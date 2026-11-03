@@ -258,8 +258,11 @@ let
               # THE DISK'S PASSPHRASE, typed on the serial line. The prompt
               # ends no line, and the driver's console log holds whole lines
               # only: it is typed once the boot manager starts the system, and
-              # again only if the session's console does not come.
-              wait_for(booted, r"Linux Boot Manager", 300)
+              # again only if the session's console does not come. WHICHEVER
+              # entry the firmware starts: the installation registers none in
+              # its menu (it writes no EFI variable, `nix/modules/boot-loader.nix`),
+              # so the firmware starts the disk's fallback, `\EFI\BOOT\BOOTX64.EFI`.
+              wait_for(booted, r"BdsDxe: starting Boot[0-9A-F]+", 300)
               time.sleep(20)
               for _ in range(3):
                   booted.send_console("${passphrase}\n")

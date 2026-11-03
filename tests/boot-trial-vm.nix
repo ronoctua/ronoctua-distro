@@ -1,10 +1,12 @@
 # THE BOOT TRIAL FALLS BACK (`boot-trial-falls-back`).
 #
-# NixOS 26.05 has no boot counting, so the way back is ours
-# (`crates/ronoctua-machine`, `nix/modules/machine.nix`): after a switch,
-# `bootctl set-default` names the last good entry and `bootctl set-oneshot`
-# the new one, and a while after the system's default target
-# `ronoctua-boot-bless.service` reads which of the two booted. This proves it
+# The way back is ours (`crates/ronoctua-machine`, `nix/modules/machine.nix`),
+# on systemd-boot's boot counting and never on an EFI variable — a firmware
+# may reset the machine on a write (`nix/modules/boot-loader.nix`): after a
+# switch, `loader.conf`'s `default` names the last good entry and `preferred`
+# the new one, whose file carries one try, and a while after the system's
+# default target `ronoctua-boot-bless.service` reads which of the two booted
+# and takes the counter off the one that did. This proves it
 # on a machine that boots the way an installed one does — systemd-boot, from
 # an EFI whose variables PERSIST across reboots (`useBootLoader`,
 # `useEFIBoot`; the test keeps the variables file for the whole run) — and
@@ -15,21 +17,22 @@
 #      boot really reaches: what booted and lasted is the last good system;
 #   2. an apply of a system that CANNOT boot (its `init` is no system's:
 #      stage 1 cannot activate it, and the kernel panics) arms the trial —
-#      default on the last good entry, one-shot on the new one — and a bless
+#      default on the last good entry, one-shot on the new one, with no EFI
+#      variable written (they are mounted read-only) — and a bless
 #      in that same boot judges nothing: the trial has not been tried;
 #   3. the reboot tries the trial ONCE — the console shows its panic — and
 #      comes back on the last good one by itself; the bless marks the trial
 #      `failed`, puts the system profile back on the last good system and
-#      unsets the EFI default, so `loader.conf` names it;
-#   4. the boot after that is the last good one with no variable set;
+#      the default back on the newest good entry, which is it;
+#   4. the boot after that is the last good one, by the menu alone;
 #   5. a trial whose STAGE 2 never reaches the default target — it ends in
 #      emergency mode, as a mount that failed does, PID 1 alive and the
 #      watchdog petted — is restarted by its deadline
 #      (`ronoctua-boot-trial-deadline.service`), and comes back on the last
 #      good one; the next apply does not build the trial that failed again;
 #   6. a trial whose kernel the LOADER cannot start falls back with no
-#      person at the menu: systemd-boot restarts (the `reboot-on-error` the
-#      trial posts in `loader.conf`), GRUB boots its `fallback` in the same
+#      person at the menu: systemd-boot restarts (a counted entry's
+#      `reboot-on-error`, on by default), GRUB boots its `fallback` in the same
 #      boot — and either way the last good system is the one boot that
 #      follows;
 #   7. the UPDATE's apply (`apply --next-boot`, 2026-10-30) of a system that
@@ -276,14 +279,47 @@ pkgs.testers.runNixOSTest {
           return menu
 
 
+      def conf_line(key):
+          """`loader.conf`'s `key` line's value, or None."""
+          for line in machine.succeed("cat /boot/loader/loader.conf").splitlines():
+              k, _, v = line.partition(" ")
+              if k == key:
+                  return v.strip()
+          return None
+
+
+      def entry_file(entry_id):
+          """The name of entry `entry_id`'s file, its boot counter in it."""
+          stem = entry_id.removesuffix(".conf")
+          names = machine.succeed("ls /boot/loader/entries").split()
+          return next((n for n in names if n == entry_id or n.startswith(stem + "+")), None)
+
+
       def default():
-          """The trial's default: `LoaderEntryDefault`, or GRUB's `ronoctua_default`."""
-          return grub_block().get("ronoctua_default") if GRUB else efi("LoaderEntryDefault")
+          """The trial's default: `loader.conf`'s `default` — None while it is
+          the newest good entry (`nixos-*`) —, or GRUB's `ronoctua_default`."""
+          if GRUB:
+              return grub_block().get("ronoctua_default")
+          d = conf_line("default")
+          return None if d in (None, "nixos-*") else d
 
 
       def oneshot():
-          """The boot of once: `LoaderEntryOneShot`, or GRUB's `next_entry`."""
-          return grub_block().get("next_entry") if GRUB else efi("LoaderEntryOneShot")
+          """The boot of once: the preferred entry while its file still has
+          its one try, or GRUB's `next_entry`."""
+          if GRUB:
+              return grub_block().get("next_entry")
+          p = conf_line("preferred")
+          return p if p and (entry_file(p) or "").endswith("+1.conf") else None
+
+
+      def no_variable_written():
+          """The EFI variables are mounted read-only, and none of the old
+          trial's is there."""
+          opts = machine.succeed("findmnt -no OPTIONS /sys/firmware/efi/efivars").split(",")
+          assert "ro" in opts, opts
+          for name in ("LoaderEntryDefault", "LoaderEntryOneShot"):
+              assert efi(name) is None, f"{name} is set: {efi(name)!r}"
 
 
       def boots(entry_id):
@@ -294,11 +330,11 @@ pkgs.testers.runNixOSTest {
           return next(e for e in entries if e["id"] == entry_id)["options"]
 
 
-      def restarts():
-          """Whether systemd-boot restarts on a start that fails: the line
-          the trial posts in `loader.conf`, and takes away with it."""
-          conf = machine.succeed("cat /boot/loader/loader.conf").splitlines()
-          return "reboot-on-error yes" in conf
+      def counted(entry_id):
+          """Whether the entry's file carries a boot counter: systemd-boot
+          restarts on a counted entry it cannot start (`reboot-on-error`'s
+          default), and reads an unblessed one with no tries left as bad."""
+          return "+" in (entry_file(entry_id) or "")
 
 
       def boots_so_far():
@@ -336,6 +372,13 @@ pkgs.testers.runNixOSTest {
           s = state()
           assert s["last-good"]["toplevel"] == good, s
           assert s["trial"] is None, s
+          if not GRUB:
+              # THE ENTRY THAT BOOTED IS BLESSED: the builder wrote it with a
+              # try, which this boot spent; left counted, the next boot would
+              # read it as bad.
+              selected = efi("LoaderEntrySelected")
+              assert selected and not counted(selected), (selected, entry_file(selected))
+              no_variable_written()
 
       with subtest("an apply arms the trial against the last good entry"):
           machine.succeed("mkdir -p /etc/nixos")
@@ -349,7 +392,8 @@ pkgs.testers.runNixOSTest {
           assert f"init={BROKEN}/init" in boots(once), once
           assert f"init={good}/init" in boots(back), back
           if not GRUB:
-              assert restarts(), "a trial systemd-boot cannot start would go to the firmware"
+              assert counted(once), "a trial systemd-boot cannot start would go to the firmware"
+              no_variable_written()
 
       with subtest("a bless in the boot that armed the trial judges nothing"):
           machine.succeed("systemctl restart ronoctua-boot-bless.service")
@@ -374,26 +418,19 @@ pkgs.testers.runNixOSTest {
           assert oneshot() is None, "the one-shot was spent"
           assert default() is None, "the default is the menu's own again"
           if not GRUB:
-              assert not restarts(), "a verdict takes the restart away with the default"
+              no_variable_written()
           if GRUB:
               # The menu's first entry is the newest generation: the last good.
               first = next(iter(grub_menu().values()))
               assert f"init={good}/init" in first, first
           else:
-              # systemd-boot's configured default is the newest generation, the
-              # last good. It is named by its content hash now
-              # (`nixos-<sha256>.conf`), not `nixos-generation-N`, so check what
-              # that default entry BOOTS, not what it is called.
-              loader = machine.succeed("cat /boot/loader/loader.conf")
-              default_line = next(
-                  (l for l in loader.splitlines() if l.startswith("default ")), None
-              )
-              assert default_line, f"loader.conf has no `default`:\n{loader}"
-              default_entry = default_line.split(None, 1)[1].strip()
-              assert f"init={good}/init" in boots(default_entry), (
-                  f"loader.conf's default ({default_entry}) does not boot the "
-                  f"last good system:\n{loader}"
-              )
+              # systemd-boot prefers the profile's generation — the way back,
+              # a copy of the last good one, blessed — and falls back to the
+              # newest entry that is not bad. Named by its content hash
+              # (`nixos-<sha256>.conf`), so check what it BOOTS.
+              preferred = conf_line("preferred")
+              assert preferred and f"init={good}/init" in boots(preferred), preferred
+              assert not counted(preferred), "the way back is no trial of its own"
 
       with subtest("the boot after that is the last good one, by the menu alone"):
           machine.reboot()
@@ -461,7 +498,7 @@ pkgs.testers.runNixOSTest {
           assert machine.succeed("readlink -f /nix/var/nix/profiles/system").strip() == good
           assert oneshot() is None and default() is None
           if not GRUB:
-              assert not restarts()
+              no_variable_written()
 
       with subtest("the update's apply sets a system for the next boot, and the restart blesses it"):
           before = witness()
@@ -515,5 +552,10 @@ pkgs.testers.runNixOSTest {
           assert s["last-good"]["toplevel"] == STAGED, s
           assert "WITNESS=staged" in witness()[1].split(), witness()
           assert oneshot() is None and default() is None
+          if not GRUB:
+              # BLESSED: the counter is off the entry that booted, so the boot
+              # after it is the trial's again, and no variable was written.
+              assert not counted(conf_line("preferred")), conf_line("preferred")
+              no_variable_written()
     '';
 }

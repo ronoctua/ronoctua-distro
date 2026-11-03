@@ -115,6 +115,10 @@ resto. Faltam fotos, com asserção, de:
   herdado, o dono do arquivo em `/etc` aceito pela checagem dele); o conjunto da conta acende com o
   estado certo, pelo OSC 7501 no nosso terminal e pelo gancho fora dele; o clique foca a janela, ou
   abre o grupo de um terminal no background; uma conta de API sem créditos fica em perigo.
+- **A entrada da firmware numa instalação nova**: com o `canTouchEfiVariables` desligado, a
+  instalação não registra o systemd-boot no menu da firmware e conta com o caminho de reserva
+  `\EFI\BOOT\BOOTX64.EFI`; falta ver numa máquina de verdade que ela liga sozinha depois de instalar,
+  inclusive numa que teve outro sistema no disco.
 - **O IME numa sessão de verdade**: com o Mozc ligado uma vez nas configurações do fcitx5,
   `Ctrl+Espaço` e `nihon` mostram a composição sublinhada no cursor e os candidatos ao lado, e o
   texto confirmado chega ao programa; o Compose continua funcionando no nosso terminal com o fcitx5

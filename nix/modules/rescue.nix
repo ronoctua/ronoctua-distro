@@ -72,8 +72,8 @@ let
   # with no boot trial behind it. While a system waits, the way back is the
   # system that RUNS, and nothing is switched; otherwise the generation
   # before, passing over the one whose trial failed. AND THE BOOT TRIAL IS
-  # DISARMED by the same verb: an update arms one in two EFI variables a
-  # rollback does not touch — the one-shot would take the next boot straight
+  # DISARMED by the same verb: an update arms one in the boot loader's
+  # default and one-shot — the one-shot would take the next boot straight
   # back into the system rolled away from —, and the system left is recorded
   # as one that did not boot, so the next update does not switch into it
   # again. The instance (`switch` or `boot`) is the verb's word.

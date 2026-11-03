@@ -6,19 +6,23 @@
 # (`/boot/EFI/Linux/nixos-generation-<n>-<hash>.efi`), signed with the
 # machine's keys, and `loader.conf` names no generation (`default nixos-*`,
 # the newest). `ronoctua-machine` changes nothing for it: the trial is the same
-# two EFI variables, the entries are what `bootctl list` says — a UKI's
-# command line carries its `init=` like an entry file does. This proves it, on
-# a machine with lanzaboote and its keys, under an OVMF that enforces them:
+# two lines of `loader.conf` and the same one try, on the UKI's own name
+# (`<id>+1.efi` — the signature is of the image, not of its name), and the
+# entries are what `bootctl list` says — a UKI's command line carries its
+# `init=` like an entry file does. This proves it, on a machine with
+# lanzaboote and its keys, under an OVMF that enforces them:
 #
-#   1. the firmware starts in setup mode and takes the machine's keys; from
-#      the next boot on it starts only what they signed;
+#   1. the firmware starts in setup mode and takes the machine's keys — the
+#      one write of EFI variables there is, a person's own, made by mounting
+#      them writable for it (they are read-only, `nix/modules/boot-loader.nix`);
+#      from the next boot on it starts only what they signed;
 #   2. the update's apply (`apply --next-boot`) of a system with a kernel
 #      parameter of its own has lanzaboote sign its UKI, and arms the trial
 #      against the last good one's UKI;
 #   3. the reboot tries the trial — signed, the firmware enforcing — and the
-#      bless makes it the last good system: the variables unset, the boot
-#      menu's default is the trial's UKI;
-#   4. and a boot with no variable at all takes it, signed;
+#      bless makes it the last good system: its counter off, the boot menu's
+#      default the trial's UKI;
+#   4. and a boot after it takes it, signed;
 #   5. the rescue's rollback (`ronoctua-machine rollback boot`) goes back to
 #      the system before it, and the reboot comes up on that system: the
 #      rollback makes the newest generation a copy of it, because the menu
@@ -159,6 +163,46 @@ pkgs.testers.runNixOSTest {
           return entry(entry_id)["options"]
 
 
+      def conf_line(key):
+          """`loader.conf`'s `key` line's value, or None."""
+          for line in machine.succeed("cat /boot/loader/loader.conf").splitlines():
+              k, _, v = line.partition(" ")
+              if k == key:
+                  return v.strip()
+          return None
+
+
+      def uki_file(entry_id):
+          """The name of the UKI `entry_id`'s file, its boot counter in it."""
+          stem = entry_id.removesuffix(".efi")
+          names = machine.succeed("ls /boot/EFI/Linux").split()
+          return next((n for n in names if n == entry_id or n.startswith(stem + "+")), None)
+
+
+      def default():
+          """The trial's default: `loader.conf`'s, None while it is the newest's."""
+          d = conf_line("default")
+          return None if d in (None, "nixos-*") else d
+
+
+      def oneshot():
+          """The boot of once: the preferred UKI while it still has its try."""
+          p = conf_line("preferred")
+          return p if p and (uki_file(p) or "").endswith("+1.efi") else None
+
+
+      def counted(entry_id):
+          """Whether the UKI's file carries a boot counter."""
+          return "+" in (uki_file(entry_id) or "")
+
+
+      def no_variable_written():
+          opts = machine.succeed("findmnt -no OPTIONS /sys/firmware/efi/efivars").split(",")
+          assert "ro" in opts, opts
+          for name in ("LoaderEntryDefault", "LoaderEntryOneShot"):
+              assert efi(name) is None, f"{name} is set: {efi(name)!r}"
+
+
       def secure_boot():
           """What the firmware says of Secure Boot, as `bootctl` reads it."""
           out = machine.succeed("bootctl status 2>&1 || true")
@@ -176,11 +220,6 @@ pkgs.testers.runNixOSTest {
 
       def resolved(link):
           return machine.succeed(f"readlink -f {link}").strip()
-
-
-      def restarts():
-          """Whether systemd-boot restarts on a start that fails: the trial's line."""
-          return "reboot-on-error yes" in machine.succeed("cat /boot/loader/loader.conf").splitlines()
 
 
       def apply(builds, *words):
@@ -201,7 +240,12 @@ pkgs.testers.runNixOSTest {
           machine.succeed("cp -rL /etc/secureboot/. /var/lib/sbctl/")
           machine.succeed("chmod -R u+rwX /var/lib/sbctl")
           print(machine.succeed("sbctl setup --migrate 2>&1 || true"))
+          # THE KEYS ARE VARIABLES: written by the person, deliberately, with
+          # the mount made writable for it and read-only again after.
+          no_variable_written()
+          machine.succeed("mount -o remount,rw /sys/firmware/efi/efivars")
           print(machine.succeed("sbctl enroll-keys --yes-this-might-brick-my-machine 2>&1"))
+          machine.succeed("mount -o remount,ro /sys/firmware/efi/efivars")
           machine.wait_for_unit("ronoctua-boot-bless.service")
           assert state()["last-good"]["toplevel"] == good, state()
 
@@ -227,12 +271,13 @@ pkgs.testers.runNixOSTest {
           assert resolved("/run/current-system") == good
           s = state()
           assert s["trial"] == {"toplevel": STAGED, "outcome": "pending"}, s
-          once, back = efi("LoaderEntryOneShot"), efi("LoaderEntryDefault")
+          once, back = oneshot(), default()
           print(json.dumps(entries(), indent=1))
           assert once and once.endswith(".efi") and f"init={STAGED}/init" in boots(once), once
           assert back and back.endswith(".efi") and f"init={good}/init" in boots(back), back
           assert signed(once), "lanzaboote did not sign the trial's UKI"
-          assert restarts(), "a trial systemd-boot cannot start would go to the firmware"
+          assert counted(once), "a trial systemd-boot cannot start would go to the firmware"
+          no_variable_written()
 
       with subtest("the trial boots signed, and the bless makes it the last good system"):
           machine.reboot()
@@ -246,11 +291,12 @@ pkgs.testers.runNixOSTest {
           s = state()
           assert s["trial"] == {"toplevel": STAGED, "outcome": "good"}, s
           assert s["last-good"]["toplevel"] == STAGED, s
-          assert efi("LoaderEntryOneShot") is None and efi("LoaderEntryDefault") is None
-          assert not restarts(), "a verdict takes the restart away with the default"
+          assert oneshot() is None and default() is None
+          assert not counted(once), "blessed: the counter is off the trial's UKI"
+          no_variable_written()
           # THE MENU'S OWN DEFAULT, with no variable: lanzaboote's newest UKI.
-          default = [e["id"] for e in entries() if e.get("isDefault")]
-          assert default == [once], (default, once)
+          menu = [e["id"] for e in entries() if e.get("isDefault")]
+          assert menu == [once], (menu, once)
 
       with subtest("a boot with no variable takes the blessed generation, signed"):
           machine.reboot()

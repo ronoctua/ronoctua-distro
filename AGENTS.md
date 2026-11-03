@@ -458,7 +458,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
 | o estado do Claude Code e do Codex, o endpoint de uso da Anthropic e o registro das sessões que o gancho gerenciado escreve | `ronoctua-llm` (cobra `one-llm-boundary`) |
 | o registro dos terminais (`<id>.json` e `<id>.sock`), o protocolo guardião↔visor e o lançador dos guardiões; o rodapé e o brain leem só os arquivos, nunca o socket no laço | `ronoctua-terminals` |
-| `bootctl`, as variáveis EFI, o `reboot-on-error` do `loader.conf`, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
+| `bootctl` (só a lista), o `default`/`preferred` do `loader.conf` e o contador das entradas, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
 | os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
 | o VS Code: o manifesto das extensões instaladas, a lista da pessoa que viaja nos pertences e o `code --install-extension` | `ronoctua-vscode` (cobra `one-vscode-boundary`) |
@@ -484,9 +484,13 @@ negocia PQ primeiro e todo sshd tem só a chave ed25519 (cobram `ssh-kex-is-pq-f
 `belongings-https-is-pq-only`).
 
 <!-- anchor: L05 --> **Só o `ronoctua-machine apply` muda o sistema** (resgate, atualização, central
-de programas): constrói antes, troca depois, arma o ensaio de boot (systemd-boot, ou GRUB na BIOS).
-Nenhum outro crate roda `bootctl`/`grub-editenv`, escreve `LoaderEntry*`/`loader.conf`/`grubenv`,
-mexe no perfil do sistema ou chama `switch-to-configuration` (cobra `one-bootctl-driver`). Build
+de programas): constrói antes, troca depois, arma o ensaio de boot (a contagem de boots do
+systemd-boot, ou GRUB na BIOS). Nenhum outro crate roda `bootctl`/`grub-editenv`, escreve
+`loader.conf`/as entradas/`grubenv`, mexe no perfil do sistema ou chama `switch-to-configuration`
+(cobra `one-bootctl-driver`). **Nada grava variável EFI com a máquina rodando**: uma firmware pode
+resetar a máquina numa gravação (o ThinkPad Z16 Gen 2 reseta em toda, 2026-11-03), então as
+variáveis montam só leitura, o `bootctl` não registra nada e o ensaio mora nos arquivos do ESP (cobra
+`the-machine-writes-no-efi-variable`). Build
 falho devolve o lock em execução (cobra `apply-reverts-the-lock-on-build-failure`); o bless pende do
 alvo padrão, nunca do `graphical.target` (cobra `update-apply-rule-is-narrow`), e julga pela
 identidade do boot, não pelo relógio (cobra `generations-keep-the-boot-trial`).

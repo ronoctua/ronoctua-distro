@@ -1,5 +1,6 @@
-//! The machine's own flake and its life — the one crate that runs `bootctl`,
-//! reads the EFI variables and writes the machine directory.
+//! The machine's own flake and its life — the one crate that runs `bootctl`
+//! (only to read the menu), writes the boot trial into systemd-boot's files
+//! or GRUB's block, and writes the machine directory.
 //!
 //! # The machine directory
 //!
@@ -28,7 +29,7 @@
 //!   system that runs when another waits for the next boot, else to the
 //!   generation before — and the trial it leaves disarmed ([`rollback`]).
 //! - `disarm`: the profile was rolled back by hand; the trial it left is not
-//!   tried again, and the EFI variables are unset.
+//!   tried again, and the boot loader's default is the menu's own again.
 //! - `hibernate pre | post`: the trial's one-shot put aside for a
 //!   hibernation, and back after the resume ([`sleep`]).
 //! - `hold [<rev>]` / `unhold`: the machine stays on the distro revision it
@@ -47,11 +48,13 @@
 //!
 //! # The boot trial
 //!
-//! NixOS 26.05 has no boot counting, so the way back is ours. After a switch
-//! — unless it returned 0 and the kernel, initrd and kernel parameters are
-//! the last good generation's — `bootctl set-default` names the LAST GOOD
-//! entry and `bootctl set-oneshot` the NEW one: the next boot tries the new
-//! system once, and any boot after that — a panic (`panic=10`), a stage 1
+//! The way back is ours, on systemd-boot's boot counting and never on an EFI
+//! variable ([`loader`]: a firmware may reset the machine on a write). After
+//! a switch — unless it returned 0 and the kernel, initrd and kernel
+//! parameters are the last good generation's — `loader.conf`'s `default`
+//! names the LAST GOOD entry and `preferred` the NEW one, whose file carries
+//! one try: the next boot tries the new system once, and any boot after that
+//! that nobody blessed — a panic (`panic=10`), a stage 1
 //! that failed (`boot.panic_on_fail`), a stage 2 that does not reach the
 //! default target in time (`ronoctua-boot-trial-deadline.service`), a hang
 //! the hardware watchdog ends — comes back to the last good one. `bless`
@@ -61,7 +64,8 @@
 //!
 //! A system set for the next boot ([`Applying::NextBoot`]) is armed the same
 //! way, and always for real: nothing has run its userland. Until the restart
-//! the one-shot still names it, which is how a bless in the boot that set it
+//! the one-shot still names it, its try unspent, which is how a bless in the
+//! boot that set it
 //! knows it was not tried, even when the record of that boot is lost. Whether
 //! one waits is [`next_boot`]'s to say, from the profile and the running
 //! system — never from the last apply.

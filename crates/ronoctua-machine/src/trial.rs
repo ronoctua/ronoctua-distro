@@ -140,7 +140,13 @@ pub(crate) fn arm(
     };
     if clean && boot::same_boot(&m.system, toplevel, &last_good.toplevel) {
         let listed = loader.entries();
-        if listed.is_some() {
+        if let Some(listed) = &listed {
+            // GOOD AT ONCE: the builder wrote its entry with a try, which
+            // the next boot would spend and then read as bad — and, blessed
+            // first, it is no one-shot for the clear to take away.
+            if let Some(new) = boot::entry_of(listed, toplevel) {
+                loader.bless(new);
+            }
             loader.clear();
         }
         state.last_good = Some(last_good_of(m, toplevel, listed.as_deref()));
@@ -212,6 +218,22 @@ pub(crate) fn arm(
         toplevel: toplevel.to_owned(),
         outcome: TrialOutcome::Pending,
     })
+}
+
+/// The entry that boots `toplevel` blessed: a way back to a system that ran —
+/// the rescue's rollback, a trial's verdict — is no trial of its own. The
+/// builder wrote its new generation's entry with a try, and were that boot
+/// to fail before its bless, systemd-boot would fall back to the newest entry
+/// that is not bad: the very system the way back left.
+pub(crate) fn bless_way_back(m: &Machine, toplevel: &str) {
+    let Some(loader) = Loader::of(&m.system) else {
+        return;
+    };
+    if let Some(listed) = loader.entries()
+        && let Some(entry) = boot::entry_of(&listed, toplevel)
+    {
+        loader.bless(entry);
+    }
 }
 
 /// The generation `booted` belongs to: its own toplevel, or the toplevel of

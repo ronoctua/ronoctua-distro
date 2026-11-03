@@ -113,10 +113,10 @@ mod tests {
     fn a_line_quotes_what_would_read_as_two_words() {
         assert_eq!(
             line(
-                Path::new("/b/bootctl"),
-                &["set-default".into(), String::new()]
+                Path::new("/b/grub-editenv"),
+                &["/boot/grub/grubenv".into(), "set".into(), String::new()]
             ),
-            "/b/bootctl set-default \"\""
+            "/b/grub-editenv /boot/grub/grubenv set \"\""
         );
         assert_eq!(line(Path::new("/b/nix"), &["a b".into()]), "/b/nix \"a b\"");
     }

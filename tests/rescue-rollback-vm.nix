@@ -11,7 +11,8 @@
 #      previous generation" — pressed twice, as a row that cannot be taken back
 #      is — goes back NOW: the system that runs is the last good one again, the
 #      profile is on a new generation that is a copy of it, the newest, the
-#      trial is recorded `failed` and the boot loader's variables are gone;
+#      trial is recorded `failed` and the boot loader's default and one-shot
+#      are gone, no EFI variable written;
 #   3. the reboot comes up on that generation, by the boot's identity — a new
 #      boot, the entry the loader says it started boots the last good system,
 #      and the command line is not the trial's —, and the next apply does not
@@ -167,12 +168,47 @@ pkgs.testers.runNixOSTest {
           return next(e for e in entries if e["id"] == entry_id)["options"]
 
 
+      def conf_line(key):
+          """`loader.conf`'s `key` line's value, or None."""
+          for line in machine.succeed("cat /boot/loader/loader.conf").splitlines():
+              k, _, v = line.partition(" ")
+              if k == key:
+                  return v.strip()
+          return None
+
+
+      def entry_file(entry_id):
+          """The name of entry `entry_id`'s file, its boot counter in it."""
+          stem = entry_id.removesuffix(".conf")
+          names = machine.succeed("ls /boot/loader/entries").split()
+          return next((n for n in names if n == entry_id or n.startswith(stem + "+")), None)
+
+
+      def default():
+          """The trial's default: `loader.conf`'s, None while it is the newest's."""
+          d = conf_line("default")
+          return None if d in (None, "nixos-*") else d
+
+
+      def oneshot():
+          """The boot of once: the preferred entry while it still has its try."""
+          p = conf_line("preferred")
+          return p if p and (entry_file(p) or "").endswith("+1.conf") else None
+
+
       def menu_default():
-          """The entry `loader.conf` names, which a boot with no variable takes."""
-          loader = machine.succeed("cat /boot/loader/loader.conf")
-          line = next((l for l in loader.splitlines() if l.startswith("default ")), None)
-          assert line, f"loader.conf has no `default`:\n{loader}"
-          return line.split(None, 1)[1].strip()
+          """The entry the menu starts with no trial armed: the profile's own,
+          preferred — blessed, so it is no trial of its own."""
+          p = conf_line("preferred")
+          assert p and "+" not in (entry_file(p) or "+"), (p, entry_file(p or ""))
+          return p
+
+
+      def no_variable_written():
+          opts = machine.succeed("findmnt -no OPTIONS /sys/firmware/efi/efivars").split(",")
+          assert "ro" in opts, opts
+          for name in ("LoaderEntryDefault", "LoaderEntryOneShot"):
+              assert efi(name) is None, f"{name} is set: {efi(name)!r}"
 
 
       def resolved(link):
@@ -277,8 +313,9 @@ pkgs.testers.runNixOSTest {
           assert resolved(PROFILE) == AWAY
           s = state()
           assert s["trial"] == {"toplevel": AWAY, "outcome": "pending"}, s
-          assert f"init={AWAY}/init" in boots(efi("LoaderEntryOneShot"))
-          assert f"init={good}/init" in boots(efi("LoaderEntryDefault"))
+          assert f"init={AWAY}/init" in boots(oneshot())
+          assert f"init={good}/init" in boots(default())
+          no_variable_written()
 
       with subtest("the rescue goes back now, and disarms the trial"):
           ended = through_the_rescue(0, "ronoctua-rescue-rollback@switch.service")
@@ -292,8 +329,9 @@ pkgs.testers.runNixOSTest {
           assert back != first and back == newest(), (back, first, newest())
           s = state()
           assert s["trial"] == {"toplevel": AWAY, "outcome": "failed"}, s
-          assert efi("LoaderEntryOneShot") is None, "the next boot would still try the system left"
-          assert efi("LoaderEntryDefault") is None
+          assert oneshot() is None, "the next boot would still try the system left"
+          assert default() is None
+          no_variable_written()
           assert f"init={good}/init" in boots(menu_default())
 
       with subtest("the reboot comes up on the generation it came back to"):
@@ -309,7 +347,7 @@ pkgs.testers.runNixOSTest {
           s = state()
           assert s["trial"] == {"toplevel": AWAY, "outcome": "failed"}, s
           assert s["last-good"]["toplevel"] == good, s
-          assert efi("LoaderEntryOneShot") is None and efi("LoaderEntryDefault") is None
+          assert oneshot() is None and default() is None
 
       with subtest("the system rolled away from is not built into the machine again"):
           status, out = apply(AWAY)
@@ -333,7 +371,7 @@ pkgs.testers.runNixOSTest {
           assert resolved("/run/current-system") == good
           s = state()
           assert s["trial"] == {"toplevel": WAITING, "outcome": "failed"}, s
-          assert efi("LoaderEntryOneShot") is None and efi("LoaderEntryDefault") is None
+          assert oneshot() is None and default() is None
           assert f"init={good}/init" in boots(menu_default())
           before = boot_id()
           restart()

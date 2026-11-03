@@ -46571,9 +46571,9 @@ let
               top = os.path.realpath(l)[len(str(root)):]
               entries.append({"id": f"nixos-generation-{l.name[7:-5]}.conf", "options": f"init={top}/init quiet"})
           print(json.dumps(entries))
-      elif a[0] in ("set-default", "set-oneshot"):
-          (root / ("efi-" + a[0][4:])).write_text(a[1])
       else:
+          # ONLY THE LIST: the trial is written in systemd-boot's files,
+          # never through `bootctl` into an EFI variable.
           sys.exit(2)
       """
 
@@ -46605,13 +46605,30 @@ let
               (d / "initrd").symlink_to(store / "initrd")
               (d / "kernel-params").write_text(params)
               program(d / "bin/switch-to-configuration", f"""
-              import pathlib, sys
+              import os, pathlib, sys
               with open("{root}/switched", "a") as f:
                   f.write("{top} " + sys.argv[1] + "\\n")
+              # AS NIXOS'S BUILDER WRITES THE ESP with boot counting on: an
+              # entry with one try for every generation that has none, the
+              # profile's preferred, the newest good one the default.
+              root = pathlib.Path("{root}")
+              profiles = root / "nix/var/nix/profiles"
+              ent = root / "boot/loader/entries"
+              ent.mkdir(parents=True, exist_ok=True)
+              for l in profiles.glob("system-*-link"):
+                  n = l.name[7:-5]
+                  if not list(ent.glob(f"nixos-generation-{{n}}.conf")) + list(ent.glob(f"nixos-generation-{{n}}+*.conf")):
+                      (ent / f"nixos-generation-{{n}}+1.conf").write_text(f"version Generation {{n}}\\n")
+              n = os.readlink(profiles / "system")[7:-5]
+              (root / "boot/loader/loader.conf").write_text(f"timeout 5\\npreferred nixos-generation-{{n}}.conf\\ndefault nixos-*\\neditor 0\\n")
               """)
               tops[top] = d
           (root / "nix/var/nix/profiles/system-1-link").symlink_to(tops["a"])
           (root / "nix/var/nix/profiles/system").symlink_to("system-1-link")
+          # THE ESP of the system that runs, blessed long ago.
+          (root / "boot/loader/entries").mkdir(parents=True)
+          (root / "boot/loader/entries/nixos-generation-1.conf").write_text("version Generation 1\n")
+          (root / "boot/loader/loader.conf").write_text("timeout 5\npreferred nixos-generation-1.conf\ndefault nixos-*\neditor 0\n")
           (root / "run/booted-system").symlink_to(tops["a"])
           (root / "run/current-system").symlink_to(tops["a"])
           (root / "machine").mkdir()
@@ -46655,6 +46672,15 @@ let
       def text(path):
           return path.read_text() if path.exists() else ""
 
+      def armed(root):
+          # The trial as systemd-boot keeps it: `loader.conf`'s default, and
+          # the preferred entry while its file still has its one try.
+          conf = dict(l.split(" ", 1) for l in text(root / "boot/loader/loader.conf").splitlines() if " " in l)
+          default = conf.get("default", "")
+          preferred = conf.get("preferred", "")
+          tried = (root / "boot/loader/entries" / preferred.replace(".conf", "+1.conf")).exists()
+          return ("" if default == "nixos-*" else default, preferred if tried else "")
+
       wrong = []
 
       # 1. THE BUILD FAILS.
@@ -46690,8 +46716,8 @@ let
           wrong.append("a good build did not move the system profile")
       if text(root / "switched") != "b switch\n":
           wrong.append(f"a good build did not switch to it: {text(root / 'switched')!r}")
-      if (text(root / "efi-default"), text(root / "efi-oneshot")) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
-          wrong.append("the boot trial is not armed: default on the system that booted, one-shot on the new one")
+      if armed(root) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
+          wrong.append(f"the boot trial is not armed: default on the system that booted, one-shot on the new one ({armed(root)})")
       record = json.loads(text(root / "state/state.json") or "{}")
       if (record.get("trial") or {}).get("outcome") != "pending":
           wrong.append(f"the record holds no pending trial: {record}")
@@ -46720,8 +46746,8 @@ let
               wrong.append(f"{how}: the system that runs moved")
           if os.path.realpath(root / "nix/var/nix/profiles/system") != str(tops["b"]):
               wrong.append(f"{how}: the profile does not name the new system")
-          if (text(root / "efi-default"), text(root / "efi-oneshot")) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
-              wrong.append(f"{how}: the boot trial is not armed for the next boot")
+          if armed(root) != ("nixos-generation-1.conf", "nixos-generation-2.conf"):
+              wrong.append(f"{how}: the boot trial is not armed for the next boot ({armed(root)})")
           record = json.loads(text(root / "state/state.json") or "{}")
           last = record.get("last-apply") or {}
           # `state.json` says only what a reader older than `staged` reads;
@@ -47124,13 +47150,121 @@ let
       END
     '';
 
+  # THE MACHINE WRITES NO EFI VARIABLE WHILE IT RUNS.
+  #
+  # A write is a call into the firmware, and on a ThinkPad Z16 Gen 2 every
+  # one — a write or a removal — reset the machine two to five seconds later
+  # (2026-11-03): the boot trial's `bootctl set-default`/`set-oneshot`, and
+  # `bootctl` registering itself in the firmware's menu when systemd-boot was
+  # updated. Asked of every system that boots systemd-boot, evaluated:
+  #
+  # - `bootctl` never touches the variables (`canTouchEfiVariables`);
+  # - the boot trial is systemd-boot's boot counting with ONE try, the
+  #   machine's verdict and not systemd's (`systemd-bless-boot` masked);
+  # - the variables are remounted read-only before `sysinit.target`, so a
+  #   writer nobody here knows of is refused instead of resetting the
+  #   machine;
+  # - the kernel keeps no crash report in them (`efi_pstore`);
+  #
+  # and of the source: the trial's driver hands `bootctl` no word but its
+  # list, and no Rust source opens the variables to write.
+  the-machine-writes-no-efi-variable =
+    let
+      booting = lib.filterAttrs (_: c: c.config.boot.loader.systemd-boot.enable) self.nixosConfigurations;
+      facts = pkgs.writeText "efi-variable-facts.json" (
+        builtins.toJSON (
+          lib.mapAttrs (_: c: {
+            touch = c.config.boot.loader.efi.canTouchEfiVariables;
+            counting = c.config.boot.loader.systemd-boot.bootCounting;
+            bless = c.config.systemd.services.systemd-bless-boot.enable or true;
+            readOnly =
+              let
+                u = c.config.systemd.services.ronoctua-efi-variables-read-only or null;
+              in
+              if u == null then
+                null
+              else
+                {
+                  exec = u.serviceConfig.ExecStart or "";
+                  wantedBy = u.wantedBy;
+                  before = u.before;
+                  defaults = u.unitConfig.DefaultDependencies or true;
+                };
+            params = c.config.boot.kernelParams;
+          }) booting
+        )
+      );
+    in
+    mkCheck "the-machine-writes-no-efi-variable" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the evaluated systems, as JSON — values, not source.
+      facts = json.load(open("${facts}"))
+      floor(len(facts), 2, "systems that boot systemd-boot")
+      wrong = []
+      for name, f in sorted(facts.items()):
+          if f["touch"]:
+              wrong.append(f"{name}: bootctl may write EFI variables (canTouchEfiVariables)")
+          if f["counting"] != {"enable": True, "tries": 1}:
+              wrong.append(f"{name}: the boot trial is not boot counting with one try: {f['counting']}")
+          if f["bless"]:
+              wrong.append(f"{name}: systemd-bless-boot would bless an entry before the machine's verdict")
+          ro = f["readOnly"]
+          if ro is None:
+              wrong.append(f"{name}: nothing mounts the EFI variables read-only")
+          elif (not ro["exec"].endswith("mount -o remount,ro /sys/firmware/efi/efivars")
+                or "sysinit.target" not in ro["wantedBy"] or "sysinit.target" not in ro["before"]
+                or ro["defaults"]):
+              wrong.append(f"{name}: the read-only remount is not early in stage 2: {ro}")
+          if "efi_pstore.pstore_disable=1" not in f["params"]:
+              wrong.append(f"{name}: the kernel may keep a crash report in an EFI variable")
+
+      # FILE-WIDE: a path of the variables opened to write, anywhere in a
+      # crate's code, is the write; comments off, strings kept. And `bootctl`'s
+      # words, narrowed to `list_entries` by name.
+      crates = pathlib.Path("${../crates}")
+      home = crates / "ronoctua-machine/src"
+      machine = "".join(uncommented(without_tests(f.read_text())) for f in sorted(home.rglob("*.rs")))
+      floor(len(machine), 5000, "characters of ronoctua-machine")
+      # EVERY WORD `bootctl` IS HANDED is one of `argv`'s lists, by name.
+      handed = set(re.findall(r"\(\s*bootctl\s*,\s*&argv::(\w+)\(", machine))
+      if handed != {"list_entries"}:
+          wrong.append(f"ronoctua-machine hands bootctl {sorted(handed)}, not its list alone")
+      argv = uncommented(without_tests((home / "argv.rs").read_text()))
+      listing = must(body_of(argv, "list_entries"), "argv.rs: `list_entries`")
+      if sorted(re.findall(r'"([^"]*)"', listing)) != ["--json=short", "--no-pager", "list"]:
+          wrong.append(f"bootctl's list is asked more than its list: {listing.strip()}")
+      for verb in ("set-default", "set-oneshot", "set-preferred", "set-sysfail", "set-timeout"):
+          if f'"{verb}"' in machine:
+              wrong.append(f"ronoctua-machine names `{verb}`, a bootctl verb that writes EFI variables")
+      swept = 0
+      for f in workspace_sources(crates):
+          code = uncommented(without_tests(f.read_text()))
+          swept += 1
+          if "efivars" in code and re.search(r"OpenOptions|fs::write|File::create|remove_file|set_permissions", code):
+              wrong.append(f"{f.relative_to(crates)} names the EFI variables and writes files: it may write one")
+      floor(swept, 300, "Rust sources swept")
+
+      if wrong:
+          print("ERROR: something may write an EFI variable while the machine runs.", file=sys.stderr)
+          for w in wrong:
+              print("       " + w, file=sys.stderr)
+          print("       A firmware may reset the machine on any such write (boot-loader.nix).", file=sys.stderr)
+          raise SystemExit(1)
+      print(f"OK: {len(facts)} systems keep the trial in systemd-boot's files, the variables read-only; {swept} Rust sources write none")
+      END
+    '';
+
   # ONE DRIVER OF THE BOOT LOADER.
   #
-  # `bootctl`, the EFI variables it writes (`LoaderEntryDefault`,
-  # `LoaderEntryOneShot`) — on a BIOS machine's GRUB, `grub-editenv` and the
-  # environment block's two (`ronoctua_default`, `next_entry`) —, the system
-  # profile and `switch-to-configuration` are the boot trial's, and the boot
-  # trial is ONE crate's: a second writer of the default would shadow the
+  # `bootctl`, systemd-boot's files the trial is written in (`loader.conf`'s
+  # `default` and `preferred`, the entries' boot counters) — on a BIOS
+  # machine's GRUB, `grub-editenv` and the environment block's two
+  # (`ronoctua_default`, `next_entry`) —, the system profile and
+  # `switch-to-configuration` are the boot trial's, and the boot trial is ONE
+  # crate's: a second writer of the default would shadow the
   # trial's default, or the rescue's rollback, and nothing would say so. No other Rust source names any of
   # them in code (strings kept: a program's name is a string), and no Nix
   # file but the machine's own module hands a unit `bootctl`. Reading the
@@ -47147,6 +47281,7 @@ let
     home = crates / "ronoctua-machine"
     NEEDLE = re.compile(
         r"\bbootctl\b|LoaderEntry|switch-to-configuration|profiles/system\b|set-oneshot"
+        r"|loader/loader\.conf|loader/entries"
         # GRUB's variable as GRUB's (a string), never a Rust name of the same
         # spelling: an iterator's `next_entry` drives no boot loader.
         r'|grub-editenv|\bgrubenv\b|"next_entry"|next_entry=|\bronoctua_default\b'
@@ -47163,12 +47298,12 @@ let
             wrong.append(f"{f.relative_to(crates)}:{line}: names `{m.group(0)}` — the boot loader is ronoctua-machine's")
     floor(swept, 300, "Rust sources outside ronoctua-machine swept")
 
-    # PROVED ON THE DRIVER ITSELF: the sweep sees ronoctua-machine name all
-    # four, so it would see anybody else's.
+    # PROVED ON THE DRIVER ITSELF: the sweep sees ronoctua-machine name each
+    # of them, so it would see anybody else's.
     at_home = "".join(uncommented(without_tests(f.read_text())) for f in rust_sources(home))
     floor(len(at_home), 5000, "characters of ronoctua-machine")
-    for needle in ("bootctl", "switch-to-configuration", "profiles/system", "set-oneshot",
-                   "grub-editenv", "grubenv", '"next_entry"', "ronoctua_default"):
+    for needle in ("bootctl", "switch-to-configuration", "profiles/system", "loader/loader.conf",
+                   "loader/entries", "grub-editenv", "grubenv", '"next_entry"', "ronoctua_default"):
         if needle not in at_home:
             wrong.append(f"the sweep does not see ronoctua-machine name `{needle}`: it would see nobody's")
 
@@ -57902,6 +58037,7 @@ let
       apply-names-what-failed
       update-apply-rule-is-narrow
       one-bootctl-driver
+      the-machine-writes-no-efi-variable
       generations-keep-the-boot-trial
       ;
     boot-trial-falls-back = bootTrialVm;

@@ -250,7 +250,8 @@ in
         RONOCTUA_KEEP_UNITS = "${keepUnits}/bin/ronoctua-keep-units";
       }
       # THE BOOT LOADER'S OWN TOOL, for the boot trial: systemd-boot's
-      # `bootctl` (EFI variables), or, on a BIOS machine's GRUB
+      # `bootctl` (which only lists its menu: the trial is in its files), or,
+      # on a BIOS machine's GRUB
       # (`ronoctua.firmware`), `grub-editenv` (GRUB's environment block) —
       # by the loader the system has, so a machine that imports this module
       # alone (a test) still names the right one.
@@ -399,13 +400,13 @@ in
       # `graphical.target` is never reached.
       target = config.systemd.defaultUnit;
       # THE DEADLINE OF A TRIAL BOOT. Only a boot that TRIES a new system is
-      # bounded: the boot loader's default names the last good entry and it
-      # booted another (`LoaderEntrySelected`, which systemd-boot writes at
-      # every boot) — no other boot has a default set, since every judgement
-      # unsets it. GRUB, on a BIOS machine, leaves Linux no such variable: its
+      # bounded: systemd-boot started a COUNTED entry — it says which in
+      # `LoaderBootCountPath`, a variable it writes at every such boot, and
+      # every entry but a trial's is blessed, its counter off. GRUB, on a BIOS
+      # machine, leaves Linux no such variable: its
       # menu marks the boot of once of an armed trial on the kernel's command
       # line instead (`nix/boot-trial-mark.nix`, `nix/modules/boot-loader.nix`).
-      # Then: the default target, in time, or a restart, and the one-shot is
+      # Then: the default target, in time, or a restart, and the try is
       # spent, so the boot loader takes the last good system.
       grub = config.boot.loader.grub.enable && !config.boot.loader.systemd-boot.enable;
       tries =
@@ -431,10 +432,10 @@ in
                 ${pkgs.coreutils}/bin/tail -c +5 "$vars/$1-$loader" | ${pkgs.coreutils}/bin/tr -d '\000'
               fi
             }
-            default=$(value LoaderEntryDefault) selected=$(value LoaderEntrySelected)
-            if [ -z "$default" ] || [ "$default" = "$selected" ] || up; then
+            if [ ! -e "$vars/LoaderBootCountPath-$loader" ] || up; then
               exit 0
             fi
+            selected=$(value LoaderEntrySelected) default="the last good system"
           '';
       # UP is REACHED IN THIS BOOT, not active now: a `systemctl rescue` later
       # in a boot that came up (which wants this unit again) is no stage 2

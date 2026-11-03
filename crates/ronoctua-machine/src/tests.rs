@@ -3,11 +3,12 @@
 //! `nix-env` and `bootctl` that are small shell programs keeping a log of
 //! what they were asked. They behave as the real ones do in the ways the
 //! verbs depend on: `nix-env --set` makes no generation for the newest one
-//! again, `bootctl list` names each generation's entry with its `init=`,
-//! `set-oneshot` keeps the variable where `efivarfs` shows it and `""`
-//! unsets it. A reboot ([`World::reboot`]) is a new boot identity, the
-//! booted and running links moved, and the one-shot spent — what the boot
-//! loader does with it.
+//! again, `bootctl list` names each generation's entry with its `init=`, and
+//! a switch writes the ESP as NixOS's builder does with boot counting on — a
+//! new generation's entry with one try (`+1`), `preferred` on the profile's,
+//! `default nixos-*` (`bin/builder`). A reboot ([`World::reboot`]) is a new
+//! boot identity, the booted and running links moved, and the one-shot spent
+//! — the preferred entry's try, as systemd-boot spends it.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -83,9 +84,10 @@ impl Drop for Scratch {
 /// Where a toplevel carries its lock, as the machine module puts it.
 const SYSTEM_LOCK: &str = "etc/ronoctua/machine.lock";
 
-/// systemd-boot's `loader.conf`, as NixOS's builder writes it.
+/// systemd-boot's `loader.conf`, as NixOS's builder writes it with boot
+/// counting on.
 const LOADER_CONF: &str =
-    "timeout 5\ndefault nixos-generation-1.conf\neditor 0\nconsole-mode keep\n";
+    "timeout 5\npreferred nixos-generation-1.conf\ndefault nixos-*\neditor 0\nconsole-mode keep\n";
 
 /// The machine flake at the distro's `a…` and [`LOCK_B`] at `b…`, both on
 /// the same `nixpkgs` (the distro moved alone: an apply switches now).
@@ -267,23 +269,39 @@ if [ "$1" = "--no-pager" ] && [ "$2" = "list" ]; then
   printf ']\n'
   exit 0
 fi
-if [ -e "$root/no-efi" ]; then echo "Failed to write LoaderEntry" >&2; exit 1; fi
-case "$1" in
-  set-default) printf '%s' "$2" > "$root/efi-default" ;;
-  set-oneshot)
-    printf '%s' "$2" > "$root/efi-oneshot"
-    v="$root{ONESHOT}"
-    mkdir -p "${{v%/*}}"
-    if [ -z "$2" ]; then rm -f "$v"; else
-      s="$2"
-      {{ printf '\007\000\000\000'
-        while [ -n "$s" ]; do r="${{s#?}}"; printf '%s\000' "${{s%"$r"}}"; s="$r"; done
-        printf '\000\000'; }} > "$v"
-    fi ;;
-  *) exit 2 ;;
-esac
-"#,
-                ONESHOT = crate::loader::ONESHOT_VARIABLE,
+exit 2
+"#
+            ),
+        );
+        // THE BUILDER, as NixOS's writes the ESP with boot counting on:
+        // every generation that has no entry gets one with one try, and —
+        // on a switch (`all`) — `loader.conf` names the profile's generation
+        // `preferred` and the newest good entry the `default`.
+        script(
+            &s.path("bin/builder"),
+            &format!(
+                r#"#!/bin/sh
+root='{root}'
+dir="$root/nix/var/nix/profiles"
+ent="$root/boot/loader/entries"
+mkdir -p "$ent"
+for l in "$dir"/system-*-link; do
+  [ -e "$l" ] || continue
+  n="${{l##*/system-}}"; n="${{n%-link}}"
+  have=''
+  for f in "$ent/nixos-generation-$n.conf" "$ent/nixos-generation-$n"+*.conf; do
+    if [ -e "$f" ]; then have=1; fi
+  done
+  if [ -z "$have" ]; then
+    t="$(readlink -f "$l")"; t="${{t#"$root"}}"
+    printf 'title NixOS\nversion Generation %s\noptions init=%s/init quiet\n' "$n" "$t" > "$ent/nixos-generation-$n+1.conf"
+  fi
+done
+if [ "$1" = all ] && [ -e "$root/boot/loader/loader.conf" ]; then
+  p="$(readlink "$dir/system")"; p="${{p#system-}}"; p="${{p%-link}}"
+  printf 'timeout 5\npreferred nixos-generation-%s.conf\ndefault nixos-*\neditor 0\nconsole-mode keep\n' "$p" > "$root/boot/loader/loader.conf"
+fi
+"#
             ),
         );
         // THE SIZING, as `sizing-says` says it; WHAT BUILDS THE UNITS, which
@@ -327,6 +345,13 @@ esac
         };
         let a = w.toplevel("a", "quiet");
         w.generation(1, &a);
+        // THE SYSTEM THAT RUNS booted long ago and was blessed: no counter.
+        let entries = w.s.path("boot/loader/entries");
+        std::fs::rename(
+            entries.join("nixos-generation-1+1.conf"),
+            entries.join("nixos-generation-1.conf"),
+        )
+        .unwrap();
         w.link("run/booted-system", &a);
         w.link("run/current-system", &a);
         w.boot_as(1);
@@ -359,7 +384,7 @@ esac
         script(
             &top.join("bin/switch-to-configuration"),
             &format!(
-                "#!/bin/sh\necho \"{name} $1\" >> '{root}/switched'\nexit \"$(cat '{root}/switch-exit' 2>/dev/null || echo 0)\"\n"
+                "#!/bin/sh\necho \"{name} $1\" >> '{root}/switched'\n'{root}/bin/builder' all\nexit \"$(cat '{root}/switch-exit' 2>/dev/null || echo 0)\"\n"
             ),
         );
         std::fs::write(
@@ -400,7 +425,60 @@ esac
         self.link("run/booted-system", into);
         self.link("run/current-system", into);
         let _ = std::fs::remove_file(self.s.path("efi-oneshot"));
-        let _ = std::fs::remove_file(self.real(crate::loader::ONESHOT_VARIABLE));
+        // systemd-boot SPENDS THE TRY of the entry it prefers when it starts
+        // it: `+1` becomes `+0-1`.
+        if let Some(name) = self.preferred().and_then(|p| self.entry_file(&p))
+            && let Some(stem) = name.strip_suffix("+1.conf")
+        {
+            let dir = self.s.path("boot/loader/entries");
+            std::fs::rename(dir.join(&name), dir.join(format!("{stem}+0-1.conf"))).unwrap();
+        }
+    }
+
+    /// `loader.conf`'s line `key`, when there is one.
+    fn conf_line(&self, key: &str) -> Option<String> {
+        self.read("boot/loader/loader.conf").lines().find_map(|l| {
+            let (k, v) = l.split_once(' ')?;
+            (k == key).then(|| v.trim().to_owned())
+        })
+    }
+
+    fn preferred(&self) -> Option<String> {
+        self.conf_line("preferred")
+    }
+
+    /// The name of entry `id`'s file, its counter in it.
+    fn entry_file(&self, id: &str) -> Option<String> {
+        let stem = id.strip_suffix(".conf")?;
+        std::fs::read_dir(self.s.path("boot/loader/entries"))
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().into_string().unwrap())
+            .find(|n| n == id || n.starts_with(&format!("{stem}+")))
+    }
+
+    /// The trial's default, as the loader keeps it: GRUB's variable, or
+    /// `loader.conf`'s `default` — none when it is the newest entry's.
+    fn default_entry(&self) -> String {
+        if self.m.system.grub_editenv.is_some() {
+            return self.read("efi-default");
+        }
+        match self.conf_line("default") {
+            Some(d) if d != crate::loader::DEFAULT_ANY => d,
+            _ => String::new(),
+        }
+    }
+
+    /// The trial's one-shot, as the loader keeps it: GRUB's variable, or
+    /// the preferred entry while its file still has its one try.
+    fn oneshot_entry(&self) -> String {
+        if self.m.system.grub_editenv.is_some() {
+            return self.read("efi-oneshot");
+        }
+        match self.preferred() {
+            Some(p) if self.entry_file(&p).is_some_and(|f| f.ends_with("+1.conf")) => p,
+            _ => String::new(),
+        }
     }
 
     fn link(&self, at: &str, logical: &str) {
@@ -417,11 +495,25 @@ esac
         let _ = std::fs::remove_file(&profile);
         std::os::unix::fs::symlink(format!("system-{n}-link"), profile).unwrap();
         self.grub_menu();
+        self.entries();
+    }
+
+    /// The ESP's entry files for every generation, as the builder adds them.
+    fn entries(&self) {
+        let builder = self.s.path("bin/builder");
+        if builder.exists() {
+            assert!(
+                std::process::Command::new(&builder)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
     }
 
     /// THE SAME WORLD ON A BIOS MACHINE'S GRUB: `grub-editenv` in place of
-    /// `bootctl`, keeping the trial's two variables where the fake `bootctl`
-    /// keeps them (`efi-default`, `efi-oneshot`), and a `grub.cfg` written
+    /// `bootctl`, keeping the trial's two variables in `efi-default` and
+    /// `efi-oneshot` (what [`World::default_entry`] reads), and a `grub.cfg` written
     /// as NixOS's `install-grub.pl` writes it — the newest first, every
     /// generation in `All configurations` — whenever the profile moves.
     fn grub(what: &str) -> Self {
@@ -586,8 +678,8 @@ fn an_apply_switches_and_arms_the_trial() {
     );
     assert_eq!(w.profile().as_deref(), Some(b.as_str()));
     assert_eq!(w.read("switched"), "b switch\n");
-    assert_eq!(w.read("efi-default"), "nixos-generation-1.conf");
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.default_entry(), "nixos-generation-1.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     let state = w.state();
     let good = state.last_good.unwrap();
     assert_eq!(
@@ -644,8 +736,8 @@ fn an_apply_for_the_next_boot_activates_nothing_and_arms_a_real_trial() {
         "the system that runs stays"
     );
     assert_eq!(w.profile().as_deref(), Some(b.as_str()));
-    assert_eq!(w.read("efi-default"), "nixos-generation-1.conf");
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.default_entry(), "nixos-generation-1.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     let state = w.state();
     assert_eq!(state.trial.map(|t| t.outcome), Some(TrialOutcome::Pending));
     assert_eq!(state.last_good.unwrap().toplevel, a);
@@ -730,8 +822,8 @@ fn a_staged_system_stays_staged() {
         Some(a.as_str())
     );
     assert_eq!(w.profile().as_deref(), Some(c.as_str()));
-    assert_eq!(w.read("efi-default"), "nixos-generation-1.conf");
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-3.conf");
+    assert_eq!(w.default_entry(), "nixos-generation-1.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-3.conf");
     assert_eq!(
         w.state().last_apply.unwrap().toplevel.as_deref(),
         Some(c.as_str())
@@ -924,7 +1016,7 @@ fn a_rollback_while_systems_wait_goes_back_to_the_one_that_runs() {
             })
         );
         assert_eq!(
-            (w.read("efi-default"), w.read("efi-oneshot")),
+            (w.default_entry(), w.oneshot_entry()),
             (String::new(), String::new())
         );
         assert_eq!(w.lock(), LOCK_A);
@@ -1109,12 +1201,12 @@ fn a_hibernation_does_not_spend_the_trial() {
     let b = w.toplevel("b", "quiet b");
     w.builds(&b);
     w.m.apply(Applying::NextBoot).unwrap();
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     assert_eq!(hibernate(&w, false), "put aside nixos-generation-2.conf");
-    assert_eq!(w.read("efi-oneshot"), "", "the resume boots the default");
-    assert_eq!(w.read("efi-default"), "nixos-generation-1.conf");
+    assert_eq!(w.oneshot_entry(), "", "the resume boots the default");
+    assert_eq!(w.default_entry(), "nixos-generation-1.conf");
     assert_eq!(hibernate(&w, true), "put back nixos-generation-2.conf");
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     assert!(w.snapshot(crate::sleep::ASLEEP).is_empty(), "the note went");
     assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
     // THE RESUME NEVER CAME (the power lost): the next boot was the default,
@@ -1124,7 +1216,7 @@ fn a_hibernation_does_not_spend_the_trial() {
     hibernate(&w, false);
     w.reboot(&a);
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Pending);
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     assert_eq!(
         w.profile().as_deref(),
         Some(b.as_str()),
@@ -1137,19 +1229,23 @@ fn a_hibernation_does_not_spend_the_trial() {
     let b = w.toplevel("b", "quiet b");
     w.builds(&b);
     w.m.apply(Applying::NextBoot).unwrap();
-    let w2 = w.m.system.bootctl.clone().unwrap();
-    assert!(
-        std::process::Command::new(w2)
-            .args(["set-oneshot", "nixos-generation-1.conf"])
-            .status()
-            .unwrap()
-            .success()
+    // ANOTHER ENTRY PREFERRED, with a try: somebody else's one-shot.
+    let entries = w.s.path("boot/loader/entries");
+    std::fs::rename(
+        entries.join("nixos-generation-1.conf"),
+        entries.join("nixos-generation-1+1.conf"),
+    )
+    .unwrap();
+    let conf = w.read("boot/loader/loader.conf").replace(
+        "preferred nixos-generation-2.conf",
+        "preferred nixos-generation-1.conf",
     );
+    std::fs::write(w.s.path("boot/loader/loader.conf"), conf).unwrap();
     assert_eq!(
         hibernate(&w, false),
         "the one-shot is not the trial's: left as it is"
     );
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-1.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-1.conf");
 }
 
 /// FAILS IF: applies set for the next boot, stacked up by a machine nobody
@@ -1464,12 +1560,20 @@ fn a_system_that_boots_alike_is_blessed_at_once() {
     let w = World::new("alike");
     let b = w.toplevel("b", "quiet");
     w.builds(&b);
-    std::fs::write(w.s.path("efi-oneshot"), "nixos-generation-9.conf").unwrap();
+    let conf = w
+        .read("boot/loader/loader.conf")
+        .replace("default nixos-*", "default nixos-generation-9.conf");
+    std::fs::write(w.s.path("boot/loader/loader.conf"), conf).unwrap();
     let applied = w.m.apply(Applying::Now).unwrap();
     assert_eq!(applied.trial.unwrap().outcome, TrialOutcome::BootIdentical);
     assert_eq!(w.state().last_good.unwrap().toplevel, b);
-    assert_eq!(w.read("efi-oneshot"), "", "a trial still armed is disarmed");
-    assert_eq!(w.read("efi-default"), "");
+    assert_eq!(w.oneshot_entry(), "", "a trial still armed is disarmed");
+    assert_eq!(w.default_entry(), "");
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2.conf"),
+        "good at once: no try for the next boot to spend and call bad"
+    );
 }
 
 /// FAILS IF: the trial that booted is not made the last good one, or the EFI
@@ -1489,7 +1593,7 @@ fn a_trial_that_booted_is_blessed() {
         (good.toplevel.as_str(), good.entry.as_str()),
         (b.as_str(), "nixos-generation-2.conf")
     );
-    assert_eq!(w.read("efi-default"), "");
+    assert_eq!(w.default_entry(), "");
     assert_eq!(
         std::fs::read_to_string(w.m.places.state.join(crate::LAST_GOOD_LOCK)).unwrap(),
         LOCK_A
@@ -1531,7 +1635,7 @@ fn a_trial_that_did_not_boot_goes_back() {
         "{}",
         w.read("switched")
     );
-    assert_eq!(w.read("efi-default"), "");
+    assert_eq!(w.default_entry(), "");
     assert_eq!(w.lock(), LOCK_A, "the folder is the running system's again");
 }
 
@@ -2156,7 +2260,7 @@ fn a_bless_in_the_boot_that_armed_the_trial_judges_nothing() {
         Some(b.as_str()),
         "nothing went back"
     );
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     assert!(
         w.snapshot(crate::boots::TRIED).is_empty(),
         "the arming boot is no try"
@@ -2222,7 +2326,7 @@ fn a_trial_is_judged_by_the_boot_that_tried_it() {
     let applied = w.m.apply(Applying::Now).unwrap();
     assert_eq!(applied.trial.map(|t| t.outcome), Some(TrialOutcome::Good));
     assert_eq!(w.state().last_good.unwrap().toplevel, b);
-    assert_eq!(w.read("efi-default"), "", "the old default is gone");
+    assert_eq!(w.default_entry(), "", "the old default is gone");
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
     w.reboot(&b);
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
@@ -2262,7 +2366,7 @@ fn a_trial_is_judged_by_the_boot_that_tried_it() {
         Some(b.as_str()),
         "nothing was rolled back"
     );
-    assert_eq!(w.read("efi-default"), "", "the next boot is the trial's");
+    assert_eq!(w.default_entry(), "", "the next boot is the trial's");
     assert!(
         !w.read("switched").contains("a boot"),
         "{}",
@@ -2299,8 +2403,8 @@ fn only_a_clean_switch_is_blessed_at_once() {
             "exit {exit}"
         );
         assert_eq!(state.last_good.unwrap().toplevel, a, "exit {exit}");
-        assert_eq!(w.read("efi-default"), "nixos-generation-1.conf");
-        assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+        assert_eq!(w.default_entry(), "nixos-generation-1.conf");
+        assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     }
 }
 
@@ -2436,7 +2540,7 @@ fn a_failed_trial_is_tried_again_once_when_asked() {
     assert_eq!(applied.result, ApplyResult::Staged);
     assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
     assert_eq!(w.profile().as_deref(), Some(b.as_str()));
-    let (default, oneshot) = (w.read("efi-default"), w.read("efi-oneshot"));
+    let (default, oneshot) = (w.default_entry(), w.oneshot_entry());
     assert!(
         !default.is_empty() && !oneshot.is_empty() && default != oneshot,
         "no way back armed: default {default:?}, one-shot {oneshot:?}"
@@ -2517,15 +2621,15 @@ fn a_rollback_by_hand_disarms_the_trial() {
     w.m.apply(Applying::Now).unwrap();
     // Still on b: disarm leaves the trial alone.
     w.m.disarm().unwrap();
-    assert_eq!(w.read("efi-oneshot"), "nixos-generation-2.conf");
+    assert_eq!(w.oneshot_entry(), "nixos-generation-2.conf");
     assert_eq!(w.outcome(), Some(TrialOutcome::Pending));
     // A rollback by hand: the profile back on generation 1.
     let profile = w.s.path("nix/var/nix/profiles/system");
     std::fs::remove_file(&profile).unwrap();
     std::os::unix::fs::symlink("system-1-link", &profile).unwrap();
     w.m.disarm().unwrap();
-    assert_eq!(w.read("efi-oneshot"), "", "the one-shot is gone");
-    assert_eq!(w.read("efi-default"), "", "loader.conf decides");
+    assert_eq!(w.oneshot_entry(), "", "the one-shot is gone");
+    assert_eq!(w.default_entry(), "", "loader.conf decides");
     assert_eq!(w.outcome(), Some(TrialOutcome::Failed));
     assert_eq!(
         w.lock(),
@@ -3034,8 +3138,8 @@ fn the_trial_runs_on_grub_as_on_systemd_boot() {
         applied.trial.map(|t| t.outcome),
         Some(TrialOutcome::Pending)
     );
-    assert_eq!(w.read("efi-default"), World::grub_entry(1));
-    assert_eq!(w.read("efi-oneshot"), World::grub_entry(2));
+    assert_eq!(w.default_entry(), World::grub_entry(1));
+    assert_eq!(w.oneshot_entry(), World::grub_entry(2));
     assert!(
         w.read("calls").contains("grub-editenv"),
         "{}",
@@ -3049,7 +3153,7 @@ fn the_trial_runs_on_grub_as_on_systemd_boot() {
     );
     w.reboot(&b);
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
-    assert_eq!(w.read("efi-default"), "", "the menu's first entry decides");
+    assert_eq!(w.default_entry(), "", "the menu's first entry decides");
     assert_eq!(w.state().last_good.unwrap().entry, World::grub_entry(2));
 
     // SET FOR THE NEXT BOOT on GRUB: the menu written by `boot`, the trial
@@ -3061,8 +3165,8 @@ fn the_trial_runs_on_grub_as_on_systemd_boot() {
     let applied = w.m.apply(Applying::NextBoot).unwrap();
     assert_eq!(applied.result, ApplyResult::Staged);
     assert_eq!(w.read("switched"), "b boot\n");
-    assert_eq!(w.read("efi-default"), World::grub_entry(1));
-    assert_eq!(w.read("efi-oneshot"), World::grub_entry(2));
+    assert_eq!(w.default_entry(), World::grub_entry(1));
+    assert_eq!(w.oneshot_entry(), World::grub_entry(2));
     std::fs::remove_file(w.m.places.state.join(crate::boots::ARMED)).unwrap();
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Pending);
     assert_eq!(w.profile().as_deref(), Some(b.as_str()));
@@ -3081,61 +3185,103 @@ fn the_trial_runs_on_grub_as_on_systemd_boot() {
         Some(a.as_str()),
         "the profile is back"
     );
-    assert_eq!(w.read("efi-default"), "");
+    assert_eq!(w.default_entry(), "");
 }
 
-/// FAILS IF: systemd-boot is not told to restart on a start that fails
-/// while a trial is armed — a trial it cannot start would hand the machine
-/// to the firmware —, the line outlives the trial's verdict, good or failed
-/// (it would restart forever a newest generation that cannot start, with no
-/// trial at all), a line NixOS wrote is lost, or the line is written with
-/// no trial armed, into a `loader.conf` that is not there, or on GRUB.
+/// FAILS IF: the trial on systemd-boot is not `loader.conf`'s two lines and
+/// the new entry's one try — the default on the last good entry, the new one
+/// preferred —; a verdict leaves the default on an old entry or the counter
+/// on the entry that booted (the boot after would read its spent try as bad
+/// and come back to the old system); a boot with no trial waiting leaves its
+/// own entry counted; or a machine with no `loader.conf` to write the trial
+/// into arms one anyway, or gets a `loader.conf` made from nothing.
 #[test]
-fn only_a_trial_restarts_a_start_that_fails() {
-    let posted = format!("{LOADER_CONF}{}\n", crate::loader::REBOOT_ON_ERROR);
+fn the_trial_is_in_loader_conf_and_the_entry_counter() {
     let conf = "boot/loader/loader.conf";
-    let w = World::new("restarts");
+    let w = World::new("in-loader-conf");
     let a = w.m.system.resolve(system::BOOTED).unwrap();
     let b = w.toplevel("b", "quiet panic=10");
     w.builds(&b);
     w.m.apply(Applying::Now).unwrap();
-    assert_eq!(w.read(conf), posted, "armed");
+    assert_eq!(
+        w.read(conf),
+        "timeout 5\npreferred nixos-generation-2.conf\ndefault nixos-generation-1.conf\neditor 0\nconsole-mode keep\n",
+        "armed"
+    );
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2+1.conf")
+    );
     w.reboot(&b);
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2+0-1.conf"),
+        "the try spent"
+    );
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
-    assert_eq!(w.read(conf), LOADER_CONF, "a trial that booted");
+    assert_eq!(
+        w.default_entry(),
+        "",
+        "the default is the newest entry's again"
+    );
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2.conf"),
+        "blessed"
+    );
+    // A TRIAL THAT DID NOT BOOT: the machine comes back on b, and the
+    // menu is written for it again.
     let c = w.toplevel("c", "quiet c");
     w.builds(&c);
     w.m.apply(Applying::Now).unwrap();
-    assert_eq!(w.read(conf), posted, "armed again");
+    assert_eq!(w.default_entry(), "nixos-generation-2.conf");
     w.reboot(&b);
     assert_eq!(w.m.bless().unwrap(), TrialOutcome::Failed);
-    assert_eq!(w.read(conf), LOADER_CONF, "a trial that did not boot");
+    assert_eq!(w.default_entry(), "");
+    // BACK ON b is a generation of its own (`nix-env --set`), and the menu
+    // is written for it.
+    assert_eq!(
+        w.preferred().as_deref(),
+        Some("nixos-generation-4.conf"),
+        "the menu written for what booted"
+    );
+    assert_eq!(w.profile().as_deref(), Some(b.as_str()));
+    assert_eq!(
+        w.entry_file("nixos-generation-3.conf").as_deref(),
+        Some("nixos-generation-3+0-1.conf"),
+        "bad, and left so"
+    );
     assert_ne!(a, b);
 
-    let w = World::new("restarts-no-efi");
-    std::fs::write(w.s.path("no-efi"), "").unwrap();
+    // A BOOT WITH NO TRIAL WAITING blesses its own entry — the first boot
+    // after a system set up by the builder alone.
+    let w = World::new("no-trial-blessed");
     let b = w.toplevel("b", "quiet b");
-    w.builds(&b);
-    w.m.apply(Applying::Now).unwrap();
-    assert_eq!(w.read(conf), LOADER_CONF, "no trial, no line");
+    w.generation(2, &b);
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2+1.conf")
+    );
+    let conf_b = w.read(conf).replace(
+        "preferred nixos-generation-1.conf",
+        "preferred nixos-generation-2.conf",
+    );
+    std::fs::write(w.s.path(conf), conf_b).unwrap();
+    w.reboot(&b);
+    assert_eq!(w.m.bless().unwrap(), TrialOutcome::Good);
+    assert_eq!(
+        w.entry_file("nixos-generation-2.conf").as_deref(),
+        Some("nixos-generation-2.conf")
+    );
 
-    let w = World::new("restarts-no-conf");
+    let w = World::new("in-loader-conf-none");
     std::fs::remove_file(w.s.path(conf)).unwrap();
     let b = w.toplevel("b", "quiet b");
     w.builds(&b);
     let applied = w.m.apply(Applying::Now).unwrap();
-    assert_eq!(
-        applied.trial.map(|t| t.outcome),
-        Some(TrialOutcome::Pending),
-        "the trial is armed all the same"
-    );
+    assert_eq!(applied.trial, None, "nowhere to write the trial");
+    assert_eq!(w.state().no_trial, Some(NoTrial::NoEfiVariables));
     assert!(!w.s.path(conf).exists(), "a loader.conf made from nothing");
-
-    let w = World::grub("restarts-grub");
-    let b = w.toplevel("b", "quiet b");
-    w.builds(&b);
-    w.m.apply(Applying::Now).unwrap();
-    assert_eq!(w.read(conf), LOADER_CONF, "GRUB has no loader.conf to post");
 }
 
 /// FAILS IF: a GRUB whose environment block cannot be written arms a trial

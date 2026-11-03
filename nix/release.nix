@@ -897,7 +897,7 @@ rec {
   # (`applyCommand`, `nix/modules/machine.nix`) — busy is refused, never
   # waited for. Under it, and only under it, the record is read again: an
   # update that ran while the checkout was building may have armed a trial
-  # (its system named by the EFI variables, the profile then naming this
+  # (its system named by the boot loader's one-shot, the profile then naming this
   # one: the next boot would bless the update's and this switch would not
   # stick). And the boot menu keeps its way back: a new generation that
   # would push the last good system out of the menu is refused, as

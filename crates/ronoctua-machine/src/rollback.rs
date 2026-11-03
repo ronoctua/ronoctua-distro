@@ -95,7 +95,9 @@ pub(crate) fn rollback(m: &Machine, now: bool) -> Result<String, Refusal> {
         (how, run::status(&switch, &argv::switch(how))?),
         (Switch::Switch, Some(0 | 4)) | (Switch::Boot, Some(0))
     );
-    if !ok {
+    if ok {
+        trial::bless_way_back(m, &target);
+    } else {
         say(
             3,
             &format!("the profile is back on {target}, and its switch failed"),

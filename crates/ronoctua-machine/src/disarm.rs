@@ -3,19 +3,21 @@
 //! rollback is [`crate::rollback`], which does this itself; the verb stays
 //! for a profile moved by anything else.
 //!
-//! A trial armed by an apply is two EFI variables: `LoaderEntryOneShot` on
-//! the new system and `LoaderEntryDefault` on the last good one. Both outlive
-//! a rollback — `nix-env --rollback` and `switch-to-configuration` write the
-//! profile and `loader.conf`, never the variables — so without this the next
+//! A trial armed by an apply is the default on the last good entry and the
+//! one-shot on the new system — on GRUB two variables of its block, which
+//! outlive a rollback: `nix-env --rollback` and `switch-to-configuration`
+//! write the profile and the menu, never the block. So without this the next
 //! boot would still try the system the person rolled away from, and every
-//! boot after it would come up on the default. So:
+//! boot after it would come up on the default. (On systemd-boot both are
+//! lines of `loader.conf`, which the rollback's switch already wrote again.)
+//! So:
 //!
 //! - a trial the profile no longer names was LEFT by the person, and is
 //!   recorded `failed`: the next apply does not switch into it again
 //!   (`did-not-boot`) before the distro or `nixpkgs` moves on (a trial the
 //!   profile still names keeps its way back, and nothing else is done);
-//! - both variables are unset: `loader.conf`, which the rollback wrote, is
-//!   the boot loader's choice again;
+//! - the default is the menu's own again — what the rollback wrote is the
+//!   boot loader's choice;
 //! - the machine directory gets back the lock of the system the profile now
 //!   names, when it is known, so a rebuild builds what the rollback chose.
 
@@ -46,8 +48,8 @@ pub(crate) enum Disarmed {
     /// The profile still names the system on trial: its way back stays, and
     /// nothing else was done.
     KeptArmed,
-    /// The variables are unset and the folder describes what the profile
-    /// names; `left` when a pending trial was recorded `failed`.
+    /// The default is the menu's own and the folder describes what the
+    /// profile names; `left` when a pending trial was recorded `failed`.
     Done {
         /// Whether the record changed.
         left: bool,
@@ -55,7 +57,7 @@ pub(crate) enum Disarmed {
 }
 
 /// What a profile moved by hand leaves to undo, root's lock held: the trial
-/// it left recorded `failed`, the boot loader's variables unset, and the
+/// it left recorded `failed`, the boot loader's default the menu's own, and the
 /// lock of what the profile names put back in the folder.
 pub(crate) fn after_rollback(m: &Machine, state: &mut MachineState) -> Disarmed {
     let s = &m.system;
@@ -93,7 +95,7 @@ pub(crate) fn after_rollback(m: &Machine, state: &mut MachineState) -> Disarmed 
         None => false,
     };
 
-    // THE VARIABLES, whatever armed them.
+    // THE DEFAULT, whatever armed it.
     match Loader::of(s) {
         Some(loader) => {
             if loader.entries().is_some() {
@@ -103,7 +105,7 @@ pub(crate) fn after_rollback(m: &Machine, state: &mut MachineState) -> Disarmed 
         None => say(
             4,
             &format!(
-                "neither {} nor {} is set: the boot loader's variables are left as they are",
+                "neither {} nor {} is set: the boot loader's default is left as it is",
                 system::BOOTCTL,
                 system::GRUB_EDITENV
             ),

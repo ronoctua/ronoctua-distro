@@ -16800,41 +16800,30 @@ failure`, que prova também o caso sem cópia nenhuma: o primeiro `apply` depois
 atualização que falhou deixa a pasta como a máquina roda, e o próximo `apply` constrói o que roda,
 não o que falhou.
 
-**O ensaio de boot é nosso.** O NixOS não nos deu contagem de boot: na 26.05 o builder do
-systemd-boot não escrevia contador, e não havia opção; no `nixos-unstable`, que a distro segue desde
-2026-10-30, isso não foi conferido de novo. Depois de um switch cujo kernel, initrd ou parâmetros
-diferem dos do último sistema bom, `bootctl set-default` nomeia a entrada do ÚLTIMO BOM e `bootctl
-set-oneshot` a do NOVO: o próximo boot tenta o novo uma vez (a variável `LoaderEntryOneShot` some ao
-ser lida), e qualquer boot depois disso volta ao último bom. A entrada de um sistema é achada pelo
-`init=` que o `bootctl list` mostra — nada mais diz qual sistema uma entrada sobe. Para o boot ruim
-virar boot de novo sem ninguém: `panic=10` (um kernel em pânico reinicia em dez segundos),
-`boot.panic_on_fail` (um estágio 1 que falha entra em pânico em vez de esperar num shell de
-emergência cujo root está trancado; o initrd systemd do nixpkgs faz isso com
-`panic-on-fail.service`), o watchdog de hardware (`RuntimeWatchdogSec`) e um prazo para o estágio 2.
-Um estágio 2 que cai no modo de emergência (uma montagem que falhou) ou que nunca termina (uma
-unidade sem fim) deixa o PID 1 vivo e o watchdog alimentado, e esperaria para sempre num console
-trancado: o `ronoctua-boot-trial-deadline.service` começa com o estágio 2, sobrevive ao isolamento
-do modo de emergência ou de resgate (que também o querem) e, num boot que TENTA um sistema, reinicia
-a máquina se o alvo padrão não chegou em `trialBootSeconds`. Um boot tenta um sistema quando o
-`LoaderEntryDefault` está posto e o `LoaderEntrySelected` (que o systemd-boot escreve a cada boot) é
-outro — só um ensaio deixa o default posto, e todo julgamento o apaga —, então nenhum boot comum
-ganha prazo, e um estágio 2 quebrado num sistema já bom não vira um laço de reinícios. Três senhas
-erradas no disco são uma falha dessas, e reiniciam.
-
-**Um ensaio que o carregador não consegue iniciar também volta sozinho.** O prazo e o bless só veem um
-kernel que rodou; um kernel que o carregador não carrega (um arquivo que ele não lê, ou que nem é
-kernel) não roda nada, e sem mais nada a máquina pararia num menu esperando alguém. No UEFI, o
-systemd-boot reinicia quando a entrada que ele inicia falha, e o boot seguinte é o último bom, porque
-ele apaga o `LoaderEntryOneShot` assim que o lê. Só que isso exige `reboot-on-error yes` no
-`loader.conf`, e o padrão dele, `auto`, só reinicia entrada com contagem de boot, que as do NixOS
-nunca têm. Então a linha é do ensaio, como a contagem seria: o `ronoctua-machine` a escreve junto com
-o default (só um ensaio deixa o default posto, e o default é o último bom, que esse carregador já
-iniciou) e a tira sempre que o apaga, o que todo julgamento faz. Fixa no `loader.conf`, a linha
-reiniciaria para sempre uma geração mais nova que não inicia sem ensaio nenhum (o primeiro boot
-depois da instalação), onde o firmware teria tentado o pendrive. O NixOS reescreve o arquivo inteiro a
-cada instalação, sem a linha; a nossa escrita é a do builder (uma cópia sincronizada, renomeada por
-cima, e a pasta sincronizada), e um `loader.conf` que falta não é inventado: os padrões do
-systemd-boot religariam o editor. O `boot-trial-falls-back` prova os dois casos.
+**O ensaio de boot é nosso, na contagem de boots do systemd-boot e nunca numa variável EFI.** Gravar
+uma variável com a máquina rodando é chamar a firmware, e uma firmware pode responder mal: no ThinkPad
+Z16 Gen 2 toda gravação — ou remoção — reseta a máquina dois a cinco segundos depois (provado em
+2026-11-03, na bateria e na tomada, com `kernel.panic=0`: não é pânico). Então as variáveis montam só
+leitura no começo do estágio 2, o `bootctl` não registra nada no menu da firmware
+(`canTouchEfiVariables = false`) e o kernel não guarda relatório de pânico nelas (`efi_pstore`). O
+ensaio mora nos arquivos do ESP: o builder do NixOS escreve toda entrada nova com UMA tentativa
+(`<id>+1.conf`, `bootCounting.tries = 1`) e o `loader.conf` com `preferred` na geração do perfil e
+`default nixos-*`; depois de um switch cujo kernel, initrd ou parâmetros diferem dos do último bom, o
+`ronoctua-machine` põe o `default` na entrada do ÚLTIMO BOM e o `preferred` na do NOVO. O boot que o
+inicia gasta a tentativa (`+0-1`); uma entrada sem tentativas que ninguém abençoou é ruim, e o boot
+seguinte é o do default. O bless tira o contador do arquivo (como o `systemd-bless-boot`, que fica
+mascarado: ele abençoaria no `boot-complete.target`, segundos depois do boot), e um caminho de volta —
+o rollback do resgate, o `go_back` de um ensaio que falhou — nasce abençoado. A entrada de um sistema é
+achada pelo `init=` que o `bootctl list` mostra; num host com Secure Boot, a do lanzaboote é uma UKI
+(`EFI/Linux/<id>.efi`), contada no próprio nome. Para o boot ruim virar boot de novo sem ninguém:
+`panic=10`, `boot.panic_on_fail`, o watchdog de hardware e o `ronoctua-boot-trial-deadline.service`,
+que num boot que TENTA um sistema — o systemd-boot iniciou uma entrada contada e diz qual em
+`LoaderBootCountPath`, que ler é permitido — reinicia a máquina se o alvo padrão não chegou em
+`trialBootSeconds`. Um kernel que o carregador nem inicia também volta: numa entrada contada o
+`reboot-on-error` do systemd-boot já é o padrão. O `boot-trial-falls-back` prova cada caso; o
+`the-machine-writes-no-efi-variable` cobra a regra. Cadastrar as chaves do Secure Boot é a única
+gravação que existe, um gesto da pessoa: remontar as variáveis como escrita, `sbctl enroll-keys`,
+voltar a só leitura.
 
 **Numa máquina BIOS, o mesmo ensaio no GRUB.** O systemd-boot é um programa EFI; uma máquina que
 liga pela BIOS (`ronoctua.firmware = "bios"`, que o instalador escreve no `host.nix`) sobe o GRUB
@@ -16885,13 +16874,12 @@ padrão do sistema (`systemd.defaultUnit`, hoje `multi-user.target`) e ordenado 
 ensaio ficaria pendente e todo boot depois do primeiro voltaria ao sistema velho. O teste de VM roda
 com o alvo padrão da distro, sem sobrescrevê-lo.
 
-**O bless desarma, em vez de nomear o ensaio.** Se subiu o ensaio, ele é o último bom, e o
-`LoaderEntryDefault` é APAGADO (`bootctl set-default ""`): o `loader.conf` já nomeia a geração mais
-nova do perfil, que é o ensaio. Deixar o default EFI apontando para uma entrada sombrearia o
-`loader.conf` para sempre. Se subiu outro sistema com um ensaio esperando, o ensaio é `failed`, o
-perfil volta ao que subiu (`switch-to-configuration boot` reescreve o menu para ele), o default é
-apagado, e o lock do sistema de volta (o que ele carrega, senão `last-good.lock`) volta à pasta. Sem
-ensaio esperando, o que subiu e durou é o último bom.
+**O bless desarma, em vez de nomear o ensaio.** Se subiu o ensaio, ele é o último bom: a entrada perde
+o contador e o `default` volta a `nixos-*`, a mais nova boa, que é ele. Se subiu outro sistema com um
+ensaio esperando, o ensaio é `failed`, o perfil volta ao que subiu (`switch-to-configuration boot`
+reescreve o menu para ele, e a entrada de volta nasce abençoada), e o lock do sistema de volta (o que
+ele carrega, senão `last-good.lock`) volta à pasta. Sem ensaio esperando, o que subiu e durou é o
+último bom, e a entrada que subiu perde o contador.
 
 **O sistema que não subiu não é tentado de novo.** O `apply` que constrói exatamente o toplevel cujo
 ensaio falhou recusa (`did-not-boot`) e devolve o lock: sem isso, a atualização seguinte (ou a
@@ -17083,8 +17071,8 @@ o lock andado — ou não dá para saber — um lock sem esse input, um sistema 
 e o desconhecido não é prova de que nada andou. Fora disso — a troca de build que só move a distro, a
 central de programas numa máquina sem nada esperando — o `apply` troca na hora; um `boot` que falha é
 `next-boot-failed`, não `switch-failed`. O bless sabe que um ensaio cujo one-shot o carregador ainda
-guarda (`LoaderEntryOneShot`, o `next_entry` do GRUB) não foi tentado, mesmo sem o registro do boot
-que o armou: os dois carregadores esquecem o one-shot no instante em que um boot o lê.
+guarda (o `preferred` com a tentativa inteira, o `next_entry` do GRUB) não foi tentado, mesmo sem o
+registro do boot que o armou: os dois carregadores gastam o one-shot no boot que o inicia.
 
 **Se um sistema espera o reinício é o perfil que diz, não o último apply.** `ronoctua_machine::
 next_boot` responde: espera o sistema que o perfil nomeia quando o que roda (`/run/current-system`)

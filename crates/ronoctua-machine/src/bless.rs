@@ -15,12 +15,13 @@
 //!   is turned off) has still said it, and whoever judges next — the next
 //!   bless, or an apply — judges by that boot, not by its own: a trial that
 //!   booted well is never called failed because the boot AFTER it came up on
-//!   the EFI default.
+//!   the default.
 //!
 //! Then:
 //!
-//! - That boot booted the trial: it is the last good system now, and the EFI
-//!   default is unset — `loader.conf` names it already.
+//! - That boot booted the trial: it is the last good system now, its entry
+//!   is blessed (the boot counter off, `Loader::bless`) and the default is
+//!   the newest entry again — which it is.
 //! - It booted another system: the trial did not boot (the one-shot was spent
 //!   on it, and the boot after came back to the default). The trial is
 //!   `failed`, the system profile goes back to what booted
@@ -63,9 +64,18 @@ pub(crate) fn bless(m: &Machine) -> Result<TrialOutcome, Refusal> {
     let outcome = match settle(m, &mut state, &booted)? {
         Some(outcome) => outcome,
         None => {
-            // NO TRIAL WAITING: what booted and lasted is the last good one.
+            // NO TRIAL WAITING: what booted and lasted is the last good one —
+            // and its entry, when the builder gave it a try, good: the boot
+            // after would read a spent try as bad.
+            let loader = Loader::of(s);
+            let listed = loader.as_ref().and_then(Loader::entries);
+            if let (Some(l), Some(entry)) = (
+                &loader,
+                listed.as_deref().and_then(|e| boot::entry_of(e, &booted)),
+            ) {
+                l.bless(entry);
+            }
             if state.last_good.as_ref().map(|g| g.toplevel.as_str()) != Some(booted.as_str()) {
-                let listed = Loader::of(s).as_ref().and_then(Loader::entries);
                 state.last_good = Some(trial::last_good_of(m, &booted, listed.as_deref()));
                 if trial::profile_names(m, &trial::generation_toplevel(m, &booted)) {
                     let running = trial::running_lock(m).ok().flatten();
@@ -194,9 +204,12 @@ pub(crate) fn settle(
             outcome: TrialOutcome::Good,
             ..t.clone()
         });
-        if listed.is_some()
-            && let Some(l) = &loader
-        {
+        if let (Some(listed), Some(l)) = (&listed, &loader) {
+            // GOOD: its entry loses the try it spent, and the default goes
+            // back to the newest entry — which it is.
+            if let Some(entry) = boot::entry_of(listed, &t.toplevel) {
+                l.bless(entry);
+            }
             l.set_default("");
         }
         let running = trial::running_lock(m).ok().flatten();
@@ -271,7 +284,9 @@ fn go_back(m: &Machine, toplevel: &str) -> Result<(), Refusal> {
         return Err(Refusal::of(Why::Failed));
     }
     let switch = s.real(toplevel).join("bin/switch-to-configuration");
-    if run::status(&switch, &argv::switch(Switch::Boot))? != Some(0) {
+    if run::status(&switch, &argv::switch(Switch::Boot))? == Some(0) {
+        trial::bless_way_back(m, toplevel);
+    } else {
         say(
             4,
             "the boot menu was not written again for the system that booted",

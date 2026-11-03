@@ -20,7 +20,7 @@ in
     # HOW THE FIRMWARE STARTS THIS MACHINE, and so which boot loader it has.
     #
     # UEFI is the default and the better one: systemd-boot (section 7.2) and
-    # the boot trial on EFI variables. A machine that starts from BIOS — most
+    # the boot trial on its boot counting. A machine that starts from BIOS — most
     # often one whose setup keeps the legacy mode (CSM) on — has no EFI to
     # run systemd-boot from, so it boots GRUB,
     # the loader BIOS boots, with the same boot trial on GRUB's environment
@@ -47,14 +47,62 @@ in
       # several generations in there. The cap is `nix/modules/store.nix`'s: the
       # menu lists no more generations than the system keeps.
       editor = false; # an editable cmdline at boot destroys the PCR 12 measurement
+      # THE BOOT TRIAL IS SYSTEMD-BOOT'S BOOT COUNTING: every new entry is
+      # written with ONE try (`<id>+1.conf`), and `loader.conf` prefers the
+      # profile's generation and falls back to the newest entry that is not
+      # bad. `ronoctua-machine` arms the trial in those files — `default` on
+      # the last good entry, the new one `preferred` with its try — and
+      # blesses an entry by taking its counter off
+      # (`crates/ronoctua-machine/src/loader.rs`). One try, because the trial
+      # is a boot of once: an entry nobody blessed is bad at the boot after,
+      # and that boot is the last good system's. A trial systemd-boot cannot
+      # start restarts the machine on its own: a counted entry's
+      # `reboot-on-error` is on by default.
+      bootCounting = {
+        enable = true;
+        tries = 1;
+      };
     };
-    boot.loader.efi.canTouchEfiVariables = lib.mkDefault (cfg.firmware == "uefi");
-    # A TRIAL SYSTEMD-BOOT CANNOT START restarts the machine into the last
-    # good system: `ronoctua-machine` posts `reboot-on-error yes` in
-    # `loader.conf` with the trial's default, and takes it away with it
-    # (`crates/ronoctua-machine/src/loader.rs`) — a trial's only, never a
-    # line of this module's, which would restart forever a newest generation
-    # that cannot start with no trial at all.
+    # THE MACHINE NEVER WRITES AN EFI VARIABLE WHILE IT RUNS. A write is a
+    # call into the firmware, and a firmware may answer it badly: on a
+    # ThinkPad Z16 Gen 2 every one — a write or a removal, by `bootctl`,
+    # `efibootmgr` or the kernel — reset the machine two to five seconds
+    # later (2026-11-03). So:
+    #
+    # - the boot trial is in systemd-boot's files, above;
+    # - `bootctl` registers nothing in the firmware's boot menu when systemd-
+    #   boot is updated (`--variables=no`): the entry the installation made,
+    #   or the fallback `\EFI\BOOT\BOOTX64.EFI` it always keeps, starts the
+    #   machine;
+    # - the variables are mounted READ-ONLY early in stage 2 — what still
+    #   tries to write one (`systemd-sleep`'s `HibernateLocation`, which
+    #   `resume=` makes needless; a `systemctl reboot --firmware-setup`) is
+    #   refused instead of resetting the machine;
+    # - the kernel keeps no crash report in them (`efi_pstore`): it writes one
+    #   on a panic through its own way in, and the boot after deletes it.
+    #
+    # Reading them — `LoaderEntrySelected`, `LoaderBootCountPath`, Secure
+    # Boot's state — is what a read-only mount still allows.
+    boot.loader.efi.canTouchEfiVariables = false;
+    systemd.services.ronoctua-efi-variables-read-only = lib.mkIf (cfg.firmware == "uefi") {
+      description = "Mounts the EFI variables read-only";
+      wantedBy = [ "sysinit.target" ];
+      before = [ "sysinit.target" ];
+      unitConfig = {
+        DefaultDependencies = false;
+        ConditionPathIsMountPoint = "/sys/firmware/efi/efivars";
+      };
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.util-linux}/bin/mount -o remount,ro /sys/firmware/efi/efivars";
+      };
+      restartIfChanged = false;
+    };
+    # The verdict is the machine's own, after the default target and a while
+    # (`ronoctua-boot-bless.service`): systemd's would bless an entry at
+    # `boot-complete.target`, a few seconds into the boot.
+    systemd.services.systemd-bless-boot.enable = lib.mkIf (cfg.firmware == "uefi") false;
     # GRUB ON A BIOS MACHINE, into the disk's first sectors and its BIOS boot
     # partition (`nix/disko/default.nix`); the disk is the one disko lays out,
     # which hands it to GRUB. `/boot` is the same FAT partition the ESP is on
@@ -63,8 +111,8 @@ in
     # THE BOOT TRIAL'S DEFAULT IS A VARIABLE OF OURS, `ronoctua_default` in
     # GRUB's environment block, read after NixOS's own choice and never on a
     # boot of once (`next_entry`, the trial itself): `ronoctua-machine` writes
-    # the two, as `bootctl` writes `LoaderEntryDefault` and
-    # `LoaderEntryOneShot` on UEFI. NOT NixOS's `default = "saved"`, which puts
+    # the two, as it writes `loader.conf`'s `default` and `preferred` on
+    # UEFI. NOT NixOS's `default = "saved"`, which puts
     # `savedefault` in every entry: an entry picked by hand at the menu would
     # stay the default for good, where systemd-boot keeps it for that boot.
     #
@@ -148,6 +196,10 @@ in
         done
       '';
     };
-    boot.kernelParams = lib.mkIf (cfg.firmware == "bios") [ "\${ronoctua_trial}" ];
+    # GRUB's trial mark, expanded by GRUB at boot; and on UEFI, no crash
+    # report kept in an EFI variable (above).
+    boot.kernelParams =
+      lib.optional (cfg.firmware == "bios") "\${ronoctua_trial}"
+      ++ lib.optional (cfg.firmware == "uefi") "efi_pstore.pstore_disable=1";
   };
 }

@@ -383,21 +383,6 @@ pub fn list_entries() -> Vec<String> {
     ]
 }
 
-/// `bootctl set-default <entry>`: the EFI variable `LoaderEntryDefault`,
-/// which wins over `loader.conf`'s `default`. An empty entry unsets it, and
-/// `loader.conf` — the profile's newest generation — is the default again.
-#[must_use]
-pub fn set_default(entry: &str) -> Vec<String> {
-    vec!["set-default".to_owned(), entry.to_owned()]
-}
-
-/// `bootctl set-oneshot <entry>`: `LoaderEntryOneShot`, which the boot
-/// loader reads and REMOVES at the next boot — the trial is tried once.
-#[must_use]
-pub fn set_oneshot(entry: &str) -> Vec<String> {
-    vec!["set-oneshot".to_owned(), entry.to_owned()]
-}
-
 /// `grub-editenv <block> create`: GRUB's environment block, made.
 #[must_use]
 pub fn grub_create(block: &std::path::Path) -> Vec<String> {
@@ -665,11 +650,6 @@ mod tests {
 
     #[test]
     fn bootctl_and_the_switch_take_fixed_words() {
-        assert_eq!(set_default(""), ["set-default", ""]);
-        assert_eq!(
-            set_oneshot("nixos-generation-7.conf"),
-            ["set-oneshot", "nixos-generation-7.conf"]
-        );
         assert_eq!(list_entries(), ["--no-pager", "list", "--json=short"]);
         let block = std::path::Path::new("/boot/grub/grubenv");
         assert_eq!(grub_create(block), ["/boot/grub/grubenv", "create"]);
