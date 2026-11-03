@@ -56,7 +56,9 @@ critério de pronto, em poucas linhas.
   terminal novo abre, antes de a janela dele se ligar.
 - **O IME além do terminal**: as perguntas das portas, o acesso rápido e a busca do terminal ainda
   não recebem texto do fcitx5; a janela de candidatos veste o tema do fcitx5, não os nossos tokens; o
-  Chrome só usa o IME com `--enable-wayland-ime --wayland-text-input-version=3`.
+  Chrome só usa o IME com `--enable-wayland-ime --wayland-text-input-version=3`. Os apps GTK (o
+  Ghostty, o Emacs) não chegam ao fcitx5: ficam no `GTK_IM_MODULE=simple`, porque sob o fcitx5 o
+  Compose não junta acentos neles; os dois juntos pedem que o fcitx5 componha o Compose.
 
 ## O que só uma máquina de verdade, uma foto ou um servidor provam
 
@@ -115,7 +117,8 @@ resto. Faltam fotos, com asserção, de:
   abre o grupo de um terminal no background; uma conta de API sem créditos fica em perigo.
 - **O IME numa sessão de verdade**: com o Mozc ligado uma vez nas configurações do fcitx5,
   `Ctrl+Espaço` e `nihon` mostram a composição sublinhada no cursor e os candidatos ao lado, e o
-  texto confirmado chega ao programa; o Compose continua funcionando no nosso terminal e no Ghostty.
+  texto confirmado chega ao programa; o Compose continua funcionando no nosso terminal com o fcitx5
+  rodando.
 - **O player com o YouTube de verdade no `.#dev`**: toca, ganha o título, uma recusa diz a linha do
   yt-dlp, um álbum ganha o nome do álbum, o mesmo endereço duas vezes pergunta "já está na fila".
 - **O catálogo de vídeos contra o YouTube de verdade** (um canal por `@handle`, uma varredura).

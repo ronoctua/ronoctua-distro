@@ -6,8 +6,8 @@
 # Japanese, Chinese and Korean are not typed a key a character: an input method
 # reads the keys, composes, and hands the window the text it settled on. A
 # window takes that through `zwp_text_input_v3` (the shell's own door,
-# `crates/ronoctua-shell-door/src/door/text_input.rs`, and every GTK 4 or
-# Qt 6 program), and the compositor relays it to an input method that speaks
+# `crates/ronoctua-shell-door/src/door/text_input.rs`, and a Qt 6 program),
+# and the compositor relays it to an input method that speaks
 # `zwp_input_method_v2` — the pinned compositor has the relay (`sway/server.c`),
 # and nothing on the machine spoke the other half until this module. Without
 # it a window that enables its text input is enabled for nobody.
@@ -16,10 +16,14 @@
 #
 # `i18n.inputMethod` is how NixOS declares fcitx5 and its engines, and nothing
 # here reimplements it. `waylandFrontend` because this session is Wayland
-# only: the module then sets no `GTK_IM_MODULE` and no `QT_IM_MODULE`, which
-# would route those programs through fcitx5's own toolkit plugins instead of
-# the protocol their toolkits already speak (fcitx5's own guide for Wayland
-# compositors says the same).
+# only: the module then sets no `QT_IM_MODULE`, which would route Qt through
+# fcitx5's own toolkit plugin instead of the protocol it already speaks
+# (fcitx5's own guide for Wayland compositors says the same).
+#
+# GTK IS NOT SERVED, and on purpose: `nix/modules/foreign.nix` keeps
+# `GTK_IM_MODULE=simple`, because a GTK app composes the Compose key only
+# there — under fcitx5 Ghostty typed `'a` for `CAPS ' a` (2026-11-03), and
+# accents are typed all day, Japanese by nobody yet.
 #
 # # The engines are THERE, not switched on
 #

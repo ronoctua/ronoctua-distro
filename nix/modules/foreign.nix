@@ -85,13 +85,14 @@ in
     # no input-method framework. The shell's own windows compose in their own
     # reader (`ronoctua_shell_door::door::compose`) and never read this.
     #
-    # ONLY WITHOUT THE INPUT METHOD (2026-11-02): the session runs fcitx5
-    # (`nix/modules/input-method.nix`), and GTK apps reach it through its
-    # Wayland frontend — `simple` would keep Ghostty and Emacs away from it.
-    # fcitx5 composes the Compose key itself, so accents keep working.
-    environment.sessionVariables.GTK_IM_MODULE = lib.mkIf (
-      !config.ronoctua.inputMethod.enable
-    ) "simple";
+    # AND WITH THE INPUT METHOD TOO. It was made `simple` only without fcitx5
+    # (2026-11-02), on the belief that fcitx5 composes the Compose key for the
+    # GTK apps it serves; on the machine (2026-11-03) Ghostty typed `'a` for
+    # `CAPS ' a` with fcitx5 running, and with it stopped under its GTK module
+    # and under `wayland`, and `á` only under `simple`. So GTK apps keep their
+    # accents and reach no input method; fcitx5 serves the shell's own windows,
+    # which speak to it over `zwp_text_input_v3` (`nix/modules/input-method.nix`).
+    environment.sessionVariables.GTK_IM_MODULE = "simple";
 
     # What the settings portal answers: `programs.dconf.enable` is the compositor module's.
     programs.dconf.profiles.user.databases = [
