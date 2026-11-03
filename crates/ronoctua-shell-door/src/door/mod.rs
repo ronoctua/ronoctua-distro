@@ -33,6 +33,7 @@ pub mod handlers;
 pub mod keys;
 pub mod list;
 pub mod screens;
+pub mod text_input;
 pub mod touch;
 
 use anyhow::{Context as _, Result};
@@ -60,7 +61,7 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, Proxy as _, QueueHandle,
     globals::{GlobalList, registry_queue_init},
-    protocol::{wl_keyboard, wl_surface, wl_touch},
+    protocol::{wl_callback, wl_keyboard, wl_surface, wl_touch},
 };
 
 /// `BTN_LEFT`, from `linux/input-event-codes.h`.
@@ -211,6 +212,12 @@ pub struct Ui {
     /// The session is to be opened again at the end of the turn — asked by
     /// a door that holds the lock ([`Ui::unlock`]).
     unlock_owed: bool,
+    /// The next frame is to ask the compositor when it is shown — see
+    /// [`Ui::pace`].
+    frame_wanted: bool,
+    /// A frame asked about ([`Ui::pace`]) is not shown yet — see
+    /// [`Ui::frame_in_flight`].
+    frame_in_flight: bool,
 }
 
 /// A program a window starts — see [`Ui::launch`] and [`Ui::launch_entry`].
@@ -236,6 +243,10 @@ enum PasteFor {
     Line(u64),
     /// The window itself: [`Content::pasted`].
     Content,
+    /// The window itself, from the PRIMARY selection — what a pointer last
+    /// swept anywhere, which a middle click and `S-Insert` paste — and not
+    /// from the clipboard ([`Ui::paste_primary`]).
+    Primary,
 }
 
 /// What a key did while the line asked — what the window is told.
@@ -293,6 +304,53 @@ impl Ui {
     /// Asks for a frame. It is drawn when the event queue empties.
     pub const fn ask_paint(&mut self) {
         self.owed = true;
+    }
+
+    /// THE FRAME PRESENTED NEXT asks the compositor to say when it is SHOWN,
+    /// and the window hears it as [`Content::frame_done`] — a frame skipped
+    /// (hidden, out of date) asks nothing, and the want waits for one that is
+    /// presented.
+    ///
+    /// # Why a window would
+    ///
+    /// For a window that draws as fast as data arrives — a grid of cells
+    /// under a program writing a flood — and must not draw faster than the
+    /// screen shows: it paints, asks, and paints again when the compositor
+    /// has taken the last frame, ONE in flight at most ([`Ui::frame_in_flight`]),
+    /// so a present never waits for the swap chain on the loop's thread and
+    /// a key pressed in the flood is read at once.
+    ///
+    /// # And what it must never be used for
+    ///
+    /// A surface nobody sees — under a fullscreen window, on a workspace no
+    /// screen shows — is never told: its frame stays in flight until it is
+    /// shown again. A window that waits for the answer before PAINTING stops
+    /// painting while hidden, which is the point; one that waits for it to
+    /// CONFIRM anything else freezes (AGENTS: a hidden surface gets no frame
+    /// callback).
+    pub const fn pace(&mut self) {
+        self.frame_wanted = true;
+    }
+
+    /// Whether a paced frame ([`Ui::pace`]) is still waiting to be shown —
+    /// what a window asks before painting at once on fresh data: while one is
+    /// in flight, [`Content::frame_done`] will come, and it paints then.
+    #[must_use]
+    pub const fn frame_in_flight(&self) -> bool {
+        self.frame_in_flight
+    }
+
+    /// Whether the frame being presented is to ask for its callback: it was
+    /// wanted ([`Ui::pace`]) and none is in flight. The want is taken either
+    /// way — with one in flight, its answer is the one the window hears.
+    const fn pace_this_frame(&mut self) -> bool {
+        let wanted = self.frame_wanted;
+        self.frame_wanted = false;
+        if wanted && !self.frame_in_flight {
+            self.frame_in_flight = true;
+            return true;
+        }
+        false
     }
 
     /// OPENS THE SESSION AGAIN, at the end of the turn, and ends the door —
@@ -425,6 +483,14 @@ impl Ui {
         self.paste_owed = Some(PasteFor::Content);
     }
 
+    /// The PRIMARY selection's text is wanted by the window — what a pointer
+    /// last swept, anywhere: read off the loop like [`Ui::paste`], and handed
+    /// to the same [`Content::pasted`]. A middle click and `S-Insert` paste
+    /// it, where `C-S-v` pastes the clipboard.
+    pub const fn paste_primary(&mut self) {
+        self.paste_owed = Some(PasteFor::Primary);
+    }
+
     /// A key, while a question is on the line. Every key is the line's: it
     /// is typed, answered, let go, or asks for the clipboard — and the answer
     /// leaves the line before the window hears it.
@@ -486,7 +552,7 @@ impl Ui {
     /// must not type into.
     fn pasted_into_the_line(&mut self, to: PasteFor, text: &str) -> Option<bool> {
         match to {
-            PasteFor::Content => Some(false),
+            PasteFor::Content | PasteFor::Primary => Some(false),
             PasteFor::Line(n) if n == self.questions => {
                 let line = self.asking.as_mut()?;
                 if line.paste(text) == crate::line::Step::Changed {
@@ -614,6 +680,8 @@ impl Ui {
             detached: true,
             follow_owed: false,
             unlock_owed: false,
+            frame_wanted: false,
+            frame_in_flight: false,
         };
         ui.recount();
         Ok(ui)
@@ -1032,8 +1100,29 @@ pub struct Hand<H> {
     /// A held button that may become — or has become — a sweep of text
     /// (`crate::text_select`).
     pub selecting: crate::text_select::Selecting,
+    /// Where this pointer rests on the surface, in logical pixels, and
+    /// `None` once it left: where the look under it is asked again when a
+    /// KEY changes it with nothing moving — the pointer hidden as somebody
+    /// types, the hand `Ctrl` shows over a link ([`Door::look_again`]).
+    pub at: Option<(f64, f64)>,
     /// What the window keeps of its own for this pointer.
     pub extra: H,
+}
+
+/// Where a pointer rests after `events`, from where it rested before: an
+/// enter or a motion puts it there, a leave takes it off the surface, and a
+/// button or the wheel leaves it where it was.
+#[must_use]
+pub(crate) fn resting_at(
+    before: Option<(f64, f64)>,
+    events: &[PointerEvent],
+) -> Option<(f64, f64)> {
+    use smithay_client_toolkit::seat::pointer::PointerEventKind;
+    events.iter().fold(before, |at, e| match e.kind {
+        PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => Some(e.position),
+        PointerEventKind::Leave { .. } => None,
+        _ => at,
+    })
 }
 
 /// Every pointer's row in its cursor's colour, and where across the surface
@@ -1138,11 +1227,14 @@ pub struct Composed {
 }
 
 impl Composed {
-    /// Draws the frame, once its three pipelines were handed it — the text
-    /// over the PHYSICAL pixels, the rectangles and the pictures over the
-    /// LOGICAL ones (`crate::hidpi`, and `Door::present`) — in the canvas's
-    /// order: the rectangles under, the pictures, the rectangles over, the
-    /// text. There is no depth test — later is on top.
+    /// Draws the frame, once its pipelines were handed it — the text and the
+    /// cells over the PHYSICAL pixels, the rectangles and the pictures over
+    /// the LOGICAL ones (`crate::hidpi`, and `Door::present`) — in the
+    /// canvas's order: the rectangles under, the pictures, the rectangles
+    /// over, a grid of cells if the window has one ([`Content::sheet`]), the
+    /// text. There is no depth test — later is on top: the window's own
+    /// header, line and messages stay over the grid, and the grid's
+    /// backgrounds over the window's ground.
     ///
     /// # Errors
     ///
@@ -1153,11 +1245,15 @@ impl Composed {
         text: &ronoctua_render::Text,
         quads: &ronoctua_render::quad::Quads,
         images: &ronoctua_render::image::Images,
+        cells: Option<&ronoctua_render::cells::Cells>,
     ) -> Result<()> {
         let total = u32::try_from(self.quads.len()).unwrap_or(u32::MAX);
         quads.draw_range(pass, 0, self.split);
         images.draw(pass);
         quads.draw_range(pass, self.split, total);
+        if let Some(cells) = cells {
+            cells.draw(pass);
+        }
         text.draw(ronoctua_render::Atlas::Pinned, pass)
     }
 }
@@ -1528,6 +1624,34 @@ pub trait Content: Sized + 'static {
         crate::theme::windows_page()
     }
 
+    /// THE COLOUR THE WINDOW IS CLEARED WITH, linear (as
+    /// `tokens::Color::to_linear` gives it): `surface.chrome` of the page it
+    /// wears ([`Content::page`]), every window's ground. A window whose ground
+    /// is another — a grid of cells cleared in its own background, which a
+    /// program may change — answers it here, so the ground is the clear and
+    /// nothing paints it a second time.
+    ///
+    /// Asked at every frame, with the page already worn.
+    fn clear(&self) -> [f32; 4] {
+        tokens::color::SURFACE_CHROME.to_linear()
+    }
+
+    /// THE GRID OF CELLS this window draws, when it draws one
+    /// (`ronoctua_render::cells`): asked at every frame after
+    /// [`Content::paint`], and drawn over the frame's rectangles and pictures
+    /// and under its text ([`Composed::draw`]). The door owns what
+    /// draws it — the atlas, the buffers — and rebuilds only the rows the
+    /// sheet says were written; `None`, the default, is every window that
+    /// draws no grid, and costs it nothing.
+    ///
+    /// A METHOD AND NOT A FIELD OF THE CANVAS: the canvas outlives the
+    /// window's `paint`, and a sheet the window keeps cannot be lent to
+    /// something that outlives the borrow — asked after, it is lent for the
+    /// one present that draws it.
+    fn sheet(&self) -> Option<&ronoctua_render::cells::Sheet> {
+        None
+    }
+
     /// The line the header is drawn on — `0`, in every window. A column
     /// answers `1`: its line 0 is its own control line (`crate::column`), and
     /// the header, the drawer and the list move down with it
@@ -1672,6 +1796,36 @@ pub trait Content: Sized + 'static {
         crate::cursor_shape::Look::Arrow
     }
 
+    /// WHERE THIS WINDOW TAKES TEXT FROM AN INPUT METHOD — the field the
+    /// keyboard types into now, and where its cursor is (`door::text_input`).
+    /// An input method composes there: [`Content::preedit`] while it guesses,
+    /// [`Content::committed`] once it settled.
+    ///
+    /// `None`, THE DEFAULT, is a window that types into nothing an input
+    /// method could compose for — a list, a question read key by key: it is
+    /// never enabled, and every key reaches it as the keyboard gave it. Asked
+    /// once a turn while the keyboard is in, after the frame, so a cursor the
+    /// frame moved is told beside the text it moved with; the door's own
+    /// line, while it asks, answers `None` over it.
+    fn text_input(&self, ui: &Ui) -> Option<text_input::Field> {
+        let _ = ui;
+        None
+    }
+
+    /// What the input method is composing, or `None` once it composes
+    /// nothing — to DRAW where it will land, never to type: only
+    /// [`Content::committed`] is typed. Heard only by a window that answered
+    /// [`Content::text_input`].
+    fn preedit(&mut self, ui: &mut Ui, preedit: Option<text_input::Preedit>) {
+        let _ = (ui, preedit);
+    }
+
+    /// Text the input method committed — typed, as a key's character is.
+    /// Heard only by a window that answered [`Content::text_input`].
+    fn committed(&mut self, ui: &mut Ui, text: &str) {
+        let _ = (ui, text);
+    }
+
     /// The state this window is in, for the modeline: an id with a
     /// `state-<id>` key, and the tone it is drawn in — a question waiting on
     /// the person in `Warning`. `None`, the default, is a window with no
@@ -1690,6 +1844,15 @@ pub trait Content: Sized + 'static {
     /// controls, the bar, the hover, the click and the wheel.
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Self::Hand>, events: &[PointerEvent]) {
         list::pointer(self, ui, hand, events);
+    }
+
+    /// Whether the mouse's Back button is `Esc` over this window — `true`,
+    /// the standard (`BACK_BUTTON`, the pointer's way back). A window that
+    /// hands the pointer's buttons to a program of its own — a terminal
+    /// reporting the mouse — answers `false`, and the press reaches
+    /// [`Content::pointer`] as any other button's does.
+    fn back_is_esc(&self) -> bool {
+        true
     }
 
     /// Whether the header's own keys — the right `Ctrl` walking its drawer,
@@ -1819,6 +1982,9 @@ pub struct Door<C: Content> {
     pointers: crate::seats::Seats<Hand<C::Hand>>,
     /// The arrow each pointer is asked for on entering. See `crate::cursor_shape`.
     shapes: crate::cursor_shape::Shapes,
+    /// A text input per seat with a keyboard, for a window an input method
+    /// composes in. See [`text_input`].
+    inputs: text_input::Inputs,
     /// The state of the pointer whose events are being handled now.
     pub here: Hand<C::Hand>,
     /// Every touch screen on every seat.
@@ -1836,6 +2002,10 @@ pub struct Door<C: Content> {
     text: Option<ronoctua_render::Text>,
     quads: Option<ronoctua_render::quad::Quads>,
     images: Option<ronoctua_render::image::Images>,
+    /// The grid of cells a window draws ([`Content::sheet`]) — made on the
+    /// first frame that hands one over, and kept: a window that draws a grid
+    /// draws it for its whole life.
+    cells: Option<ronoctua_render::cells::Cells>,
     /// Every bar the last frame drew — see `crate::bars`.
     bars: crate::bars::Drawn,
     /// The text the last frame drew, in cells — what a sweep copies
@@ -2018,6 +2188,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             detached: false,
             follow_owed: false,
             unlock_owed: false,
+            frame_wanted: false,
+            frame_in_flight: false,
         },
         content,
         handle,
@@ -2031,6 +2203,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         compose: compose::Compose::from_locale(),
         pointers: crate::seats::Seats::default(),
         shapes: crate::cursor_shape::Shapes::bind(&globals, &qh),
+        inputs: text_input::Inputs::bind(&globals, &qh),
         here: Hand::default(),
         touches: crate::seats::Seats::default(),
         fingers: touch::Fingers::default(),
@@ -2040,6 +2213,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         text: None,
         quads: None,
         images: None,
+        cells: None,
         bars: crate::bars::Drawn::default(),
         painted: Vec::new(),
         selection: None,
@@ -2332,10 +2506,19 @@ impl<C: Content> Door<C> {
         self.ui.hinted.let_everything_go();
         let _ = self.ui.hinted.light_at(None);
         let _ = self.ui.hinted.say(None);
+        // THE CELLS GO WITH THE GPU they were made on — their pipeline, atlas
+        // and buffers are that device's, and their shapes name the faces of
+        // the text going with it; the next frame that hands a sheet makes
+        // them again on the new one.
+        self.cells = None;
         self.images = None;
         self.quads = None;
         self.text = None;
         self.gpu = None;
+        // AND A PACED FRAME IN FLIGHT IS NOT: the old surface's callback dies
+        // with it unanswered, and a window waiting for it would never paint
+        // on the new one (`Ui::pace`).
+        self.ui.frame_in_flight = false;
         self.ui.surface = surface;
         // A NEW SURFACE IS ON NO SCREEN until it is told it entered one —
         // and the window is told that moved, as every other change of
@@ -2542,6 +2725,9 @@ impl<C: Content> Door<C> {
                 self.paint();
             }
         }
+        // THE FIELD AN INPUT METHOD COMPOSES IN, after the frame: a cursor
+        // the frame moved is told now, with the text it moved with.
+        self.follow_the_field();
     }
 
     /// Every pointer's row, in its cursor's colour — and the finger's — and
@@ -2642,11 +2828,55 @@ impl<C: Content> Door<C> {
         // exactly where a physical one over a physical viewport would.
         quads.prepare(&gpu.device, &gpu.queue, width, height, &composed.quads);
         images.prepare(&gpu.queue, width, height, &composed.pictures);
+        // THE GRID OF CELLS, when the window draws one: over the PHYSICAL
+        // surface like the text, shaped through the text's own faces so its
+        // fallback is the interface's, and only the rows the sheet says were
+        // written rebuilt (`ronoctua_render::cells`).
+        let drew_cells = match self.content.sheet() {
+            Some(sheet) => {
+                if self.cells.is_none() {
+                    match ronoctua_render::cells::Cells::new(&gpu.device, gpu.config.format) {
+                        Ok(c) => self.cells = Some(c),
+                        Err(e) => tracing::error!(error = %e, "assembling the cells failed"),
+                    }
+                }
+                self.cells.as_mut().is_some_and(|cells| {
+                    cells.prepare(
+                        &gpu.device,
+                        &gpu.queue,
+                        sheet,
+                        text.fonts(),
+                        (gpu.config.width, gpu.config.height),
+                    );
+                    true
+                })
+            }
+            None => false,
+        };
+        let cells = if drew_cells {
+            self.cells.as_ref()
+        } else {
+            None
+        };
+        // THE WINDOW'S GROUND, which a grid of cells may have made its own.
+        let clear = self.content.clear();
+        let (ui, qh) = (&mut self.ui, &self.qh);
         let (text, quads, images) = (&*text, &*quads, &*images);
         if let Err(e) = gpu.frame(
-            tokens::color::SURFACE_CHROME.to_linear(),
-            || crate::hidpi::told_before_present(scale, told, &surface),
-            |pass| composed.draw(pass, text, quads, images),
+            clear,
+            || {
+                crate::hidpi::told_before_present(scale, told, &surface);
+                // THE FRAME CALLBACK (`Ui::pace`), asked HERE and not before
+                // `Gpu::frame`: this is where the frame is certain to be
+                // presented. A frame skipped — hidden, out of date, a draw
+                // that failed — makes no commit, and a callback asked before
+                // it would wait for whichever commit came next, a paced
+                // window holding its paint for an answer nothing had asked.
+                if ui.pace_this_frame() {
+                    let _ = surface.frame(qh, Paced);
+                }
+            },
+            |pass| composed.draw(pass, text, quads, images, cells),
         ) {
             tracing::error!(error = %e, "drawing the frame failed");
             return;
@@ -2681,6 +2911,29 @@ impl<C: Content> Door<C> {
             event,
             mods,
         );
+        self.look_again();
+    }
+
+    /// THE LOOK UNDER EVERY POINTER ON THE SURFACE, asked again where each
+    /// one rests (`Hand::at`) — after a key, which can change it with nothing
+    /// moving: a window hides the pointer as somebody types, and `Ctrl`
+    /// held over a link turns it into the hand. Asked only on motion, the
+    /// first never showed and the second waited for the pointer to move. A
+    /// pointer off the surface is asked nothing; the shape is only sent when
+    /// it changed (`cursor_shape::Shapes::wear`).
+    pub(crate) fn look_again(&mut self) {
+        let looks: Vec<_> = self
+            .pointers
+            .devices()
+            .filter_map(|p| {
+                let seat = self.pointers.seat_of(p)?;
+                let at = self.pointers.state_on(seat, &self.here)?.at?;
+                Some((seat.clone(), self.content.cursor_at(&self.ui, at)))
+            })
+            .collect();
+        for (seat, look) in looks {
+            self.shapes.wear(Some(&seat), look);
+        }
     }
 
     /// A click on a shortcut of the header: what the key would have done —
@@ -2812,9 +3065,15 @@ impl<C: Content> Door<C> {
     /// (`crate::pasting`) and handed back through the door's channel.
     fn read_the_clipboard(&self, to: PasteFor) {
         let back = self.back.clone();
-        crate::pasting::text_then(move |text| {
+        let done = move |text| {
             let _ = back.send(Back::Pasted { to, text });
-        });
+        };
+        // THE PRIMARY SELECTION is its own; every other paste is the
+        // clipboard's.
+        match to {
+            PasteFor::Primary => crate::pasting::primary_then(done),
+            PasteFor::Content | PasteFor::Line(_) => crate::pasting::text_then(done),
+        }
     }
 
     /// One order down the footer's control socket, from a thread: a connect
@@ -3130,9 +3389,12 @@ fn pointer_into<C: Content>(
             acts.push(Some(act));
             continue;
         }
-        // THE BACK BUTTON, over any part of the window — see `went_back_into`.
+        // THE BACK BUTTON, over any part of the window — see `went_back_into`
+        // — unless the window hands its buttons on (`Content::back_is_esc`),
+        // and then it is a press like any other's.
         if let PointerEventKind::Press { button, .. } = e.kind
             && button == BACK_BUTTON
+            && content.back_is_esc()
         {
             acts.push(None);
             continue;
@@ -3358,6 +3620,36 @@ impl<C: Content> Detached<C> {
         }
         self.painted = crate::text_select::painted_of(&composed.spans);
         composed
+    }
+}
+
+/// THE FRAME CALLBACK THE DOOR ASKS FOR ITS OWN PACING ([`Ui::pace`]): when
+/// the compositor says the frame is shown, the frame is no longer in flight
+/// and the window hears [`Content::frame_done`].
+///
+/// Its own user data, and not SCTK's `FrameCallbackData`, so the door knows
+/// which answer is ITS frame's: a window that asks for a callback of its own
+/// (a column, to learn it was mapped) must not end the pacing's flight, and
+/// the pacing's answer must not be mistaken for that one's — each is
+/// dispatched to its own.
+#[derive(Debug)]
+struct Paced;
+
+impl<C: Content> smithay_client_toolkit::dispatch2::Dispatch2<wl_callback::WlCallback, Door<C>>
+    for Paced
+{
+    fn event(
+        &self,
+        door: &mut Door<C>,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &Connection,
+        _: &QueueHandle<Door<C>>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            door.ui.frame_in_flight = false;
+            door.content.frame_done(&mut door.ui);
+        }
     }
 }
 
@@ -3696,5 +3988,171 @@ mod tests {
         closing.quit = true;
         closing.last_orders_sent(false);
         assert!(closing.quit, "a window closing for itself was kept open");
+    }
+
+    /// A window of nothing but the hooks a grid of cells overrides — what
+    /// these tests drive.
+    struct Grid {
+        back_is_esc: bool,
+        escapes: usize,
+        pressed: Vec<u32>,
+    }
+
+    impl Grid {
+        fn new(back_is_esc: bool) -> Self {
+            Self {
+                back_is_esc,
+                escapes: 0,
+                pressed: Vec::new(),
+            }
+        }
+    }
+
+    impl Content for Grid {
+        type Hand = ();
+
+        fn app_id(&self) -> &'static str {
+            "test.grid"
+        }
+
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+
+        fn typed(&mut self, _: &mut Ui, event: &KeyEvent, _: Modifiers) {
+            if event.keysym == Keysym::Escape {
+                self.escapes += 1;
+            }
+        }
+
+        fn back_is_esc(&self) -> bool {
+            self.back_is_esc
+        }
+
+        fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+            None
+        }
+
+        fn pointer(&mut self, _: &mut Ui, _: &mut Hand<()>, events: &[PointerEvent]) {
+            use smithay_client_toolkit::seat::pointer::PointerEventKind;
+            for e in events {
+                if let PointerEventKind::Press { button, .. } = e.kind {
+                    self.pressed.push(button);
+                }
+            }
+        }
+    }
+
+    /// A press of `button` in the middle of a window.
+    fn press(ui: &Ui, button: u32) -> PointerEvent {
+        PointerEvent {
+            surface: ui.surface.clone(),
+            position: (200.0, 200.0),
+            kind: smithay_client_toolkit::seat::pointer::PointerEventKind::Press {
+                time: 0,
+                button,
+                serial: 0,
+            },
+        }
+    }
+
+    /// FAILS IF: the Back button stops being `Esc` over a window that keeps
+    /// the standard, or stays `Esc` over one that hands its buttons on — a
+    /// terminal reporting the mouse would close what the program under it
+    /// opened instead of telling the program button 8 was pressed.
+    #[test]
+    fn the_back_button_is_esc_unless_the_window_hands_it_on() {
+        let standard = ui();
+        let event = press(&standard, BACK_BUTTON);
+        let mut d = Detached::new(standard, Grid::new(true));
+        d.pointer(&[event]);
+        assert_eq!(d.content.escapes, 1, "the Back button was not Esc");
+        assert!(
+            d.content.pressed.is_empty(),
+            "the window saw the Back button"
+        );
+
+        let handing = ui();
+        let event = press(&handing, BACK_BUTTON);
+        let mut d = Detached::new(handing, Grid::new(false));
+        d.pointer(&[event]);
+        assert_eq!(d.content.escapes, 0, "the Back button was Esc");
+        assert_eq!(d.content.pressed, vec![BACK_BUTTON]);
+    }
+
+    /// FAILS IF: a paced window has more than one frame in flight — the
+    /// present would wait for the swap chain on the loop's thread — or never
+    /// gets to ask again once the frame was shown.
+    #[test]
+    fn a_paced_window_has_one_frame_in_flight() {
+        let mut ui = ui();
+        assert!(!ui.pace_this_frame(), "a frame nobody asked to pace asked");
+        ui.pace();
+        assert!(ui.pace_this_frame());
+        assert!(ui.frame_in_flight());
+        ui.pace();
+        assert!(!ui.pace_this_frame(), "a second frame went in flight");
+        // THE ANSWER, as `Paced` takes it.
+        ui.frame_in_flight = false;
+        assert!(
+            !ui.pace_this_frame(),
+            "a want taken while one was in flight came back"
+        );
+        ui.pace();
+        assert!(ui.pace_this_frame());
+    }
+
+    /// FAILS IF: a paste of the primary selection is not the window's own —
+    /// typed into a question on the line, which it was never read for — or
+    /// is not asked for at all.
+    #[test]
+    fn a_primary_paste_is_the_windows() {
+        let mut ui = ui();
+        ui.ask(Line::new("software-file-path", false, None));
+        ui.paste_primary();
+        assert!(ui.wants_the_clipboard());
+        let to = ui.paste_owed.take().expect("a paste owed");
+        assert_eq!(to, PasteFor::Primary);
+        assert_eq!(ui.pasted_into_the_line(to, "swept"), Some(false));
+        assert_eq!(ui.asking.as_ref().map(|l| l.text.as_str()), Some(""));
+    }
+
+    /// FAILS IF: a window that says nothing draws a grid, or is cleared in
+    /// anything but its page's chrome — every window but a grid's would
+    /// change ground.
+    #[test]
+    fn a_window_draws_no_grid_and_wears_its_chrome_by_default() {
+        let grid = Grid::new(true);
+        assert!(grid.sheet().is_none());
+        assert!(grid.back_is_esc());
+        assert_eq!(grid.clear(), tokens::color::SURFACE_CHROME.to_linear());
+    }
+
+    /// FAILS IF: a pointer's resting place does not follow its last enter
+    /// or motion, a click or the wheel moves it, or a pointer that left is
+    /// still taken to rest on the surface — the look a key asks again
+    /// (`Door::look_again`) would be asked where no pointer is: hidden, or
+    /// a hand, over a window the pointer is not on.
+    #[test]
+    fn a_pointer_rests_where_it_last_moved_until_it_leaves() {
+        use smithay_client_toolkit::seat::pointer::PointerEventKind;
+        let ui = ui();
+        let at = |position, kind| PointerEvent {
+            surface: ui.surface.clone(),
+            position,
+            kind,
+        };
+        let came = [
+            at((5.0, 6.0), PointerEventKind::Enter { serial: 1 }),
+            at((7.0, 8.0), PointerEventKind::Motion { time: 0 }),
+        ];
+        assert_eq!(resting_at(None, &came), Some((7.0, 8.0)));
+        let clicked = [press(&ui, LEFT_BUTTON)];
+        assert_eq!(resting_at(Some((7.0, 8.0)), &clicked), Some((7.0, 8.0)));
+        let went = [
+            at((9.0, 9.0), PointerEventKind::Motion { time: 0 }),
+            at((9.0, 9.0), PointerEventKind::Leave { serial: 2 }),
+        ];
+        assert_eq!(resting_at(Some((7.0, 8.0)), &went), None);
     }
 }

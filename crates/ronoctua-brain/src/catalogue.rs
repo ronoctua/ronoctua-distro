@@ -122,6 +122,13 @@ pub struct Mark {
     pub instances: u8,
     /// Whether it may be drawn at rest.
     pub resting: bool,
+    /// How many sets it may stand in; `0` for none (`MarkId::sets`). Absent
+    /// from a catalogue written before there were sets, which had none.
+    #[serde(default)]
+    pub sets: u8,
+    /// Whether it leads its set (`MarkId::leads`).
+    #[serde(default)]
+    pub leads: bool,
 }
 
 /// A notice a module may raise, as declared.
@@ -377,6 +384,8 @@ impl Declared {
                     hint: k.hint.to_string(),
                     instances: k.instances,
                     resting: k.resting,
+                    sets: k.sets,
+                    leads: k.leads,
                 })
                 .collect(),
             notices: m

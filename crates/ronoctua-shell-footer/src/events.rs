@@ -123,6 +123,17 @@ pub const TOR_DOWN: &str = "tor-down";
 pub const CHARGER_PLUGGED: &str = "charger-plugged";
 /// The charger stopped delivering.
 pub const CHARGER_UNPLUGGED: &str = "charger-unplugged";
+/// A program in a terminal nobody is looking at rang its bell.
+pub const TERMINAL_BELL: &str = "terminal-bell";
+/// A program in a terminal nobody is looking at is blocked on the person
+/// (OSC 7501's `blocked`): it cannot go on until they answer.
+pub const TERMINAL_WAITING: &str = "terminal-waiting";
+/// A long command ended in a terminal nobody is looking at (OSC 133 `D`).
+pub const TERMINAL_FINISHED: &str = "terminal-finished";
+/// A program in a terminal nobody is looking at asked for a desktop
+/// notification (OSC 9/777) — a NOTIFICATION the footer raises, with the
+/// program's own words, and not an event: what it says is the program's.
+pub const TERMINAL_NOTICE: &str = "terminal-notice";
 
 /// The programs of OURS that hold a camera, by the name `/proc` gives them.
 ///
@@ -211,9 +222,13 @@ pub struct Event {
     /// called `1`, finds none and falls to the default without a word
     /// (`numeric-selectors-get-numbers`). A brain module's event carries them.
     pub counts: Vec<(&'static str, i64)>,
-    /// What its action opens, when it opens something — the desktop id of
-    /// the program an install put in the launcher ([`launch_of`]).
-    pub opens: Option<String>,
+    /// What its actions are about, when they are about one thing: the
+    /// argument a command of its entry runs with ([`subject_of`]) — the
+    /// desktop id of the program an install put in the launcher, the
+    /// terminal a terminal's signal shows. It crosses to the notification
+    /// the event becomes on the band ([`notification`]), whose button runs
+    /// on it too.
+    pub subject: Option<String>,
     /// Its level, as the filters decide it for the notification it would be
     /// on the band — what orders the line's queue as it orders the band's
     /// ([`Line::arrive`]). The footer decides it before the line hears the
@@ -231,7 +246,7 @@ impl Event {
             app,
             args: Vec::new(),
             counts: Vec::new(),
-            opens: None,
+            subject: None,
             level: 0,
         }
     }
@@ -243,13 +258,27 @@ impl Event {
         self
     }
 
+    /// The same, with a count more — crossing to Fluent as a number.
+    #[must_use]
+    pub fn counting(mut self, name: &'static str, value: i64) -> Self {
+        self.counts.push((name, value));
+        self
+    }
+
+    /// The same, about `subject` — what its actions run on ([`Event::subject`]).
+    #[must_use]
+    pub fn on(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
     /// A program the software centre put in the launcher — `tag` is
     /// `software-installed` or `software-web-created`, `app` its name, and
-    /// `opens` the desktop id its action launches.
+    /// `opens` the desktop id its action launches — the event's subject.
     #[must_use]
     pub fn installed(tag: &'static str, app: &str, opens: Option<&str>) -> Self {
         let mut e = Self::of(tag, key::NOTIF_SOFTWARE_APP).about("app", app);
-        e.opens = opens.map(ToOwned::to_owned);
+        e.subject = opens.map(ToOwned::to_owned);
         e
     }
 
@@ -293,6 +322,9 @@ pub fn notification(e: &Event, texts: &ronoctua_i18n::Texts) -> ronoctua_notify:
         ronoctua_notify::Urgency::Normal,
     );
     n.tags = vec![e.tag.to_owned()];
+    // WHAT ITS ACTIONS ARE ABOUT goes with it: the band's button, and the
+    // manager's, run the entry's command on the same thing the line's would.
+    n.subject.clone_from(&e.subject);
     n
 }
 
@@ -334,21 +366,33 @@ pub fn actions_of(
 /// was installed".
 pub const LAUNCH_LATEST: &str = "software-launch-latest";
 
-/// The desktop id a click on `command`, among `e`'s actions, launches.
+/// The command a terminal's signals offer — its notice, its bell, its wait
+/// and its long command — run on the terminal they are about (their
+/// subject): its window in front, or a window opened for its group.
+pub const TERMINAL_SHOW: &str = "terminal-show";
+
+/// What a click on `command`, among `e`'s actions, runs on: the event's
+/// subject, when `command` is one its catalogue entry offers.
 ///
 /// THE ONE THE LINE NAMES, and not the latest: `software-launch-latest` with
 /// no argument opens whatever finished LAST, and the queue and the pointer's
 /// hold keep an older install's line up while newer ones finish — "GIMP is
-/// installed · Open it" opened Inkscape. `None` for any other command, or an
-/// event that carries no id; the band's button keeps the latest, as it
-/// always did.
+/// installed · Open it" opened Inkscape. The same for a terminal: "show it"
+/// on a bell's line shows the terminal that rang, whichever rang since.
+/// `None` for a command its entry does not offer, or an event that is about
+/// nothing in particular.
 #[must_use]
-pub fn launch_of<'a>(e: &'a Event, command: &str) -> Option<&'a str> {
-    if command == LAUNCH_LATEST {
-        e.opens.as_deref()
-    } else {
-        None
-    }
+pub fn subject_of<'a>(
+    e: &'a Event,
+    command: &str,
+    book: &ronoctua_notify::Book,
+) -> Option<&'a str> {
+    let offered = book
+        .entry(e.tag)?
+        .actions
+        .iter()
+        .any(|a| matches!(&a.doing, ronoctua_notify::Doing::Command(c) if c == command));
+    if offered { e.subject.as_deref() } else { None }
 }
 
 // ---------------------------------------------------------------------------
@@ -640,13 +684,13 @@ const OPPOSITES: &[(&str, &str, Option<&str>)] = &[
 pub fn contradicts(new: &Event, old: &Event) -> bool {
     OPPOSITES.iter().any(|(on, off, about)| {
         let paired = (new.tag == *on && old.tag == *off) || (new.tag == *off && old.tag == *on);
-        paired && subject(new, *about) == subject(old, *about)
+        paired && about_of(new, *about) == about_of(old, *about)
     })
 }
 
 /// The argument `about` names — which network, tunnel or device an event is
 /// about — or nothing, for a source that has one thing.
-fn subject<'a>(e: &'a Event, about: Option<&str>) -> Option<&'a str> {
+fn about_of<'a>(e: &'a Event, about: Option<&str>) -> Option<&'a str> {
     let name = about?;
     e.args
         .iter()
@@ -655,13 +699,24 @@ fn subject<'a>(e: &'a Event, about: Option<&str>) -> Option<&'a str> {
 }
 
 /// Whether `new` replaces `old` on the line: two events, one the opposite of
-/// the other ([`contradicts`]). A notification replaces nothing — two
+/// the other ([`contradicts`]) — or the same thing said again of the same
+/// subject ([`repeats`]). A notification replaces nothing — two
 /// notifications are two things somebody said.
 fn replaces(new: &Said, old: &Said) -> bool {
     match (new, old) {
-        (Said::Event(new), Said::Event(old)) => contradicts(new, old),
+        (Said::Event(new), Said::Event(old)) => contradicts(new, old) || repeats(new, old),
         _ => false,
     }
+}
+
+/// Whether `new` says again what `old` said, of the same subject: a terminal
+/// that rings its bell twice while the first line is up is one terminal
+/// ringing — the line says it once, with its whole time again, and the queue
+/// does not fill with the same sentence. An event about nothing in particular
+/// repeats nothing: two networks lost are two things.
+#[must_use]
+pub fn repeats(new: &Event, old: &Event) -> bool {
+    new.tag == old.tag && new.subject.is_some() && new.subject == old.subject
 }
 
 /// What the minibuffer's line says — an event or a notification — and what
@@ -806,7 +861,7 @@ impl Line {
 
     /// What is on the line was acted on — one of its actions clicked — and
     /// leaves it: given back, so the click knows WHICH it was about
-    /// ([`launch_of`], a notification's record).
+    /// ([`subject_of`], a notification's record).
     pub fn done(&mut self) -> Option<Said> {
         self.on.take().map(|up| up.said)
     }
@@ -2511,6 +2566,9 @@ mod tests {
         crate::tags::BLUETOOTH_DISCONNECTED,
         crate::tags::SOFTWARE_INSTALLED,
         crate::tags::SOFTWARE_WEB_CREATED,
+        TERMINAL_BELL,
+        TERMINAL_WAITING,
+        TERMINAL_FINISHED,
     ];
 
     /// FAILS IF: an event's tag has no entry in the generated catalogue —
@@ -2602,20 +2660,73 @@ mod tests {
 
     /// FAILS IF: "Open it" on an install's line launches anything but the
     /// program THAT line names — the latest install, when a newer one
-    /// finished while this line was up — or another command launches it.
+    /// finished while this line was up — or a command its entry does not
+    /// offer runs on it.
     #[test]
     fn the_install_on_the_line_is_the_one_opened() {
+        let book = ronoctua_notify::Book::distro();
         let gimp = Event::installed(
             crate::tags::SOFTWARE_INSTALLED,
             "GIMP",
             Some("org.gimp.GIMP.desktop"),
         );
         assert_eq!(
-            launch_of(&gimp, LAUNCH_LATEST),
+            subject_of(&gimp, LAUNCH_LATEST, &book),
             Some("org.gimp.GIMP.desktop")
         );
-        assert_eq!(launch_of(&gimp, "files-open"), None);
+        assert_eq!(subject_of(&gimp, "files-open", &book), None);
         let unknown = Event::installed(crate::tags::SOFTWARE_INSTALLED, "GIMP", None);
-        assert_eq!(launch_of(&unknown, LAUNCH_LATEST), None);
+        assert_eq!(subject_of(&unknown, LAUNCH_LATEST, &book), None);
+    }
+
+    /// FAILS IF: an event's line opens anything but what THAT line names —
+    /// "show it" on a terminal's bell shows another terminal, or none — or
+    /// the band's button, once the event goes there, runs on nothing: the
+    /// subject has to cross to the notification the event becomes.
+    #[test]
+    fn an_event_opens_what_its_line_names() {
+        let book = ronoctua_notify::Book::distro();
+        let t = texts();
+        for tag in [TERMINAL_BELL, TERMINAL_WAITING, TERMINAL_FINISHED] {
+            let rang = Event::of(tag, key::NOTIF_TERMINAL_APP)
+                .about("title", "vim notes.md")
+                .about("program", "claude")
+                .counting("code", 0)
+                .on("0123456789abcdef");
+            assert_eq!(
+                subject_of(&rang, TERMINAL_SHOW, &book),
+                Some("0123456789abcdef"),
+                "{tag}"
+            );
+            let n = notification(&rang, &t);
+            assert_eq!(n.subject.as_deref(), Some("0123456789abcdef"), "{tag}");
+            let p = book.decide(&n);
+            assert_eq!(p.catalogue.as_deref(), Some(tag));
+            assert_ne!(p.show, ronoctua_notify::Show::Hidden, "{tag}");
+        }
+        // AN EVENT ABOUT NOTHING crosses as a notification about nothing.
+        assert_eq!(notification(&e(NETWORK_LOST), &t).subject, None);
+    }
+
+    /// FAILS IF: a terminal ringing twice while its first line is up fills
+    /// the queue with the same sentence — or one terminal's line takes the
+    /// place of another's, or of an event about nothing in particular.
+    #[test]
+    fn the_same_thing_said_again_of_one_subject_replaces_it() {
+        let now = Instant::now();
+        let rang = |id: &str| Event::of(TERMINAL_BELL, key::NOTIF_TERMINAL_APP).on(id);
+        let mut line = Line::default();
+        assert!(line.arrive(rang("aaaaaaaaaaaaaaaa"), false, now).is_none());
+        assert!(line.arrive(rang("aaaaaaaaaaaaaaaa"), false, now).is_none());
+        assert!(
+            line.waiting.is_empty(),
+            "the second bell queued behind the first"
+        );
+        assert!(line.arrive(rang("bbbbbbbbbbbbbbbb"), false, now).is_none());
+        assert_eq!(line.waiting.len(), 1, "another terminal's bell is its own");
+        assert!(
+            !repeats(&e(NETWORK_LOST), &e(NETWORK_LOST)),
+            "about nothing"
+        );
     }
 }

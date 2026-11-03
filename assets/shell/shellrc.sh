@@ -446,7 +446,7 @@ fi
 
 
 # -----------------------------------------------------------------------------
-# The default LLM accounts (`LEADER m a`)
+# The default LLM accounts (`LEADER / a`)
 # -----------------------------------------------------------------------------
 # `ronoctua-llm` writes this file whenever the person picks a default account,
 # so `claude` and `codex` typed here open it: an `export CLAUDE_CONFIG_DIR=…`
@@ -457,6 +457,66 @@ fi
 
 if [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/llm-default.env" ]; then
     . "${XDG_CONFIG_HOME:-$HOME/.config}/ronoctua/llm-default.env"
+fi
+
+
+# -----------------------------------------------------------------------------
+# The terminal's marks — only in a terminal of the distro's own
+# -----------------------------------------------------------------------------
+# The distro's terminal (`RONOCTUA_TERMINAL` names it) reads three things a
+# shell says about itself and does something with each: OSC 7 is the folder
+# (a new terminal of the group starts there, the background view shows it),
+# OSC 133 marks where a prompt, a command and its output begin and end, with
+# the exit code (jump between prompts, select one command's output; an
+# agent's "working" ends at a prompt), and OSC 2 is the title. Nothing is
+# printed anywhere else — not in Ghostty or VS Code, which bring their own,
+# not in `M-x shell`, not into a pipe — so the guard is the terminal's
+# variable AND a tty. The hooks hang in each shell's own file, after
+# starship, whose prompt they wrap. No fork per prompt: everything is the
+# shell's own expansion.
+
+__ronoctua_marks_wanted() {
+    [ -n "${RONOCTUA_TERMINAL:-}" ] && [ -t 1 ]
+}
+
+# The folder, as `kitty-shell-cwd://` takes it: the path raw, no
+# percent-encoding to get wrong. A folder whose name holds a control
+# character is not said at all — it would end the sequence early.
+__ronoctua_mark_folder() {
+    case "$PWD" in
+        *[[:cntrl:]]*) ;;
+        *) printf '\033]7;kitty-shell-cwd://%s%s\033\\' "${HOST:-${HOSTNAME:-}}" "$PWD" ;;
+    esac
+}
+
+__ronoctua_mark_title() {
+    printf '\033]2;%s\033\\' "${1//[[:cntrl:]]/}"
+}
+
+# At a prompt: the end of the command that ran (its exit code, the first
+# argument — read by the hook before anything else could change `$?`), the
+# folder and the title.
+__ronoctua_mark_precmd() {
+    local tilde='~'
+    if [ -n "${__ronoctua_running:-}" ]; then
+        printf '\033]133;D;%s\033\\' "$1"
+        __ronoctua_running=
+    fi
+    __ronoctua_mark_folder
+    __ronoctua_mark_title "${PWD/#"$HOME"/$tilde}"
+}
+
+# Before a command: where its output starts, and the command as the title.
+__ronoctua_mark_preexec() {
+    __ronoctua_running=1
+    printf '\033]133;C\033\\'
+    __ronoctua_mark_title "$1"
+}
+
+# THE TERMINAL IS GHOSTTY'S ENGINE (`TERM=xterm-ghostty`), and a host on the
+# other side of ssh may not know that name: it gets the one every host knows.
+if [ -n "${RONOCTUA_TERMINAL:-}" ] && [ "${TERM:-}" = xterm-ghostty ]; then
+    ssh() { TERM=xterm-256color command ssh "$@"; }
 fi
 
 

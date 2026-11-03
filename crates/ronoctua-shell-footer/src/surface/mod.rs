@@ -109,9 +109,10 @@ mod footer_settings;
 /// WHAT THE FOOTER HOLDS that a region of the slot host reads and does not
 /// own, LENT for one call by type (`region::Lent`): the transfer queue's
 /// jobs, the studio's state, the notification desk's queue and the person's
-/// filter book, and the clock's zone. (Never the cameras plugged in: reading
-/// one opens it and blinks its light, so the footer reads none, and the
-/// camera's settings read them while they are shown.) A list of
+/// filter book, the clock's zone, and the census of the held terminals.
+/// (Never the cameras plugged in: reading one opens it and blinks its light,
+/// so the footer reads none, and the camera's settings read them while they
+/// are shown.) A list of
 /// the footer's fields, borrowed one by one — so a call can lend them while
 /// the slot host lends the region out (`Footer::with_region`) — and written
 /// once, here: a region keeps no second copy of any of them.
@@ -123,6 +124,7 @@ macro_rules! held_by_the_footer {
             &$footer.notifications,
             &$footer.book,
             &$footer.zone,
+            &$footer.terminals.census,
         ]
     };
 }
@@ -145,6 +147,10 @@ mod sections;
 // THE STUDIO'S STATE, heard by the footer: the camera's and the recording's
 // marks, and the photos and recordings it says were written.
 mod studio;
+// THE HELD TERMINALS: their census, the modeline's mark for the ones no window
+// shows, `terminal-show`, `window-of-process`, and what one nobody is looking
+// at asks for.
+mod terminals;
 mod themes;
 mod window_menu;
 
@@ -1175,6 +1181,9 @@ struct Footer {
     /// from the top, so it can never meet the bus daemon's, which counts up
     /// from one — see [`Footer::arrived`].
     locally_raised: u32,
+    /// THE HELD TERMINALS, as their state files say them, and what the
+    /// footer keeps about them (`surface/terminals.rs`).
+    terminals: terminals::Held,
     /// The pairing question that is standing, wherever it is being shown.
     ///
     /// The VIEW is told it to draw it (`Footer::standing`); this holds it so that `LEADER s b y`
@@ -1465,6 +1474,11 @@ struct PerSeat {
     /// (`player_mark::zone_at`) — the pair is one segment, and its two
     /// glyphs say two things.
     mark_zone_under_pointer: Option<crate::player_mark::Zone>,
+    /// Which glyph of a brain SET it is over, by the glyph's first cell in
+    /// the set's segment (`brain::member_start`) — a set is one segment of
+    /// many glyphs, each with its own hint and click. `None` off a set, and
+    /// on its pads and the air between its glyphs.
+    set_member_under_pointer: Option<u16>,
     /// Where the pointer last was over the footer, in logical pixels — so the
     /// segment under it is read again when the MODELINE moves under a hand
     /// that stayed (`Footer::modeline_moved_under_the_pointer`).
@@ -1658,6 +1672,9 @@ const PRECEDENCE: &[Rank] = &[
     // The camera settings — `LEADER s c c`. Ranked with the pointers for
     // their reason: rows of settings hold nothing built by hand.
     Rank::Region("camera"),
+    // The terminal's settings — `LEADER RET s s`. With the camera's, for
+    // their reason: five rings, nothing built by hand.
+    Rank::Region("terminal-settings"),
     // The player — `LEADER p p`. Ranked with the camera settings, for their
     // reason: a cursor over a queue holds nothing a person built by hand.
     Rank::Region("player"),
@@ -1707,9 +1724,13 @@ const PRECEDENCE: &[Rank] = &[
     // question is the minibuffer's line — nothing half done lives in the
     // view, so any view that holds work outranks it.
     Rank::Region("belongings"),
-    // The LLM accounts (`LEADER m a a`): facts and a few questions — below
+    // The LLM accounts (`LEADER / a a`): facts and a few questions — below
     // the views that hold work, as the belongings are.
     Rank::Region("agents"),
+    // The terminals no window shows (`LEADER RET b b`, the modeline's mark):
+    // a list and a question at most, holding nothing built by hand — ranked
+    // with the accounts, whose agents run in them.
+    Rank::Region("terminals"),
     // The search over everything (`LEADER d d`): one line typed and what it
     // found — below every view that holds work, as the icons app is.
     Rank::Region("fast-access"),
@@ -3025,6 +3046,7 @@ fn assemble(
         bluetooth_asked: None,
         bluetooth_alarmed: std::collections::BTreeSet::new(),
         locally_raised: u32::MAX,
+        terminals: terminals::Held::default(),
         net: ronoctua_network::Snapshot::default(),
         repeat: None,
         region_clock_armed: false,
@@ -3176,6 +3198,12 @@ pub(crate) fn photographed(
     // the modeline's pair, and what the player's view is told.
     for heard in scene.player {
         state.player_heard(heard);
+    }
+    // THE HELD TERMINALS, by the door the census's thread delivers a reading
+    // through: the mark, and what the background view lists. The first
+    // reading, so the baseline — it raises nothing.
+    if !scene.terminals.is_empty() {
+        state.terminals_heard(scene.terminals);
     }
     state.draw_and_paint();
     queue.roundtrip(&mut state).context("a frame")?;
@@ -3760,6 +3788,9 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     state.software_window_closed();
                 }
                 state.windows.apply_to(&e);
+                // THE HELD TERMINALS: which window had the focus, and a
+                // terminal's show that waited for its window.
+                state.terminals_windows_moved(&e);
                 // THE FOCUSED WINDOW'S SHORTCUTS, re-read on every change of
                 // focus — not only when the leader opens — so the minibuffer's
                 // line and the `LEADER Alt` region always carry the window in
@@ -4118,6 +4149,21 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
             }
         })
         .map_err(|e| anyhow::anyhow!("could not hang the syncthing.json watch: {e}"))?;
+
+    // THE HELD TERMINALS, as their holders' state files say them: the folder
+    // watched and read on a thread of the census's own, each reading whole
+    // (`surface/terminals.rs`) — the modeline's mark, the background view's
+    // rows and what a terminal nobody looks at asks for, all from it.
+    let (terminals_sender, terminals_read) =
+        channel::channel::<Vec<ronoctua_terminals::state::TerminalState>>();
+    state.terminals.watch(terminals_sender);
+    handle
+        .insert_source(terminals_read, |event, (), state: &mut Footer| {
+            if let channel::Event::Msg(states) = event {
+                state.terminals_heard(states);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("could not hang the terminals' census: {e}"))?;
 
     // THE PERSON'S OWN PROGRAMS, as the footer keeps them with the view
     // closed: the session's context, and what the two marks say, read on
@@ -4819,6 +4865,8 @@ impl Footer {
                 player: self.player.as_ref().and_then(crate::player_mark::mark),
                 workspaces: &workspaces,
                 drawer: self.in_the_drawer().len(),
+                // THE HELD TERMINALS NO WINDOW SHOWS, from the census.
+                terminals_away: self.terminals.away_mark(),
                 selection: self.selection.any().then(|| self.selection.count()),
                 trails: self.windows.trails(),
                 compositor_mode: mode.as_deref(),
@@ -5339,6 +5387,14 @@ impl Footer {
             });
             return;
         }
+        // THE TERMINALS NO WINDOW SHOWS: the list of them, the command
+        // `LEADER RET b b` runs — and their holders asked whether they live,
+        // so the list does not name one that died.
+        if id == "terminals-away" {
+            self.terminals.sweep();
+            self.run_command("terminals-open");
+            return;
+        }
         // THE UPDATE'S MARK OPENS THE WINDOW THAT WATCHES IT.
         //
         // It is the one thing on this line that appears without anybody having
@@ -5530,6 +5586,17 @@ impl Footer {
         // name through `brain-act`, or its module's page through `brain-open`
         // (`LEADER b`) — both doors the keyboard has. Either button: a mark
         // says one thing, and a second meaning would be a menu.
+        //
+        // A SET is one segment of many marks, each its own click: the one
+        // drawn at `cell` (`brain::drawn_at`, the painter's own layout), and
+        // nothing on its pads and its air.
+        if crate::brain::is_set(id) {
+            if let Some(mark) = crate::brain::drawn_at(id, cell) {
+                let (command, argument) = crate::brain::click_of(&mark);
+                self.run_with(command, Some(&argument));
+            }
+            return;
+        }
         if let Some(mark) = crate::brain::drawn_mark(id) {
             let (command, argument) = crate::brain::click_of(&mark);
             self.run_with(command, Some(&argument));
@@ -5687,6 +5754,22 @@ impl Footer {
                         crate::key::HINT_TRAIL_NUMBER
                     },
                     &[("number", ronoctua_i18n::Arg::Number(i64::from(n)))],
+                ))
+            }
+            // HOW MANY TERMINALS NO WINDOW SHOWS, and whether one asks for
+            // the person — which is why the mark is in caution.
+            "terminals-away" => {
+                let (count, asking) = self.terminals.away_mark()?;
+                Some(self.texts.t_args(
+                    if asking {
+                        crate::key::HINT_TERMINALS_AWAY_ASKING
+                    } else {
+                        crate::key::HINT_TERMINALS_AWAY
+                    },
+                    &[(
+                        "count",
+                        ronoctua_i18n::Arg::Number(i64::try_from(count).unwrap_or(i64::MAX)),
+                    )],
                 ))
             }
             "drawer" => Some(self.texts.t_args(
@@ -5862,7 +5945,13 @@ impl Footer {
                 )
             }
 
-            // A BRAIN MODULE'S MARK says what its module wrote for it.
+            // A BRAIN MODULE'S MARK says what its module wrote for it — in a
+            // set, the mark under the pointer does, and the pads and the air
+            // between glyphs say nothing.
+            id if crate::brain::is_set(id) => self
+                .here
+                .set_member_under_pointer
+                .and_then(|cell| crate::brain::hint_at(id, cell, &self.texts)),
             id if crate::brain::is_mark(id) => crate::brain::hint_of(id, &self.texts),
 
             "state" => {
@@ -7195,6 +7284,7 @@ impl Footer {
         let segment_before = (
             self.here.segment_under_pointer,
             self.here.mark_zone_under_pointer,
+            self.here.set_member_under_pointer,
         );
         let mut clicked = None;
         let mut menu = false;
@@ -7297,6 +7387,7 @@ impl Footer {
                     let hit = self.segment_hit(e.position.0, e.position.1);
                     self.here.segment_under_pointer = hit.map(|(id, _)| id);
                     self.here.mark_zone_under_pointer = pair_zone(hit);
+                    self.here.set_member_under_pointer = set_member(hit);
                     self.here.pointer_at = Some(e.position);
                     // THE SHOWN REGION'S OWN CONTROLS — the player's panel's
                     // buttons, a deck's controls, a title's control, its globe.
@@ -7413,6 +7504,7 @@ impl Footer {
                     self.here.x_under_pointer = None;
                     self.here.segment_under_pointer = None;
                     self.here.mark_zone_under_pointer = None;
+                    self.here.set_member_under_pointer = None;
                     self.here.pointer_at = None;
                     self.here.segment_held = None;
                     self.address_hint = None;
@@ -7822,14 +7914,16 @@ impl Footer {
                 self.forget_the_line_under_the_pointer();
                 self.close_the_drawer_of_an_empty_line();
             }
-            // AND AN INSTALL'S "OPEN IT" OPENS THE PROGRAM THAT LINE NAMES,
-            // and not whatever finished last (`events::launch_of`).
+            // AND AN EVENT'S ACTION RUNS ON WHAT THAT LINE NAMES — an
+            // install's "open it" opens the program it names, and not whatever
+            // finished last; a terminal's "show it" shows the terminal that
+            // rang (`events::subject_of`).
             if let (Some(crate::events::Said::Event(e)), crate::chrome::Act::Run(command)) =
                 (&acted_on, act)
-                && let Some(id) = crate::events::launch_of(e, command)
+                && let Some(subject) = crate::events::subject_of(e, command, &self.book)
             {
-                let id = id.to_owned();
-                self.software_launch_latest(Some(&id));
+                let subject = subject.to_owned();
+                self.run_with(command, Some(&subject));
                 return;
             }
             // A NOTIFICATION'S BUTTON is the action of THAT record, by its
@@ -8047,6 +8141,7 @@ impl Footer {
             != (
                 self.here.segment_under_pointer,
                 self.here.mark_zone_under_pointer,
+                self.here.set_member_under_pointer,
             )
             || address_before != self.address_hint
             || before
@@ -8585,6 +8680,12 @@ impl Footer {
             // notification's, and by name: the footer keeps which entry the
             // last install made, view or no view (`surface/programs.rs`).
             "software-launch-latest" => self.software_launch_latest(argument),
+            // A HELD TERMINAL SHOWN — its window in front, or one opened for
+            // its group — and the window of a process: what the background
+            // view's `RET`, the terminals' notices and the agents' marks run,
+            // each with its argument (`surface/terminals.rs`).
+            "terminal-show" => self.terminal_show(argument),
+            "window-of-process" => self.window_of_process(argument),
             // WHAT A DOOR OF THE SEARCH HANDS THE FOOTER, which outlives the
             // window: what only the footer holds — the launcher's catalogue,
             // the file manager's opener, the workspace in focus — each with
@@ -8827,6 +8928,38 @@ impl Footer {
                     self.compositor_action(move |wm| wm.deed(&spoken.deed, argument.as_deref()));
                     self.fullscreen_asked_now();
                     return;
+                }
+                // A COMMAND OF THE WINDOW IN FRONT — one it publishes among its
+                // shortcuts (`LEADER Alt`), run by name (`LEADER :`): handed
+                // to that window, as its key would be (`buffer_key`). A
+                // command of the registry that the window in front does not
+                // publish is some other window's, and the line says so.
+                match forward_of(
+                    &self.buffer_bindings,
+                    self.buffer_pid,
+                    otherwise,
+                    self.command_registry.search(otherwise).is_some(),
+                ) {
+                    Forward::ToTheWindow(pid) => {
+                        match crate::ipc::buffer_command(pid, otherwise) {
+                            Ok(()) => tracing::info!(
+                                command = otherwise,
+                                "a command of the window in front, by name"
+                            ),
+                            Err(e) => {
+                                tracing::warn!(error = %e, command = otherwise, "the window refused")
+                            }
+                        }
+                        return;
+                    }
+                    Forward::NotThisWindows => {
+                        let m = self
+                            .texts
+                            .t_with(crate::key::ECHO_NOT_THIS_WINDOWS, &[("command", otherwise)]);
+                        self.echo_message(m);
+                        return;
+                    }
+                    Forward::Unknown => {}
                 }
                 // NOT just a `warn` in the log. A command that shows up in
                 // which-key and does nothing is indistinguishable from an
@@ -9350,6 +9483,9 @@ impl Footer {
             }
             Launch::Failed { program, error } => {
                 tracing::error!(error, program, "could not open");
+                // A WINDOW THAT WAS TO SHOW A GROUP OF TERMINALS did not come:
+                // the group is not held shut waiting for it.
+                self.terminals_window_failed();
                 let m = self
                     .texts
                     .t_with(crate::key::ECHO_NO_OPENED, &[("program", program.as_str())]);
@@ -11477,6 +11613,7 @@ impl Footer {
         let hit = self.segment_hit(x, y);
         self.here.segment_under_pointer = hit.map(|(id, _)| id);
         self.here.mark_zone_under_pointer = pair_zone(hit);
+        self.here.set_member_under_pointer = set_member(hit);
         self.linger();
         self.draw();
         self.paint();
@@ -12138,10 +12275,17 @@ impl Footer {
                 }
             }
             // THE MANUAL PAGE IN A TERMINAL, `man <section> <name>` — the
-            // whole page, which the detail shows the start of.
+            // whole page, which the detail shows the start of. In the
+            // window's own process (`--here`): a page read is closed with its
+            // window, and never left in the background.
             ("fast-access-man", Some(page)) => {
                 let (name, section) = page.rsplit_once('.').unwrap_or((page, ""));
-                let mut args = vec!["terminal".to_owned(), "man".to_owned()];
+                let mut args = vec![
+                    "terminal".to_owned(),
+                    "--here".to_owned(),
+                    "--".to_owned(),
+                    "man".to_owned(),
+                ];
                 if !section.is_empty() {
                     args.push(section.to_owned());
                 }
@@ -16502,6 +16646,8 @@ impl Footer {
                 .into_iter()
                 .find(|w| w.current)
                 .and_then(|w| crate::workspaces::id_of(w.number));
+            // WHETHER A TERMINAL NO WINDOW SHOWS ASKS FOR THE PERSON.
+            let terminals_asking = self.terminals.away_mark().is_some_and(|(_, asks)| asks);
             // A MODELINE THAT IS NOT DRAWN IS NOT HIT (`crate::hidden`): its
             // two tables are emptied with it, as `brain_placed` is when the
             // brain has no line — a click on the row where it would be must
@@ -16543,6 +16689,7 @@ impl Footer {
                                 battery_danger,
                                 &alarmed,
                                 current_workspace,
+                                terminals_asking,
                             )
                         });
                     // THE PLAYER'S PAIR, one run per glyph — each at its own
@@ -16559,6 +16706,23 @@ impl Footer {
                                     // NEXT IN THE INERT TONE while it takes
                                     // no click (`player_mark::tone`).
                                     crate::player_mark::tone(zone, player_now, colour),
+                                    c.edge,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                    }
+                    // A BRAIN SET, one run per glyph — each in its own tone,
+                    // in the cells `brain::member_at` says it is in, which is
+                    // where the pointer finds it.
+                    if crate::brain::is_set(c.id) {
+                        return crate::brain::painted_set(c.id)
+                            .into_iter()
+                            .flat_map(|(cell, text, colour)| {
+                                glyph_and_text(
+                                    &text,
+                                    c.column + cell,
+                                    modeline_line,
+                                    colour,
                                     c.edge,
                                 )
                             })
@@ -17975,6 +18139,22 @@ impl Footer {
                     height: line_height,
                     color,
                 });
+            }
+            // AND THE BRAIN'S SETS' GROUNDS over it, one per set drawn, where
+            // the modeline has a band of its own (`hidden::Grounds::sets`):
+            // from the border as the sets were placed, the two tones taking
+            // turns COUNTED FROM THE EDGE, so the sets a narrow line keeps
+            // keep their colours, and two that touch never share one.
+            if grounds.sets {
+                for quad in set_grounds(
+                    &self.modeline_placed,
+                    width as f32,
+                    columns,
+                    f32::from(modeline_line) * line_height,
+                    line_height,
+                ) {
+                    backgrounds.push(quad);
+                }
             }
             if let Some(color) = owner_tint {
                 backgrounds.push(ronoctua_render::quad::Quad {
@@ -19509,6 +19689,58 @@ fn pair_zone(hit: Option<(&'static str, u16)>) -> Option<crate::player_mark::Zon
         .and_then(|(_, cell)| crate::player_mark::zone_at(cell))
 }
 
+/// The grounds under the brain's sets on one modeline, from what was PLACED
+/// (`(id, column, width, edge)`, the table the pointer reads): one quad per
+/// set, placed from the border as its segment was (`chrome::edge_x`), and
+/// `surface.mark-set` on the set nearest the edge, its alternate on the next,
+/// and so on — counted from the edge, since a narrow line drops sets from the
+/// left and the ones it keeps must keep their tones.
+fn set_grounds(
+    placed: &[(&'static str, u16, u16, bool)],
+    width_px: f32,
+    columns: u16,
+    y: f32,
+    height: f32,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let mut sets: Vec<&(&'static str, u16, u16, bool)> = placed
+        .iter()
+        .filter(|(id, _, _, _)| crate::brain::is_set(id))
+        .collect();
+    sets.sort_by_key(|(_, column, _, _)| std::cmp::Reverse(*column));
+    let cell = crate::chrome::cell_width();
+    let x_of = |column: u16, edge: bool| {
+        if edge {
+            crate::chrome::edge_x(width_px, columns, column)
+        } else {
+            f32::from(column) * cell
+        }
+    };
+    sets.iter()
+        .enumerate()
+        .map(|(n, (_, column, cells, edge))| {
+            let x = x_of(*column, *edge);
+            ronoctua_render::quad::Quad {
+                x,
+                y,
+                width: x_of(column + cells, *edge) - x,
+                height,
+                color: if n % 2 == 0 {
+                    tokens::color::SURFACE_MARK_SET
+                } else {
+                    tokens::color::SURFACE_MARK_SET_ALTERNATE
+                },
+            }
+        })
+        .collect()
+}
+
+/// Which glyph of a brain set a hit is on, by its first cell — `None` off a
+/// set, and on its pads and its air (`brain::member_start`, the painter's
+/// own layout of a set).
+fn set_member(hit: Option<(&'static str, u16)>) -> Option<u16> {
+    hit.and_then(|(id, cell)| crate::brain::member_start(id, cell))
+}
+
 /// One piece of chrome text becomes ONE OR TWO runs.
 ///
 /// # Why the glyph cannot be in the same run as the text
@@ -20258,11 +20490,12 @@ impl Footer {
             return false;
         };
         let hit = self.segment_hit(x, y);
-        let now = (hit.map(|(id, _)| id), pair_zone(hit));
+        let now = (hit.map(|(id, _)| id), pair_zone(hit), set_member(hit));
         if now
             == (
                 self.here.segment_under_pointer,
                 self.here.mark_zone_under_pointer,
+                self.here.set_member_under_pointer,
             )
         {
             return false;
@@ -20270,6 +20503,7 @@ impl Footer {
         (
             self.here.segment_under_pointer,
             self.here.mark_zone_under_pointer,
+            self.here.set_member_under_pointer,
         ) = now;
         true
     }
@@ -21104,8 +21338,15 @@ fn segment_color(
     battery_danger: bool,
     alarmed: &[&'static str],
     current_workspace: Option<&'static str>,
+    terminals_asking: bool,
 ) -> tokens::Color {
     match id {
+        // THE TERMINALS NO WINDOW SHOWS, in the quiet secondary at rest — and
+        // in caution while one of them asks for the person (a bell, a
+        // notification, a program waiting on them): the colour is what is
+        // seen before the count is read.
+        "terminals-away" if terminals_asking => tokens::color::STATE_CAUTION,
+        "terminals-away" => tokens::color::TEXT_SECONDARY,
         // A WORKSPACE NUMBER: the one in front brighter, the rest quiet — and
         // never the accent, which on this line is the keyboard's.
         _ if crate::workspaces::number_of(id).is_some() => {
@@ -21192,6 +21433,39 @@ fn segment_color(
         "buffer" if footer_with_keyboard => tokens::color::STATE_ACCENT,
         "buffer" => tokens::color::TEXT_PRIMARY,
         _ => tokens::color::TEXT_SECONDARY,
+    }
+}
+
+/// Where a command nobody here answers goes ([`Footer::run_with`]'s last
+/// arm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forward {
+    /// To the window in front, the process given: it publishes the command
+    /// among its shortcuts (`LEADER Alt`) — a terminal's `terminal-new`.
+    ToTheWindow(u32),
+    /// Nowhere: the registry knows it, and the window in front does not
+    /// publish it — it is another window's.
+    NotThisWindows,
+    /// Nowhere: not a command of the registry at all.
+    Unknown,
+}
+
+/// Where `id` goes, run by name with nothing here answering it: the window in
+/// front (`window`, its process) when it publishes `id` among its shortcuts
+/// (`published`, its `(keys, command)` pairs). It names no feature: what a
+/// window publishes is the window's to say.
+fn forward_of(
+    published: &[(String, String)],
+    window: Option<u32>,
+    id: &str,
+    registered: bool,
+) -> Forward {
+    match window {
+        Some(pid) if published.iter().any(|(_, command)| command == id) => {
+            Forward::ToTheWindow(pid)
+        }
+        _ if registered => Forward::NotThisWindows,
+        _ => Forward::Unknown,
     }
 }
 
@@ -21625,6 +21899,7 @@ mod tests {
                 false,
                 alarmed,
                 current,
+                false,
             )
         };
         assert_eq!(paint("bt-2", &[], None), color::MODELINE_DEVICE);
@@ -21644,6 +21919,28 @@ mod tests {
         assert_eq!(paint("build-own", &[], None), color::MODELINE_BUILD);
         assert_eq!(paint("ws-3", &[], Some("ws-3")), color::TEXT_PRIMARY);
         assert_eq!(paint("ws-1", &[], Some("ws-3")), color::TEXT_DIM);
+    }
+
+    /// FAILS IF: the background terminals' mark is not the quiet secondary
+    /// at rest, or does not turn caution while one of them asks for the
+    /// person — or the caution reaches a mark that is not it.
+    #[test]
+    fn the_background_terminals_turn_caution_while_one_asks() {
+        use ronoctua_tokens::color;
+        let paint = |id, asking| {
+            super::segment_color(
+                id,
+                false,
+                color::MODELINE_STATE_NORMAL,
+                false,
+                &[],
+                None,
+                asking,
+            )
+        };
+        assert_eq!(paint("terminals-away", false), color::TEXT_SECONDARY);
+        assert_eq!(paint("terminals-away", true), color::STATE_CAUTION);
+        assert_eq!(paint("drawer", true), color::MODELINE_DRAWER);
     }
 
     /// FAILS IF: a mark drawn from the border is hit by the column from the
@@ -21733,6 +22030,52 @@ mod tests {
             assert_eq!(zone_at(cell), painted, "cell {cell}");
         }
         assert_eq!(super::pair_zone(Some(("drawer", 0))), None);
+    }
+
+    /// FAILS IF: two touching sets share one ground, the tones are counted
+    /// from the left (so a narrow line that drops the first set repaints
+    /// every other in the other tone), a set's ground is not where its
+    /// segment was placed — from the border, as wide as its cells — or a
+    /// segment that is no set lays one.
+    #[test]
+    fn sets_alternate_from_the_edge() {
+        use super::tokens;
+        let (width_px, columns) = (1280.0_f32, 200_u16);
+        let placed = [
+            ("brain:fixture/1", 150, 6, true),
+            ("brain:fixture/2", 156, 4, true),
+            ("brain:fixture/3", 160, 8, true),
+            ("brain:fixture/full", 172, 1, true),
+            ("player", 175, 3, true),
+        ];
+        let quads = super::set_grounds(&placed, width_px, columns, 10.0, 20.0);
+        assert_eq!(quads.len(), 3, "a segment that is no set laid a ground");
+        let edge = |column: u16| crate::chrome::edge_x(width_px, columns, column);
+        // FROM THE EDGE: set 3 is nearest, and wears the first tone.
+        let colours: Vec<tokens::Color> = quads.iter().map(|q| q.color).collect();
+        assert_eq!(
+            colours,
+            [
+                tokens::color::SURFACE_MARK_SET,
+                tokens::color::SURFACE_MARK_SET_ALTERNATE,
+                tokens::color::SURFACE_MARK_SET,
+            ]
+        );
+        for (q, (_, column, cells, _)) in quads.iter().zip([placed[2], placed[1], placed[0]]) {
+            assert!((q.x - edge(column)).abs() < 1e-3, "{q:?}");
+            assert!((q.x + q.width - edge(column + cells)).abs() < 1e-3, "{q:?}");
+            assert!((q.y - 10.0).abs() < 1e-6 && (q.height - 20.0).abs() < 1e-6);
+        }
+        // TOUCHING: one ground ends where the next begins.
+        for pair in quads.windows(2) {
+            assert!((pair[1].x + pair[1].width - pair[0].x).abs() < 1e-3);
+        }
+        // A NARROW LINE DROPS THE FIRST SET, and the others keep their tones.
+        let narrow = super::set_grounds(&placed[1..], width_px, columns, 10.0, 20.0);
+        assert_eq!(
+            narrow.iter().map(|q| q.color).collect::<Vec<_>>(),
+            colours[..2]
+        );
     }
 
     /// Nothing of the queue loaded and the rain on at 60% — the player's own
@@ -23094,6 +23437,40 @@ mod tests {
                 "{sym:?} should do nothing with CtrlRight held"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod forward_tests {
+    use super::{Forward, forward_of};
+
+    /// FAILS IF: a command the window in front publishes, run by name, is
+    /// not handed to that window — or one it does not publish is, or is said
+    /// to be nobody's when the registry knows it (another window's), or an
+    /// unknown id stops being "does nothing yet".
+    #[test]
+    fn a_command_the_window_publishes_is_handed_to_it() {
+        let published = [
+            ("C-T".to_owned(), "terminal-new".to_owned()),
+            ("C-TAB".to_owned(), "terminal-next".to_owned()),
+        ];
+        assert_eq!(
+            forward_of(&published, Some(4242), "terminal-new", true),
+            Forward::ToTheWindow(4242)
+        );
+        assert_eq!(
+            forward_of(&published, Some(4242), "terminal-detach", true),
+            Forward::NotThisWindows
+        );
+        assert_eq!(
+            forward_of(&published, None, "terminal-new", true),
+            Forward::NotThisWindows,
+            "no window to hand it to"
+        );
+        assert_eq!(
+            forward_of(&published, Some(4242), "mx-does-not-exist", false),
+            Forward::Unknown
+        );
     }
 }
 

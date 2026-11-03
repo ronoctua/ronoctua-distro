@@ -34,7 +34,13 @@ usage: ronoctua-shell photograph [options] [steps]
                         stick, software, incus, agents, fast-access,
                         network, bluetooth, audio, locale,
                         camera-settings, display, clipboard, curtain,
-                        lifeline, lock or footer (default: window);
+                        lifeline, lock, terminal, terminals,
+                        terminal-settings or footer (default: window);
+                        terminal is the terminal's window over a recorded
+                        stream (`--corpus <file.vt>`); terminals the ones no
+                        window shows over a planted census (`--terminals
+                        <file.json>`); terminal-settings the terminal's
+                        settings over a planted `terminal.json`;
                         footer-settings is the footer's own settings in
                         their window (`LEADER s r w`), no player's door;
                         update is the update's window (`LEADER s u w`), over
@@ -63,7 +69,7 @@ usage: ronoctua-shell photograph [options] [steps]
 ";
 
 /// Every door's word, as a door that is none of them is refused with.
-const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, audio, locale, camera-settings, display, clipboard, curtain, lifeline, lock and footer";
+const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, audio, locale, camera-settings, display, clipboard, curtain, lifeline, lock, terminal, terminals, terminal-settings and footer";
 
 /// THE DOORS THAT ARE NOT THE PLAYER'S, as the player's camera reads them.
 const OTHER_DOORS: OtherDoors = OtherDoors {
@@ -140,6 +146,7 @@ const CAMERAS: &[&[Camera]] = &[
     ronoctua_shell_security::CAMERAS,
     ronoctua_shell_software::CAMERAS,
     ronoctua_shell_stick::CAMERAS,
+    ronoctua_shell_terminal::CAMERAS,
     ronoctua_shell_update::CAMERAS,
     ronoctua_shell_video_metrics::CAMERAS,
 ];

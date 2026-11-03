@@ -1145,6 +1145,7 @@ fn mark(id: &'static str, glyph: char, priority: u8) -> Segment {
         side: Side::Left,
         shrink: Shrink::Cut,
         removable: true,
+        place: None,
     }
 }
 
@@ -1243,6 +1244,7 @@ impl ModelineAdapter for Adapter<'_> {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         };
         out.push((counter_seg(BEFORE), Target::Before(0)));
         let front = k.tabs.iter().position(|t| t.active).unwrap_or(first);
@@ -1262,6 +1264,7 @@ impl ModelineAdapter for Adapter<'_> {
                     side: Side::Left,
                     shrink: Shrink::AtTheEnd,
                     removable: false,
+                    place: None,
                 }
             } else {
                 // FARTHEST FIRST: the rung grows with the distance from the
@@ -1276,6 +1279,7 @@ impl ModelineAdapter for Adapter<'_> {
                     side: Side::Left,
                     shrink: Shrink::Cut,
                     removable: true,
+                    place: None,
                 }
             };
             out.push((seg, target));
@@ -1303,6 +1307,7 @@ impl ModelineAdapter for Adapter<'_> {
                     side: Side::Left,
                     shrink: Shrink::Cut,
                     removable: true,
+                    place: None,
                 },
                 Target::Extension {
                     id: e.id.clone(),
@@ -1338,6 +1343,7 @@ impl ModelineAdapter for Adapter<'_> {
                 side: Side::Left,
                 shrink: Shrink::Cut,
                 removable: true,
+                place: None,
             },
             Target::Zoom(zoom),
         ));
@@ -2106,6 +2112,7 @@ mod tests {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         }];
         a.line(base, &window(7, APP_ID, "t", false), texts)
     }

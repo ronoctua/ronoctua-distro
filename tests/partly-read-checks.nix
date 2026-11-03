@@ -63,6 +63,7 @@
         "config/language.json": ("ronoctua-shell-locale", "language::read_in_part()"),
         "config/llm-accounts.json": ("ronoctua-shell-agents", "partly_read::judged(&Accounts::store())"),
         "config/locale.json": ("ronoctua-shell-locale", "prefs::read_in_part()"),
+        "config/terminal.json": ("ronoctua-shell-terminal", "partly_read::PartlyRead::of(FILE,&reading)"),
         "config/modeline.json": ("ronoctua-shell-footer", "partly_read::PartlyRead::of(FILE,reading)"),
         "config/notifications.json": ("ronoctua-shell-notifications", "preferences_store().and_then(|store|crate::partly_read::judged(&store))"),
         "config/osk.json": ("ronoctua-shell-footer", "partly_read::read(&crate::osk::store())"),

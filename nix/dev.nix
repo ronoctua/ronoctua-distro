@@ -345,7 +345,7 @@ let
 
     # A TERMINAL, through the registry and not through a `$term` of its own.
     #
-    # `buffer-terminal` is the id `LEADER RET /` runs, so this bind proves the
+    # `buffer-terminal` is the id `LEADER RET RET` runs, so this bind proves the
     # control socket end to end under Scroll — and it costs no second opinion
     # about which terminal this project uses.
     bindsym $mod+Return exec ${ronoctua-shell}/bin/ronoctua-shell command buffer-terminal
@@ -1593,7 +1593,8 @@ let
                    -p ronoctua-brain-daemon --bin ronoctua-brain \
                    -p ronoctua-studio --bin ronoctua-studio \
                    -p ronoctua-player-engine --bin ronoctua-player \
-                   -p ronoctua-tags --bin ronoctua-tags 2>&1 | tail -20; then
+                   -p ronoctua-tags --bin ronoctua-tags \
+                   -p ronoctua-term --bin ronoctua-term-holder 2>&1 | tail -20; then
                 export RONOCTUA_FOOTER_BIN="$CARGO_TARGET_DIR/loop/ronoctua-shell"
                 restart_footer
               else

@@ -367,11 +367,12 @@ impl Shape {
     #[must_use]
     pub fn grounds(self, page: crate::theme::Page) -> Grounds {
         if !self.hidden {
+            let banded = self.draws_modeline() && page == crate::theme::Page::Chrome;
             return Grounds {
                 clear: tokens::color::SURFACE_CHROME,
                 rows: None,
-                modeline: (self.draws_modeline() && page == crate::theme::Page::Chrome)
-                    .then_some(tokens::color::MODELINE_BACKGROUND),
+                modeline: banded.then_some(tokens::color::MODELINE_BACKGROUND),
+                sets: banded,
             };
         }
         Grounds {
@@ -382,6 +383,7 @@ impl Shape {
                 tokens::color::SURFACE_CHROME
             }),
             modeline: None,
+            sets: false,
         }
     }
 }
@@ -403,6 +405,12 @@ pub struct Grounds {
     /// The modeline's own band, one tone above the chrome — only with the
     /// bars visible and the footer on the chrome.
     pub modeline: Option<tokens::Color>,
+    /// Whether the brain's SETS lay their grounds (`surface.mark-set` and its
+    /// alternate, alternating from the edge) — only where the modeline has a
+    /// band of its own: on a desk's page, and on the veil over a window, a
+    /// set is its glyphs alone, as every other mark is (the owner,
+    /// 2026-11-02).
+    pub sets: bool,
 }
 
 /// Whether a pointer at `y` on a footer `height` pixels tall is at the
@@ -990,6 +998,7 @@ mod tests {
                             clear: color::SURFACE_CHROME,
                             rows: None,
                             modeline: band(visible, page),
+                            sets: band(visible, page).is_some(),
                         },
                         "{c:?}"
                     );
@@ -1031,6 +1040,7 @@ mod tests {
                                     clear: color::SURFACE_CHROME,
                                     rows: None,
                                     modeline: band(s, c.footer_page()),
+                                    sets: band(s, c.footer_page()).is_some(),
                                 },
                                 "{why}"
                             );
@@ -1045,6 +1055,56 @@ mod tests {
         assert!(!opaque(color::SURFACE_VEIL));
         assert_eq!(color::SURFACE_CLEAR.to_rgba8()[3], 0);
         assert!(opaque(color::SURFACE_CHROME));
+    }
+
+    /// FAILS IF: a set lays its ground anywhere the modeline has no band of
+    /// its own — on the veil over a window, on the rows that push the windows
+    /// away (the desk's page), on a desk's page with the bars visible — or
+    /// does not lay it on the chrome's page with the bars visible, the
+    /// fullscreen edge held out included.
+    #[test]
+    fn the_veil_lays_no_set_grounds() {
+        use crate::theme::{Backdrop, Borders, Choice, Gaps, Ground, Page};
+        for t in tokens::theme::all() {
+            for backdrop in Backdrop::ALL {
+                for footer in Ground::ALL {
+                    let c = Choice {
+                        theme: t,
+                        backdrop,
+                        footer,
+                        windows: Ground::Theme,
+                        borders: Borders::Standard,
+                        gaps: Gaps::With,
+                    };
+                    let visible = Shape::default();
+                    let page = visible.page(c.footer_page(), c.desk_page());
+                    assert_eq!(visible.grounds(page).sets, page == Page::Chrome, "{c:?}");
+                    for mode in [Hidden::Push, Hidden::Cover] {
+                        for bits in 0u8..128 {
+                            let s = Shape::of(Inputs {
+                                hidden: Some(mode),
+                                revealed: bits & 1 != 0,
+                                kiosk_focused: bits & 2 != 0,
+                                app_open: bits & 4 != 0,
+                                minibuffer_busy: bits & 8 != 0,
+                                band_or_brain: bits & 16 != 0,
+                                list_withheld: bits & 32 != 0,
+                                keyboard_out: bits & 64 != 0,
+                            });
+                            let why = format!("{c:?} {s:?}");
+                            let page = s.page(c.footer_page(), c.desk_page());
+                            assert!(!s.grounds(page).sets, "{why}");
+                            let edge = s.painted(true);
+                            assert_eq!(
+                                edge.grounds(c.footer_page()).sets,
+                                c.footer_page() == Page::Chrome && edge.draws_modeline(),
+                                "{why}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// FAILS IF: the footer's pictures are asked for under one page and

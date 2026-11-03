@@ -39,7 +39,7 @@ pub const EMBEDDED_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_REGULAR"));
 /// §6.4 forbids the renderer from CONSULTING fontconfig, and that still holds:
 /// the chain here is DECLARED in two lines of code, not discovered at run
 /// time. Which face draws what is still a question with a fixed
-/// answer, and the `renderer-loads-four-faces` check fixes it —
+/// answer, and the `renderer-loads-its-faces` check fixes it —
 /// written when the third face came in, because until then it was only a
 /// promise in a comment, which is the same thing as an absent guard.
 ///
@@ -97,6 +97,17 @@ pub const MARKS_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_MARKS"));
 /// loaded": with it, the emoji face could disappear from the build and the only symptom
 /// would be tofu coming back on the screen of whoever looks for an emoji.
 pub const FACES: usize = 4;
+
+/// How many STYLES of the primary family a grid of cells draws with when the
+/// wrapper points at them (`RONOCTUA_TERMINAL_FACES`): Bold, Italic and
+/// BoldItalic, cut of their emoji as the Regular is (`nix/primary-font.nix`).
+///
+/// By PATH and never embedded, for the coverage faces' reason: three files of
+/// about fifteen megabytes each, and a store path in the compiler's
+/// environment rebuilds every unit above the renderer. Absent — the installer,
+/// the rescue console, a test — the grid synthesises them (`crate::cells`):
+/// the Regular thickened for bold, slanted for italic.
+pub const STYLES: usize = 3;
 
 /// Which atlas to use for a run of text.
 ///
@@ -356,6 +367,36 @@ pub fn rasterised_at(scale: i32) -> f32 {
     }
 }
 
+/// The primary family's [`STYLES`], loaded into `db` from the directory
+/// `RONOCTUA_TERMINAL_FACES` names, and how many arrived — every face in it,
+/// as fontdb names them.
+///
+/// ABSENCE IS NOT AN ERROR, the coverage faces' rule: without the variable a
+/// grid of cells synthesises the styles. FEWER THAN DECLARED is a build that
+/// lost a file, and is said — loudly, but not fatally, because a terminal
+/// drawing bold by thickening is still a terminal. Public so the check that
+/// holds the faces (`ronoctua-test-faces`) loads them the way a door does.
+pub fn load_styles(db: &mut glyphon::fontdb::Database) -> usize {
+    let Some(dir) = std::env::var_os("RONOCTUA_TERMINAL_FACES") else {
+        tracing::debug!("RONOCTUA_TERMINAL_FACES is not set; bold and italic are synthesised");
+        return 0;
+    };
+    let before = db.len();
+    db.load_fonts_dir(&dir);
+    let loaded = db.len() - before;
+    if loaded == STYLES {
+        tracing::debug!(faces = loaded, directory = ?dir, "the primary family's styles are loaded");
+    } else {
+        tracing::warn!(
+            faces = loaded,
+            wanted = STYLES,
+            directory = ?dir,
+            "the primary family's styles did not all load; the missing ones are synthesised"
+        );
+    }
+    loaded
+}
+
 /// A run positioned in CELLS.
 ///
 /// Position in cells, not in pixels: with the exact cell (0.600 at), the
@@ -521,6 +562,9 @@ pub struct Text {
     /// declared is a build that lost a file, which is not. See
     /// [`Text::coverage`].
     coverage: usize,
+    /// How many of the primary family's [`STYLES`] loaded — none without
+    /// `RONOCTUA_TERMINAL_FACES`, which is a grid drawing them synthesised.
+    styles: usize,
 }
 
 impl Text {
@@ -662,7 +706,7 @@ impl Text {
         // the four unified Han faces — see `set_locale`.
         locale: &str,
     ) -> Result<Self> {
-        let (face, coverage) = Self::faces(locale)?;
+        let (face, coverage, styles) = Self::faces(locale)?;
 
         let cache = glyphon::Cache::new(device);
         let viewport = glyphon::Viewport::new(device, &cache);
@@ -695,13 +739,40 @@ impl Text {
             // `rasterised_at`, which is the one conversion.
             scale: rasterised_at(scale),
             coverage,
+            styles,
         })
     }
 
+    /// The faces a shaper draws with, speaking `locale`, and NO DEVICE — for
+    /// the half of a drawing that is the CPU's alone (`crate::cells::Assembly`),
+    /// which a bench and a test run without a GPU. The same bank [`Text::new`]
+    /// builds, so what they measure is what a door draws.
+    ///
+    /// # Errors
+    ///
+    /// When an embedded face did not load — see [`FACES`].
+    pub fn fonts_alone(locale: &str) -> Result<glyphon::FontSystem> {
+        Self::faces(locale).map(|(face, ..)| face)
+    }
+
+    /// The door's own faces, for a drawing that shapes through them — a grid
+    /// of cells (`crate::cells`), whose fallback has to be the interface's
+    /// fallback, face for face, and not a second bank of the same files.
+    pub const fn fonts(&mut self) -> &mut glyphon::FontSystem {
+        &mut self.face
+    }
+
+    /// How many of the primary family's styles are loaded, and how many there
+    /// are — `(0, STYLES)` where they are synthesised. See [`STYLES`].
+    #[must_use]
+    pub const fn styles(&self) -> (usize, usize) {
+        (self.styles, STYLES)
+    }
+
     /// The faces a shaper draws with, speaking `locale` from its first run,
-    /// and how many coverage faces joined them. No device: this half is
-    /// the fonts'.
-    fn faces(locale: &str) -> Result<(glyphon::FontSystem, usize)> {
+    /// and how many coverage faces and styles joined them. No device: this
+    /// half is the fonts'.
+    fn faces(locale: &str) -> Result<(glyphon::FontSystem, usize, usize)> {
         // THE BANK IS BUILT HERE, and not by `new_with_fonts`.
         //
         // cosmic-text 0.19's `new_with_fonts` does
@@ -733,7 +804,7 @@ impl Text {
         // CODEPOINT, and not by family name — and that is why the
         // remapping had to be done: with the source codepoints, the
         // Iosevka would answer first for 634 of them. Measured with a probe that
-        // asks `cosmic-text` which face drew the glyph; the `renderer-loads-four-faces`
+        // asks `cosmic-text` which face drew the glyph; the `renderer-loads-its-faces`
         // check repeats it on every build.
         db.load_font_source(glyphon::fontdb::Source::Binary(std::sync::Arc::new(
             LUCIDE_FONT,
@@ -781,6 +852,12 @@ impl Text {
         // reports how many arrived, so a screen can say the interface is
         // reduced rather than showing tofu and letting somebody guess.
         let coverage = Self::load_the_coverage(&mut db);
+        // AND THE PRIMARY FAMILY'S OTHER STYLES, by path for the same reason
+        // (see `STYLES`). They share the Regular's family name and cmap, so
+        // the interface — which asks for the normal weight and style by name
+        // — still gets the Regular first, and no codepoint the Regular lacks
+        // is answered by them instead of the chain.
+        let styles = load_styles(&mut db);
 
         let face = glyphon::FontSystem::new_with_locale_and_db_and_fallback(
             // THE LOCALE IS A DRAWING, not a formality: it is what decides,
@@ -791,7 +868,7 @@ impl Text {
             db,
             crate::chain::Chain,
         );
-        Ok((face, coverage))
+        Ok((face, coverage, styles))
     }
 
     /// Draws the unified Han the way this language expects, from the next
@@ -1119,9 +1196,39 @@ mod tests {
     #[test]
     fn a_shaper_is_born_speaking_its_language() {
         for locale in ["pt-BR", "ja", "zh-CN", crate::chain::DEFAULT_LOCALE] {
-            let (face, _) = Text::faces(locale).expect("the faces");
+            let (face, ..) = Text::faces(locale).expect("the faces");
             assert_eq!(face.locale(), locale);
         }
+    }
+
+    /// FAILS IF: the primary family's styles do not load from where the
+    /// wrapper points — every bold of a grid synthesised on a machine that
+    /// ships the Bold face — or are said to load where nothing points, or
+    /// loading them takes the Regular's place in the interface's text. The
+    /// same verdict with the variable and without it: each branch asserts its
+    /// own answer.
+    #[test]
+    fn the_styles_load_beside_the_regular_without_taking_its_place() {
+        use glyphon::fontdb::{Family, Query, Style, Weight};
+        let (face, _, styles) = Text::faces(crate::chain::DEFAULT_LOCALE).expect("the faces");
+        let wanted = if std::env::var_os("RONOCTUA_TERMINAL_FACES").is_some() {
+            STYLES
+        } else {
+            0
+        };
+        assert_eq!(styles, wanted);
+        let regular = face
+            .db()
+            .query(&Query {
+                families: &[Family::Name(tokens::font::FAMILY_MONO)],
+                ..Query::default()
+            })
+            .and_then(|id| face.db().face(id))
+            .expect("the primary face");
+        assert_eq!(
+            (regular.weight, regular.style),
+            (Weight::NORMAL, Style::Normal)
+        );
     }
 
     #[test]

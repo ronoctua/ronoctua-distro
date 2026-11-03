@@ -234,6 +234,10 @@ impl<C: Content> SeatHandler for Door<C> {
                 Ok(k) => self.keyboards.took(&seat, k, name.as_deref()),
                 Err(e) => tracing::warn!(error = %e, "no keyboard; there is no typing"),
             }
+            // AND ITS TEXT INPUT, which follows that keyboard's focus: what an
+            // input method composes reaches the window by it
+            // (`door::text_input`).
+            self.text_input_took(&seat);
         }
         if cap == Capability::Pointer {
             match self.seats.get_pointer(qh, &seat) {
@@ -267,6 +271,7 @@ impl<C: Content> SeatHandler for Door<C> {
     ) {
         if cap == Capability::Keyboard {
             self.keyboards.lost(&seat, &mut self.mods);
+            self.text_input_lost(&seat);
         }
         if cap == Capability::Pointer {
             self.shapes.lost(&seat);
@@ -360,6 +365,9 @@ impl<C: Content> KeyboardHandler for Door<C> {
         self.header_took(event.keysym, false);
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
         self.content.released(&mut self.ui, &event);
+        // A KEY UP CHANGES THE LOOK TOO: `Ctrl` let go puts the link's hand
+        // away under a pointer that did not move.
+        self.look_again();
     }
 
     fn update_modifiers(
@@ -406,6 +414,9 @@ impl<C: Content> PointerHandler for Door<C> {
             events
         };
         self.pointers.switch_to(pointer, &mut self.here);
+        // WHERE THIS POINTER RESTS, kept for the look a key asks again
+        // (`Door::look_again`).
+        self.here.at = super::resting_at(self.here.at, events);
         self.pointer_frame_here(events);
         // THE LOOK UNDER THE HAND, asked after the window has seen the frame:
         // a grip that started a drag in it already answers for the drag.

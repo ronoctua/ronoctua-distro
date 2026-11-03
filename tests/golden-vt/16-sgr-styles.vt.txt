@@ -1,0 +1,7 @@
+B I F R U S H
+rg b x tu
+allredend c
+
+
+
+cursor: 2,11

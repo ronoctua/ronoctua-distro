@@ -35,7 +35,14 @@ members = [
   "crates/ronoctua-notify",
   "crates/ronoctua-clipboard",
   "crates/ronoctua-apps",
+  # The held terminals without their engine (the wire, the state, the census,
+  # the spawner), below the footer and the brain; the engine and the holder
+  # above it.
+  "crates/ronoctua-terminals",
   "crates/ronoctua-term",
+  # The engine's differential test (alacritty, the canonical grid, the
+  # reference colours), apart from the engine so nothing that ships links it.
+  "crates/ronoctua-term-differential",
   "crates/ronoctua-keymap",
   "crates/ronoctua-render",
   "crates/ronoctua-compositor",
@@ -321,9 +328,10 @@ wit-bindgen = { version = "0.46", default-features = false, features = [ "macros
 wasmtime-wasi = "40"
 
 # --- terminal (section 7.10, risk R1) ---------------------------------
-# `alacritty_terminal` is the implementation milestone 7 closes with. The
-# `libghostty-vt` comes in later behind the SAME trait — and it is the trait that makes the
-# order irrelevant, which is R1's recorded mitigation.
+# `alacritty_terminal` is the implementation milestone 7 closed with, and R1's
+# mitigation was the trait both engines answer through. `libghostty-vt` is the
+# product engine now, and alacritty is only the differential's second opinion
+# (`crates/ronoctua-term-differential`, whose program is a driver).
 alacritty_terminal = "0.26"
 # The PTY. `rustix` and not `libc`/`nix` because its API is SAFE: the terminal
 # crate is `forbid(unsafe_code)`, and opening a pty with libc would require `unsafe`

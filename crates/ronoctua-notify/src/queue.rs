@@ -95,6 +95,20 @@ pub struct Notification {
     pub actions: Vec<Action>,
     /// When it arrived, on the wall clock. The fifteen days count from here.
     pub at: SystemTime,
+    /// What its commands are about — the terminal a `terminal-show` shows —
+    /// handed to a command of the registry as its argument when one of its
+    /// actions runs (`ronoctua_shell_kit::desk::deed_of`).
+    ///
+    /// ONLY THE FOOTER SETS IT, on a notification it raises itself. Nothing
+    /// that arrives on the bus does: no hint is read into it
+    /// ([`crate::dbus`]), so a program cannot aim one of our commands at
+    /// something of its choosing — its own buttons go back to it
+    /// (`Doing::Invoke`), and a catalogue entry's command runs bare on what
+    /// it recognised. Absent from a record written before it existed, which
+    /// reads as `None` (`serde(default)`), and left out of the file when
+    /// there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 /// A hand-written `Default`, because `SystemTime` has none.
@@ -117,6 +131,7 @@ impl Default for Notification {
             tags: Vec::new(),
             actions: Vec::new(),
             at: SystemTime::UNIX_EPOCH,
+            subject: None,
         }
     }
 }
@@ -146,6 +161,7 @@ impl Notification {
             tags: Vec::new(),
             actions: Vec::new(),
             at: SystemTime::now(),
+            subject: None,
         }
     }
 
@@ -963,6 +979,26 @@ mod tests {
         );
         one.at = std::time::UNIX_EPOCH + Duration::from_secs(secs);
         one
+    }
+
+    /// FAILS IF: a notification's subject does not come back from the
+    /// history's file — the action of a terminal's notice read back after a
+    /// restart would show no terminal — or a record written before the field
+    /// existed stops reading, which would lose the whole history.
+    #[test]
+    fn a_subject_survives_the_file_and_an_older_record_has_none() {
+        let mut one = n(3);
+        one.subject = Some("0123456789abcdef".into());
+        let line = serde_json::to_string(&one).unwrap();
+        let back: Notification = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.subject.as_deref(), Some("0123456789abcdef"));
+        // AND NONE IS NOT WRITTEN: the file of a history with no subject in
+        // it reads as it did before the field.
+        let bare = serde_json::to_string(&n(4)).unwrap();
+        assert!(!bare.contains("subject"), "{bare}");
+        let older: Notification =
+            serde_json::from_str(r#"{"id":9,"app":"a","summary":"s","body":""}"#).unwrap();
+        assert_eq!(older.subject, None);
     }
 
     /// The name of the record `n(id)` makes.

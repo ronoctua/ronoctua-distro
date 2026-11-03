@@ -85,8 +85,8 @@ bind '"\e[B": history-search-forward' 2>/dev/null
 # runs after section 5 and takes the Up key, leaving `history-search-backward`
 # there as the fallback for when atuin is absent.
 
-if [ -r /run/current-system/sw/share/bash-preexec/bash-preexec.sh ]; then
-    . /run/current-system/sw/share/bash-preexec/bash-preexec.sh
+if [ -r /run/current-system/sw/share/bash/bash-preexec.sh ]; then
+    . /run/current-system/sw/share/bash/bash-preexec.sh
 fi
 
 if command -v atuin >/dev/null 2>&1; then
@@ -100,4 +100,27 @@ fi
 
 if command -v starship >/dev/null 2>&1; then
     eval "$(starship init bash)"
+fi
+
+
+# -----------------------------------------------------------------------------
+# 8. The terminal's marks — after starship, whose prompt they wrap
+# -----------------------------------------------------------------------------
+# `.shellrc` says what the marks are and when they are wanted. bash-preexec
+# (section 6) gives every precmd hook the command's own `$?`, so ours can go
+# last, after `starship_precmd` — which sets `PS1` again at every prompt, and
+# so the wrapping between 133;A and 133;B is redone each time. Without
+# bash-preexec there are no hooks to hang them on, and nothing is printed.
+
+if __ronoctua_marks_wanted 2>/dev/null && [ -n "${bash_preexec_imported:-}${__bp_imported:-}" ]; then
+    __ronoctua_mark_prompt() {
+        local code=$?
+        __ronoctua_mark_precmd "$code"
+        case "$PS1" in
+            *'133;A'*) ;;
+            *) PS1='\[\e]133;A\e\\\]'"$PS1"'\[\e]133;B\e\\\]' ;;
+        esac
+    }
+    precmd_functions+=(__ronoctua_mark_prompt)
+    preexec_functions+=(__ronoctua_mark_preexec)
 fi

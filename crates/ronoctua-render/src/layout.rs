@@ -65,6 +65,91 @@ pub struct Segment {
     /// icon (the only sign that something is pending) and the buffer's name
     /// (it elides, but never disappears). Those shrink to `min_cols` and stop.
     pub removable: bool,
+    /// Where it SITS on the right, when that is not where its priority puts
+    /// it ([`Place`]). `None` — almost every segment — sits at its priority,
+    /// as it always did.
+    pub place: Option<Place>,
+}
+
+/// Where a right-hand segment sits, apart from WHEN it gives way.
+///
+/// # Why a second number
+///
+/// Because `priority` used to answer both questions: the lowest number sat
+/// against the edge and was also the last to go. The LLM accounts' sets
+/// (2026-11-02) are the first marks that want the two apart: the owner put
+/// them to the left of every glyph on this side — the farthest rung from
+/// the edge — and wants them to stay while the workspace numbers, the
+/// player and the devices go. With one number, the farthest from the edge
+/// was the first to go.
+///
+/// The drop order stays `priority`'s alone ([`resolve`]); a place moves the
+/// segment along the line and saves cells, and nothing else. On the LEFT a
+/// place means nothing: that side reads in the order it is pushed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    /// The rung it sits at, counted from the edge as `priority` is: the
+    /// lowest against the border, the highest farthest from it.
+    pub rung: u8,
+    /// Whether it TOUCHES its neighbours at the same rung that touch too:
+    /// no gap between them. The sets touch, so their two alternating
+    /// grounds read as one ribbon cut into accounts.
+    pub touching: bool,
+}
+
+/// The rung a right-hand segment is placed at: its [`Place`]'s, or its
+/// priority's.
+fn rung_of(s: &Segment) -> u8 {
+    s.place.map_or(s.priority, |p| p.rung)
+}
+
+/// Whether two right-hand neighbours touch: both say so, at one rung.
+fn touch(a: &Segment, b: &Segment) -> bool {
+    match (a.place, b.place) {
+        (Some(x), Some(y)) => {
+            x.touching
+                && y.touching
+                && x.rung == y.rung
+                && a.side == b.side
+                && a.side == Side::Right
+        }
+        _ => false,
+    }
+}
+
+/// The right-hand side in the order it is placed, FROM THE EDGE INWARDS:
+/// by rung, and among one rung in the order the segments were pushed (the
+/// sort is stable). Indices into `segments`.
+fn right_in_place(segments: &[&Segment]) -> Vec<usize> {
+    let mut right: Vec<usize> = (0..segments.len())
+        .filter(|&i| segments[i].side == Side::Right)
+        .collect();
+    right.sort_by_key(|&i| rung_of(segments[i]));
+    right
+}
+
+/// The cells the GAPS between the drawn segments take: one gap between every
+/// two of them, less one for each pair of right-hand neighbours that touch.
+///
+/// ONE ANSWER for the two places that charge the line for its air — the
+/// drop's cost and the shrink's total — so the line that decides what goes
+/// and the line that decides how narrow it gets agree about every gap.
+/// `widths[i]` is `segments[i]`'s width; a segment at zero is not drawn,
+/// and has no air beside it.
+fn gaps(segments: &[&Segment], widths: &[u16], gap: u16) -> u32 {
+    let live: Vec<&Segment> = segments
+        .iter()
+        .zip(widths)
+        .filter(|(_, w)| **w > 0)
+        .map(|(s, _)| *s)
+        .collect();
+    let mut cells = u32::from(gap) * (live.len().saturating_sub(1) as u32);
+    for pair in right_in_place(&live).windows(2) {
+        if touch(live[pair[0]], live[pair[1]]) {
+            cells = cells.saturating_sub(u32::from(gap));
+        }
+    }
+    cells
 }
 
 /// Where a segment ended up, after elision.
@@ -432,13 +517,11 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
             .saturating_sub(tokens::space::MODELINE_EDGELEFT + tokens::space::MODELINE_EDGERIGHT),
     );
 
-    // A set's cost: the sum of the natural widths plus the gaps.
+    // A set's cost: the sum of the natural widths plus the gaps — less the
+    // ones touching neighbours do without (`gaps`).
     let cost = |v: &[&Segment]| -> u32 {
-        if v.is_empty() {
-            return 0;
-        }
-        let text: u32 = v.iter().map(|s| u32::from(width(&s.text))).sum();
-        text + u32::from(gap) * (v.len() as u32 - 1)
+        let widths: Vec<u16> = v.iter().map(|s| width(&s.text)).collect();
+        widths.iter().map(|&w| u32::from(w)).sum::<u32>() + gaps(v, &widths, gap)
     };
 
     // Step 2: it drops the lowest-priority one until it fits. Whoever has
@@ -465,9 +548,7 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     // beside a segment that is not there took the bell away at eight columns
     // while three cells sat empty — measured, once the edges were reserved.
     let total = |ws: &[u16]| -> u32 {
-        let live = ws.iter().filter(|&&w| w > 0).count();
-        ws.iter().map(|&w| u32::from(w)).sum::<u32>()
-            + u32::from(gap) * (live.saturating_sub(1) as u32)
+        ws.iter().map(|&w| u32::from(w)).sum::<u32>() + gaps(&alive, ws, gap)
     };
 
     // Phase A: shrink to the floor, from the least prioritised to the most.
@@ -537,23 +618,27 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
         x += w + gap;
     }
 
-    // The right side is laid out from the edge inwards, and the ORDER is by PRIORITY,
-    // not by declaration order.
+    // The right side is laid out from the edge inwards, and the ORDER is by
+    // RUNG — the priority, or a segment's own place (`Place`) — not by
+    // declaration order.
     //
     // Section 4.2 is literal: "From right to left: 1. the notifications
     // icon, flush against the right edge. 2. Tray, immediately to the
     // left of that icon." Iterating the list backwards put the
     // tray at the edge when it was declared later — which went
     // unnoticed until a test measured the final column.
-    let mut right: Vec<usize> = (0..alive.len())
-        .filter(|&i| alive[i].side == Side::Right)
-        .collect();
-    right.sort_by_key(|&i| alive[i].priority);
-
     let mut dir = columns.saturating_sub(tokens::space::MODELINE_EDGERIGHT);
-    for i in right {
+    let mut nearer: Option<&Segment> = None;
+    for i in right_in_place(&alive) {
         let s = alive[i];
         let w = widths[i];
+        // THE AIR BEFORE IT, unless it touches the one nearer the edge.
+        if let Some(n) = nearer
+            && !touch(n, s)
+        {
+            dir = dir.saturating_sub(gap);
+        }
+        nearer = Some(s);
         dir = dir.saturating_sub(w);
         out.push(Placed {
             id: s.id,
@@ -568,7 +653,6 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
             // edge of the SURFACE are not the same place.
             edge: true,
         });
-        dir = dir.saturating_sub(gap);
     }
 
     out
@@ -674,8 +758,218 @@ mod tests {
                 },
                 // `mode` and `notif` never disappear (section 7.2 of the plan).
                 removable: i >= 2,
+                place: None,
             })
             .collect()
+    }
+
+    /// A line with a RIGHT side worth placing: the bell at the edge, a few
+    /// marks at their priorities, and up to nine sets with one place —
+    /// anywhere from among the marks to past them all, touching or not —
+    /// beside a long name on the left.
+    fn draw_placed(r: &mut Draw) -> Vec<Segment> {
+        const RIGHT: &[&str] = &["r-0", "r-1", "r-2", "r-3", "r-4", "r-5", "r-6"];
+        const SETS: &[&str] = &[
+            "s-1", "s-2", "s-3", "s-4", "s-5", "s-6", "s-7", "s-8", "s-9",
+        ];
+        // THE GLYPHS AND LETTERS OF ONE CELL EACH: a cut that cannot split a
+        // two-cell cluster draws narrower than its budget, and the touching
+        // property is about the budget.
+        let text = |r: &mut Draw, max: u64| -> String {
+            const ONE_CELL: &[char] = &['a', 'z', '/', '-', '\u{f07b}', '\u{f0996}'];
+            let n = r.up_to(max).max(1) as usize;
+            (0..n)
+                .map(|_| ONE_CELL[r.up_to(ONE_CELL.len() as u64) as usize])
+                .collect()
+        };
+        let mut out = vec![
+            Segment {
+                id: "name",
+                text: text(r, 50),
+                priority: 4,
+                min_cols: 8,
+                side: Side::Left,
+                shrink: Shrink::InTheMiddle,
+                removable: false,
+                place: None,
+            },
+            Segment {
+                id: "notif",
+                text: text(r, 2),
+                priority: 2,
+                min_cols: 1,
+                side: Side::Right,
+                shrink: Shrink::Cut,
+                removable: false,
+                place: None,
+            },
+        ];
+        for id in RIGHT {
+            if r.up_to(3) == 0 {
+                continue;
+            }
+            out.push(Segment {
+                id,
+                text: text(r, 4),
+                priority: u8::try_from(3 + r.up_to(15)).unwrap_or(17),
+                min_cols: 1,
+                side: Side::Right,
+                shrink: Shrink::Cut,
+                removable: true,
+                place: None,
+            });
+        }
+        let touching = r.up_to(4) > 0;
+        let rung = u8::try_from(10 + r.up_to(10)).unwrap_or(18);
+        for id in SETS.iter().take(r.up_to(10) as usize) {
+            out.push(Segment {
+                id,
+                text: text(r, 12),
+                priority: u8::try_from(1 + r.up_to(9)).unwrap_or(9),
+                min_cols: 1,
+                side: Side::Right,
+                shrink: Shrink::Cut,
+                removable: true,
+                place: Some(Place { rung, touching }),
+            });
+        }
+        out
+    }
+
+    /// The same line with every place taken off.
+    fn unplaced(segments: &[Segment]) -> Vec<Segment> {
+        segments
+            .iter()
+            .map(|s| Segment {
+                place: None,
+                ..s.clone()
+            })
+            .collect()
+    }
+
+    /// FAILS IF: a place changes WHICH segments go — the drop order is the
+    /// priority's alone, and touching only saves cells, so a placed line
+    /// keeps at least what the same line keeps unplaced — or the segment of
+    /// the highest rung is not the one farthest from the edge.
+    #[test]
+    fn a_place_is_not_a_drop_order() {
+        let mut r = Draw(0x2026_1102);
+        for iteration in 0..5_000 {
+            let columns = u16::try_from(r.up_to(160)).unwrap_or(0);
+            let segs = draw_placed(&mut r);
+            let placed = resolve(columns, &segs);
+            let plain = resolve(columns, &unplaced(&segs));
+            for c in &placed {
+                assert!(
+                    c.column.saturating_add(width(&c.text)) <= columns,
+                    "iteration {iteration}: `{}` leaks at {columns} columns",
+                    c.id
+                );
+            }
+            for kept in &plain {
+                let there = placed.iter().find(|c| c.id == kept.id);
+                assert!(
+                    there.is_some_and(|c| width(&c.text) >= width(&kept.text)),
+                    "iteration {iteration}: `{}` kept unplaced and lost placed at {columns} columns",
+                    kept.id
+                );
+            }
+            // THE RUNG AS THE LINE DECLARES IT, written here and not asked
+            // of the layout: a test that asked it would agree with any rung.
+            let rung = |id: &str| {
+                segs.iter()
+                    .find(|s| s.id == id)
+                    .map_or(0, |s| s.place.map_or(s.priority, |p| p.rung))
+            };
+            let right: Vec<&Placed> = placed.iter().filter(|c| c.edge).collect();
+            for a in &right {
+                for b in &right {
+                    assert!(
+                        rung(a.id) >= rung(b.id) || a.column > b.column,
+                        "iteration {iteration}: `{}` (rung {}) sits farther from the edge than `{}` (rung {})",
+                        a.id,
+                        rung(a.id),
+                        b.id,
+                        rung(b.id)
+                    );
+                }
+            }
+            if let Some(top) = right.iter().map(|c| rung(c.id)).max() {
+                let leftmost = right.iter().map(|c| c.column).min();
+                assert!(
+                    right
+                        .iter()
+                        .filter(|c| rung(c.id) == top)
+                        .any(|c| Some(c.column) == leftmost),
+                    "iteration {iteration}: the highest rung is not the farthest from the edge"
+                );
+            }
+        }
+    }
+
+    /// FAILS IF: two touching neighbours at one rung have air between them,
+    /// or one of them lands on the other — the farther one ends where the
+    /// nearer begins — or a segment that does not touch loses its gap.
+    #[test]
+    fn touching_segments_touch() {
+        let gap = tokens::space::MODELINE_SEGMENTGAP;
+        let mut r = Draw(0x5E75_0009);
+        let mut met = 0;
+        for iteration in 0..5_000 {
+            let columns = u16::try_from(40 + r.up_to(160)).unwrap_or(0);
+            let segs = draw_placed(&mut r);
+            let placed = resolve(columns, &segs);
+            let of = |id: &str| {
+                segs.iter()
+                    .find(|s| s.id == id)
+                    .expect("a segment of the line")
+            };
+            // TOUCHING AS THE LINE DECLARES IT: both say so, at one rung.
+            let touch = |a: &Segment, b: &Segment| matches!((a.place, b.place), (Some(x), Some(y)) if x.touching && y.touching && x.rung == y.rung);
+            let mut right: Vec<&Placed> = placed.iter().filter(|c| c.edge).collect();
+            // FROM THE EDGE INWARDS, as they were placed.
+            right.sort_by_key(|c| std::cmp::Reverse(c.column));
+            for pair in right.windows(2) {
+                let (nearer, farther) = (pair[0], pair[1]);
+                let end = farther.column + width(&farther.text);
+                if touch(of(nearer.id), of(farther.id)) {
+                    met += 1;
+                    assert_eq!(
+                        end, nearer.column,
+                        "iteration {iteration}: `{}` and `{}` touch and stand apart",
+                        farther.id, nearer.id
+                    );
+                } else {
+                    assert_eq!(
+                        end + gap,
+                        nearer.column,
+                        "iteration {iteration}: `{}` and `{}` lost their gap",
+                        farther.id,
+                        nearer.id
+                    );
+                }
+            }
+        }
+        assert!(met > 1_000, "only {met} touching pairs were drawn");
+    }
+
+    /// FAILS IF: a place on the LEFT moves anything: that side reads in the
+    /// order it is pushed, and a place is the right side's.
+    #[test]
+    fn a_place_leaves_the_left_alone() {
+        let mut r = Draw(0x1EF7_0001);
+        for _ in 0..3_000 {
+            let columns = u16::try_from(r.up_to(200)).unwrap_or(0);
+            let segs = draw_segments(&mut r);
+            let mut with: Vec<Segment> = segs.clone();
+            for s in with.iter_mut().filter(|s| s.side == Side::Left) {
+                s.place = Some(Place {
+                    rung: u8::try_from(r.up_to(30)).unwrap_or(0),
+                    touching: r.up_to(2) == 0,
+                });
+            }
+            assert_eq!(resolve(columns, &with), resolve(columns, &segs));
+        }
     }
 
     #[test]
@@ -790,6 +1084,7 @@ mod tests {
             side,
             shrink: e,
             removable,
+            place: None,
         }
     }
 

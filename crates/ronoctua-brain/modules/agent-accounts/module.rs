@@ -1,6 +1,6 @@
-//! The person's LLM accounts on the modeline — one mark each, coloured by how
-//! much of the account's limits is used — and the usage unit, started after
-//! an account was used.
+//! The person's LLM accounts on the modeline — one set each: the account's
+//! glyph, coloured by how much of its limits is used, and its agents — and
+//! the usage unit, started after an account was used.
 //!
 //! Why each piece is so is in `why.md`, beside this file. What is here is the
 //! shape of it.
@@ -10,8 +10,9 @@
 //! Everything about an account comes from `ronoctua_llm`, the one crate that
 //! reads the agents' state: the list (`Accounts`), what to watch for each
 //! (`watched`), the limits Claude Code's status line kept or Codex wrote in
-//! its logs (`statusline::limits`) and the usage endpoint's last answer
-//! (`usage::kept`). The module names no file and no folder of the agents'.
+//! its logs (`statusline::limits`), the usage endpoint's last answer
+//! (`usage::kept`) and an API key's word on its credits (`credits`). The
+//! module names no file and no folder of the agents'.
 //!
 //! # Two halves
 //!
@@ -22,20 +23,33 @@
 //!
 //! # The marks
 //!
-//! One per account, AT REST TOO — the owner's exception
-//! (`assets/brain-resting-marks.nix`): Claude Code's robot or Codex's, with
-//! the account's place in the person's list as its digit, and the colour of
-//! the most used of its windows that has not reset — quiet, a warning from
-//! [`Lines::warn_percent`], danger from [`Lines::danger_percent`]. A click
-//! opens the accounts' view on that account (`agents-open <n>`). Nine at most:
-//! the digit is one.
+//! One SET per account, AT REST TOO — the owner's exception
+//! (`assets/brain-resting-marks.nix`), in the account's place in the
+//! person's list. It leads with the account's own glyph — Claude Code's
+//! spark, Codex's ring, our dotted "A" for Claude Code on an API key — in the
+//! colour of the most used of its windows that has not reset: quiet, a
+//! warning from [`Lines::warn_percent`], danger from [`Lines::danger_percent`].
+//! An API key has no window: its lead is danger while Claude Code says its
+//! credits ran out, and quiet otherwise. A click on the lead opens the
+//! accounts' view on that account (`agents-open <n>`). Nine sets at most.
+//!
+//! Then the agents working in the account, a glyph per state in the place
+//! each keeps (`Places`), and past the ninth the count of the rest — all made
+//! by the shared half (`marks_for`), so a photograph's are these. Where the
+//! agents are read from is one seam (`Probe::agents`, `agents_now`): the
+//! records the managed hook writes, one per Claude Code session, and what a
+//! program in one of our terminals said of itself (OSC 7501), which the
+//! terminal's holder keeps in its state file — merged by `ronoctua_llm`'s one
+//! reader. A click on an agent goes to it (`agents-show <session>`).
 //!
 //! # Three watches of its own, and why
 //!
 //! The core reads a watcher's sources ONCE, when its thread starts, and the
 //! accounts are the person's to add at any moment. So the core watches the
-//! two files whose paths never change — the list and the lines, their
-//! folders made first, since a file is watched from its folder — and the
+//! paths that never change — the list and the lines, their folders made
+//! first, since a file is watched from its folder, and the agents' two
+//! folders, made private first (the hook's sessions, the terminals' state
+//! files): a change there reads the agents alone — and the
 //! module keeps three `Notice`s of its own over everything per account,
 //! raised again whenever what they should cover changes: one over the
 //! folders the numbers are kept in (a change there is re-read), one over the
@@ -50,12 +64,18 @@
 //! The usage unit counts the transcripts and asks the endpoint
 //! (`ronoctua-llm refresh`). It is wanted only after an account was used
 //! since the last start, and no sooner than [`AGAIN_AFTER_S`] after it; and
-//! the one clock the module asks for is the nearest reset of a window it
-//! shows, so a mark that is red because the five hours are used turns quiet
-//! when they start over — and no clock at all when no window is known.
+//! the clock the module asks for is the nearest reset of a window it shows,
+//! so a mark that is red because the five hours are used turns quiet when
+//! they start over — and no clock at all when no window is known.
+//!
+//! One more, and only while it is needed: an agent OUTSIDE our terminals (a
+//! Ghostty, an editor's) killed with no `SessionEnd` writes nothing anybody
+//! hears — inside one of ours its holder's file moves when the program
+//! does. So while such an agent is drawn, its process is asked again every
+//! [`LIVENESS_S`]; with none drawn, no clock (owner, 2026-11-02).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use ronoctua_files::notice::{Notice, Pace};
@@ -64,8 +84,9 @@ use ronoctua_llm::{Account, Kind as Agent, Watched, Window};
 // THE SHARED HALF (`shared.rs`, compiled into the library beside the
 // manifest): what the accounts' view reads of the same machine.
 use super::{
-    Lines, Seen, Which, accounts_now, lines_store, marked_most, marks_for, most_used, read_lines,
-    tone_of, windows_now, write_line,
+    AgentSeen, Lines, Places, Seen, Which, accounts_now, agents_now, credits_now, credits_tone,
+    lines_store, make_agents_folders, marked_most, marks_for, most_used, outside_is_drawn,
+    read_lines, sessions_folder, terminals_folder, tone_of, windows_now, write_line,
 };
 use crate::module::{
     Act, Acted, Birth, Cell, Ctx, Face, Heard, Look, Manifest, Mark, Module, Row, Run, Scheduled,
@@ -80,6 +101,12 @@ use crate::task::{Due, Outcome};
 /// used: their numbers move by the minute, and a count every few minutes of
 /// work is what the view needs — never one per answer.
 pub const AGAIN_AFTER_S: i64 = 10 * 60;
+
+/// How long an agent outside our terminals is trusted to be alive after it
+/// was last read: such an agent killed with no `SessionEnd` (a `kill -9`, a
+/// terminal closed under it) writes nothing anybody hears, so its process is
+/// asked again this often — and only while one is drawn.
+pub const LIVENESS_S: i64 = 60;
 
 /// The entry: the machine's accounts, the lines in the module's folder.
 #[must_use]
@@ -101,8 +128,26 @@ trait Probe: Send + Sync {
     /// Every window an account's agent, or the endpoint, last said — reset
     /// or not.
     fn windows(&self, account: &Account) -> Vec<Window>;
+    /// Since when an API key's credits ran out, as Claude Code last said;
+    /// `None` for every other account.
+    fn out_of_credits(&self, account: &Account) -> Option<Moment>;
     /// What to watch for it.
     fn watched(&self, account: &Account) -> Watched;
+    /// The agents at work in these accounts now — the one seam their
+    /// reading comes in by (`agents_now`).
+    fn agents(&self, accounts: &[Account]) -> Vec<AgentSeen>;
+    /// Where the agents are read from, watched by the core; `None` without a
+    /// runtime folder, where the hook and the terminals write nothing.
+    fn agents_folders(&self) -> Option<Folders>;
+}
+
+/// The two folders the agents are read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Folders {
+    /// The hook's records, one per session.
+    sessions: PathBuf,
+    /// Our terminals' state files, where a program's OSC 7501 is kept.
+    terminals: PathBuf,
 }
 
 /// The real machine: `ronoctua_llm`, under the environment's roots.
@@ -124,8 +169,23 @@ impl Probe for Machine {
         windows_now(account)
     }
 
+    fn out_of_credits(&self, account: &Account) -> Option<Moment> {
+        credits_now(account)
+    }
+
     fn watched(&self, account: &Account) -> Watched {
         ronoctua_llm::watched(account)
+    }
+
+    fn agents(&self, accounts: &[Account]) -> Vec<AgentSeen> {
+        agents_now(accounts)
+    }
+
+    fn agents_folders(&self) -> Option<Folders> {
+        Some(Folders {
+            sessions: sessions_folder()?,
+            terminals: terminals_folder()?,
+        })
     }
 }
 
@@ -138,6 +198,11 @@ impl Probe for Machine {
 struct Kept {
     /// The accounts, in the person's order.
     accounts: Vec<Seen>,
+    /// The agents at work in them.
+    agents: Vec<AgentSeen>,
+    /// The places the agents keep in their sets: kept across readings, so a
+    /// glyph keeps its agent.
+    places: Places,
     /// The list is there and does not read: the marks it had stay off, and
     /// the page says so.
     unreadable: bool,
@@ -146,6 +211,10 @@ struct Kept {
     /// Why the lines cannot be watched: a line changed in another door is
     /// not heard, and the page says so.
     lines_lost: Option<String>,
+    /// Why a folder the agents are read from cannot be watched, by its ear:
+    /// an agent that starts, waits or ends is not heard, and the page says
+    /// so.
+    agents_lost: Vec<(Ear, String)>,
     /// The lines.
     lines: Lines,
 }
@@ -172,13 +241,17 @@ struct Watches {
     folders: Option<Notice>,
 }
 
-/// Which of the core's two sources a heard path is.
+/// Which of the core's sources a heard path is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ear {
     /// The list of accounts.
     Accounts,
     /// The person's lines.
     Lines,
+    /// The hook's records of the sessions.
+    Sessions,
+    /// Our terminals' state files.
+    Terminals,
 }
 
 /// The module.
@@ -199,6 +272,13 @@ struct Inner {
     reading: Mutex<()>,
     /// An account was used since the run last started.
     used: AtomicBool,
+    /// When the agents were last read by a watch of the core's — what the
+    /// liveness clock counts from.
+    agents_at: AtomicI64,
+    /// When the module's clock last rang, or the module started — what tells
+    /// a window's reset, which moves the page, from the liveness clock's
+    /// ring, which moves nothing unless an agent went.
+    rang_at: AtomicI64,
     /// The page's generation.
     generation: AtomicU64,
     watches: Mutex<Watches>,
@@ -221,6 +301,16 @@ impl AgentAccounts {
                 tracing::warn!(error = %e, folder = %folder.display(), "the LLM accounts' folder could not be made");
             }
         }
+        // THE AGENTS' TWO FOLDERS, private: the hook's and the terminals'
+        // writers keep `0700` folders, and one made here by `create_dir_all`
+        // would be anybody's to read. A folder that cannot be made is still
+        // watched — its birth is heard — and the page says why if it is not.
+        let agents = probe.agents_folders();
+        if let Some(f) = &agents
+            && let Err(e) = make_agents_folders(&f.sessions, &f.terminals)
+        {
+            tracing::warn!(error = %e, "the agents' folders could not be made");
+        }
         let lines = lines_store(config);
         let mut ears = Vec::new();
         if let Some(path) = probe.accounts_file() {
@@ -229,6 +319,10 @@ impl AgentAccounts {
         if let Some(path) = lines.path() {
             ears.push((Ear::Lines, path));
         }
+        if let Some(f) = agents {
+            ears.push((Ear::Sessions, f.sessions));
+            ears.push((Ear::Terminals, f.terminals));
+        }
         Self {
             inner: Arc::new(Inner {
                 probe,
@@ -236,6 +330,8 @@ impl AgentAccounts {
                 kept: Mutex::new(Kept::default()),
                 reading: Mutex::new(()),
                 used: AtomicBool::new(false),
+                agents_at: AtomicI64::new(0),
+                rang_at: AtomicI64::new(0),
                 generation: AtomicU64::new(0),
                 watches: Mutex::new(Watches::default()),
             }),
@@ -273,21 +369,56 @@ impl Inner {
     fn reread(&self) -> bool {
         let _one = self.reading.lock().unwrap_or_else(PoisonError::into_inner);
         let read = self.probe.accounts().map(|accounts| {
-            accounts
+            let seen = accounts
                 .iter()
-                .map(|a| Seen::of(a, self.probe.windows(a)))
-                .collect::<Vec<_>>()
+                .map(|a| Seen::of(a, self.probe.windows(a), self.probe.out_of_credits(a)))
+                .collect::<Vec<_>>();
+            (seen, self.probe.agents(&accounts))
         });
         self.keep(|k| match read {
-            Some(accounts) => {
+            Some((accounts, agents)) => {
+                k.places.settle(&agents);
                 k.accounts = accounts;
+                k.agents = agents;
                 k.unreadable = false;
             }
             // A LIST THAT DOES NOT READ keeps no marks it cannot vouch for.
             None => {
                 k.accounts.clear();
+                k.agents.clear();
+                k.places = Places::default();
                 k.unreadable = true;
             }
+        })
+    }
+
+    /// Everything read again, at `now` — the agents' clock counting from it.
+    fn reread_at(&self, now: Moment) -> bool {
+        let moved = self.reread();
+        self.agents_at.store(now, Ordering::Relaxed);
+        moved
+    }
+
+    /// The agents alone read again, at `now`, over the list as it says now —
+    /// a session started, waited or ended, a program in one of our
+    /// terminals said its state, the liveness clock rang. The accounts'
+    /// numbers are not read: nothing of theirs moved. `true` when anything
+    /// did. In turn with the other readings, for the same reason.
+    fn reread_agents(&self, now: Moment) -> bool {
+        let _one = self.reading.lock().unwrap_or_else(PoisonError::into_inner);
+        self.agents_at.store(now, Ordering::Relaxed);
+        // A LIST THAT DOES NOT READ is the list's ear's to say; its marks
+        // are off, and no agent is put back under them.
+        let Some(accounts) = self.probe.accounts() else {
+            return false;
+        };
+        let agents = self.probe.agents(&accounts);
+        self.keep(|k| {
+            if k.unreadable {
+                return;
+            }
+            k.places.settle(&agents);
+            k.agents = agents;
         })
     }
 
@@ -440,10 +571,21 @@ fn nearest_reset(kept: &Kept, now: Moment) -> Option<Moment> {
         .min()
 }
 
-/// The marks: one per account, by its place in the list — the shared half's
-/// own (`marks_for`), so a photograph's marks are these.
+/// Whether a window the page shows reset after `since` and by `now`: the
+/// page says how full each account is, and a reset changes that — every
+/// account's, the ones past the ninth too (the page lists them).
+fn reset_between(kept: &Kept, since: Moment, now: Moment) -> bool {
+    kept.accounts
+        .iter()
+        .flat_map(|s| s.windows.iter())
+        .any(|w| w.resets_at_s > since && w.resets_at_s <= now)
+}
+
+/// The marks: one set per account, by its place in the list, its agents in
+/// it — the shared half's own (`marks_for`), so a photograph's marks are
+/// these.
 fn marks_of(kept: &Kept, now: Moment) -> Vec<Mark> {
-    marks_for(&kept.accounts, kept.lines, now)
+    marks_for(&kept.accounts, &kept.agents, &kept.places, kept.lines, now)
 }
 
 /// A text key as a cell.
@@ -452,13 +594,25 @@ fn key(k: &'static str) -> Cell {
 }
 
 /// The page's rows: each account with the most used of its windows, or why
-/// there is none; and the two lines.
+/// there is none — an API key's with its credits, which is all it has —
+/// and the two lines.
 fn sections_of(kept: &Kept, now: Moment) -> Vec<Section> {
     let mut accounts = Vec::new();
     if let Some(why) = &kept.lost {
         accounts.push(Row {
             id: "lost".to_owned(),
             label: key(super::key::AGENT_ACCOUNTS_ROW_UNWATCHED),
+            value: Cell::Data(why.clone()),
+            tone: Tone::Warning,
+            ..Row::default()
+        });
+    }
+    // AN AGENT'S FOLDER NOT WATCHED: its agents would stand still on the
+    // modeline, said in the machine's words.
+    if let Some((_, why)) = kept.agents_lost.first() {
+        accounts.push(Row {
+            id: "agents-lost".to_owned(),
+            label: key(super::key::AGENT_ACCOUNTS_ROW_AGENTS_UNWATCHED),
             value: Cell::Data(why.clone()),
             tone: Tone::Warning,
             ..Row::default()
@@ -479,26 +633,45 @@ fn sections_of(kept: &Kept, now: Moment) -> Vec<Section> {
         });
     }
     for (n, seen) in kept.accounts.iter().enumerate() {
-        let used = most_used(&seen.windows, now);
         let note = if n >= marked_most() {
             super::key::AGENT_ACCOUNTS_NOTE_NO_MARK
         } else {
             match seen.agent {
                 Agent::Claude => super::key::AGENT_ACCOUNTS_NOTE_CLAUDE,
+                Agent::ClaudeApi => super::key::AGENT_ACCOUNTS_NOTE_CLAUDE_API,
                 Agent::Codex => super::key::AGENT_ACCOUNTS_NOTE_CODEX,
             }
+        };
+        let (value, tone) = if seen.agent.has_windows() {
+            let used = most_used(&seen.windows, now);
+            (
+                used.map_or_else(
+                    || key(super::key::AGENT_ACCOUNTS_UNKNOWN),
+                    // A WHOLE PER CENT: the window's own number has a
+                    // decimal, and the page says how full, not to a tenth.
+                    |p| Cell::Count(rounded(p)),
+                ),
+                tone_of(used, kept.lines),
+            )
+        } else {
+            // A KEY HAS NO WINDOW: a row saying "not known yet" would never
+            // become known. What it has is its credits' word.
+            let out = seen.out_of_credits_since;
+            (
+                key(if out.is_some() {
+                    super::key::AGENT_ACCOUNTS_CREDITS_OUT
+                } else {
+                    super::key::AGENT_ACCOUNTS_CREDITS_OK
+                }),
+                credits_tone(out),
+            )
         };
         accounts.push(Row {
             id: format!("account-{}", seen.id),
             label: Cell::Data(seen.name.clone()),
-            value: used.map_or_else(
-                || key(super::key::AGENT_ACCOUNTS_UNKNOWN),
-                // A WHOLE PER CENT: the window's own number has a decimal,
-                // and the page says how full, not to a tenth.
-                |p| Cell::Count(rounded(p)),
-            ),
+            value,
             note: key(note),
-            tone: tone_of(used, kept.lines),
+            tone,
             ..Row::default()
         });
     }
@@ -661,7 +834,8 @@ impl Scheduled for AgentAccounts {
 }
 
 impl Watcher for AgentAccounts {
-    /// The two files whose paths never change: the list, and the lines.
+    /// The paths that never change: the list, the lines, and the agents'
+    /// two folders.
     fn sources(&self) -> Vec<Source> {
         self.ears
             .iter()
@@ -671,9 +845,10 @@ impl Watcher for AgentAccounts {
 
     /// THE FIRST READING, after the core's watches are raised — and the
     /// module's own raised over what it found.
-    fn started(&self, _now: Moment, ctx: &Ctx) {
+    fn started(&self, now: Moment, ctx: &Ctx) {
+        self.inner.rang_at.store(now, Ordering::Relaxed);
         self.inner.reread_lines();
-        self.inner.reread();
+        self.inner.reread_at(now);
         rewatch(&self.inner, ctx);
         ctx.changed();
     }
@@ -683,18 +858,26 @@ impl Watcher for AgentAccounts {
         match heard {
             Heard::Path { source, .. } => match ear(source) {
                 Some(Ear::Accounts) => {
-                    self.inner.reread();
+                    self.inner.reread_at(ctx.now());
                     rewatch(&self.inner, ctx);
                     ctx.changed();
                 }
                 Some(Ear::Lines) if self.inner.reread_lines() => ctx.changed(),
-                Some(Ear::Lines) | None => {}
+                // AN AGENT MOVED — the hook wrote a session, a terminal's
+                // holder wrote its state — and only the agents are read.
+                Some(Ear::Sessions | Ear::Terminals) if self.inner.reread_agents(ctx.now()) => {
+                    ctx.changed();
+                }
+                Some(Ear::Lines | Ear::Sessions | Ear::Terminals) | None => {}
             },
             Heard::Lost { source, why } => {
-                let why = Some(why.to_owned());
                 let moved = match ear(source) {
-                    Some(Ear::Accounts) => self.inner.keep(|k| k.lost = why),
-                    Some(Ear::Lines) => self.inner.keep(|k| k.lines_lost = why),
+                    Some(Ear::Accounts) => self.inner.keep(|k| k.lost = Some(why.to_owned())),
+                    Some(Ear::Lines) => self.inner.keep(|k| k.lines_lost = Some(why.to_owned())),
+                    Some(e @ (Ear::Sessions | Ear::Terminals)) => self.inner.keep(|k| {
+                        k.agents_lost.retain(|(lost, _)| *lost != e);
+                        k.agents_lost.push((e, why.to_owned()));
+                    }),
                     None => false,
                 };
                 if moved {
@@ -704,8 +887,16 @@ impl Watcher for AgentAccounts {
             Heard::Back { source } => match ear(source) {
                 Some(Ear::Accounts) => {
                     self.inner.keep(|k| k.lost = None);
-                    self.inner.reread();
+                    self.inner.reread_at(ctx.now());
                     rewatch(&self.inner, ctx);
+                    ctx.changed();
+                }
+                // WHAT AN AGENT DID while its folder was not heard is read
+                // now.
+                Some(e @ (Ear::Sessions | Ear::Terminals)) => {
+                    self.inner
+                        .keep(|k| k.agents_lost.retain(|(lost, _)| *lost != e));
+                    self.inner.reread_agents(ctx.now());
                     ctx.changed();
                 }
                 // WHAT WAS MISSED while it was down is read now.
@@ -719,17 +910,39 @@ impl Watcher for AgentAccounts {
             // A WINDOW RESET: the face drops it by the moment it is asked at,
             // and the page — which shows how full it was — is another page
             // now: its generation moves, or the host never asks for it again.
+            // OR THE LIVENESS CLOCK: the agents outside our terminals, whose
+            // end nothing may have said, are asked again — and a ring that
+            // finds every one alive tells nobody: a mind published, and the
+            // page moved, every minute an agent is drawn, would be the clock
+            // at rest this module has none of.
             Heard::Wake => {
-                self.inner.generation.fetch_add(1, Ordering::Relaxed);
-                ctx.changed();
+                let now = ctx.now();
+                let since = self.inner.rang_at.swap(now, Ordering::Relaxed);
+                let went = self.inner.reread_agents(now);
+                let reset = reset_between(&self.kept(), since, now);
+                if reset {
+                    self.inner.generation.fetch_add(1, Ordering::Relaxed);
+                }
+                if went || reset {
+                    ctx.changed();
+                }
             }
             Heard::Journal { .. } | Heard::Line { .. } => {}
         }
     }
 
-    /// The nearest reset of a window shown, and nothing when none is known.
+    /// The nearest reset of a window shown — and, while an agent outside
+    /// our terminals is drawn, the liveness clock ([`LIVENESS_S`] after the
+    /// agents were last read): nothing at all when neither is.
     fn next_wake(&self, now: Moment) -> Option<Moment> {
-        nearest_reset(&self.kept(), now)
+        let kept = self.kept();
+        let alive = outside_is_drawn(&kept.accounts, &kept.agents).then(|| {
+            self.inner
+                .agents_at
+                .load(Ordering::Relaxed)
+                .saturating_add(LIVENESS_S)
+        });
+        nearest_reset(&kept, now).into_iter().chain(alive).min()
     }
 }
 
@@ -771,12 +984,18 @@ mod tests {
         }
     }
 
-    /// A machine the test sets.
+    /// A machine the test sets. With `folders`, its agents are READ from
+    /// them by the shared half's own reader (`agents_in`), every process
+    /// alive but the `dead` ones; without, they are the planted `agents`.
     #[derive(Default)]
     struct Set {
         list: Mutex<Option<Vec<Account>>>,
         windows: Mutex<Vec<(String, Vec<Window>)>>,
+        credits: Mutex<Vec<(String, Moment)>>,
         watched: Mutex<Vec<(String, Watched)>>,
+        agents: Mutex<Vec<AgentSeen>>,
+        folders: Option<Folders>,
+        dead: Mutex<Vec<u32>>,
         file: Option<PathBuf>,
     }
 
@@ -794,12 +1013,32 @@ mod tests {
                 .map(|(_, w)| w.clone())
                 .unwrap_or_default()
         }
+        fn out_of_credits(&self, a: &Account) -> Option<Moment> {
+            let all = self.credits.lock().unwrap();
+            all.iter().find(|(id, _)| *id == a.id).map(|(_, at)| *at)
+        }
         fn watched(&self, a: &Account) -> Watched {
             let all = self.watched.lock().unwrap();
             all.iter()
                 .find(|(id, _)| *id == a.id)
                 .map(|(_, w)| w.clone())
                 .unwrap_or_default()
+        }
+        fn agents(&self, accounts: &[Account]) -> Vec<AgentSeen> {
+            let Some(f) = &self.folders else {
+                return self.agents.lock().unwrap().clone();
+            };
+            let dead = self.dead.lock().unwrap().clone();
+            super::super::agents_in(
+                accounts,
+                &f.sessions,
+                Some(&f.terminals),
+                Some(Path::new("/home/p")),
+                &|pid, _| !dead.contains(&pid),
+            )
+        }
+        fn agents_folders(&self) -> Option<Folders> {
+            self.folders.clone()
         }
     }
 
@@ -817,14 +1056,14 @@ mod tests {
         })
     }
 
-    /// FAILS IF: an account has no mark, or one numbered by anything but its
-    /// place in the person's whole list, named by anything but the person's
-    /// word, opening anything but the accounts' view; a mark is coloured by
-    /// a window that already reset or past the person's lines; a tenth
-    /// account draws a digit the footer cannot; or the core would refuse one
-    /// of them (`Manifest::refusal_of`).
+    /// FAILS IF: an account has no set, or one numbered by anything but its
+    /// place in the person's whole list, led by anything but its own mark
+    /// named by the person's word and opening the accounts' view; a lead is
+    /// coloured by a window that already reset or past the person's lines; a
+    /// tenth account gets a set the modeline has no room for; or the core
+    /// would refuse one of them (`Manifest::refusal_of`).
     #[test]
-    fn one_mark_per_account_by_its_place_coloured_by_its_most_used_window() {
+    fn one_set_per_account_by_its_place_led_by_its_most_used_window() {
         let set = Arc::new(Set::default());
         let home = Path::new("/home/p");
         let mut list = vec![
@@ -858,12 +1097,12 @@ mod tests {
         let (ctx, _) = Ctx::kept("agent-accounts", NOON);
         m.inner.reread();
         let face = face_at(&m, NOON);
-        assert_eq!(face.marks.len(), 9, "one digit: nine marks at most");
+        assert_eq!(face.marks.len(), 9, "nine sets at most");
         let first = &face.marks[0];
         assert_eq!(first.id.name, "claude");
         assert_eq!(
-            (first.id.instance, first.id.label.as_deref()),
-            (1, Some("Work"))
+            (first.id.set, first.id.instance, first.id.label.as_deref()),
+            (1, 0, Some("Work"))
         );
         assert_eq!(first.id.opens.as_deref(), Some(OPENS));
         assert_eq!(
@@ -871,11 +1110,11 @@ mod tests {
             (Tone::Warning, 0, None)
         );
         let second = &face.marks[1];
-        assert_eq!((second.id.name.as_ref(), second.id.instance), ("codex", 2));
+        assert_eq!((second.id.name.as_ref(), second.id.set), ("codex", 2));
         assert_eq!(second.tone, Tone::Quiet, "a reset window does not colour");
         assert_eq!(face.marks[2].tone, Tone::Danger);
-        assert_eq!(face.marks[8].id.instance, 9);
-        // THE CORE TAKES EVERY ONE: declared, resting, numbered within nine.
+        assert_eq!(face.marks[8].id.set, 9);
+        // THE CORE TAKES EVERY ONE: declared, resting, in a set within nine.
         let shown: Vec<&Mark> = face.marks.iter().collect();
         for (n, mark) in face.marks.iter().enumerate() {
             assert_eq!(
@@ -897,6 +1136,159 @@ mod tests {
         assert_eq!(face_at(&m, NOON).marks[1].tone, Tone::Quiet);
         assert_eq!(face_at(&m, NOON).marks[2].tone, Tone::Danger);
         let _ = std::fs::remove_dir_all(config);
+    }
+
+    /// FAILS IF: an API key's account draws no mark, is not danger while
+    /// Claude Code says its credits ran out — on the modeline and on the
+    /// page — stays danger once they are back, or keeps a "not known yet"
+    /// row for windows a key never has; or the core would refuse its mark.
+    #[test]
+    fn an_api_keys_mark_is_danger_while_its_credits_are_out() {
+        let set = Arc::new(Set::default());
+        *set.list.lock().unwrap() = Some(vec![
+            account(
+                "claude-1",
+                Agent::Claude,
+                "Work",
+                Path::new("/home/p/.claude"),
+            ),
+            account(
+                "claude-api-1",
+                Agent::ClaudeApi,
+                "Console",
+                Path::new("/home/p/.claude-api"),
+            ),
+        ]);
+        let m = module(&set, None);
+        m.inner.reread();
+        let face = face_at(&m, NOON);
+        let api = &face.marks[1];
+        assert_eq!(
+            (api.id.name.as_ref(), api.id.set, api.id.label.as_deref()),
+            ("claude-api", 2, Some("Console"))
+        );
+        assert_eq!(api.tone, Tone::Quiet);
+        let row = |m: &AgentAccounts| {
+            sections_of(&m.kept(), NOON)[0]
+                .rows
+                .iter()
+                .find(|r| r.id == "account-claude-api-1")
+                .cloned()
+                .expect("the API key's row")
+        };
+        assert_eq!(
+            row(&m).value,
+            key(super::super::key::AGENT_ACCOUNTS_CREDITS_OK)
+        );
+        assert_eq!(
+            row(&m).note,
+            key(super::super::key::AGENT_ACCOUNTS_NOTE_CLAUDE_API)
+        );
+
+        // OUT OF CREDITS: heard on a re-read, as the numbers' watch rings.
+        *set.credits.lock().unwrap() = vec![("claude-api-1".to_owned(), NOON - 600)];
+        assert!(m.inner.reread(), "the page did not move");
+        let face = face_at(&m, NOON);
+        assert_eq!(face.marks[1].tone, Tone::Danger);
+        assert_eq!(
+            face.marks[0].tone,
+            Tone::Quiet,
+            "the subscription is its own"
+        );
+        assert_eq!(
+            (row(&m).value, row(&m).tone),
+            (
+                key(super::super::key::AGENT_ACCOUNTS_CREDITS_OUT),
+                Tone::Danger
+            )
+        );
+        let shown: Vec<&Mark> = face.marks.iter().collect();
+        for (n, mark) in face.marks.iter().enumerate() {
+            assert_eq!(super::super::MANIFEST.refusal_of(mark, &shown[..n]), None);
+        }
+        assert_eq!(m.next_wake(NOON), None, "a key has no window to wake for");
+
+        set.credits.lock().unwrap().clear();
+        m.inner.reread();
+        assert_eq!(face_at(&m, NOON).marks[1].tone, Tone::Quiet);
+    }
+
+    /// FAILS IF: the agents the module hears through its one seam
+    /// (`Probe::agents`) do not stand in their account's set, a glyph moves
+    /// to another agent across readings when one before it ends, a lead in
+    /// danger for its credits is quieted by its agents, or the core would
+    /// refuse a mark of the set (`Manifest::refusal_of`).
+    #[test]
+    fn the_agents_heard_stand_in_their_accounts_set_and_keep_their_places() {
+        use super::super::Doing;
+        let set = Arc::new(Set::default());
+        *set.list.lock().unwrap() = Some(vec![
+            account("claude-1", Agent::Claude, "Work", Path::new("/a")),
+            account("claude-api-1", Agent::ClaudeApi, "Console", Path::new("/b")),
+        ]);
+        *set.credits.lock().unwrap() = vec![("claude-api-1".to_owned(), NOON - 600)];
+        let agent = |account: &str, n: u32, doing: Doing| AgentSeen {
+            account: account.to_owned(),
+            session: format!("{n:08x}-0000-4000-8000-000000000000"),
+            folder: format!("~/p{n}"),
+            doing,
+            since: NOON + i64::from(n),
+            terminal: None,
+            pid: 0,
+        };
+        let (a, b, c) = (
+            agent("claude-api-1", 1, Doing::Working),
+            agent("claude-api-1", 2, Doing::Waiting),
+            agent("claude-api-1", 3, Doing::Done),
+        );
+        *set.agents.lock().unwrap() = vec![a.clone(), b.clone(), c.clone()];
+        let m = module(&set, None);
+        m.inner.reread();
+        let face = face_at(&m, NOON);
+        let shown: Vec<&Mark> = face.marks.iter().collect();
+        for (n, mark) in face.marks.iter().enumerate() {
+            assert_eq!(
+                super::super::MANIFEST.refusal_of(mark, &shown[..n]),
+                None,
+                "{mark:?}"
+            );
+        }
+        let second: Vec<(&str, u8)> = face
+            .marks
+            .iter()
+            .filter(|mk| mk.id.set == 2)
+            .map(|mk| (mk.id.name.as_ref(), mk.id.instance))
+            .collect();
+        assert_eq!(
+            second,
+            [
+                ("claude-api", 0),
+                ("agent-working", 1),
+                ("agent-waiting", 2),
+                ("agent-done", 3)
+            ]
+        );
+        assert_eq!(face.marks[1].tone, Tone::Danger, "the lead's danger went");
+        assert!(
+            face.marks.iter().filter(|mk| mk.id.set == 1).count() == 1,
+            "an agent of the second account stood in the first's set"
+        );
+        // THE FIRST ENDS: the others keep their places, and a new one takes
+        // the lowest free.
+        let d = agent("claude-api-1", 4, Doing::Working);
+        *set.agents.lock().unwrap() = vec![b.clone(), c.clone(), d.clone()];
+        m.inner.reread();
+        let keyed = |face: &Face, who: &AgentSeen| {
+            face.marks
+                .iter()
+                .find(|mk| mk.id.key.as_deref() == Some(who.session.as_str()))
+                .map(|mk| mk.id.instance)
+        };
+        let face = face_at(&m, NOON);
+        assert_eq!(
+            [&a, &b, &c, &d].map(|x| keyed(&face, x)),
+            [None, Some(2), Some(3), Some(1)]
+        );
     }
 
     /// FAILS IF: the marks outlive a list that stopped reading, or an empty
@@ -1189,6 +1581,380 @@ mod tests {
         assert!(!kept.changes().is_empty());
     }
 
+    /// A session id of `n`, as Claude Code writes them.
+    fn session_id(n: u32) -> String {
+        format!("5f0c1e2a-0000-4000-8000-{n:012x}")
+    }
+
+    /// The hook's record of a session, written where the hook writes it.
+    fn record(
+        folder: &Path,
+        n: u32,
+        account_dir: &str,
+        terminal: Option<&str>,
+        status: ronoctua_llm::sessions::Status,
+    ) {
+        let session = ronoctua_llm::sessions::Session {
+            format: ronoctua_llm::sessions::FORMAT,
+            session: session_id(n),
+            account_dir: account_dir.into(),
+            pid: 100 + n,
+            pid_start_ticks: 7,
+            terminal: terminal.map(str::to_owned),
+            folder: format!("/home/p/work-{n}").into(),
+            transcript: None,
+            status,
+            said_at_ns: 1,
+            started_at_ns: u64::try_from(NOON).unwrap() * 1_000_000_000 + u64::from(n),
+            ended: false,
+        };
+        std::fs::write(
+            folder.join(format!("{}.json", session.session)),
+            serde_json::to_vec(&session).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// One of our terminals' state files, its program saying `state` of
+    /// itself (OSC 7501) — written as its holder writes it.
+    fn terminal_says(folder: &Path, id: &str, state: &str) {
+        std::fs::write(
+            folder.join(format!("{id}.json")),
+            format!(
+                r#"{{"protocol":1,"id":"{id}","group":"fedcba9876543210","order":0,"program":"zsh","started_s":5,"statuses":[{{"id":"","app":"claude-code","state":"{state}","at_ms":1}}]}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// The marks of one set, as (name, instance, tone, key).
+    fn set_of(face: &Face, set: u8) -> Vec<(String, u8, Tone, Option<String>)> {
+        face.marks
+            .iter()
+            .filter(|mk| mk.id.set == set)
+            .map(|mk| {
+                (
+                    mk.id.name.to_string(),
+                    mk.id.instance,
+                    mk.tone,
+                    mk.id.key.as_ref().map(ToString::to_string),
+                )
+            })
+            .collect()
+    }
+
+    /// FAILS IF: the agents are not read where the hook and our terminals
+    /// write — both folders watched by the core and made private first — an
+    /// agent does not land in its account's set in the place it keeps, the
+    /// program's own word (OSC 7501) does not beat the hook's inside our
+    /// terminal, a process that died (heard by the liveness clock) or a
+    /// terminal whose holder's file went is still drawn, a billing failure
+    /// no longer makes its lead danger beside its agents, or a folder that
+    /// cannot be watched is not said on the page and read again when back.
+    #[test]
+    fn the_agents_are_read_where_the_hook_and_the_terminals_write() {
+        use ronoctua_llm::sessions::Status;
+        use std::os::unix::fs::PermissionsExt as _;
+        const T1: &str = "0123456789abcdef";
+        let root = scratch("agents");
+        let folders = Folders {
+            sessions: root.join("ronoctua-agents"),
+            terminals: root.join("ronoctua-terms"),
+        };
+        let set = Arc::new(Set {
+            folders: Some(folders.clone()),
+            ..Set::default()
+        });
+        *set.list.lock().unwrap() = Some(vec![
+            account(
+                "claude-1",
+                Agent::Claude,
+                "Work",
+                Path::new("/home/p/.claude"),
+            ),
+            account(
+                "claude-api-1",
+                Agent::ClaudeApi,
+                "Console",
+                Path::new("/home/p/.claude-api"),
+            ),
+        ]);
+        *set.credits.lock().unwrap() = vec![("claude-api-1".to_owned(), NOON - 600)];
+        let m = module(&set, None);
+        // WATCHED BY THE CORE, AND MADE PRIVATE before it watches.
+        let sources = m.sources();
+        for folder in [&folders.sessions, &folders.terminals] {
+            assert!(
+                sources
+                    .iter()
+                    .any(|s| matches!(s, Source::Path(p) if p == folder)),
+                "{} is not watched",
+                folder.display()
+            );
+            let mode = std::fs::metadata(folder).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", folder.display());
+        }
+        let ear_of = |wanted: Ear| m.ears.iter().position(|(e, _)| *e == wanted).unwrap();
+        // ONE IN OUR TERMINAL — the hook heard it working, the program says
+        // it is blocked on the person — one outside it waiting, and one of
+        // the API key's done.
+        record(
+            &folders.sessions,
+            1,
+            "/home/p/.claude",
+            Some(T1),
+            Status::Working,
+        );
+        record(
+            &folders.sessions,
+            2,
+            "/home/p/.claude",
+            None,
+            Status::Waiting,
+        );
+        record(
+            &folders.sessions,
+            3,
+            "/home/p/.claude-api",
+            None,
+            Status::Done,
+        );
+        terminal_says(&folders.terminals, T1, "blocked");
+        let (ctx, _) = Ctx::kept("agent-accounts", NOON);
+        m.started(NOON, &ctx);
+        let face = face_at(&m, NOON);
+        let shown: Vec<&Mark> = face.marks.iter().collect();
+        for (n, mark) in face.marks.iter().enumerate() {
+            assert_eq!(
+                super::super::MANIFEST.refusal_of(mark, &shown[..n]),
+                None,
+                "{mark:?}"
+            );
+        }
+        assert_eq!(
+            set_of(&face, 1),
+            [
+                ("claude".to_owned(), 0, Tone::Quiet, None),
+                (
+                    "agent-waiting".to_owned(),
+                    1,
+                    Tone::Warning,
+                    Some(session_id(1))
+                ),
+                (
+                    "agent-waiting".to_owned(),
+                    2,
+                    Tone::Warning,
+                    Some(session_id(2))
+                ),
+            ]
+        );
+        assert_eq!(
+            set_of(&face, 2),
+            [
+                ("claude-api".to_owned(), 0, Tone::Danger, None),
+                ("agent-done".to_owned(), 1, Tone::Quiet, Some(session_id(3))),
+            ],
+            "the billing failure's danger went"
+        );
+        let label = face
+            .marks
+            .iter()
+            .find(|mk| mk.id.key.as_deref() == Some(session_id(2).as_str()))
+            .and_then(|mk| mk.id.label.as_deref());
+        assert_eq!(label, Some("~/work-2"), "the folder is the person's");
+
+        // THE OUTSIDE ONE DIES with no word: the liveness clock rings, and
+        // the one in our terminal keeps its place.
+        set.dead.lock().unwrap().push(102);
+        let (later, told) = Ctx::kept("agent-accounts", NOON + LIVENESS_S);
+        m.heard(Heard::Wake, &later);
+        let face = face_at(&m, NOON + LIVENESS_S);
+        assert_eq!(
+            set_of(&face, 1)
+                .iter()
+                .map(|(name, place, _, _)| (name.as_str(), *place))
+                .collect::<Vec<_>>(),
+            [("claude", 0), ("agent-waiting", 1)]
+        );
+
+        // THE TERMINAL'S HOLDER IS GONE, its file with it: heard there, and
+        // its agent with it.
+        std::fs::remove_file(folders.terminals.join(format!("{T1}.json"))).unwrap();
+        let before = told.changes().len();
+        m.heard(
+            Heard::Path {
+                source: ear_of(Ear::Terminals),
+                path: &folders.terminals,
+            },
+            &later,
+        );
+        assert_eq!(
+            set_of(&face_at(&m, NOON), 1).len(),
+            1,
+            "a gone terminal's agent stayed"
+        );
+        assert!(
+            told.changes().len() > before,
+            "the face moved and nobody was told"
+        );
+
+        // A FOLDER NOT WATCHED is said, and read again when it is back.
+        m.heard(
+            Heard::Lost {
+                source: ear_of(Ear::Sessions),
+                why: "no more watches",
+            },
+            &later,
+        );
+        let rows = &sections_of(&m.kept(), NOON)[0].rows;
+        assert_eq!(rows[0].id, "agents-lost");
+        assert_eq!(rows[0].value, Cell::Data("no more watches".to_owned()));
+        record(
+            &folders.sessions,
+            4,
+            "/home/p/.claude",
+            None,
+            Status::Working,
+        );
+        m.heard(
+            Heard::Back {
+                source: ear_of(Ear::Sessions),
+            },
+            &later,
+        );
+        assert!(
+            sections_of(&m.kept(), NOON)[0]
+                .rows
+                .iter()
+                .all(|r| r.id != "agents-lost")
+        );
+        assert!(
+            set_of(&face_at(&m, NOON), 1)
+                .iter()
+                .any(|(name, _, _, key)| name == "agent-working"
+                    && key.as_deref() == Some(session_id(4).as_str())),
+            "what was missed while the folder was down was not read"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// FAILS IF: a clock is armed for the agents when none outside our
+    /// terminals is drawn — inside one of ours its holder's file says when
+    /// the program goes — or not armed while one is, or counted from
+    /// anything but when the agents were last read; or an agent that is not
+    /// drawn (an account past the ninth, or none listed) arms it.
+    #[test]
+    fn the_liveness_clock_is_armed_only_while_an_agent_outside_is_drawn() {
+        use super::super::Doing;
+        let set = Arc::new(Set::default());
+        let mut list = vec![account("claude-1", Agent::Claude, "Work", Path::new("/a"))];
+        for n in 2..=10 {
+            list.push(account(
+                &format!("claude-{n}"),
+                Agent::Claude,
+                "x",
+                Path::new("/x"),
+            ));
+        }
+        *set.list.lock().unwrap() = Some(list);
+        let agent = |account: &str, terminal: Option<&str>| AgentSeen {
+            account: account.to_owned(),
+            session: "5f0c1e2a-0000-4000-8000-000000000001".to_owned(),
+            folder: "~/p".to_owned(),
+            doing: Doing::Working,
+            since: NOON,
+            terminal: terminal.map(str::to_owned),
+            pid: 4242,
+        };
+        let m = module(&set, None);
+        let (ctx, _) = Ctx::kept("agent-accounts", NOON);
+        m.started(NOON, &ctx);
+        assert_eq!(m.next_wake(NOON), None, "no agent: no clock");
+        *set.agents.lock().unwrap() = vec![agent("claude-1", Some("0123456789abcdef"))];
+        m.inner.reread_agents(NOON);
+        assert_eq!(
+            m.next_wake(NOON),
+            None,
+            "an agent in our terminal: no clock"
+        );
+        for undrawn in ["claude-10", "nobody"] {
+            *set.agents.lock().unwrap() = vec![agent(undrawn, None)];
+            m.inner.reread_agents(NOON);
+            assert_eq!(m.next_wake(NOON), None, "{undrawn}'s agent is not drawn");
+        }
+        *set.agents.lock().unwrap() = vec![agent("claude-1", None)];
+        m.inner.reread_agents(NOON);
+        assert_eq!(m.next_wake(NOON), Some(NOON + LIVENESS_S));
+        // RUNG: read again, and the next one counted from then.
+        let (rung, _) = Ctx::kept("agent-accounts", NOON + LIVENESS_S);
+        m.heard(Heard::Wake, &rung);
+        assert_eq!(m.next_wake(NOON + LIVENESS_S), Some(NOON + 2 * LIVENESS_S));
+        // AND A WINDOW'S RESET, nearer, is still the one asked for.
+        *set.windows.lock().unwrap() = vec![("claude-1".to_owned(), vec![window(5.0, NOON + 70)])];
+        m.inner.reread_at(NOON + LIVENESS_S);
+        assert_eq!(m.next_wake(NOON + LIVENESS_S), Some(NOON + 70));
+        // GONE: no clock.
+        set.agents.lock().unwrap().clear();
+        set.windows.lock().unwrap().clear();
+        m.inner.reread_agents(NOON + 80);
+        assert_eq!(m.next_wake(NOON + 80), None);
+    }
+
+    /// FAILS IF: the liveness clock's ring tells anybody when every agent it
+    /// asked about is alive — a mind published and the page moved every
+    /// minute an agent outside our terminals is drawn — or says nothing when
+    /// one went, or a window that reset since the last ring no longer moves
+    /// the page.
+    #[test]
+    fn a_liveness_ring_that_finds_every_agent_alive_tells_nobody() {
+        use super::super::Doing;
+        let set = Arc::new(Set::default());
+        *set.list.lock().unwrap() = Some(vec![account(
+            "claude-1",
+            Agent::Claude,
+            "Work",
+            Path::new("/a"),
+        )]);
+        *set.agents.lock().unwrap() = vec![AgentSeen {
+            account: "claude-1".to_owned(),
+            session: "5f0c1e2a-0000-4000-8000-000000000001".to_owned(),
+            folder: "~/p".to_owned(),
+            doing: Doing::Working,
+            since: NOON,
+            terminal: None,
+            pid: 4242,
+        }];
+        // A WINDOW resetting long after the rings below.
+        *set.windows.lock().unwrap() = vec![(
+            "claude-1".to_owned(),
+            vec![window(50.0, NOON + 10 * LIVENESS_S)],
+        )];
+        let m = module(&set, None);
+        let (start, _) = Ctx::kept("agent-accounts", NOON);
+        m.started(NOON, &start);
+        let before = face_at(&m, NOON).screen;
+        let (ring, told) = Ctx::kept("agent-accounts", NOON + LIVENESS_S);
+        m.heard(Heard::Wake, &ring);
+        assert!(told.changes().is_empty(), "an idle ring was published");
+        assert_eq!(
+            face_at(&m, NOON + LIVENESS_S).screen,
+            before,
+            "an idle ring moved the page"
+        );
+        // THE AGENT WENT: said.
+        set.agents.lock().unwrap().clear();
+        let (ring, told) = Ctx::kept("agent-accounts", NOON + 2 * LIVENESS_S);
+        m.heard(Heard::Wake, &ring);
+        assert!(!told.changes().is_empty(), "a gone agent was not said");
+        // AND THE WINDOW'S RESET, rung for, still moves the page.
+        let before = face_at(&m, NOON + 2 * LIVENESS_S).screen;
+        let (ring, told) = Ctx::kept("agent-accounts", NOON + 10 * LIVENESS_S);
+        m.heard(Heard::Wake, &ring);
+        assert!(!told.changes().is_empty(), "the reset was not said");
+        assert_ne!(face_at(&m, NOON + 10 * LIVENESS_S).screen, before);
+    }
+
     /// A machine whose first reading of windows waits to be let go — the
     /// slow Codex logs.
     struct Slow {
@@ -1213,8 +1979,17 @@ mod tests {
             }
             read
         }
+        fn out_of_credits(&self, a: &Account) -> Option<Moment> {
+            self.set.out_of_credits(a)
+        }
         fn watched(&self, a: &Account) -> Watched {
             self.set.watched(a)
+        }
+        fn agents(&self, accounts: &[Account]) -> Vec<AgentSeen> {
+            self.set.agents(accounts)
+        }
+        fn agents_folders(&self) -> Option<Folders> {
+            None
         }
     }
 
@@ -1289,6 +2064,7 @@ mod tests {
                         root.join("cache/llm/claude-1/tokens.json"),
                     ],
                     trees: vec![claude.dir.join("projects")],
+                    ..Watched::default()
                 },
             ),
             (
@@ -1299,6 +2075,7 @@ mod tests {
                         codex.dir.join("sessions"),
                         codex.dir.join("archived_sessions"),
                     ],
+                    ..Watched::default()
                 },
             ),
         ];
@@ -1348,6 +2125,7 @@ mod tests {
             Watched {
                 files: vec![numbers.join("usage.json")],
                 trees: vec![claude.dir.join("projects")],
+                ..Watched::default()
             },
         )];
         let m = module(&set, None);

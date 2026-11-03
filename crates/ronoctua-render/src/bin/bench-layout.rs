@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use ronoctua_render::layout::{Segment, Shrink, Side, resolve};
+use ronoctua_render::layout::{Place, Segment, Shrink, Side, resolve};
 use ronoctua_tokens as tokens;
 
 /// The frame's budget, from section 5.2.
@@ -33,6 +33,7 @@ fn segments(name: &str) -> Vec<Segment> {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: false,
+            place: None,
         },
         // The bell as the modeline draws it now: one glyph, no count, and
         // only there while something is unread.
@@ -44,6 +45,7 @@ fn segments(name: &str) -> Vec<Segment> {
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         },
         Segment {
             id: "buffer",
@@ -53,6 +55,7 @@ fn segments(name: &str) -> Vec<Segment> {
             side: Side::Left,
             shrink: Shrink::InTheMiddle,
             removable: false,
+            place: None,
         },
         Segment {
             id: "mode",
@@ -62,6 +65,7 @@ fn segments(name: &str) -> Vec<Segment> {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         },
         Segment {
             id: "state",
@@ -71,8 +75,69 @@ fn segments(name: &str) -> Vec<Segment> {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         },
     ]
+}
+
+/// THE FULLEST RIGHT SIDE A MODELINE CARRIES: the line above, a deskful of
+/// marks at the rungs they sit at, and NINE LLM accounts' sets — each its
+/// lead and agents, touching at the rung far from the edge (`Place`) and
+/// dropping at the brain's priority. The sets are the one scenario where
+/// where a segment sits and when it goes are two answers, and the layout
+/// asks both for every gap (`layout::resolve`).
+fn nine_sets(name: &str) -> Vec<Segment> {
+    let mut out = segments(name);
+    let glyph = tokens::icon::NOTIFICATION_PENDING;
+    // TWENTY MARKS of one glyph or a glyph and a number, from the edge's
+    // rung to the numbers' — what a busy machine draws.
+    for (n, id) in [
+        "m-1", "m-2", "m-3", "m-4", "m-5", "m-6", "m-7", "m-8", "m-9", "m-10", "m-11", "m-12",
+        "m-13", "m-14", "m-15", "m-16", "m-17", "m-18", "m-19", "m-20",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        out.push(Segment {
+            id,
+            text: if n % 3 == 0 {
+                format!("{glyph} {n}")
+            } else {
+                glyph.to_string()
+            },
+            priority: 1 + u8::try_from(n % 17).unwrap_or(0),
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+            place: None,
+        });
+    }
+    // AND THE NINE SETS, pushed from the last: a pad, the lead, up to nine
+    // agents a cell apart, a pad.
+    for (n, id) in [
+        "s-9", "s-8", "s-7", "s-6", "s-5", "s-4", "s-3", "s-2", "s-1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let members = 1 + n;
+        let text = format!(" {} ", vec![glyph.to_string(); members].join(" "));
+        out.push(Segment {
+            id,
+            text,
+            priority: 9,
+            min_cols: 1,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+            place: Some(Place {
+                rung: 18,
+                touching: true,
+            }),
+        });
+    }
+    out
 }
 
 fn main() -> std::process::ExitCode {
@@ -84,29 +149,30 @@ fn main() -> std::process::ExitCode {
     // A LONG name on purpose: a browser title goes past 200 characters,
     // and it is what makes the elision work.
     let name = "project/subfolder/deeper/still/one/a-rather-long-file-name.rs";
-    let segs = segments(name);
 
     // Widths that exercise the three regimes: slack, tight and phase B.
     let widths = [200_u16, 80, 40, 20];
     let mut worst = 0.0_f64;
 
-    for width in widths {
-        // Warm-up: the first pass pays for a cold cache.
-        for _ in 0..100 {
-            std::hint::black_box(resolve(width, &segs));
-        }
+    for (scenario, segs) in [("plain", segments(name)), ("nine sets", nine_sets(name))] {
+        for width in widths {
+            // Warm-up: the first pass pays for a cold cache.
+            for _ in 0..100 {
+                std::hint::black_box(resolve(width, &segs));
+            }
 
-        let mut samples = Vec::with_capacity(repeats);
-        for _ in 0..repeats {
-            let t = Instant::now();
-            std::hint::black_box(resolve(width, &segs));
-            samples.push(t.elapsed().as_secs_f64() * 1000.0);
+            let mut samples = Vec::with_capacity(repeats);
+            for _ in 0..repeats {
+                let t = Instant::now();
+                std::hint::black_box(resolve(width, &segs));
+                samples.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(f64::total_cmp);
+            let p99 = samples[(samples.len() as f64 * 0.99) as usize];
+            let p50 = samples[samples.len() / 2];
+            println!("layout {scenario:>9}, {width:>4} columns: p50={p50:.4} ms  p99={p99:.4} ms");
+            worst = worst.max(p99);
         }
-        samples.sort_by(f64::total_cmp);
-        let p99 = samples[(samples.len() as f64 * 0.99) as usize];
-        let p50 = samples[samples.len() / 2];
-        println!("layout {width:>4} columns: p50={p50:.4} ms  p99={p99:.4} ms");
-        worst = worst.max(p99);
     }
 
     let ceiling = FRAME_MS * SLICE;

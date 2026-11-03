@@ -1,6 +1,6 @@
-//! THE LLM ACCOUNTS IN THE FOOTER'S REGION (`LEADER m a a`) — the view as a
+//! THE LLM ACCOUNTS IN THE FOOTER'S REGION (`LEADER / a a`) — the view as a
 //! [`crate::region::Region`] the footer hosts by its id, beside its window
-//! (`LEADER m a w`, [`crate::agents_window`]).
+//! (`LEADER / a w`, [`crate::agents_window`]).
 //!
 //! # One view, two doors, one errand handler
 //!
@@ -23,15 +23,15 @@
 //! refresh: a region whose door is a photograph's reaches no network.
 
 use crate::agents::{
-    LOGIN_COMMAND, OPEN_COMMAND, Open, Reach, Reader, SESSION_COMMAND, View, is_command, place_of,
-    press_of_key, session_from_anywhere, window_words,
+    LOGIN_COMMAND, OPEN_COMMAND, Open, Reach, Reader, SESSION_COMMAND, SHOW_COMMAND, View,
+    is_command, place_of, press_of_key, session_from_anywhere, show_agent, window_words,
 };
 use crate::region::{Closed, Doorway, Entry, Region, Row, Seen, Taken};
 
 /// The id the footer ranks the view under (`surface::PRECEDENCE`).
 pub const ID: &str = "agents";
 
-/// The command that opens the view's window (`LEADER m a w`).
+/// The command that opens the view's window (`LEADER / a w`).
 const WINDOW_COMMAND: &str = "agents-window";
 
 /// The region the binary registers (`regions.rs`).
@@ -44,7 +44,10 @@ pub const ENTRY: Entry = Entry {
 /// What a command of the view does while it is CLOSED: the view (a mark's
 /// click hands it the account's place) and every command of the view open
 /// it — then the open region takes the command; its window opens without
-/// it, and a session and a login from anywhere open in the terminal.
+/// it, a session and a login from anywhere open in the terminal, and an
+/// agent named by its session (a click on its glyph on the modeline) is gone
+/// to without the view: the window it works in comes forward. With no
+/// session, the view opens on the agents' rows' way to it.
 fn closed(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Closed {
     match command {
         OPEN_COMMAND => Closed::Opens,
@@ -56,6 +59,13 @@ fn closed(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Close
             session_from_anywhere(command == LOGIN_COMMAND, place_of(argument), way);
             Closed::Taken
         }
+        SHOW_COMMAND => match argument.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(session) => {
+                show_agent(session, way);
+                Closed::Taken
+            }
+            None => Closed::Opens,
+        },
         other if is_command(other) => Closed::Opens,
         _ => Closed::NotMine,
     }
@@ -278,11 +288,29 @@ mod tests {
     /// FAILS IF: a command of the view does to the CLOSED view something
     /// other than what the footer did when it held the view itself — the
     /// view and its commands open it, its window opens without it (with the
-    /// place a mark gave), and another view's command is not its.
+    /// place a mark gave), an agent named by nothing opens the view where
+    /// its rows are, one named by a session is gone to without the view (a
+    /// click on its glyph opens no view over the window it brings forward),
+    /// and another view's command is not its.
     #[test]
     fn a_closed_view_opens_for_its_own_commands() {
         let mut w = way();
         assert_eq!(closed(OPEN_COMMAND, Some("2"), &mut w), Closed::Opens);
+        assert_eq!(closed(SHOW_COMMAND, None, &mut w), Closed::Opens);
+        assert_eq!(closed(SHOW_COMMAND, Some("  "), &mut w), Closed::Opens);
+        // A SESSION NO MARK COULD HAND (`agent_of` reads nothing for it):
+        // the same verdict on every machine — taken, and said.
+        assert_eq!(
+            closed(SHOW_COMMAND, Some("NOT-A-SESSION"), &mut w),
+            Closed::Taken
+        );
+        assert_eq!(
+            std::mem::take(&mut w.owed),
+            vec![Effect::Say(
+                texts().t(crate::key::AGENTS_AGENT_ENDED),
+                crate::echo::Echo::Long
+            )]
+        );
         assert_eq!(closed("agents-refresh", None, &mut w), Closed::Opens);
         assert_eq!(closed("agents-add-codex", None, &mut w), Closed::Opens);
         assert_eq!(closed(WINDOW_COMMAND, Some("2"), &mut w), Closed::Taken);

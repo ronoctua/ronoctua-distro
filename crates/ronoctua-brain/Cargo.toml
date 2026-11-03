@@ -40,8 +40,12 @@ ronoctua-store = { path = "../ronoctua-store" }
 #   `prefs`: serde and the XDG roots, never `age`);
 # - the LLM accounts, their limits and the usage endpoint's last answer, as
 #   `ronoctua-llm` keeps them — WITHOUT `fetch`: no TLS client, no consent
-#   pass, no credentials reader.
+#   pass, no credentials reader;
+# - what a program in one of our terminals says of itself (OSC 7501), as the
+#   terminal's holder keeps it in its state file (`ronoctua-terminals`: the
+#   state and the registry, no engine — never `libghostty-vt`).
 ronoctua-memory = { path = "../ronoctua-memory" }
+ronoctua-terminals = { path = "../ronoctua-terminals" }
 ronoctua-machine = { path = "../ronoctua-machine" }
 ronoctua-person = { path = "../ronoctua-person", default-features = false }
 ronoctua-belongings = { path = "../ronoctua-belongings", default-features = false, features = [ "prefs" ] }

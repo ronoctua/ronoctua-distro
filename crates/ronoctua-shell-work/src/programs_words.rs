@@ -153,6 +153,7 @@ pub fn segments(running: &Running) -> Vec<ronoctua_render::layout::Segment> {
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if running.android {
@@ -164,6 +165,7 @@ pub fn segments(running: &Running) -> Vec<ronoctua_render::layout::Segment> {
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     out

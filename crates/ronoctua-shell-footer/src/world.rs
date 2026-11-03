@@ -353,6 +353,7 @@ pub fn line(
                 // THE PRIMARY NEVER GOES. It is what the glance was asked
                 // about; a glance that dropped it answered nothing.
                 removable: n > 0,
+                place: None,
             }
         })
         .collect();

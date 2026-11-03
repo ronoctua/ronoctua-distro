@@ -14,10 +14,13 @@
 //!   a terminal.
 //! - `remove --profile <id>`: the account forgotten (its folder stays), its
 //!   own status line given back first.
+//! - `hook`: what Claude Code runs on a session's events, by the distro's
+//!   managed settings. Keeps the session's record; never prints, and always
+//!   answers 0 — whatever its arguments, whatever its stdin.
 
 use std::io::Read as _;
 
-use ronoctua_llm::{Accounts, Roots, refresh, statusline, usage};
+use ronoctua_llm::{Accounts, Roots, hook, refresh, statusline, usage};
 
 const HELP: &str = "\
 ronoctua-llm — the person's LLM accounts (Claude Code, Codex)
@@ -34,8 +37,13 @@ USAGE:
     ronoctua-llm remove --profile <id>       forget the account (its folder
                                              stays), giving its own status
                                              line back
+    ronoctua-llm hook                        run as Claude Code's managed hook:
+                                             keep the session the event on
+                                             stdin is of; prints nothing,
+                                             answers 0
 
-The accounts are in $XDG_CONFIG_HOME/ronoctua/llm-accounts.json.";
+The accounts are in $XDG_CONFIG_HOME/ronoctua/llm-accounts.json; the hook's
+sessions in $XDG_RUNTIME_DIR/ronoctua-agents/.";
 
 /// The value after `--profile`, when the arguments are exactly that (or
 /// nothing, when `optional`).
@@ -48,6 +56,16 @@ fn profile(rest: &[String], optional: bool) -> Option<Option<String>> {
 }
 
 fn main() {
+    // THE HOOK FIRST, before anything that could fail aloud: its arguments
+    // are not read (an argument it does not know must not answer 2, which
+    // Claude Code takes for a blocking error), and an argument that is not
+    // text must not panic in `env::args`.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|verb| verb == "hook")
+    {
+        std::process::exit(hook::serve());
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.split_first() {
         Some((verb, rest)) if verb == "statusline" => match profile(rest, false) {

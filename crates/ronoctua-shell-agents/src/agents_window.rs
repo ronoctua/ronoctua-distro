@@ -1,5 +1,5 @@
 //! The LLM accounts, in a window of their own — the second door onto
-//! `crate::agents` (`LEADER m a w`).
+//! `crate::agents` (`LEADER / a w`).
 //!
 //! # What is here and what is not
 //!

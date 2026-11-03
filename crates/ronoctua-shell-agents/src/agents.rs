@@ -1,7 +1,7 @@
-//! `LEADER m a` — the person's LLM accounts (Claude Code, Codex), in one
-//! view with two doors: the footer's region (`m a a`, [`crate::agents_region`])
-//! and a window (`m a w`, [`crate::agents_window`]). `m a n` opens a session of
-//! an account and `m a l` logs one in, from anywhere. Both doors hold the view
+//! `LEADER / a` — the person's LLM accounts (Claude Code on a subscription or
+//! on an API key, Codex), in one view with two doors: the footer's region (`/ a a`, [`crate::agents_region`])
+//! and a window (`/ a w`, [`crate::agents_window`]). `/ a n` opens a session of
+//! an account and `/ a l` logs one in, from anywhere. Both doors hold the view
 //! [`Open`] and carry out what it asks through ONE function, [`carry_out`].
 //!
 //! # What is here
@@ -26,10 +26,16 @@
 //!
 //! # Per account
 //!
-//! Its agent and folder, its plan, the five-hour and the weekly window (and
-//! the weekly windows by model the usage endpoint gives) as bars with their
-//! reset, its tokens by day and by model, its status line, and the rows that
-//! act on it: a session, a login, its name, the default of its kind, remove.
+//! Its agent and folder, its plan, its agents running now — each a row with
+//! its state's glyph, its folder and its state, whose `RET` goes to it
+//! (`agents-show <session>`: the keyboard's way to what a click on the
+//! agent's glyph on the modeline does) — the windows its plan has — five hours and
+//! a week, or the week alone (Claude's Ultra) — and the weekly windows by
+//! model the usage endpoint gives, as bars with their reset, its tokens by day and by model, its status line, and the rows that
+//! act on it: a session, a login, its name, the default of its agent, remove.
+//! An API key's account has no window and no status line of ours: in their
+//! place, the one word anybody has on its credits — whether Claude Code said
+//! they ran out, and since when (`ronoctua_llm::credits`).
 //! Then the consent row for the usage endpoint (unofficial, and the screen
 //! says so), the rows that add an account — the name asked, the folder
 //! made, the status line put in front and the login opened in the terminal —
@@ -49,8 +55,12 @@ use std::sync::{Arc, Mutex};
 use crate::key;
 use ronoctua_brain::compiled::agent_accounts;
 use ronoctua_brain::module::Tone;
+// THE BRAIN MODULE'S AGENTS, by the names this crate's other files use: this
+// file is the one the module's `namedBy` lets name it, and the words and the
+// camera reach its agents through here.
+pub use agent_accounts::{AgentSeen, Doing, Whereabouts};
 use ronoctua_i18n::Arg;
-use ronoctua_llm::credentials::Facts;
+use ronoctua_llm::credentials::{ApiKey, Facts};
 use ronoctua_llm::statusline::{Limits, Wrapping};
 use ronoctua_llm::tokens::Tally;
 use ronoctua_llm::{Account, Accounts, Kind as Agent, Refusal, Why, Window, usage};
@@ -82,20 +92,37 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
 /// The commands the view's ROWS run — every one reachable by name too
 /// (`LEADER :`), where it opens the view and does the same.
 pub const OF_THE_ROWS: &[&str] = &[
+    SHOW_COMMAND,
     "agents-add-claude",
+    "agents-add-claude-api",
     "agents-add-codex",
     "agents-status-line",
     "agents-warn-at",
     "agents-danger-at",
 ];
 
-/// The command that opens the view in the footer (`LEADER m a a`) — and
+/// The command that opens the view in the footer (`LEADER / a a`) — and
 /// the one a mark on the modeline runs, with the account's place.
 pub const OPEN_COMMAND: &str = "agents-open";
-/// A session of an account (`LEADER m a n`, `n` on one).
+/// A session of an account (`LEADER / a n`, `n` on one).
 pub const SESSION_COMMAND: &str = "agents-session";
-/// A login of an account (`LEADER m a l`, `l` on one).
+/// A login of an account (`LEADER / a l`, `l` on one).
 pub const LOGIN_COMMAND: &str = "agents-login";
+/// An agent, by its session: the window it works in brought forward, or
+/// its terminal opened in one — what a click on its glyph on the modeline
+/// runs (the brain module's `SHOWS`, one spelling), and its row's `RET`.
+pub const SHOW_COMMAND: &str = agent_accounts::SHOWS;
+
+/// The terminal's command that shows one of OUR terminals by its id — its
+/// window brought forward and the terminal put in front of its group, or
+/// the group restored in a window. The terminal's to answer; this view only
+/// names it, as a region runs any command of the registry (`Doorway::run`).
+pub const TERMINAL_SHOW: &str = "terminal-show";
+
+/// The footer's command that brings forward the window of a process — the
+/// one the process, or a process above it, opened: a Ghostty, an editor —
+/// for an agent outside our terminals. The footer's to answer.
+pub const WINDOW_OF_PROCESS: &str = "window-of-process";
 
 /// Every command this view's keys and rows reach — for `bindings::reachable`.
 pub fn reached() -> impl Iterator<Item = &'static str> {
@@ -136,7 +163,7 @@ pub enum Press {
     Login,
     /// Its name.
     Rename,
-    /// Make it the default of its kind.
+    /// Make it the default of its agent.
     Default,
     /// Remove it.
     Remove,
@@ -204,8 +231,11 @@ pub struct Seen {
     /// Its tokens, by day in the machine's zone and by model.
     pub tally: Tally,
     /// Whether our status line is in front of its own (a Claude Code
-    /// account's).
+    /// subscription's account's).
     pub wrapping: Option<Result<Wrapping, Why>>,
+    /// Since when its credits ran out, as Claude Code last said — or that
+    /// they have not (an API key's account's; `None` for every other).
+    pub credits: Option<Result<Option<i64>, Why>>,
 }
 
 /// Everything both doors draw from — read the same way by both.
@@ -218,6 +248,9 @@ pub struct Readings {
     pub refused: bool,
     /// The accounts, in the person's order.
     pub accounts: Vec<Seen>,
+    /// The agents running in them now, as the brain module reads them
+    /// (`agent_accounts::agents_now`) — the same the modeline's sets draw.
+    pub agents: Vec<AgentSeen>,
     /// The lines the bars change colour at — the brain module's.
     pub lines: agent_accounts::Lines,
     /// What of `llm-accounts.json` and of the lines' file did not read, when
@@ -254,7 +287,8 @@ impl Readings {
         self.seen(&id)
     }
 
-    /// Whether any account is Claude Code's — the usage endpoint is theirs.
+    /// Whether any account is a Claude Code subscription's — the usage
+    /// endpoint is theirs (an API key's says nothing there).
     fn has_claude(&self) -> bool {
         self.accounts
             .iter()
@@ -263,8 +297,9 @@ impl Readings {
 }
 
 /// The account a gesture means: the one at `place` (from 1, a mark's
-/// digit), or with none the default Claude Code account, else the default
-/// Codex one, else the first.
+/// digit), or with none the default Claude Code account (on a subscription
+/// or an API key: the two share one), else the default Codex one, else the
+/// first.
 #[must_use]
 pub fn chosen_of(accounts: &[Account], place: Option<usize>) -> Option<Account> {
     if let Some(place) = place {
@@ -534,11 +569,18 @@ impl Open {
     pub fn command(&mut self, id: &str, argument: Option<&str>, way: &mut dyn Doorway) {
         // AN ANSWER ONLY TO THE VIEW'S OWN QUESTION.
         let answering = self.view.asking().is_some_and(|a| a.command() == id);
-        let errand = match argument.filter(|_| answering) {
-            Some(said) => self.view.answered(id, said, way.texts()),
-            None => self
-                .view
-                .command(id, &self.readings, &self.zone, way.columns(), way.texts()),
+        // AN AGENT NAMED BY ITS SESSION — a glyph on the modeline clicked
+        // with the view open: that agent, whatever row is under the cursor.
+        let session = argument
+            .map(str::trim)
+            .filter(|s| id == SHOW_COMMAND && !s.is_empty());
+        let errand = match (argument.filter(|_| answering), session) {
+            (Some(said), _) => self.view.answered(id, said, way.texts()),
+            (None, Some(session)) => Errand::Show(session.to_owned()),
+            (None, None) => {
+                self.view
+                    .command(id, &self.readings, &self.zone, way.columns(), way.texts())
+            }
         };
         carry_out(errand, self, way);
     }
@@ -631,6 +673,10 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
             way.say(said, Echo::Normal);
             open.refresh();
         }
+        Errand::Show(session) => match &mut open.reach {
+            Reach::Machine => show_agent(&session, way),
+            Reach::Nowhere(done) => done.push(format!("{SHOW_COMMAND} {session}")),
+        },
     }
     // WHAT THIS DOOR WROTE, read back at once — the watches ring for it too,
     // and find nothing new.
@@ -655,6 +701,45 @@ pub fn session_from_anywhere(login: bool, place: Option<usize>, way: &mut dyn Do
     }
 }
 
+/// `agents-show <session>` — a click on an agent's glyph on the modeline, the
+/// `RET` of its row: the agent read NOW by the module's own reader
+/// (`agent_accounts::agent_of`), so the click goes where it is, not where it
+/// was when its mark was drawn. On the door's loop: the folders read are the
+/// runtime's (a tmpfs), a few small files.
+pub fn show_agent(session: &str, way: &mut dyn Doorway) {
+    show_found(
+        agent_accounts::agent_of(session).and_then(|a| a.whereabouts()),
+        way,
+    );
+}
+
+/// Goes where an agent was found: the door steps aside (the footer's region
+/// would keep the keyboard over the window that comes forward) and the
+/// command that shows it runs — or, for an agent that ended, the sentence.
+pub fn show_found(found: Option<Whereabouts>, way: &mut dyn Doorway) {
+    match found {
+        Some(at) => {
+            let (command, argument) = order_of(&at);
+            way.step_aside();
+            way.run(command, Some(argument));
+        }
+        None => {
+            let said = way.texts().t(key::AGENTS_AGENT_ENDED);
+            way.say(said, Echo::Long);
+        }
+    }
+}
+
+/// The command, and its argument, that shows an agent where it is: our
+/// terminal by its id, any other window by the process.
+#[must_use]
+pub fn order_of(at: &Whereabouts) -> (&'static str, String) {
+    match at {
+        Whereabouts::Terminal(id) => (TERMINAL_SHOW, id.clone()),
+        Whereabouts::Process(pid) => (WINDOW_OF_PROCESS, pid.to_string()),
+    }
+}
+
 /// A place given to a command (`agents-open 3`, a mark's digit).
 #[must_use]
 pub fn place_of(argument: Option<&str>) -> Option<usize> {
@@ -674,9 +759,9 @@ pub fn window_words(argument: Option<&str>) -> Vec<String> {
     words
 }
 
-/// Reads everything, as it is now. BLOCKS on files — a credentials file, the
-/// kept numbers, a token count, a Codex account's newest logs: a door calls
-/// it on a thread.
+/// Reads everything, as it is now. BLOCKS on files — a credentials file (or
+/// an API key's global configuration), the kept numbers, a token count, a
+/// Codex account's newest logs: a door calls it on a thread.
 #[must_use]
 pub fn read(zone: &ronoctua_files::when::Zone) -> Readings {
     let home = std::env::var_os("HOME")
@@ -700,6 +785,9 @@ pub fn read(zone: &ronoctua_files::when::Zone) -> Readings {
         r.refused = true;
         return r;
     };
+    // THE AGENTS, by the module's own reader: the hook's sessions and what
+    // our terminals heard, merged once — never a second reading of either.
+    r.agents = agent_accounts::agents_now(&list.accounts);
     r.accounts = list
         .accounts
         .into_iter()
@@ -707,12 +795,14 @@ pub fn read(zone: &ronoctua_files::when::Zone) -> Readings {
             let claude = account.kind == Agent::Claude;
             let cache = ronoctua_llm::tokens::kept(&account);
             Seen {
-                facts: ronoctua_llm::credentials::facts(&account.dir).map_err(|r| r.why),
+                facts: ronoctua_llm::credentials::facts_of(&account).map_err(|r| r.why),
                 limits: ronoctua_llm::statusline::limits(&account).map_err(|r| r.why),
                 usage: claude.then(|| usage::kept(&account)).flatten(),
                 tally: cache.tally_in(&|at| zone.offset_at(at)),
                 wrapping: claude
                     .then(|| ronoctua_llm::statusline::wrapped(&account).map_err(|r| r.why)),
+                credits: (account.kind == Agent::ClaudeApi)
+                    .then(|| ronoctua_llm::credits::out_since(&account).map_err(|r| r.why)),
                 account,
             }
         })
@@ -743,6 +833,17 @@ pub fn watched_now(r: &Readings) -> Watching {
         files,
         ..Watching::default()
     };
+    // THE AGENTS' TWO FOLDERS, alone: a session the hook wrote, a state a
+    // terminal's holder wrote.
+    for folder in [
+        agent_accounts::sessions_folder(),
+        agent_accounts::terminals_folder(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        watch_folder(folder, &mut w);
+    }
     for s in &r.accounts {
         let watched = ronoctua_llm::watched(&s.account);
         w.dirs.extend(
@@ -764,6 +865,17 @@ pub fn watched_now(r: &Readings) -> Watching {
         list.dedup();
     }
     w
+}
+
+/// A folder watched alone — or, while it is not there yet, the nearest one
+/// above it that is, to hear it being made: the reading after its making
+/// covers a different `Watching`, and the doors raise their watches again.
+fn watch_folder(folder: PathBuf, w: &mut Watching) {
+    if folder.is_dir() {
+        w.dirs.push(folder);
+    } else if let Some(above) = folder.ancestors().skip(1).find(|a| a.is_dir()) {
+        w.ancestors.push(above.to_path_buf());
+    }
 }
 
 /// For a file whose folder is not there: the nearest folder above it that
@@ -946,6 +1058,8 @@ pub enum Fact {
     Plan,
     /// A window.
     Window(Span),
+    /// An API key's credits: run out, or not.
+    Credits,
     /// Its tokens on a day (`YYYY-MM-DD`).
     Day(String),
     /// Its tokens of a model.
@@ -968,7 +1082,7 @@ pub enum Target {
     Login(String),
     /// Its name: `RET` asks it.
     Rename(String),
-    /// The default of its kind: `RET` makes it so.
+    /// The default of its agent: `RET` makes it so.
     Default(String),
     /// Remove it: `RET` asks first, "no" drawn first.
     Remove(String),
@@ -980,6 +1094,9 @@ pub enum Target {
     Add(Agent),
     /// Count and ask again, now.
     Refresh,
+    /// An agent running in an account — its account's id and its session:
+    /// `RET` goes to it.
+    Agent(String, String),
     /// The warning's line: `RET` asks it.
     Warn,
     /// The danger's line: `RET` asks it.
@@ -999,7 +1116,8 @@ impl Target {
             | Self::Login(id)
             | Self::Rename(id)
             | Self::Default(id)
-            | Self::Remove(id) => Some(id),
+            | Self::Remove(id)
+            | Self::Agent(id, _) => Some(id),
             _ => None,
         }
     }
@@ -1015,8 +1133,10 @@ impl Target {
             Self::Default(_) => "agents-default",
             Self::Remove(_) => "agents-remove",
             Self::Add(Agent::Claude) => "agents-add-claude",
+            Self::Add(Agent::ClaudeApi) => "agents-add-claude-api",
             Self::Add(Agent::Codex) => "agents-add-codex",
             Self::Refresh => "agents-refresh",
+            Self::Agent(..) => SHOW_COMMAND,
             Self::Warn => "agents-warn-at",
             Self::Danger => "agents-danger-at",
             _ => return None,
@@ -1248,17 +1368,26 @@ fn merged(a: Option<Window>, b: Option<Window>, now_s: i64) -> Option<Window> {
 }
 
 /// The windows of an account, by span, as known now.
+///
+/// THE FIVE HOURS ARE DRAWN while they are known, or while nothing says the
+/// plan lacks them: a fresh account still reads "not known yet", and an
+/// Ultra one (the week alone, said by its status line or the endpoint) has
+/// no row that would say so forever. An API key has no window at all, and
+/// none is drawn: every row would say "not known yet" forever.
 #[must_use]
 pub fn windows_of(s: &Seen, now_s: i64) -> Vec<(Span, Option<Window>)> {
+    if !s.account.kind.has_windows() {
+        return Vec::new();
+    }
     let limits = s.limits.as_ref().ok().copied().unwrap_or_default();
     let usage = s.usage.and_then(|k| k.usage).unwrap_or_default();
-    let mut out = vec![
-        (
-            Span::FiveHours,
-            merged(limits.five_hour, usage.five_hour, now_s),
-        ),
-        (Span::Week, merged(limits.seven_day, usage.seven_day, now_s)),
-    ];
+    let five = merged(limits.five_hour, usage.five_hour, now_s);
+    let lacks_five = limits.no_five_hour || usage.no_five_hour;
+    let mut out = Vec::new();
+    if five.is_some() || !lacks_five {
+        out.push((Span::FiveHours, five));
+    }
+    out.push((Span::Week, merged(limits.seven_day, usage.seven_day, now_s)));
     // THE WEEKS BY MODEL exist only where the endpoint said them.
     for (span, w) in [
         (Span::WeekOpus, usage.seven_day_opus),
@@ -1317,6 +1446,16 @@ fn window_value(
             ),
         ],
     )
+}
+
+/// The colour an API key's credits wear: the brain module's, the mark's —
+/// danger while they are out, and `None` otherwise.
+#[must_use]
+pub fn credits_tint(out_since: Option<i64>) -> Option<tokens::Color> {
+    match agent_accounts::credits_tone(out_since) {
+        Tone::Quiet => None,
+        tone => Some(crate::brainlink::tone_colour(tone)),
+    }
 }
 
 /// The colour a window's value wears: the brain module's, by the lines —
@@ -1409,6 +1548,7 @@ impl Ask {
         match self {
             Self::Name(_) => "agents-rename",
             Self::New(Agent::Claude) => "agents-add-claude",
+            Self::New(Agent::ClaudeApi) => "agents-add-claude-api",
             Self::New(Agent::Codex) => "agents-add-codex",
             Self::Warn => "agents-warn-at",
             Self::Danger => "agents-danger-at",
@@ -1439,7 +1579,7 @@ pub enum Edit {
     Rename(String, String),
     /// An account forgotten (its folder stays).
     Remove(String),
-    /// An account made the default of its kind.
+    /// An account made the default of its agent.
     Default(String),
     /// Our status line put in front of an account's.
     Wrap(String),
@@ -1470,6 +1610,8 @@ pub enum Errand {
     Open(String, bool),
     /// Count and ask again, off the loop.
     Refresh,
+    /// Go to the agent of this session ([`show_agent`]).
+    Show(String),
 }
 
 impl Errand {
@@ -1607,8 +1749,9 @@ pub fn apply_in(
 /// A new account: its folder made first (`0700`, the agent's own mode for
 /// its credentials' folder) — so the watches hear it from the start, and
 /// Codex, which wants its folder to exist, finds it — then added to the list
-/// as the file says it now, and, for Claude Code, our status line put in
-/// front: the limits come from it.
+/// as the file says it now, and, for a Claude Code subscription, our status
+/// line put in front: the limits come from it. An API key's has no window
+/// for a status line to tell, and its `settings.json` is left as it is.
 fn add_in(
     roots: &ronoctua_llm::Roots,
     agent: Agent,
@@ -1684,32 +1827,59 @@ pub fn from_anywhere(
     terminal(&account, login).map_err(|r| words::refused(r.why, texts))
 }
 
+/// The agents a photograph plants (`--agents <file>`), read as the brain
+/// module reads them.
+///
+/// # Errors
+///
+/// The reason, in English, when the text is not a list of them.
+pub fn planted_agents(text: &str) -> Result<Vec<AgentSeen>, String> {
+    agent_accounts::planted(text)
+}
+
 /// The marks the accounts' brain module would put on the modeline now,
 /// read from the files under this process's roots, laid over a mind in
 /// place of any of the module's it had — what the footer's camera draws
 /// (`--accounts-marks`), so a picture's marks are the module's own and
-/// never written by hand.
-pub fn with_accounts_marks(mind: &mut ronoctua_brain::Mind, now: i64) {
+/// never written by hand. With `agents`, the text of a list of them
+/// (`--agents`), the agents are planted as data and the module draws them in
+/// their accounts' sets (`agent_accounts::marks_read_with`).
+///
+/// # Errors
+///
+/// The planted agents do not read as the module reads them.
+pub fn with_accounts_marks(
+    mind: &mut ronoctua_brain::Mind,
+    now: i64,
+    agents: Option<&str>,
+) -> anyhow::Result<()> {
+    let marks = match agents {
+        Some(text) => agent_accounts::marks_read_with(
+            now,
+            &agent_accounts::planted(text).map_err(anyhow::Error::msg)?,
+        ),
+        None => agent_accounts::marks_read_now(now),
+    };
     mind.marks.retain(|m| m.module != agent_accounts::ID);
     mind.marks
-        .extend(agent_accounts::marks_read_now(now).into_iter().map(|what| {
-            ronoctua_brain::mind::Posted {
-                module: agent_accounts::ID.to_owned(),
-                what,
-            }
+        .extend(marks.into_iter().map(|what| ronoctua_brain::mind::Posted {
+            module: agent_accounts::ID.to_owned(),
+            what,
         }));
+    Ok(())
 }
 
 /// The line of the door's question, for a door that asks it.
 #[must_use]
 pub fn question_text(q: &Question, texts: &ronoctua_i18n::Texts) -> String {
     match q {
-        // A CLAUDE CODE ACCOUNT gives its own status line back as it goes;
-        // Codex has none, and is not told it does.
+        // A CLAUDE CODE SUBSCRIPTION gives its own status line back as it
+        // goes; Codex and an API key have none of ours, and are not told
+        // they do.
         Question::Remove(_, name, Agent::Claude) => {
             texts.t_with(key::AGENTS_ASK_REMOVE_CLAUDE, &[("name", name)])
         }
-        Question::Remove(_, name, Agent::Codex) => {
+        Question::Remove(_, name, Agent::ClaudeApi | Agent::Codex) => {
             texts.t_with(key::AGENTS_ASK_REMOVE, &[("name", name)])
         }
     }
@@ -2040,9 +2210,18 @@ impl View {
         }
         let target = match id {
             "agents-add-claude" => Target::Add(Agent::Claude),
+            "agents-add-claude-api" => Target::Add(Agent::ClaudeApi),
             "agents-add-codex" => Target::Add(Agent::Codex),
             "agents-warn-at" => Target::Warn,
             "agents-danger-at" => Target::Danger,
+            // BY NAME, with no session: the agent under the cursor.
+            SHOW_COMMAND => {
+                let rows = self.rows(r, zone, columns, texts);
+                match rows.get(self.cursor).and_then(|row| row.target.clone()) {
+                    Some(target @ Target::Agent(..)) => target,
+                    _ => return Errand::Say(texts.t(key::AGENTS_NOT_ON_AN_AGENT)),
+                }
+            }
             "agents-status-line" => {
                 let rows = self.rows(r, zone, columns, texts);
                 let claude = self
@@ -2113,6 +2292,7 @@ impl View {
             Target::Let => allow(texts),
             Target::Add(agent) => self.ask(Ask::New(agent), r),
             Target::Refresh => Errand::Refresh,
+            Target::Agent(_, session) => Errand::Show(session),
             Target::Warn => self.ask(Ask::Warn, r),
             Target::Danger => self.ask(Ask::Danger, r),
         }
@@ -2284,6 +2464,16 @@ fn account_section(
         false,
     ));
     let plan = match &s.facts {
+        // AN API KEY'S "PLAN" is the token, and where its key comes from —
+        // that it has one is all that was read of it.
+        Ok(Facts {
+            api_key: Some(from),
+            ..
+        }) => t.t(match from {
+            ApiKey::Login => key::AGENTS_PLAN_API_LOGIN,
+            ApiKey::Helper => key::AGENTS_PLAN_API_HELPER,
+            ApiKey::Settings => key::AGENTS_PLAN_API_SETTINGS,
+        }),
         Ok(f) => match (&f.subscription, &f.tier) {
             (Some(sub), Some(tier)) => t.t_with(key::AGENTS_PLAN, &[("plan", sub), ("tier", tier)]),
             (Some(sub), None) => sub.clone(),
@@ -2305,8 +2495,39 @@ fn account_section(
         e.push(note(words::refused(Why::Expired, t)));
     }
 
-    // THE WINDOWS, as bars in the colour the marks wear.
+    // ITS AGENTS, NOW — the keyboard's way to each glyph of its set on the
+    // modeline: the same glyph, the same colour, and `RET` goes to it.
+    let mine: Vec<&AgentSeen> = r.agents.iter().filter(|g| g.account == a.id).collect();
+    if !mine.is_empty() {
+        e.push(Entry::Air);
+    }
+    for agent in mine {
+        e.push(agent_entry(agent, t));
+    }
+
+    // THE WINDOWS, as bars in the colour the marks wear — or, for an API
+    // key, which has none, its credits, in the colour its mark wears.
     e.push(Entry::Air);
+    if let Some(credits) = &s.credits {
+        let (value, out) = match credits {
+            Ok(Some(at)) => (
+                t.t_with(
+                    key::AGENTS_CREDITS_OUT,
+                    &[("when", &crate::chrome::when_text(*at, zone, false, t))],
+                ),
+                Some(*at),
+            ),
+            Ok(None) => (t.t(key::AGENTS_CREDITS_OK), None),
+            Err(why) => (words::refused(*why, t), None),
+        };
+        e.push(tinted(
+            t.t(key::AGENTS_ROW_CREDITS),
+            value,
+            Target::Fact(id(), Fact::Credits),
+            credits_tint(out),
+        ));
+        e.push(note(t.t(key::AGENTS_CREDITS_NOTE)));
+    }
     for (span, w) in windows_of(s, r.now_s) {
         e.push(tinted(
             t.t(span.label()),
@@ -2407,15 +2628,48 @@ fn account_section(
     b.section(&title, e);
 }
 
+/// An agent's row: its state's glyph and its folder, what it is doing in the
+/// colour its glyph wears on the modeline (`Doing::tone`), and `RET` going to
+/// it.
+fn agent_entry(agent: &AgentSeen, t: &ronoctua_i18n::Texts) -> Entry {
+    let glyph = words::doing_glyph(agent.doing).to_string();
+    Entry::Pair {
+        label: t.t_args(
+            key::AGENTS_AGENT,
+            &[
+                ("glyph", Arg::Text(&glyph)),
+                ("folder", Arg::Text(&agent.folder)),
+            ],
+        ),
+        value: t.t(words::doing_key(agent.doing)),
+        kind: crate::chrome::Kind::of(true),
+        target: Target::Agent(agent.account.clone(), agent.session.clone()),
+        tint: doing_tint(agent.doing),
+    }
+}
+
+/// The colour an agent's state wears: its mark's on the modeline — `None`
+/// when it is quiet, and the value says it in its own tone.
+#[must_use]
+pub fn doing_tint(doing: Doing) -> Option<tokens::Color> {
+    match doing.tone() {
+        Tone::Quiet => None,
+        tone => Some(crate::brainlink::tone_colour(tone)),
+    }
+}
+
 /// Where an account's numbers came from, and when — or why they did not.
+/// An API key has no numbers but its credits, which say so themselves.
 fn source_note(
     s: &Seen,
     r: &Readings,
     zone: &ronoctua_files::when::Zone,
     t: &ronoctua_i18n::Texts,
 ) -> Option<String> {
-    if s.account.kind == Agent::Codex {
-        return Some(t.t(key::AGENTS_FROM_LOGS));
+    match s.account.kind {
+        Agent::Codex => return Some(t.t(key::AGENTS_FROM_LOGS)),
+        Agent::ClaudeApi => return None,
+        Agent::Claude => {}
     }
     let asked = s.usage.and_then(|k| k.usage_at_s.map(|at| (at, k.refused)));
     let refused = s.usage.and_then(|k| k.refused);
@@ -2574,6 +2828,10 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             label: crate::key::CMD_AGENTS_ADD_CLAUDE,
         },
         ronoctua_cmd::Command {
+            id: "agents-add-claude-api",
+            label: crate::key::CMD_AGENTS_ADD_CLAUDE_API,
+        },
+        ronoctua_cmd::Command {
             id: "agents-add-codex",
             label: crate::key::CMD_AGENTS_ADD_CODEX,
         },
@@ -2589,14 +2847,20 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             id: "agents-danger-at",
             label: crate::key::CMD_AGENTS_DANGER_AT,
         },
+        // AN AGENT, by its session: what a glyph of an account's set runs,
+        // and its row here.
+        ronoctua_cmd::Command {
+            id: "agents-show",
+            label: crate::key::CMD_AGENTS_SHOW,
+        },
     ],
     bindings: &[
-        ("m a a", "agents-open", None),
-        ("m a w", "agents-window", None),
-        ("m a n", "agents-session", None),
-        ("m a l", "agents-login", None),
+        ("/ a a", "agents-open", None),
+        ("/ a w", "agents-window", None),
+        ("/ a n", "agents-session", None),
+        ("/ a l", "agents-login", None),
     ],
-    groups: &[("m a", crate::key::GROUP_AGENTS)],
+    groups: &[("/ a", crate::key::GROUP_AGENTS)],
     reached: keys_reached,
     ..crate::bindings::Contribution::NONE
 };
@@ -2648,10 +2912,12 @@ mod tests {
                 subscription: Some("max".to_owned()),
                 tier: Some("default_claude_max_20x".to_owned()),
                 expires_at_s: Some(NOW + 3600),
+                api_key: None,
             }),
             limits: Ok(Limits {
                 five_hour: Some(window(85.0, NOW + 3600)),
                 seven_day: Some(window(40.0, NOW + 86_400)),
+                no_five_hour: false,
             }),
             usage: (kind == Agent::Claude).then_some(usage::Kept {
                 format: 1,
@@ -2661,12 +2927,14 @@ mod tests {
                     seven_day: Some(window(41.0, NOW + 86_400)),
                     seven_day_opus: Some(window(97.0, NOW + 86_400)),
                     seven_day_sonnet: None,
+                    no_five_hour: false,
                 }),
                 usage_at_s: Some(NOW - 60),
                 refused: None,
             }),
             tally,
             wrapping: (kind == Agent::Claude).then_some(Ok(Wrapping::Ours)),
+            credits: (kind == Agent::ClaudeApi).then_some(Ok(None)),
         }
     }
 
@@ -2678,6 +2946,7 @@ mod tests {
                 seen("claude-1", Agent::Claude, "Work", true),
                 seen("codex-1", Agent::Codex, "Home", true),
             ],
+            agents: Vec::new(),
             lines: agent_accounts::Lines::default(),
             accounts_unread: None,
             lines_unread: None,
@@ -2733,6 +3002,32 @@ mod tests {
             odd.accounts[0].wrapping = Some(Ok(Wrapping::Replaced));
             odd.accounts[0].tally = Tally::default();
             states.push(odd);
+            // AN API KEY in each of its states: its key from a helper and its
+            // credits out, no key yet and a word that does not read.
+            let mut keys = readings();
+            let mut helped = seen("claude-api-1", Agent::ClaudeApi, "Console", false);
+            helped.facts = Ok(Facts {
+                api_key: Some(ApiKey::Helper),
+                ..Facts::default()
+            });
+            helped.credits = Some(Ok(Some(NOW - 600)));
+            let mut unread = seen("claude-api-2", Agent::ClaudeApi, "Spare", false);
+            unread.facts = Err(Why::NoCredentials);
+            unread.credits = Some(Err(Why::Unreadable));
+            keys.accounts.extend([helped, unread]);
+            // A long value WRAPS onto the next line at a space: read as one.
+            let said = drawn(&View::default().rows(&keys, &zone(), 100, &t)).replace('\n', " ");
+            for k in [
+                key::AGENTS_PLAN_API_HELPER,
+                key::AGENTS_KIND_CLAUDE_API,
+                key::AGENTS_ROW_CREDITS,
+            ] {
+                assert!(
+                    said.contains(&t.t(k)),
+                    "{language}: {k} not drawn in\n{said}"
+                );
+            }
+            states.push(keys);
             for r in &states {
                 let v = View::default();
                 let rows = v.rows(r, &zone(), 100, &t);
@@ -3021,6 +3316,237 @@ mod tests {
         }
     }
 
+    /// FAILS IF: an Ultra account — the week alone, said by its status line
+    /// or the endpoint — draws a "5 hours: not known yet" row that can never
+    /// become known; or a fresh account, which nothing has said anything
+    /// about, loses the row it still owes.
+    #[test]
+    fn an_ultra_account_draws_no_five_hours_row() {
+        let spans = |s: &Seen| {
+            windows_of(s, NOW)
+                .into_iter()
+                .map(|(span, _)| span)
+                .collect::<Vec<_>>()
+        };
+        let mut ultra = seen("claude-1", Agent::Claude, "Work", true);
+        ultra.limits = Ok(Limits {
+            five_hour: None,
+            seven_day: Some(window(71.0, NOW + 86_400)),
+            no_five_hour: true,
+        });
+        ultra.usage = None;
+        assert_eq!(spans(&ultra), [Span::Week]);
+
+        // The endpoint alone says so too.
+        let mut ultra_endpoint = seen("claude-1", Agent::Claude, "Work", true);
+        ultra_endpoint.limits = Ok(Limits::default());
+        if let Some(k) = ultra_endpoint.usage.as_mut()
+            && let Some(u) = k.usage.as_mut()
+        {
+            u.five_hour = None;
+            u.no_five_hour = true;
+        }
+        assert!(!spans(&ultra_endpoint).contains(&Span::FiveHours));
+
+        // A window that IS known is drawn whatever the flag says.
+        let mut known = ultra;
+        known.limits = Ok(Limits {
+            five_hour: Some(window(10.0, NOW + 3600)),
+            ..Limits::default()
+        });
+        known.usage = None;
+        assert_eq!(spans(&known), [Span::FiveHours, Span::Week]);
+    }
+
+    /// An API key's account, logged in by the Console, its credits fine.
+    fn api_seen() -> Seen {
+        let mut api = seen("claude-api-1", Agent::ClaudeApi, "Console", false);
+        api.facts = Ok(Facts {
+            api_key: Some(ApiKey::Login),
+            ..Facts::default()
+        });
+        api.limits = Ok(Limits::default());
+        api
+    }
+
+    /// FAILS IF: an API key's account draws a window — every one would say
+    /// "not known yet" forever — or a status line of ours, or no credits
+    /// row; its credits are not said (fine, out since when, or why not), or
+    /// wear another colour than its mark on the modeline; its plan is not
+    /// said as the token and the way its key comes; or any of it draws a
+    /// raw key in a language.
+    #[test]
+    fn an_api_key_draws_its_credits_and_no_window() {
+        let mut r = readings();
+        r.accounts.push(api_seen());
+        let about_api = |rows: &[Row]| -> Vec<Target> {
+            rows.iter()
+                .filter_map(|row| row.target.clone())
+                .filter(|t| t.account() == Some("claude-api-1"))
+                .collect()
+        };
+        let credits = Target::Fact("claude-api-1".to_owned(), Fact::Credits);
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = texts(language);
+            let rows = View::default().rows(&r, &zone(), 100, &t);
+            let api = about_api(&rows);
+            assert!(api.contains(&credits), "{language}: no credits row");
+            assert!(
+                !api.iter()
+                    .any(|t| matches!(t, Target::Fact(_, Fact::Window(_)) | Target::StatusLine(_))),
+                "{language}: a window or a status line on a key: {api:?}"
+            );
+            let text = drawn(&rows);
+            assert!(
+                !text.contains("agents-"),
+                "{language}: a raw key in\n{text}"
+            );
+            assert!(
+                text.contains(&t.t(key::AGENTS_PLAN_API_LOGIN)),
+                "{language}"
+            );
+            assert!(
+                text.contains(&t.t(key::AGENTS_KIND_CLAUDE_API)),
+                "{language}"
+            );
+        }
+        let t = texts("en-GB");
+        let value_of = |r: &Readings| {
+            let rows = View::default().rows(r, &zone(), 100, &t);
+            let row = rows
+                .iter()
+                .find(|row| row.target.as_ref() == Some(&credits))
+                .expect("the credits row")
+                .clone();
+            let last = row.fields.last().expect("a value").clone();
+            (last.text, last.color)
+        };
+        let (fine, fine_colour) = value_of(&r);
+        assert!(fine.contains(&t.t(key::AGENTS_CREDITS_OK)), "{fine}");
+        assert_ne!(
+            Some(fine_colour),
+            credits_tint(Some(NOW)),
+            "fine credits in the colour of danger"
+        );
+
+        // OUT: since when, in the colour the mark wears.
+        r.accounts[2].credits = Some(Ok(Some(NOW - 600)));
+        let (out, colour) = value_of(&r);
+        let when = crate::chrome::when_text(NOW - 600, &zone(), false, &t);
+        assert!(out.contains(&when), "{out}");
+        assert_eq!(
+            Some(colour),
+            Some(crate::brainlink::tone_colour(agent_accounts::credits_tone(
+                Some(NOW - 600)
+            )))
+        );
+        assert_eq!(agent_accounts::credits_tone(Some(NOW)), Tone::Danger);
+        // A WORD THAT DOES NOT READ is said, never taken for fine credits.
+        r.accounts[2].credits = Some(Err(Why::Unreadable));
+        assert_eq!(value_of(&r).0, words::refused(Why::Unreadable, &t));
+        // NO CLOCK for a key: it has no window to reset.
+        let mut only = readings();
+        only.accounts = vec![api_seen()];
+        assert_eq!(next_reset(&only), None);
+        assert!(
+            !drawn(&View::default().rows(&only, &zone(), 100, &t)).contains(usage::HOST),
+            "the usage endpoint asked to be let for a key"
+        );
+    }
+
+    /// FAILS IF: adding an account does not offer an API key's — by its
+    /// row, its command and its question on the door's own line — or the
+    /// one added is not an API key's in a folder of its own, private, with
+    /// its login opened, no status line of ours in its `settings.json`, and
+    /// the subscription's default left where it was.
+    #[test]
+    fn adding_offers_an_api_key_and_puts_no_status_line_on_it() {
+        let t = texts("en-GB");
+        let r = readings();
+        let mut v = View::default();
+        let add = Target::Add(Agent::ClaudeApi);
+        stand_on(&mut v, &r, &add, &t);
+        let Errand::Ask(line) = v.press(Press::Enter, &r, &zone(), 100, &t) else {
+            panic!("the name was not asked");
+        };
+        assert_eq!(line.id, "agents-add-claude-api");
+        assert_eq!(
+            View::about(&v.rows(&r, &zone(), 100, &t), v.cursor(), &t),
+            Some(t.t("cmd-agents-add-claude-api"))
+        );
+        assert_eq!(
+            v.answered(line.id, " Console ", &t),
+            Errand::Edit(Edit::Add(Agent::ClaudeApi, "Console".to_owned()))
+        );
+        let mut by_name = View::default();
+        assert!(matches!(
+            by_name.command("agents-add-claude-api", &r, &zone(), 100, &t),
+            Errand::Ask(ref l) if l.id == "agents-add-claude-api"
+        ));
+
+        let dir = scratch("api");
+        let roots = roots_in(&dir);
+        std::fs::create_dir_all(dir.join("home")).unwrap();
+        let opened = std::cell::RefCell::new(Vec::new());
+        let terminal = |a: &Account, login: bool| -> Result<Vec<String>, Refusal> {
+            opened.borrow_mut().push((a.id.clone(), login));
+            Ok(vec!["terminal".to_owned(), a.id.clone()])
+        };
+        let _ = apply_in(
+            &roots,
+            &terminal,
+            &Edit::Add(Agent::Claude, "Work".to_owned()),
+            &t,
+        );
+        let done = apply_in(
+            &roots,
+            &terminal,
+            &Edit::Add(Agent::ClaudeApi, "Console".to_owned()),
+            &t,
+        );
+        assert_eq!(
+            done.said,
+            Some(t.t_with(key::AGENTS_ADDED, &[("name", "Console")]))
+        );
+        let list = Accounts::store_in(roots.config).parsed().expect("the list");
+        let api = list.find("claude-api-1").expect("listed").clone();
+        assert_eq!(api.kind, Agent::ClaudeApi);
+        assert_eq!(api.dir, dir.join("home").join(".claude-api"));
+        assert_eq!(mode_of(&api.dir), 0o700);
+        assert!(
+            !api.dir
+                .join(ronoctua_llm::statusline::SETTINGS_FILE)
+                .exists(),
+            "a status line of ours on a key"
+        );
+        assert!(!api.default, "the subscription's default moved");
+        assert!(list.find("claude-1").is_some_and(|a| a.default));
+        assert_eq!(opened.borrow().last(), Some(&(api.id.clone(), true)));
+        // REMOVED, it is asked as an account with no status line of ours.
+        assert_eq!(
+            question_text(
+                &Question::Remove(api.id.clone(), api.name.clone(), api.kind),
+                &t
+            ),
+            t.t_with(key::AGENTS_ASK_REMOVE, &[("name", "Console")])
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an account nothing is known of yet stops saying "not known
+    /// yet" for its five hours — the Ultra rule hides the row only on the
+    /// plan's own word.
+    #[test]
+    fn a_fresh_account_still_says_not_known_yet() {
+        let mut fresh = seen("claude-2", Agent::Claude, "New", false);
+        fresh.limits = Ok(Limits::default());
+        fresh.usage = None;
+        assert_eq!(
+            windows_of(&fresh, NOW),
+            [(Span::FiveHours, None), (Span::Week, None)]
+        );
+    }
+
     /// FAILS IF: for ONE reading, at one moment and by one pair of lines, the
     /// account's mark on the modeline — the brain module's own windows and
     /// colouring (`windows_said`, `mark_tone`) — and the most coloured of
@@ -3041,6 +3567,7 @@ mod tests {
         opus.limits = Ok(Limits {
             five_hour: Some(window(84.2, NOW + 8100)),
             seven_day: Some(window(41.0, NOW + 3 * 86_400)),
+            no_five_hour: false,
         });
         if let Some(k) = opus.usage.as_mut()
             && let Some(u) = k.usage.as_mut()
@@ -3427,5 +3954,250 @@ mod tests {
         assert!(!v.clicked(cont, &rows), "the first click was the `RET`");
         assert_eq!(v.cursor(), first, "the click landed off the row");
         assert!(v.clicked(cont, &rows), "the second click was not the `RET`");
+    }
+
+    /// An agent of `account`, its session made of `n`.
+    fn running(account: &str, n: u32, doing: Doing, terminal: Option<&str>) -> AgentSeen {
+        AgentSeen {
+            account: account.to_owned(),
+            session: format!("5f0c1e2a-0000-4000-8000-{n:012x}"),
+            folder: format!("~/src/p{n}"),
+            doing,
+            since: NOW,
+            terminal: terminal.map(str::to_owned),
+            pid: 4000 + n,
+        }
+    }
+
+    /// A footer's doorway that writes down what it is asked.
+    fn recorder(language: &str) -> crate::region::Recorder {
+        crate::region::Recorder::new(
+            std::rc::Rc::new(texts(language)),
+            100,
+            true,
+            crate::sudo::Gate::shut(),
+            crate::wake::Wake::new(|| {}),
+        )
+    }
+
+    /// FAILS IF: an agent running in an account has no row in the account's
+    /// section — its state's glyph (the one its mark wears on the modeline)
+    /// and its folder, what it is doing in both languages and in the colour
+    /// its mark wears — or its row's `RET`, its second click and the command
+    /// by name with the cursor on it do not go to THAT agent by its session;
+    /// or an agent of no listed account is drawn.
+    #[test]
+    fn an_agent_has_a_row_in_its_account_that_goes_to_it() {
+        use Doing;
+        for language in ronoctua_i18n::LANGUAGES {
+            let t = texts(language);
+            let mut r = readings();
+            r.agents = vec![
+                running("claude-1", 1, Doing::Waiting, Some("0123456789abcdef")),
+                running("claude-1", 2, Doing::Failed, None),
+                running("claude-1", 3, Doing::Working, None),
+                running("claude-1", 4, Doing::Done, None),
+                running("nobody", 5, Doing::Working, None),
+            ];
+            let mut v = View::default();
+            let rows = v.rows(&r, &zone(), 100, &t);
+            let of = |n: u32| {
+                rows.iter()
+                    .find(|row| {
+                        row.target
+                            == Some(Target::Agent(
+                                "claude-1".to_owned(),
+                                format!("5f0c1e2a-0000-4000-8000-{n:012x}"),
+                            ))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{language}: agent {n} has no row:\n{}", drawn(&rows))
+                    })
+            };
+            for (n, doing) in [
+                (1, Doing::Waiting),
+                (2, Doing::Failed),
+                (3, Doing::Working),
+                (4, Doing::Done),
+            ] {
+                let row = of(n);
+                let text: String = row.fields.iter().map(|f| f.text.as_str()).collect();
+                let glyph = words::doing_glyph(doing);
+                assert!(
+                    text.contains(glyph) && text.contains(&format!("~/src/p{n}")),
+                    "{language}: {text}"
+                );
+                assert!(
+                    text.contains(&t.t(words::doing_key(doing))),
+                    "{language}: {text}"
+                );
+                // THE GLYPH ITS MARK WEARS on the modeline.
+                assert_eq!(
+                    crate::brainlink::glyph_of(&doing.mark().glyph),
+                    Some(glyph),
+                    "{doing:?}"
+                );
+            }
+            assert!(
+                rows.iter().all(
+                    |row| !matches!(&row.target, Some(Target::Agent(id, _)) if id == "nobody")
+                ),
+                "{language}: an agent of no listed account was drawn"
+            );
+            // A SECTION WITH NO AGENT draws none: Codex's.
+            assert_eq!(
+                rows.iter()
+                    .filter(
+                        |row| matches!(&row.target, Some(Target::Agent(id, _)) if id == "codex-1")
+                    )
+                    .count(),
+                0
+            );
+            // RET, AND THE SECOND CLICK, go to it.
+            let waiting = Target::Agent(
+                "claude-1".to_owned(),
+                "5f0c1e2a-0000-4000-8000-000000000001".to_owned(),
+            );
+            stand_on(&mut v, &r, &waiting, &t);
+            assert_eq!(
+                v.press(Press::Enter, &r, &zone(), 100, &t),
+                Errand::Show("5f0c1e2a-0000-4000-8000-000000000001".to_owned())
+            );
+            assert_eq!(
+                View::about(&rows, v.cursor(), &t),
+                Some(t.t("cmd-agents-show")),
+                "{language}: the pointer resting on it says another thing"
+            );
+            assert!(
+                v.clicked(v.cursor(), &rows),
+                "the second click is not its RET"
+            );
+            assert_eq!(
+                v.command(SHOW_COMMAND, &r, &zone(), 100, &t),
+                Errand::Show("5f0c1e2a-0000-4000-8000-000000000001".to_owned())
+            );
+            // BY NAME off an agent, said.
+            stand_on(&mut v, &r, &Target::Refresh, &t);
+            assert_eq!(
+                v.command(SHOW_COMMAND, &r, &zone(), 100, &t),
+                Errand::Say(t.t(key::AGENTS_NOT_ON_AN_AGENT))
+            );
+        }
+    }
+
+    /// FAILS IF: an agent's row does not wear the colour its mark wears on
+    /// the modeline — the brain module's tone for its state — for any state.
+    #[test]
+    fn an_agents_row_and_its_mark_wear_one_colour() {
+        for doing in Doing::ALL {
+            let mark =
+                (doing.tone() != Tone::Quiet).then(|| crate::brainlink::tone_colour(doing.tone()));
+            assert_eq!(doing_tint(doing), mark, "{doing:?}");
+        }
+        assert_eq!(doing_tint(Doing::Done), None);
+        assert_eq!(
+            doing_tint(Doing::Failed),
+            Some(crate::brainlink::tone_colour(Tone::Danger))
+        );
+    }
+
+    /// FAILS IF: an agent is not gone to where it is — one of our terminals
+    /// by the terminal's own command and its id, any other by the footer's
+    /// command for a process's window and its pid — after the door steps
+    /// aside (the footer's region would keep the keyboard over the window
+    /// that comes forward); or an agent that ended is gone to at all instead
+    /// of said, in either language.
+    #[test]
+    fn an_agent_is_gone_to_where_it_is() {
+        for (at, command, argument) in [
+            (
+                Whereabouts::Terminal("0123456789abcdef".to_owned()),
+                TERMINAL_SHOW,
+                "0123456789abcdef",
+            ),
+            (Whereabouts::Process(4242), WINDOW_OF_PROCESS, "4242"),
+        ] {
+            let mut w = recorder("en-GB");
+            show_found(Some(at), &mut w);
+            assert_eq!(
+                w.owed,
+                [
+                    crate::region::Effect::StepAside,
+                    crate::region::Effect::Run(command, Some(argument.to_owned()))
+                ]
+            );
+        }
+        for language in ronoctua_i18n::LANGUAGES {
+            let mut w = recorder(language);
+            show_found(None, &mut w);
+            assert_eq!(
+                w.owed,
+                [crate::region::Effect::Say(
+                    texts(language).t(key::AGENTS_AGENT_ENDED),
+                    Echo::Long
+                )]
+            );
+        }
+        // A PHOTOGRAPH'S agent is gone to nowhere, and written down.
+        assert_eq!(
+            running("claude-1", 1, Doing::Done, None)
+                .whereabouts()
+                .map(|w| order_of(&w)),
+            Some((WINDOW_OF_PROCESS, "4001".to_owned()))
+        );
+        fn planted(_: &ronoctua_files::when::Zone) -> Readings {
+            Readings {
+                read: true,
+                ..Readings::default()
+            }
+        }
+        let t = texts("en-GB");
+        let mut open = Open::new(
+            zone(),
+            Reader::Here(planted),
+            Reach::Nowhere(Vec::new()),
+            None,
+            100,
+            &t,
+        );
+        let mut w = recorder("en-GB");
+        open.command(SHOW_COMMAND, Some(" abc-1 "), &mut w);
+        assert_eq!(open.done(), ["agents-show abc-1"]);
+        assert!(
+            !w.owed
+                .iter()
+                .any(|e| matches!(e, crate::region::Effect::Run(..))),
+            "a photograph reached a window"
+        );
+    }
+
+    /// FAILS IF: the view's command for an agent is not the one its mark
+    /// opens on the modeline (the brain module's `SHOWS`), is not reached
+    /// from the view — the keyboard's twin of the glyphs — or is not a
+    /// command of the registry.
+    #[test]
+    fn the_agents_command_is_the_marks_and_the_registrys() {
+        assert_eq!(SHOW_COMMAND, agent_accounts::SHOWS);
+        assert!(reached().any(|c| c == SHOW_COMMAND));
+        assert!(KEYS.commands.iter().any(|c| c.id == SHOW_COMMAND));
+    }
+
+    /// FAILS IF: an agents' folder that is there is not watched alone, or one
+    /// not made yet is watched nowhere — its making (the first session the
+    /// hook writes, the first terminal held) would never reach the view.
+    #[test]
+    fn the_agents_folders_are_watched_or_their_making_is() {
+        let root = std::env::temp_dir().join(format!(
+            "ronoctua-shell-agents-folders-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("there")).unwrap();
+        let mut w = Watching::default();
+        watch_folder(root.join("there"), &mut w);
+        watch_folder(root.join("later").join("agents"), &mut w);
+        assert_eq!(w.dirs, [root.join("there")]);
+        assert_eq!(w.ancestors, std::slice::from_ref(&root));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

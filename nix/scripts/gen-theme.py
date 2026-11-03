@@ -137,9 +137,17 @@ TEXT_STEPS = (
 #: is allowed to be the theme, and a BAND or a RULE is a signal drawn on top
 #: of it, so its colour has to stay its own. The tint falls off as the ladder
 #: climbs out of the background and into the signals.
-NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "chrome-raised", "chrome-loud", "chrome-band", "near"})
+NEUTRAL_GROUNDS = frozenset({"ground", "chrome", "window", "mark-set", "chrome-raised", "chrome-loud", "chrome-band", "near"})
 NEUTRAL_PAINT = (
     ("window", 0.018),
+    # THE MODELINE'S SETS' GROUND (`surface.mark-set`, 2026-11-02), the one
+    # whose alternate is the window's rung: BELOW the modeline, halfway from
+    # `window` to it. Above the modeline the next rung is `hover` (0.070), and
+    # a set ground at 0.06-something would be the crossing-chain trap
+    # `chrome-band` records below — a set the colour of the row under the
+    # pointer. And there is room for ONE new rung here, not two: two at 0.027
+    # and 0.040 measured ΔE 0.0093 apart in evilside, under `LADDER_MIN_STEP`.
+    ("mark-set", 0.0355),
     ("chrome-raised", 0.053),
     ("hover", 0.070),
     ("chrome-loud", 0.078),
@@ -1161,6 +1169,11 @@ SIX_GROUNDS = ("surface.chrome", "modeline.background", "notification.background
 # list nobody may add to.
 RAISED_GROUNDS = ("surface.container", "surface.header")
 
+#: THE MODELINE'S SET GROUNDS (2026-11-02): every tone a brain mark wears is
+#: drawn on one of them — an account's glyph by its usage, an agent's by its
+#: status. A tuple of its own for the same reason as `RAISED_GROUNDS`.
+MARK_SET_GROUNDS = ("surface.mark-set", "surface.mark-set-alternate")
+
 #: THE DESKS, AND THE PALETTE EACH ONE IS THE PAGE OF (2026-09-28).
 #
 # The person may put the footer and our windows on the desk's colour
@@ -1221,6 +1234,18 @@ BASE_ONLY_PAIRS = frozenset(
         # the page (the owner: it has the desk's colour), so the page's
         # `modeline.background` IS its `surface.chrome` (`page_roles`).
         ("surface.chrome", "modeline.background"),
+        # AND THE SETS' GROUNDS, which are a band of the modeline's and are
+        # drawn only where the modeline has one: on a desk's page — and veiled
+        # — the sets are their glyphs alone (`hidden::Grounds::sets`).
+        # Measured, the reason: solved off a light theme's desk, the set's
+        # rung lands within ΔE 0.002 of the notification band above it.
+        ("surface.mark-set", "surface.mark-set-alternate"),
+        ("surface.mark-set", "modeline.background"),
+        ("surface.mark-set-alternate", "modeline.background"),
+        ("surface.mark-set", "surface.chrome"),
+        ("surface.mark-set-alternate", "surface.chrome"),
+        ("surface.mark-set", "notification.background"),
+        ("surface.mark-set-alternate", "notification.background"),
     }
 )
 
@@ -1233,6 +1258,11 @@ def page_roles(page_tokens: dict[str, "Resolved"], base_tokens: dict[str, "Resol
         if identical_on_every_page(key):
             page_tokens[key] = base_tokens[key]
     page_tokens["modeline.background"] = page_tokens["surface.chrome"]
+    # AND THE TERMINAL'S GROUND, which on a desk's page is the desk: the one
+    # table that said so (`TERMINAL_BACKGROUND`) is now also what the palette
+    # says, so the native terminal reads one role on every page and the
+    # Ghostty fragment and it never disagree.
+    page_tokens["terminal.background"] = page_tokens["surface.chrome"]
 
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
@@ -1420,6 +1450,13 @@ CONTRAST_GATES = (
     ("modeline.selection", ("modeline.background",), 40, 45),
     # AND THE DRAWER'S.
     ("modeline.drawer", ("modeline.background",), 40, 45),
+    # AND ON THE SETS' GROUNDS, every tone a mark wears there, at the rungs
+    # it reads at on the modeline's own band.
+    ("text.secondary", MARK_SET_GROUNDS, 43, 45),
+    ("modeline.watching", MARK_SET_GROUNDS, 40, 45),
+    ("state.caution", MARK_SET_GROUNDS, 45, 50),
+    ("state.error", MARK_SET_GROUNDS, 45, 50),
+    ("state.accent", MARK_SET_GROUNDS, 45, 50),
     ("notification.quiet", ("notification.background",), 43, 45),
     ("notification.loud", ("notification.background",), 45, 60),
     # AND THE MANAGER'S TONES, on the grounds the manager draws them on.
@@ -1747,6 +1784,20 @@ DISTANCE_GATES = (
     # group. The floor is low on purpose — this is meant to be the smallest
     # step there is, the `surface.shelf` register — but it is not zero.
     ("glance.ground", "glance.ground-alternate", 0.008, 0.012),
+    # THE MODELINE'S SETS' TWO GROUNDS, drawn edge to edge like the glance's
+    # stripes, and on the modeline: each told from the other, from the
+    # modeline's band (very close, which is the owner's ask, but not the
+    # same), from the minibuffer's chrome below and from the notification
+    # band above.
+    # The alternate is the window's rung, one ladder step off the chrome: its
+    # floor against the chrome is that step, not a band's.
+    ("surface.mark-set", "surface.mark-set-alternate", 0.010, 0.012),
+    ("surface.mark-set", "modeline.background", 0.010, 0.012),
+    ("surface.mark-set-alternate", "modeline.background", 0.02, 0.024),
+    ("surface.mark-set", "surface.chrome", 0.02, 0.024),
+    ("surface.mark-set-alternate", "surface.chrome", 0.012, 0.016),
+    ("surface.mark-set", "notification.background", 0.02, 0.024),
+    ("surface.mark-set-alternate", "notification.background", 0.02, 0.024),
     # THE ANSWER OF THE ROW UNDER THE CURSOR, in its two readings. The owner
     # moved the cursor down a sheet and watched a door and a fact become one
     # row; this is what says they cannot go back to being one in some theme
@@ -2031,7 +2082,7 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
     for a, b in DISTANCE_NOTES:
         findings.append(Finding("Note", "distance", f"{a} vs {b}", de(a, b), "reported only: never adjacent"))
 
-    ladders = [("neutral", ("chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
+    ladders = [("neutral", ("chrome", "window", "chrome-raised", "chrome-loud", "chrome-band")), ("neutral", ("chrome", "window", "mark-set", "chrome-raised")), ("neutral", ("chrome", "hover", "border", "border-strong")), ("neutral", tuple(n for n, _ in TEXT_STEPS))]
     if base:
         # THE RUNGS FROM THE GROUND, on the base alone: on a desk's page the
         # "chrome" is that desk, and a rung from the ground to it measures the

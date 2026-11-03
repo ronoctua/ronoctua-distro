@@ -9,13 +9,23 @@ publish.workspace = true
 
 # THE CLI IS PART OF THE PRODUCT, not an extra. Claude Code runs
 # `ronoctua-llm statusline --profile <id>` after every answer (the person's
-# own status line chained behind it), and the usage unit runs
+# own status line chained behind it) and `ronoctua-llm hook` on a session's
+# events (the managed drop-in, `nix/modules/llm.nix`), and the usage unit runs
 # `ronoctua-llm refresh`. Extracted as `rust.llm` (`nix/rust.nix`) and put on
-# the system's PATH, because `settings.json` outlives a generation and names
-# `/run/current-system/sw/bin/ronoctua-llm`, never a store path.
+# the system's PATH, because `settings.json` and a running session outlive a
+# generation and name `/run/current-system/sw/bin/ronoctua-llm`, never a
+# store path.
 [[bin]]
 name = "ronoctua-llm"
 path = "src/bin/cli.rs"
+required-features = [ "fetch" ]
+
+# AND THE HOOK, RUN AS CLAUDE CODE RUNS IT: the binary cargo builds for this
+# package (`CARGO_BIN_EXE_ronoctua-llm`), so it needs `fetch` too — what it
+# prints would join the conversation, and what it answers could block a tool.
+[[test]]
+name = "hook"
+path = "tests/hook.rs"
 required-features = [ "fetch" ]
 
 # WHAT READS A LOGIN AND ASKS THE NETWORK — the credentials reader, the usage
@@ -42,8 +52,12 @@ ronoctua-http = { path = "../ronoctua-http", features = [ "tls" ], optional = tr
 # `llm-accounts.json` is a `Store` (written whole and atomically, merged by
 # applying each edit to what the file says now).
 ronoctua-store = { path = "../ronoctua-store" }
-# The four roots (the cache's for the token counts) and the atomic write.
+# The four roots (the cache's for the token counts) and the atomic write —
+# and the runtime folder the hook keeps the sessions in, per instance.
 ronoctua-xdg = { path = "../ronoctua-xdg" }
+# `/proc`'s one boundary: whether a session's process is still the one it
+# was (its pid and its start), and the hook's way up to Claude Code.
+ronoctua-memory = { path = "../ronoctua-memory" }
 # Codex's compressed logs.
 ruzstd.workspace = true
 

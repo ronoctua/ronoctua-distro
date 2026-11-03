@@ -2154,6 +2154,7 @@ let
   zsh-plugins-are-linked = mkCheck "zsh-plugins-are-linked" [ ] ''
     sw=${self.nixosConfigurations.vm.config.system.path}
     zshrc=${../assets/shell/zshrc.zsh}
+    bashrc=${../assets/shell/bashrc.bash}
 
     # Every path `.zshrc` sources from the system path. The `-r` guard and the
     # `.` that follows it name the same file, so `sort -u` leaves one per plugin.
@@ -2165,6 +2166,15 @@ let
       echo "       plugin lines leave the file?" >&2
       exit 1
     fi
+    # AND BASH'S HOOK, which went unseen for months at a path its package
+    # never had: `bash-preexec` is what gives bash a preexec at all.
+    hooks=$(grep -oE '/run/current-system/sw/share/[^ ]+\.sh' "$bashrc" | sort -u || true)
+    if ! printf '%s\n' "$hooks" | grep -q 'bash-preexec\.sh$'; then
+      echo "ERROR: .bashrc no longer sources bash-preexec from the system path" >&2
+      exit 1
+    fi
+    paths="$paths $hooks"
+    count=$((count + $(printf '%s\n' "$hooks" | grep -c .)))
 
     missing=0
     for p in $paths; do
@@ -2183,6 +2193,73 @@ let
 
     echo "OK: $count zsh plugins are linked where .zshrc sources them"
   '';
+
+  # THE SHELLS MARK THE PROMPT — and only in the distro's own terminal.
+  #
+  # `.shellrc` defines the marks (OSC 7 the folder, OSC 133 A/B/C/D the
+  # prompt, the command and its exit code, OSC 2 the title), and `.zshrc` and
+  # `.bashrc` hang them after starship. Run here as a person would: an
+  # interactive zsh and bash on a pty (`script`), with the very files the home
+  # gets, typing a `cd`, a `true` and an `(exit 7)`. With `RONOCTUA_TERMINAL`
+  # set, every mark comes, in order, with the right exit codes and a folder
+  # that has a space in it; without it — Ghostty, VS Code, `M-x shell` —
+  # NOTHING is printed. bash has no hooks of its own: bash-preexec is sourced
+  # first, as the system's path does on the machine.
+  shell-rc-marks-the-prompt =
+    mkCheck "shell-rc-marks-the-prompt"
+      [
+        pkgs.zsh
+        pkgs.bashInteractive
+        pkgs.util-linux
+        pkgs.python3
+      ]
+      ''
+        home=$PWD/home
+        mkdir -p "$home/a naïve folder"
+        cp ${../assets/shell/zshrc.zsh} "$home/.zshrc"
+        cp ${../assets/shell/bashrc.bash} "$home/.bashrc"
+        cp ${../assets/shell/shellrc.sh} "$home/.shellrc"
+        # The system's path, as the machine has it (`zsh-plugins-are-linked`
+        # holds that it is linked there): the package's own file, put where
+        # `.bashrc` sources it from.
+        grep -q '/run/current-system/sw/share/bash/bash-preexec.sh' "$home/.bashrc" \
+          || { echo "ERROR: .bashrc sources bash-preexec from somewhere else" >&2; exit 1; }
+        sed -i 's|/run/current-system/sw/share/bash/bash-preexec.sh|${pkgs.bash-preexec}/share/bash/bash-preexec.sh|g' \
+          "$home/.bashrc"
+        cp "$home/.bashrc" "$home/bashrc-with-hooks"
+        printf '%s\n' 'cd "a naïve folder"' 'true' '(exit 7)' 'exit' > typed
+        here=$PWD
+        run() { # shell-command, terminal id (empty: none), out
+          ( cd "$home" && HOME=$home XDG_CONFIG_HOME=$home/.config XDG_STATE_HOME=$home/.local/state \
+            XDG_CACHE_HOME=$home/.cache LANG=C.UTF-8 RONOCTUA_TERMINAL=$2 TERM=xterm-ghostty \
+            script -q -c "$1" /dev/null < "$here/typed" > "$here/$3" 2>&1 ) || true
+        }
+        for shell in zsh bash; do
+          if [ "$shell" = zsh ]; then line="zsh -i"; else line="bash --rcfile $home/bashrc-with-hooks -i"; fi
+          run "$line" t "$shell-marked"
+          run "$line" "" "$shell-plain"
+          python3 - "$shell" "$shell-marked" "$shell-plain" <<'PY'
+        import re, sys
+        shell, marked, plain = sys.argv[1], open(sys.argv[2], "rb").read(), open(sys.argv[3], "rb").read()
+        def marks(b):
+            return [m.group(1).decode("utf-8", "replace")
+                    for m in re.finditer(rb"\x1b\](7;[^\x1b\x07]*|133;[^\x1b\x07]*)", b)]
+        got = marks(marked)
+        prompts = [m for m in got if m.startswith("133;")]
+        want = ["133;A", "133;B", "133;C", "133;D;0", "133;A", "133;B", "133;C", "133;D;0",
+                "133;A", "133;B", "133;C", "133;D;7"]
+        seen = marked.decode("utf-8", "replace").replace("\x1b", "^[")[-1500:]
+        assert prompts[: len(want)] == want, f"{shell}: the prompt marks are {prompts}; the pty said: {seen}"
+        folders = [m for m in got if m.startswith("7;")]
+        assert any(f.endswith("/a naïve folder") and f.startswith("7;kitty-shell-cwd://") for f in folders), \
+            f"{shell}: the folder was not said: {folders}"
+        assert b"\x1b]2;" in marked, f"{shell}: no title was said"
+        assert not marks(plain) and b"\x1b]2;" not in plain, \
+            f"{shell}: marks were printed outside the distro's terminal: {marks(plain)}"
+        print(f"OK: {shell} marks its prompts in the distro's terminal ({len(got)} marks) and nowhere else")
+        PY
+        done
+      '';
 
   # THE LOCALE AND THE TIMEZONE EXIST, and the check is where that gets asked.
   #
@@ -2334,11 +2411,27 @@ let
             return True
         return False
 
+    # UPSTREAM'S COPY, named and not inferred: `ghostty-vt-zig-packages.nix`
+    # is the pinned tag's `build.zig.zon.nix` byte for byte
+    # (`ghostty-vt-packages-are-upstreams`), and cannot be rewritten. Its
+    # addresses are upstream's mirror, each file named by the version, commit
+    # or Zig package hash it holds, and a git one fetched at a `rev`. What it
+    # is held to instead is that every fetch carries its own hash.
+    COPIED = {"ghostty-vt-zig-packages.nix"}
+    copied = 0
+
     seen = 0
     wrong = []
     for f in sorted(root.rglob("*.nix")):
         text = hashless(f.read_text())
         found = re.findall(r'\burl\s*=\s*"([^"]+)"', text)
+        if str(f.relative_to(root)) in COPIED:
+            copied += 1
+            hashes = len(re.findall(r'\bhash\s*=\s*"sha256-', text))
+            floor(len(found), 20, f"downloads of {f.name}")
+            if hashes != len(found):
+                wrong.append(f"{f.relative_to(root)}: {len(found)} addresses and {hashes} hashes")
+            continue
         for block in re.findall(r'\burls\s*=\s*\[(.*?)\]', text, re.S):
             found += re.findall(r'"([^"]+)"', block)
         for url in found:
@@ -2349,6 +2442,8 @@ let
                 wrong.append(f"{f.relative_to(root)}: {url}")
 
     floor(seen, 5, "download addresses under nix/")
+    if copied != len(COPIED):
+        wrong.append(f"{sorted(COPIED)}: {copied} of them found under nix/, and an exemption of nothing is stale")
 
     # PARSED: the pins file is JSON, a table of pins per kind.
     pins = json.load(open("${../assets/distro-pins.json}"))
@@ -3681,6 +3776,9 @@ let
         # `LEADER / p`, the page. Each state asserted below by what its own
         # branch runs, and each command by its binding.
         "build-own", "build-reference", "build-switching",
+        # AND THE HELD TERMINALS NO WINDOW SHOWS: it runs `terminals-open`,
+        # the background view, which is `LEADER RET b b`.
+        "terminals-away",
     }
     if acted != agreed:
         gaps.append(
@@ -3813,6 +3911,7 @@ let
         ("build-reference", '"build-open"'),
         ("build-switching", '"build-toggle"'),
         ("build-switching", '"build-open"'),
+        ("terminals-away", 'run_command("terminals-open")'),
     ):
         if needle not in branch(mark):
             gaps.append(f"clicking `{mark}` does not run {needle}")
@@ -3828,6 +3927,7 @@ let
         ("/ r", "dev-resizer"),
         ("/ b", "build-toggle"),
         ("/ p", "build-open"),
+        ("RET b b", "terminals-open"),
     ):
         if f'("{seq}", "{command}"' not in keymap:
             gaps.append(f"`{command}` has no key at LEADER {seq}")
@@ -5135,12 +5235,12 @@ let
 
     # AND WHICH OF THEM A CONTRAST GATE MEASURES A TONE ON.
     #
-    # NARROWED TO THE THREE ASSIGNMENTS THAT ARE THE ANSWER, and not grepped
+    # NARROWED TO THE FOUR ASSIGNMENTS THAT ARE THE ANSWER, and not grepped
     # over the file: a surface named in `DISTANCE_GATES` is told apart from
     # another, which says nothing about whether a tone reads ON it, and a
     # sweep of the whole generator read that as "measured".
     gated = set()
-    for name in ("SIX_GROUNDS", "RAISED_GROUNDS", "CONTRAST_GATES"):
+    for name in ("SIX_GROUNDS", "RAISED_GROUNDS", "MARK_SET_GROUNDS", "CONTRAST_GATES"):
         m = re.search(r"\n" + name + r"\s*=\s*\(", generator)
         if m is None:
             print(f"ERROR: `{name}` went away from gen-theme.py", file=sys.stderr)
@@ -7039,6 +7139,106 @@ let
       ${buffers.format}/lib/ronoctua_buffer_format.wasm 200
   '';
 
+  # THE TERMINAL ENGINE'S ZIG PACKAGES ARE UPSTREAM'S, for the pinned tag.
+  #
+  # `nix/ghostty-vt-zig-packages.nix` is a COPY of the `build.zig.zon.nix`
+  # Ghostty ships with each tag — one fetch per package, by the hash Zig knows
+  # it by — kept here because importing it out of the fetched tree would be
+  # import-from-derivation. A copy can go stale: move the tag in
+  # `nix/ghostty-vt.nix` and forget it, and the build asks Zig for packages the
+  # new `build.zig.zon` no longer names, or names under another hash. So the
+  # copy is held to the tag's own file, as `nix fmt` writes it — the formatter
+  # is the only difference allowed.
+  ghostty-vt-packages-are-upstreams =
+    let
+      vt = self.packages.${system}.ghostty-vt;
+    in
+    mkCheck "ghostty-vt-packages-are-upstreams" [ pkgs.nixfmt pkgs.diffutils ] ''
+      nixfmt - < ${vt.src}/build.zig.zon.nix > upstream.nix
+      if ! cmp -s upstream.nix ${../nix/ghostty-vt-zig-packages.nix}; then
+        echo "ERROR: nix/ghostty-vt-zig-packages.nix is not the pinned tag's build.zig.zon.nix" >&2
+        diff upstream.nix ${../nix/ghostty-vt-zig-packages.nix} | head -40 >&2 || true
+        echo "       regenerate it: nixfmt - < <tag>/build.zig.zon.nix > nix/ghostty-vt-zig-packages.nix" >&2
+        exit 1
+      fi
+      echo "OK: the Zig packages are the ones the pinned tag names (${vt.version})"
+    '';
+
+  # THE TERMINAL ENGINE'S STRUCTS AND NUMBERS, against the C compiler.
+  #
+  # `crates/ronoctua-term/src/ghostty.rs` binds libghostty-vt by hand, and
+  # `#[repr(C)]` promises to ARRANGE, never to check: the first binding of this
+  # library compiled, linked and returned a blank grid, three layouts wrong and
+  # not one diagnostic. Every constant, size and offset its `sys` module
+  # declares is measured here by a C program compiled against the pinned
+  # headers — and the program is WRITTEN FROM those declarations, so a number
+  # added to `sys` is a number measured, and a name the headers do not have is
+  # a probe that does not compile. (The crate's own test asks the linked
+  # library's type manifest the same questions at run time.)
+  ghostty-layout-matches-c =
+    let
+      vt = self.packages.${system}.ghostty-vt;
+    in
+    mkCheck "ghostty-layout-matches-c" [ pkgs.python3 pkgs.stdenv.cc ] ''
+      python3 - <<'END'
+      import pathlib, re, subprocess, sys
+      exec(open("${pyPrelude}").read())
+
+      # FILE-WIDE: the `sys` module of ghostty.rs, where the binding declares
+      # every number and every layout it relies on. `code_of`, because a number
+      # written in a comment is prose, and only a declaration the compiler reads
+      # may answer; and whitespace-free patterns, because `rustfmt` may break a
+      # long assertion over two lines.
+      rust = code_of(pathlib.Path("${../crates/ronoctua-term/src/ghostty.rs}").read_text())
+      floor(len(rust), 20000, "characters of ghostty.rs")
+      found = re.search(r"^mod sys \{$(.*?)^\}$", rust, re.M | re.S)
+      body = must(found.group(1) if found else None, "the `sys` module of ghostty.rs")
+      consts = re.findall(r"\bpub const ([A-Z][A-Z0-9_]*): (?:c_int|u8|u16|u32) = (-?[0-9]+);", body)
+      sizes = re.findall(r"size_of::<([A-Z][A-Za-z0-9]*)>\(\)\s*==\s*([0-9]+)", body)
+      offsets = re.findall(
+          r"offset_of!\(\s*([A-Z][A-Za-z0-9]*),\s*([a-z_][a-z0-9_]*)\s*\)\s*==\s*([0-9]+)", body
+      )
+      floor(len(consts), 400, "constants sys declares")
+      floor(len(sizes), 45, "struct sizes sys asserts")
+      floor(len(offsets), 95, "field offsets sys asserts")
+
+      # The C names are the Rust ones with the prefix back: `TERMINAL_OPT_MODE`
+      # is `GHOSTTY_TERMINAL_OPT_MODE`, `Point` is `GhosttyPoint`, and a field
+      # keeps its name.
+      declared = {}
+      probe = ["#include <stddef.h>", "#include <stdio.h>", "#include <ghostty/vt.h>", "int main(void) {"]
+      for name, value in consts:
+          declared[name] = int(value)
+          probe.append(f'  printf("{name} %lld\\n", (long long)(GHOSTTY_{name}));')
+      for name, value in sizes:
+          declared[f"size:{name}"] = int(value)
+          probe.append(f'  printf("size:{name} %zu\\n", sizeof(Ghostty{name}));')
+      for name, field, value in offsets:
+          declared[f"offset:{name}.{field}"] = int(value)
+          probe.append(f'  printf("offset:{name}.{field} %zu\\n", offsetof(Ghostty{name}, {field}));')
+      probe += ["  return 0;", "}"]
+      pathlib.Path("probe.c").write_text("\n".join(probe) + "\n")
+      subprocess.run(["cc", "-I${vt}/include", "probe.c", "-o", "probe"], check=True)
+
+      # PARSED: the C side is a table the compiler wrote — one name and one
+      # number per line — split on whitespace, not searched.
+      measured = {}
+      for row in subprocess.run(["./probe"], check=True, capture_output=True, text=True).stdout.splitlines():
+          name, value = row.split()
+          measured[name] = int(value)
+      wrong = [
+          f"{n}: the C compiler says {measured.get(n)}, ghostty.rs says {v}"
+          for n, v in sorted(declared.items())
+          if measured.get(n) != v
+      ]
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          sys.exit(1)
+      print(f"OK: {len(measured)} constants, sizes and offsets agree with libghostty-vt ${vt.version}'s headers")
+      END
+    '';
+
   # ===================================================================
   # THE TORRENT BORDER, and the two things about it that cannot be read.
   # ===================================================================
@@ -7709,7 +7909,7 @@ let
   # answers for `U+E0A0`, publishing Lucide in the origin range means drawing the
   # wrong symbol. The day that changes, the check fails and someone re-reads the
   # decision instead of rediscovering it through the screen.
-  renderer-loads-four-faces = mkCheck "renderer-loads-four-faces" [ ] ''
+  renderer-loads-its-faces = mkCheck "renderer-loads-its-faces" [ ] ''
     # The palettes (`rust.keyed`): this binary is the unwrapped one, and the
     # colours are data it reads at run time.
     export RONOCTUA_THEMES=${rust.keyed.RONOCTUA_THEMES}
@@ -7719,6 +7919,9 @@ let
     # correct for the installer and useless as a check — so the check supplies
     # it, exactly as the wrapper supplies it to the footer.
     export RONOCTUA_COVERAGE_FONTS=${rust.atRunTime.RONOCTUA_COVERAGE_FONTS}
+    # AND THE PRIMARY FAMILY'S THREE OTHER STYLES, which the cell grid draws a
+    # program's bold and italic in — by path, as the wrapper hands them over.
+    export RONOCTUA_TERMINAL_FACES=${rust.atRunTime.RONOCTUA_TERMINAL_FACES}
     ${rust.bins.ronoctua-test-faces}/bin/ronoctua-test-faces
   '';
 
@@ -12531,9 +12734,16 @@ let
         # asks nothing (its readings are kept for the next opening), so the
         # ring turns once: the ring above, entered by a command. The
         # notification's button reaches it through the desk too
-        # (`desk_asked` → `run_notification_action` → `run_command`).
+        # (`desk_asked` → `run_notification_action` → `run_with`, the
+        # command run on what its notification is about).
         ("close_region", "region_owed", "run_with", "software_launch_latest"),
-        ("close_region", "desk_asked", "region_owed", "run_command", "run_notification_action", "run_with", "software_launch_latest"),
+        ("close_region", "desk_asked", "region_owed", "run_notification_action", "run_with", "software_launch_latest"),
+        # A TERMINAL SHOWN WITH NO TERMINAL NAMED (`terminal-show` bare, and
+        # nothing asking for the person) opens the background terminals'
+        # view instead (`terminals-open`, a region's command): the view runs
+        # `terminal-show` only on a person's `RET` or click, with the
+        # terminal's id — so the ring turns once.
+        ("run_command", "run_with", "terminal_show"),
         # A region may run a command (`Doorway::run`), which goes in by the
         # one door every command enters by — the clipboard's shape, above: it
         # turns as often as a region asks, and a region whose command ran
@@ -12621,42 +12831,42 @@ let
         # card by its sender), and a region asks it of the footer's desk — the
         # manager's `a` on a record, a window's order by name, the band's
         # button through `notif-act` (`Effect::Desk`, `desk_asked` →
-        # `run_notification_action` → `run_command`): the region's own
+        # `run_notification_action` → `run_with`): the region's own
         # `Effect::Run` by a longer road, so every ring a region's run closes
         # (above) it closes too, once — the card's command is its sender's,
         # and one that pressed its own button again would be the sender's bug.
         # What the desk's settle asks is done in the ask's place, and an ask of
         # the desk from inside a settle is not done (`region_owed`).
-        ("desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("desk_asked", "hosted_answer", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("desk_asked", "hosted_answer", "hosted_command", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_for_news"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_for_news"),
-        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region"),
-        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_command", "region_owed", "run_notification_action", "run_with"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_answer", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_answer", "hosted_command", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_for_news"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_for_news"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_answer", "hosted_command", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "bring_a_region_behind", "desk_asked", "hosted_command", "hosted_replay", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_command", "hosted_replay", "open_region", "open_the_radio", "radio_commands", "region_owed", "run_notification_action", "run_with", "with_region_held"),
         # The launcher's "search to install" and its `C-i`/`C-d` open the
         # software centre — a region of its own crate, which the footer names
         # only by its commands — through the one door every command enters
@@ -12679,8 +12889,8 @@ let
         ("adopt_the_places", "hosted_heard", "region_owed"),
         ("bluetooth_answer", "bluetooth_ordered", "hosted_heard", "radio_commands", "region_owed", "run_with"),
         ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "hosted_heard", "radio_commands", "region_owed", "run_with"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
-        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_notification_action", "run_with"),
+        ("bluetooth_answer", "bluetooth_ordered", "bluetooth_unasked", "desk_asked", "hosted_heard", "radio_commands", "region_owed", "run_notification_action", "run_with"),
         ("clipboard_acted", "clipboard_told", "hosted_heard", "region_owed"),
         ("clipboard_acted", "clipboard_carry_out", "clipboard_moved", "clipboard_told", "hosted_heard", "region_owed"),
         # THE LINE MOVING ON lets the region's question on it go
@@ -12702,13 +12912,13 @@ let
         ("hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "region_owed", "run_with", "the_line_moves_on", "with_region"),
         ("hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "kiosk_view_errand", "kiosk_view_press", "region_owed", "run_with", "the_line_moves_on", "with_region"),
         ("bluetooth_answer", "bluetooth_ordered", "hosted_unanswered", "radio_commands", "region_owed", "run_with", "the_line_moves_on", "with_region"),
-        ("desk_asked", "hosted_unanswered", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("brain_act", "desk_asked", "hosted_unanswered", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("desk_asked", "hosted_unanswered", "kiosk_errands", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_open", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "kiosk_view_errand", "kiosk_view_press", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
-        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_unanswered", "radio_commands", "region_owed", "run_command", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("brain_act", "desk_asked", "hosted_unanswered", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_errands", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_open", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("desk_asked", "hosted_unanswered", "kiosk_commands", "kiosk_errands", "kiosk_run", "kiosk_view_errand", "kiosk_view_press", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
+        ("bluetooth_answer", "bluetooth_ordered", "desk_asked", "hosted_unanswered", "radio_commands", "region_owed", "run_notification_action", "run_with", "the_line_moves_on", "with_region"),
     }
     # A RING IS ITS MEMBERS, in any order: the same methods calling round are
     # one fact, whichever of them a reader starts from.
@@ -14692,10 +14902,17 @@ let
         # own pixels and has its own rules above, and everything else, which is
         # measured in the window's. So scan everything else, whatever it is
         # called, and the rule covers a door nobody has written yet.
+        # AND THE CELL GRID'S (2026-11-02), which is the text's kind and not
+        # the quads': its glyphs are rasterised at the buffer's pixels and its
+        # cells are whole PHYSICAL pixels (`ronoctua_render::cells`), so it is
+        # handed the physical surface — asked for below, not exempted blind.
         calls = sorted(
             {m.group(1) + ".prepare(" for m in re.finditer(r"\b(\w+)\.prepare\(", body)}
-            - {"text.prepare("}
+            - {"text.prepare(", "cells.prepare("}
         )
+        cells_at = body.find("cells.prepare(")
+        if cells_at != -1 and "gpu.config." not in shut_at(body, cells_at + len("cells.prepare(")):
+            wrong.append(f"{f.name}: the cell grid is not handed the physical surface it is rasterised for")
         for call in calls:
             at = 0
             while (at := body.find(call, at)) != -1:
@@ -15039,6 +15256,41 @@ let
     END
   '';
 
+  # THE INPUT METHOD HAS ONE DOOR (2026-11-02): `zwp_text_input_v3` is the owner's
+  # approved exception to invariant 3. Nobody but the door's `text_input.rs` names it,
+  # and the door makes a text input for every keyboard and follows the window's field
+  # every turn — a door that made none is a terminal nobody types Japanese into, green.
+  one-text-input = mkCheck "one-text-input" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
+    # FILE-WIDE: whether ANY other file names the protocol. `code_of`: names in CODE.
+    crates = pathlib.Path("${../crates}")
+    needles = ("zwp_text_input", "ZwpTextInput", "text_input::zv3")
+    wrong, looked = [], 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        if shell_name(path) == "door/text_input.rs":
+            continue
+        if any(n in code_of(path.read_text()) for n in needles):
+            wrong.append(str(path.relative_to(crates)))
+    floor(looked, 300, "Rust files read")
+    handlers = code_of(shell_source("door/handlers.rs"))
+    door = code_of(shell_source("door/mod.rs"))
+    if "text_input_took" not in body_of(handlers, "new_capability"):
+        wrong.append("door/handlers.rs: a keyboard arrives and no text input is made")
+    if "follow_the_field" not in body_of(door, "settle"):
+        wrong.append("door/mod.rs: settle does not follow the window's field")
+    if wrong:
+        print("ERROR: the text input is named outside door/text_input.rs, or not wired:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+    print("OK: only door/text_input.rs names the text input, and every keyboard has one")
+    END
+  '';
+
   # THE CURSOR'S SHAPE HAS ONE DOOR, and every surface walks through it.
   # `wp_cursor_shape_v1` is the owner's approved exception to invariant 3
   # (2026-09-25): a surface that never names a cursor leaves the compositor's
@@ -15082,6 +15334,67 @@ let
             print("       " + s, file=sys.stderr)
         sys.exit(1)
     print("OK: only cursor_shape.rs names the shape, and all three surfaces ask for it")
+    END
+  '';
+
+  # ONE FILE DRAWS THE GROUP'S STRIP — the owner's exception to invariant 4
+  # (2026-11-02): a terminal's window may hold several terminals and show one,
+  # with a thin line per terminal across its top, and only
+  # `ronoctua-shell-terminal/src/terminal_strip.rs` draws it. The behaviour —
+  # no strip for one terminal, a click fronting the line under it, the height
+  # taken off the grid — is that crate's tests; this holds the shape: the
+  # strip's measures (`space.terminal.strip`, the `TERMINAL_STRIP_*` tokens)
+  # and the strip's own type are named in that file alone, so a second
+  # strip, or a strip drawn somewhere a test does not look, cannot grow.
+  one-terminal-strip = mkCheck "one-terminal-strip" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+    exec(open("${shellPrelude}").read())
+
+    # FILE-WIDE: whether ANY other file names the strip's measures, anywhere
+    # in it — or, in the terminal's crate, builds a rectangle: the window
+    # draws its grid as cells (`ronoctua_render::cells`), and the strip is
+    # the one thing of it laid as quads. `code_of` because the needles are
+    # names in CODE; a comment may say where the strip is.
+    crates = pathlib.Path("${../crates}")
+    own = pathlib.PurePath("ronoctua-shell-terminal/src/terminal_strip.rs")
+    measures = re.compile(r"\bTERMINAL_STRIP_[A-Z]+\b")
+    built = re.compile(r"\bQuad\s*\{")
+    wrong, looked, terminal = [], 0, 0
+    for path in sorted(crates.rglob("*.rs")):
+        looked += 1
+        where = path.relative_to(crates)
+        if where == own:
+            continue
+        code = code_of(path.read_text())
+        in_the_crate = where.parts[0] == "ronoctua-shell-terminal"
+        terminal += in_the_crate
+        if measures.search(code) or (in_the_crate and built.search(code)):
+            wrong.append(str(where))
+    floor(looked, 300, "Rust files read")
+    floor(terminal, 10, "Rust files of the terminal's crate read")
+    if wrong:
+        print("ERROR: a file other than terminal_strip.rs draws the group's strip:", file=sys.stderr)
+        for w in wrong:
+            print("       " + w, file=sys.stderr)
+        sys.exit(1)
+
+    # AND THE ONE FILE IS THE ONE DRAWN: it holds the measures and builds the
+    # quads, and the window paints what it builds — a strip type left behind
+    # while the window drew its own lines would pass the half above.
+    strip = code_of((crates / own).read_text())
+    for needle in ("TERMINAL_STRIP_HEIGHTPX", "TERMINAL_STRIP_LINEPX", "TERMINAL_STRIP_GAPPX"):
+        if needle not in strip:
+            print(f"ERROR: terminal_strip.rs no longer measures the strip by `{needle}`", file=sys.stderr)
+            sys.exit(1)
+    quads = must(body_of(strip, "quads"), "`Strip::quads`")
+    floor(len(quads), 200, "characters of `Strip::quads`")
+    window = code_of(shell_file("terminal.rs").read_text())
+    if not re.search(r"\bStrip::of\(", window) or not re.search(r"\.quads\(", window):
+        print("ERROR: the terminal's window does not paint the strip terminal_strip.rs builds", file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: of {looked} Rust files, only terminal_strip.rs draws the strip, and the window paints it")
     END
   '';
 
@@ -19222,6 +19535,40 @@ let
         echo "OK: $(wc -l < ${closure}/store-paths) paths, and no compiler"
       '';
 
+  # THE TERMINAL CARRIES ITS ENGINE AND NOT ITS ENGINE'S COMPILER.
+  #
+  # The shell and the terminal holder link `libghostty-vt` (2026-11-02), and
+  # a derivation references what its bytes cite: the library's `.a` named
+  # Zig, and with it clang and LLVM (1,70 GiB), until `nix/ghostty-vt.nix`
+  # deleted it. Nothing would FAIL if a new tag brought such a file back — the
+  # machine would just carry a compiler nobody runs. The shell's bundle is
+  # measured whole: the holder rides beside it.
+  terminal-closure-has-no-toolchain =
+    let
+      closure = pkgs.closureInfo { rootPaths = [ rust.shell ]; };
+    in
+    mkCheck "terminal-closure-has-no-toolchain"
+      [
+        pkgs.gnugrep
+        pkgs.coreutils
+      ]
+      ''
+        grep -qe "-libghostty-vt-" ${closure}/store-paths || {
+          echo "ERROR: the shell's closure has no libghostty-vt: what draws the terminal?" >&2
+          exit 1
+        }
+        failed=0
+        for unwanted in -zig- -clang- -llvm-; do
+          if found=$(grep -e "$unwanted" ${closure}/store-paths); then
+            echo "ERROR: the terminal's engine drags $unwanted along:" >&2
+            echo "$found" >&2
+            failed=1
+          fi
+        done
+        [ "$failed" = 0 ] || exit 1
+        echo "OK: the shell carries libghostty-vt and no compiler ($(wc -l < ${closure}/store-paths) paths)"
+      '';
+
   # WHATEVER THE SHELL LOOKS FOR NEXT DOOR, THE DEV LOOP HAS TO BUILD.
   #
   # Programs are found by ASKING THE FILESYSTEM rather than by a store path in
@@ -21614,14 +21961,22 @@ let
         echo "    and the pidfile still points at the footer"
       '';
 
-  # ZERO grid diff on the VT corpus (milestone 7, section 7.10).
+  # ZERO diff on the VT corpus (milestone 7, section 7.10), three ways.
   #
-  # With a single engine, this is a golden file — it catches a regression, not a
-  # divergence of interpretation. It is the degradation risk R1 prescribes, and
-  # the binary itself says so in its output so nobody confuses the two.
+  # Ghostty against alacritty on what both keep — characters, cursor, the style
+  # bits they share, the answers to CPR/DSR/DECRQM and colour queries — which
+  # catches a wrong reading of the specification. Each engine against its own
+  # goldens (`golden-vt-styled/<engine>/`) for what differs by design (DA1,
+  # XTVERSION, blink, overline…), which catches a regression. And the window's
+  # mirror against the holder's terminal with every case cut at every byte,
+  # which catches a snapshot that loses a sequence it was taken in the middle of.
+  #
+  # The program is `crates/ronoctua-term-differential`'s, a driver: alacritty
+  # and the reference colours both engines are handed live there and nowhere
+  # else, so nothing a machine runs links them.
   term-differential = mkCheck "term-differential" [ ] ''
     ${rust.bins.ronoctua-term-diff}/bin/ronoctua-term-diff \
-      ${../tests/corpus-vt} ${../tests/golden-vt}
+      ${../tests/corpus-vt} ${../tests/golden-vt} ${../tests/golden-vt-styled}
   '';
 
   installer-dryrun = mkCheck "installer-dryrun" [ pkgs.python3 ] ''
@@ -21875,6 +22230,21 @@ let
     inherit pkgs lib fonts;
     inherit scroll;
     ronoctua-shell = rust.shell;
+  };
+
+  # The held terminals as the session sees them: the group's strip, the
+  # modeline's mark and its view, a program's notification, and an agent of
+  # Claude Code lighting its account's set and brought forward.
+  terminalsVm = import ./terminals-vm.nix {
+    inherit pkgs lib fonts;
+    inherit
+      scroll
+      glyphdb
+      themed
+      defaultTheme
+      ;
+    ronoctua-shell = rust.shell;
+    llm = rust.llm;
   };
 
   # The leader as the Super key on its own: keyd standing and the compositor listening (7.4).
@@ -28682,11 +29052,10 @@ let
     mkCheck "iso-carries-the-seed" [ pkgs.gnugrep pkgs.coreutils ] ''
       failed=0
       ${ofShipped}
-      # NOT libghostty-vt any more: it was on this list for crane's
-      # workspace's sake, and the only program that links it is the terminal
-      # differential (a driver), so nothing a machine runs needs it and the
-      # target never builds it.
-      for ours in -scroll- -ronoctua-iconset \
+      # libghostty-vt IS ON IT AGAIN (2026-11-02): the terminal's engine is
+      # Ghostty's, and the shell and the terminal holder (`ship`) link it —
+      # without it in the seed the target would build Zig and the library.
+      for ours in -scroll- -ronoctua-iconset -libghostty-vt- \
                   -ronoctua-buffer-memory- \
                   -ronoctua-buffer-keyboard- \
                   -ronoctua-buffer-transfers- \
@@ -50397,10 +50766,24 @@ let
             2.5
             true
           ];
+          # AND THE SETS A MARK MAY STAND IN (one per LLM account, 2026-11-02):
+          # bounded the same, and a lead only with sets to lead.
+          setsRefused = map (n: with' { sets = n; }) [
+            0
+            10
+          ];
+          leadsAlone = with' { leads = true; };
           # THE REAL TREE: every mark, with what it declares.
           declared = map (m: {
             inherit (m) id snake;
-            marks = lib.mapAttrs (_: mk: { inherit (mk) instances resting; }) m.marks;
+            marks = lib.mapAttrs (_: mk: {
+              inherit (mk)
+                instances
+                resting
+                sets
+                leads
+                ;
+            }) m.marks;
           }) brainModules.every;
         }
       );
@@ -50424,6 +50807,11 @@ let
       for said in f["refused"]:
           if not any("is a whole number from 1 to 9" in s for s in said):
               wrong.append(f"a count outside 1..9 was not refused by its sentence: {said}")
+      for said in f["setsRefused"]:
+          if not said:
+              wrong.append("a mark declaring sets outside 1..9 was not refused")
+      if not f["leadsAlone"]:
+          wrong.append("a mark leading with no sets was not refused")
       # EVERY MARK OF THE REAL TREE, against what the generator wrote for it:
       # `MarkId::declared` exactly when it declares instances or a rest, and
       # never more instances than one digit draws.
@@ -50435,8 +50823,11 @@ let
               if not 0 <= d["instances"] <= 9:
                   wrong.append(f"{m['id']}/{k} declares {d['instances']} instances")
               const = k.upper().replace("-", "_")
-              found = re.search(r"pub const " + const + r":\s*crate::module::MarkId\s*=\s*crate::module::MarkId::(of|declared)\(", made)
-              want = "declared" if (d["instances"] or d["resting"]) else "of"
+              found = re.search(r"pub const " + const + r":\s*crate::module::MarkId\s*=\s*crate::module::MarkId::(of|declared|declared_in_sets)\(", made)
+              want = ("declared_in_sets" if d.get("sets") else
+                      "declared" if (d["instances"] or d["resting"]) else "of")
+              if d.get("sets") and not 1 <= d["sets"] <= 9:
+                  wrong.append(f"{m['id']}/{k} stands in {d['sets']} sets")
               if not found or found.group(1) != want:
                   wrong.append(f"{m['id']}/{k} is not written with `MarkId::{want}`")
       floor(seen, 8, "marks of the real tree")
@@ -51413,12 +51804,17 @@ let
                "api.anthropic.com", "oauth/usage", "anthropic-beta", "llm-accounts.json",
                "llm-default.env", "rate_limits", "statusLine", "\"auth.json\"", "\"rollout-",
                "\"archived_sessions\"", "ronoctua-statusline.json", "\"limits.json\"",
-               "\"usage.json\"")
+               "\"usage.json\"", "\"credits.json\"", "primaryApiKey", "apiKeyHelper",
+               ".claude.json", "hook_event_name", "transcript_path", "notification_type",
+               "CLAUDE_PID")
       # And the folders, joined: where the agents keep their logs and where the
       # crate keeps an account's numbers. A watcher asks `ronoctua_llm::watched`
       # for them; a folder spelled out beside it would stay on the old layout
       # the day the crate's changes.
       FOLDER = re.compile(r"\.join\(\s*\"(projects|sessions|archived_sessions|llm)\"\s*\)")
+      # And the folder the managed hook keeps the sessions in: its records
+      # are the crate's to read (`sessions::read`, `agents::merged`).
+      SESSIONS_FOLDER = re.compile(r"runtime_file\(\s*\"agents\"\s*\)")
       AGENT_COMPILED_IN = re.compile(r"option_env!\(\s*\"RONOCTUA_(CLAUDE|CODEX)\"")
       wrong, swept = [], 0
       for f in workspace_sources(crates):
@@ -51436,16 +51832,27 @@ let
           for m in FOLDER.finditer(code):
               wrong.append(f"{rel} joins `{m.group(1)}` outside ronoctua-llm: an agent's log folder "
                            "or an account's state is the crate's to say (`watched`)")
+          if SESSIONS_FOLDER.search(code):
+              wrong.append(f"{rel} names the hook's sessions folder outside ronoctua-llm: ask "
+                           "`ronoctua_llm::watched` (`sessions`) and read it with `sessions::read`")
       floor(swept, 300, "sources outside ronoctua-llm swept")
       # PARSED: the crate does say them — `watched` answers the paths the
       # crate writes and reads, from the functions that write and read them.
       lib_code = code_of(without_tests((home / "src" / "lib.rs").read_text()))
       watched = must(body_of(lib_code, "watched_in"), "ronoctua-llm: `watched_in`")
       for needle in ("statusline::limits_path(", "usage::kept_path(", "tokens::kept_path(",
-                     "tokens::trees_of("):
+                     "tokens::trees_of(", "credits::kept_path(", "sessions_folder"):
           if needle not in watched:
               wrong.append(f"`watched_in` no longer asks `{needle}`: a watcher would watch a "
                            "path the crate no longer uses")
+      outer = must(body_of(lib_code, "watched"), "ronoctua-llm: `watched`")
+      if "sessions::folder(" not in outer:
+          wrong.append("`watched` no longer hands `watched_in` the hook's own folder "
+                       "(`sessions::folder`): the agents would be watched where nobody writes")
+      sessions = code_of(without_tests((home / "src" / "sessions.rs").read_text()))
+      if "ronoctua_xdg::runtime_file(" not in must(body_of(sessions, "folder"), "sessions.rs: `folder`"):
+          wrong.append("`sessions::folder` is no longer this instance's runtime file: the hook and "
+                       "its reader would part")
 
       # PARSED: the path a wrapped `settings.json` names, and the file the
       # shell sources, against the crate's own constants.
@@ -51517,6 +51924,9 @@ let
     WHERE = {
         "accessToken": {"ronoctua-llm/src/usage.rs"},
         "id_token": {"ronoctua-llm/src/credentials.rs"},
+        # An API account's key: only its PRESENCE is asked, through the wiped
+        # read, and nothing keeps more than a bool of it.
+        "primaryApiKey": {"ronoctua-llm/src/credentials.rs"},
         "refreshToken": set(),
         "refresh_token": set(),
         "access_token": set(),
@@ -51573,6 +51983,12 @@ let
     secret = must(body_of(cred, "secret"), "credentials.rs: `secret`")
     if "crate::files::read_secret(" not in secret:
         wrong.append("credentials.rs: `secret` no longer reads through `files::read_secret`")
+    one = must(body_of(cred, "read_one"), "credentials.rs: `read_one`")
+    if "crate::files::read_secret(" not in one:
+        wrong.append("credentials.rs: `read_one` (an API key's presence) no longer reads through `files::read_secret`")
+    present = re.search(r"struct\s+Present\s*\(\s*bool\s*\)", cred)
+    if present is None:
+        wrong.append("credentials.rs: `Present` keeps more than a bool of an API key")
     facts = must(body_of(cred, "facts"), "credentials.rs: `facts`")
     if len(re.findall(r"\bsecret\(", facts)) < 2:
         wrong.append("credentials.rs: `facts` reads a credentials file around `secret`")
@@ -51777,6 +52193,21 @@ let
     kept = json.load(open(sys.argv[1]))
     assert kept["five-hour"] == {"used-percent": 23.5, "resets-at-s": 4102444800}, kept
     assert kept["seven-day"] == {"used-percent": 41.2, "resets-at-s": 4102531200}, kept
+    assert "no-five-hour" not in kept and kept["format"] == 1, kept
+    PY
+
+    # AN ULTRA PLAN — the week alone: the status line leaves `five_hour`
+    # out, and that word is kept (format 2), so the view never draws a
+    # five-hour row "not known yet" that can never become known.
+    printf '%s' '{"model":{"id":"m"},"rate_limits":{"seven_day":{"used_percentage":71,"resets_at":4102531200}}}' \
+      > "$work/ultra.json"
+    "$llm" statusline --profile claude-1 < "$work/ultra.json" > /dev/null || true
+    python3 - "$XDG_STATE_HOME/ronoctua/llm/claude-1/limits.json" <<'PY' || fail "an Ultra status line was not kept as the week alone"
+    import json, sys
+    kept = json.load(open(sys.argv[1]))
+    assert kept["format"] == 2 and kept["no-five-hour"] is True, kept
+    assert kept["five-hour"] is None, kept
+    assert kept["seven-day"] == {"used-percent": 71.0, "resets-at-s": 4102531200}, kept
     PY
 
     "$llm" unwrap --profile claude-1
@@ -51819,6 +52250,313 @@ let
       || fail "a line whose account the list lost printed: $(cat "$work/lost.txt")"
 
     echo "OK: the person's line ran behind ours with the same stdin, its stdout and exit code passed through; given back byte for byte, on unwrap and on removal; still run when the list lost its account"
+  '';
+
+  # CLAUDE CODE'S MANAGED HOOK IS THE DISTRO'S, AND ONLY HOOKS.
+  #
+  # What each Claude Code session is doing reaches the modeline's account
+  # sets through `ronoctua-llm hook`, which the distro subscribes in Claude
+  # Code's MANAGED settings: one drop-in under `/etc/claude-code` for every
+  # account, never a field of the person's `settings.json`. Managed settings
+  # outrank the person's, so the drop-in says `hooks` and nothing else —
+  # `allowManagedHooksOnly` would silence the person's own hooks and their
+  # plugins', `disableAllHooks` everybody's. Each event runs the program by
+  # the system's PATH (a session outlives a generation), `exec` (its parent
+  # is Claude Code), async and with a short timeout, for every event the
+  # program maps (`hook::EVENTS`) and no other, with no matcher. Evaluated on
+  # both profiles, a link into the store as `environment.etc` makes it; and
+  # no other file of the tree names the managed folder.
+  claude-hook-is-managed =
+    let
+      file = "claude-code/managed-settings.d/ronoctua.json";
+      factsOf =
+        name:
+        let
+          e = self.nixosConfigurations.${name}.config.environment.etc.${file} or null;
+        in
+        if e == null then
+          null
+        else
+          {
+            inherit (e) enable mode text;
+          };
+      facts = pkgs.writeText "claude-hook-facts.json" (
+        builtins.toJSON (lib.genAttrs [ "noctua" "minimal" ] factsOf)
+      );
+    in
+    mkCheck "claude-hook-is-managed" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      crates = pathlib.Path("${../crates}")
+      src = crates / "ronoctua-llm" / "src"
+      wrong = []
+
+      # PARSED: the program a wrapped line names, and the events the hook maps.
+      statusline = uncommented(without_tests((src / "statusline.rs").read_text()))
+      program = re.search(r"pub const PROGRAM: &str = \"([^\"]+)\";", statusline)
+      program = must(program and program.group(1), "statusline::PROGRAM")
+      hook = uncommented(without_tests((src / "hook.rs").read_text()))
+      listed = re.search(r"pub const EVENTS: \[&str; (\d+)\] = \[(.*?)\];", hook, re.S)
+      events = re.findall(r"\"([A-Za-z]+)\"", listed.group(2)) if listed else []
+      floor(len(events), 11, "events in hook::EVENTS")
+      if listed and int(listed.group(1)) != len(events):
+          wrong.append("hook::EVENTS says one count and lists another")
+      mapping = must(body_of(hook, "effect_of"), "hook.rs: `effect_of`")
+      for event in events:
+          if "\"" + event + "\"" not in mapping:
+              wrong.append(f"hook::EVENTS subscribes {event}, and `effect_of` does not map it")
+      cli = uncommented((src / "bin" / "cli.rs").read_text())
+      main = must(body_of(cli, "main"), "cli.rs: `main`")
+      if "== \"hook\"" not in main or "hook::serve()" not in main:
+          wrong.append("`ronoctua-llm hook` is not the CLI's verb that runs `hook::serve`")
+
+      # PARSED: the drop-in, as both evaluated systems write it.
+      HOOK_KEYS = {"type", "command", "async", "timeout"}
+      facts = json.load(open("${facts}"))
+      for profile in ("noctua", "minimal"):
+          f = facts[profile]
+          if f is None:
+              wrong.append(f"{profile}: no /etc/${file}")
+              continue
+          if f["enable"] is not True or f["mode"] != "symlink":
+              wrong.append(f"{profile}: the drop-in is not a link into the store "
+                           f"(enable {f['enable']}, mode {f['mode']})")
+          text = f["text"] or ""
+          for never in ("allowManagedHooksOnly", "disableAllHooks"):
+              if never in text:
+                  wrong.append(f"{profile}: the drop-in names {never}: the person's hooks would go")
+          try:
+              doc = json.loads(text)
+          except ValueError:
+              wrong.append(f"{profile}: the drop-in is not JSON")
+              continue
+          if not isinstance(doc, dict) or set(doc) != {"hooks"}:
+              wrong.append(f"{profile}: the drop-in says {sorted(doc) if isinstance(doc, dict) else doc}, not `hooks` alone")
+              continue
+          hooks = doc["hooks"]
+          if sorted(hooks) != sorted(events):
+              wrong.append(f"{profile}: the drop-in subscribes {sorted(hooks)}, the hook maps {sorted(events)}")
+          for event, groups in sorted(hooks.items()):
+              if not (isinstance(groups, list) and len(groups) == 1 and isinstance(groups[0], dict)
+                      and set(groups[0]) == {"hooks"}):
+                  wrong.append(f"{profile}: {event} is not one group, of every tool (no matcher)")
+                  continue
+              inner = groups[0]["hooks"]
+              if not (isinstance(inner, list) and len(inner) == 1 and isinstance(inner[0], dict)):
+                  wrong.append(f"{profile}: {event} does not run one hook")
+                  continue
+              h = inner[0]
+              timeout = h.get("timeout")
+              if set(h) != HOOK_KEYS:
+                  wrong.append(f"{profile}: {event}'s hook says {sorted(h)}, not {sorted(HOOK_KEYS)}")
+              if h.get("type") != "command" or h.get("command") != f"exec {program} hook":
+                  wrong.append(f"{profile}: {event} runs {h.get('command')!r}, not `exec {program} hook`")
+              if h.get("async") is not True:
+                  wrong.append(f"{profile}: {event}'s hook is not async: a session would wait on it")
+              if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 5:
+                  wrong.append(f"{profile}: {event}'s hook times out at {timeout!r}, not within 5 s")
+
+      # FILE-WIDE: only the module writes the managed folder. Nix and shell
+      # comments off (`hashless`), Rust comments off and its strings kept.
+      NAME = "claude-code/managed-settings"
+      named, swept = [], 0
+      for base, label in ((pathlib.Path("${../nix}"), "nix"), (pathlib.Path("${../templates}"), "templates")):
+          for p in sorted(base.rglob("*.nix")):
+              swept += 1
+              if NAME in hashless(p.read_text()):
+                  named.append(f"{label}/{p.relative_to(base)}")
+      for f in workspace_sources(crates):
+          swept += 1
+          if NAME in uncommented(f.read_text()):
+              named.append(f"crates/{f.relative_to(crates)}")
+      floor(swept, 400, "Nix and Rust files swept for the managed folder")
+      if named != ["nix/modules/llm.nix"]:
+          wrong.append(f"the managed folder is named in {named}, and only nix/modules/llm.nix may")
+
+      for w in wrong:
+          print(f"ERROR: {w}", file=sys.stderr)
+      if wrong:
+          raise SystemExit(1)
+      print(f"OK: both profiles link one drop-in of hooks alone: {len(events)} events, each "
+            f"`exec {program} hook`, async, within 5 s; only nix/modules/llm.nix names it")
+      END
+    '';
+
+  # CLAUDE CODE'S HOOK NEVER SPEAKS AND NEVER FAILS.
+  #
+  # Run against the EXTRACTED CLI, as Claude Code runs it, over an event of
+  # every kind and every input it must survive: an async hook's output joins
+  # the conversation and exit code 2 is a blocking error, so every run answers
+  # 0 and prints nothing — on garbage, an empty or a huge stdin, a subagent's
+  # event, no runtime folder, a Claude Code that is gone. And what it keeps
+  # is the session's record, whole and `0600` in a `0700` folder of the
+  # instance it runs in: each event's status, the newer word winning, the
+  # tombstone at the end.
+  claude-hook-is-quiet = mkCheck "claude-hook-is-quiet" [ pkgs.python3 ] ''
+    llm=${rust.llm}/bin/ronoctua-llm
+    ${claudeHookQuietScript}
+  '';
+
+  # The script of `claude-hook-is-quiet`, apart so it runs against any build
+  # of the CLI (`$llm`).
+  claudeHookQuietScript = ''
+    python3 - "$llm" <<'END'
+    import json, os, pathlib, stat, subprocess, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: what is read here is what the hook wrote and `/proc`'s stat
+    # line, neither of which has a function in it.
+    # PARSED: no source is read — each record is `json.loads`-ed and its
+    # fields compared, and the stat line is split for its start time.
+    llm = sys.argv[1]
+    work = pathlib.Path.cwd()
+    runtime = work / "runtime"
+    runtime.mkdir(exist_ok=True)
+    S = "5f0c1e2a-0b1c-4d2e-8f3a-9b8c7d6e5f40"
+    OTHER = "0d6b8e1c-4a2f-4c3d-9e8f-7a6b5c4d3e2f"
+
+
+    def fail(what):
+        print("ERROR: " + what, file=sys.stderr)
+        raise SystemExit(1)
+
+
+    def event(session, name, **extra):
+        body = {"session_id": session, "transcript_path": "/home/p/t.jsonl",
+                "cwd": "/home/p/work", "hook_event_name": name}
+        body.update(extra)
+        return json.dumps(body).encode()
+
+
+    def hook(stdin, what, **env):
+        given = {"HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "config"),
+                 "XDG_STATE_HOME": str(work / "state"), "XDG_RUNTIME_DIR": str(runtime)}
+        for name, value in env.items():
+            if value is None:
+                given.pop(name, None)
+            else:
+                given[name] = value
+        done = subprocess.run([llm, "hook"], input=stdin, env=given, capture_output=True)
+        if done.returncode != 0:
+            fail(f"{what}: answered {done.returncode}")
+        if done.stdout or done.stderr:
+            fail(f"{what}: said {done.stdout[:200]!r} {done.stderr[:200]!r}")
+
+
+    def record(session, folder="ronoctua-agents"):
+        path = runtime / folder / (session + ".json")
+        if not path.exists():
+            return None
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            fail(f"{path} is {oct(stat.S_IMODE(path.stat().st_mode))}, not 0600")
+        if stat.S_IMODE(path.parent.stat().st_mode) != 0o700:
+            fail(f"{path.parent} is not 0700")
+        return json.loads(path.read_text())
+
+
+    def start_ticks(pid):
+        text = pathlib.Path(f"/proc/{pid}/stat").read_text()
+        return int(text[text.rfind(")") + 1:].split()[19])
+
+
+    # NOTHING KEPT for what is not a session's event — and still 0, silent.
+    # A Claude Code that is gone is one the hook was adopted away from: the
+    # pid it said lives, and is not above the hook (a stranger, held by its
+    # stdin until the end of this block — no clock).
+    huge = b"{\"session_id\":\"" + b"a" * (5 * 1024 * 1024) + b"\"}"
+    stranger = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                                stdin=subprocess.PIPE)
+    for what, stdin, env in (
+        ("garbage", b"\x00\xffnot json", {}),
+        ("an empty stdin", b"", {}),
+        ("a stdin past the bound", huge, {}),
+        ("a subagent's event", event(S, "UserPromptSubmit", prompt="x", agent_id="a1",
+                                     agent_type="Explore"), {}),
+        ("an event nobody maps", event(S, "PreCompact", trigger="auto"), {}),
+        ("no runtime folder", event(S, "SessionStart", source="startup"), {"XDG_RUNTIME_DIR": None}),
+        ("a Claude Code that is gone", event(S, "SessionStart", source="startup"), {"CLAUDE_PID": "1"}),
+        ("a Claude Code not above the hook", event(S, "SessionStart", source="startup"),
+         {"CLAUDE_PID": str(stranger.pid)}),
+    ):
+        hook(stdin, what, **env)
+        folder = runtime / "ronoctua-agents"
+        if folder.exists() and any(folder.glob("*.json")):
+            fail(f"{what} was kept")
+    stranger.stdin.close()
+    stranger.wait()
+
+    # EVERY EVENT, the life of one session: the status each one says — a
+    # tool's says "working" only to a session that was waiting.
+    life = (
+        ("SessionStart", {"source": "startup"}, "done"),
+        ("UserPromptSubmit", {"prompt": "hi"}, "working"),
+        ("PreToolUse", {"tool_name": "Bash", "tool_input": {}, "tool_use_id": "t1"}, "working"),
+        ("PermissionRequest", {"tool_name": "Bash", "tool_input": {}}, "waiting"),
+        ("PostToolUse", {"tool_name": "Bash", "tool_input": {}, "tool_response": {}}, "working"),
+        ("Notification", {"message": "m", "notification_type": "permission_prompt"}, "waiting"),
+        ("PostToolUseFailure", {"tool_name": "Bash", "tool_input": {}, "error": "e"}, "working"),
+        ("PermissionDenied", {"tool_name": "Bash", "tool_input": {}, "reason": "r"}, "working"),
+        ("Notification", {"message": "m", "notification_type": "idle_prompt"}, "done"),
+        ("StopFailure", {"error": "overloaded"}, "failed"),
+        ("Stop", {"stop_hook_active": False}, "done"),
+    )
+    floor(len(life), 11, "events of one session's life")
+    me = os.getpid()
+    for name, extra, status in life:
+        hook(event(S, name, **extra), name, CLAUDE_PID=str(me), RONOCTUA_TERMINAL="0123456789abcdef")
+        kept = record(S)
+        if kept is None or kept["status"] != status or kept["ended"]:
+            fail(f"after {name} the record says {kept}, not {status}")
+        if (kept["pid"], kept["pid-start-ticks"]) != (me, start_ticks(me)):
+            fail(f"the record names {kept['pid']}, not the Claude Code that said it ({me})")
+        if kept["terminal"] != "0123456789abcdef" or kept["account-dir"] != str(work / "home" / ".claude"):
+            fail(f"the record is not whole: {kept}")
+    hook(event(S, "SessionEnd", reason="other"), "SessionEnd")
+    end = record(S)
+    if end is None or end["ended"] is not True:
+        fail(f"the end left no tombstone: {end}")
+    # A WORD AFTER THE END revives nothing; a new start does.
+    hook(event(S, "UserPromptSubmit", prompt="late"), "after the end")
+    if record(S)["ended"] is not True:
+        fail("a word after the end revived the session")
+
+    # THE NEWER WORD WINS: a record said later than the run is left alone.
+    planted = {"format": 1, "session": OTHER, "account-dir": "/home/p/.claude", "pid": me,
+               "pid-start-ticks": start_ticks(me), "terminal": None, "folder": "/w",
+               "transcript": None, "status": "waiting", "said-at-ns": 2 ** 62,
+               "started-at-ns": 1, "ended": False}
+    path = runtime / "ronoctua-agents" / (OTHER + ".json")
+
+
+    def plant(planting):
+        path.write_text(json.dumps(planting))
+        path.chmod(0o600)
+
+
+    plant(planted)
+    hook(event(OTHER, "Stop"), "an older word")
+    if record(OTHER) != planted:
+        fail(f"an older word replaced a newer one: {record(OTHER)}")
+    planted["said-at-ns"] = 1
+    plant(planted)
+    hook(event(OTHER, "Stop"), "a newer word")
+    if record(OTHER)["status"] != "done":
+        fail(f"a newer word did not replace an older one: {record(OTHER)}")
+
+    # THE DEVELOPMENT LOOP'S SESSIONS are its folder's, and the system's stay.
+    hook(event(S, "SessionStart", source="startup"), "a dev session", RONOCTUA_INSTANCE="dev")
+    dev = record(S, "ronoctua-dev-agents")
+    if dev is None or dev["status"] != "done" or dev["ended"]:
+        fail(f"the dev instance's session was not kept in its own folder: {dev}")
+    if record(S)["ended"] is not True:
+        fail("the dev instance's run touched the system's record")
+
+    print(f"OK: {len(life) + 1} events kept whole and private, the newer word winning and the "
+          "end a tombstone; garbage, nothing, a huge stdin, a subagent, no runtime folder and "
+          "a gone Claude Code kept nothing; every run silent, every answer 0")
+    END
   '';
   # ── anchor: L15 ──
   # WORKING ON THE DISTRO FROM THE DISTRO — the facts of both profiles,
@@ -55816,7 +56554,7 @@ let
     END
   '';
   # ── anchor: L24 ──
-  # L24 — the LLM accounts' view (`LEADER m a`).
+  # L24 — the LLM accounts' view (`LEADER / a`).
   #
   # THE AGENTS REACH THE FOOTER, BY STORE PATH, WHEN THEY ARE THERE.
   #
@@ -55911,6 +56649,7 @@ let
     #   `.gitignore`/`.gitattributes` exist.
     # ===================================================================
     m1 = pkgs.linkFarmFromDrvs "check-m1" [
+      ghostty-vt-packages-are-upstreams
       torrent-layout-matches-cxx
       torrent-speaks-v2
       extension-has-no-fingerprint
@@ -55952,11 +56691,13 @@ let
       rescue-runs-by-path
       rescue-staging-agrees
       rescue-has-no-toolchain
+      terminal-closure-has-no-toolchain
       docs-exist
       architecture-sections
       english-names
       xdg-user-dirs
       zsh-plugins-are-linked
+      shell-rc-marks-the-prompt
       browser-has-no-keyring
       format-captures-resolve
       generator-flags-agree
@@ -56049,6 +56790,8 @@ let
       one-virtual-keyboard
       one-virtual-pointer
       one-cursor-shape
+      one-text-input
+      one-terminal-strip
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -56219,6 +56962,7 @@ let
       rescue-polkit-is-narrow
       ctrl-alt-del-is-ours
       rescue-has-no-toolchain
+      terminal-closure-has-no-toolchain
       rescue-staging-agrees
       ;
     files-vm = filesVm;
@@ -56257,6 +57001,8 @@ let
       one-virtual-keyboard
       one-virtual-pointer
       one-cursor-shape
+      one-text-input
+      one-terminal-strip
       keys-rules-carry-the-leader
       every-window-knows-its-scale
       every-list-window-has-a-bar
@@ -56334,6 +57080,7 @@ let
       fontconfig-nested-finds-font
       xdg-user-dirs
       zsh-plugins-are-linked
+      shell-rc-marks-the-prompt
       screenshots-land-in-a-declared-directory
       disks-adds-no-polkit-rule-of-its-own
       disks-tools-are-pinned
@@ -56405,6 +57152,7 @@ let
     memory-vm = memoryVm;
     clipboard-vm = clipboardVm;
     terminal-vm = terminalVm;
+    terminals-vm = terminalsVm;
     x11-vm = x11Vm;
     emacs-vm = emacsVm;
     vscode-vm = vscodeVm;
@@ -56451,6 +57199,8 @@ let
       transfers-driven
       format-instance-fast
       format-driven
+      ghostty-vt-packages-are-upstreams
+      ghostty-layout-matches-c
       torrent-layout-matches-cxx
       torrent-speaks-v2
       extension-has-no-fingerprint
@@ -56459,7 +57209,7 @@ let
       pot-provider-is-script-only
       extension-has-no-literal
       secrets-are-not-in-the-repo
-      renderer-loads-four-faces
+      renderer-loads-its-faces
       chrome-icons-match-the-text
       layout-fast
       shaping-fast
@@ -56894,7 +57644,7 @@ let
       transfers-driven
       format-instance-fast
       format-driven
-      renderer-loads-four-faces
+      renderer-loads-its-faces
       # THE APP FINDER, and what only the VM proves: the sweep at startup, the name
       # in the pixel, and the footer still responding with the application open —
       # the `--scope` is synchronous, and waiting for it froze everything.
@@ -57274,6 +58024,8 @@ let
       llm-tokens-never-linger
       llm-usage-asks-with-a-pass
       statusline-chains
+      claude-hook-is-managed
+      claude-hook-is-quiet
       ;
     # ── anchor: L15 ──
     inherit

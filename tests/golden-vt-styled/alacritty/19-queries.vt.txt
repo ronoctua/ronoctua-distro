@@ -1,0 +1,2 @@
+no styled cell
+replies: \e[2;4R\e[0n\e[?25;1$y\e[?7;1$y\e[?2004;2$y\e[4;2$y\e]10;rgb:e5e5/e5e5/e5e5\a\e]11;rgb:1010/1010/1010\e\\\e]4;1;rgb:cdcd/0000/0000\a\e[?6c\e[>0;2600;1c

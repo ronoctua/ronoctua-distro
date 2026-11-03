@@ -289,14 +289,57 @@ impl Manifest {
         let Some(declared) = self.mark(&id.name) else {
             return Some("a mark its manifest does not declare");
         };
+        // ITS SETS AND ITS LEAD ARE THE DECLARATION'S, as the id carries them
+        // on: the footer draws a set's lead first by what the mark says of
+        // itself, so a mark saying it leads where its manifest does not would
+        // be a second lead the core never counted (`set_refusal_of`).
+        if id.sets != declared.sets || id.leads != declared.leads {
+            return Some("a mark whose sets or lead are not its manifest's");
+        }
+        // A SET IS ONE OF THE DECLARED, from 1 — and a mark of sets stands
+        // in one: its glyph is drawn inside a set's segment or nowhere.
+        if declared.sets == 0 && id.set != 0 {
+            return Some("a set on a mark that stands in none");
+        }
+        if declared.sets != 0 && !(1..=declared.sets).contains(&id.set) {
+            return Some("a set its manifest does not declare");
+        }
+        // A LEAD IS ONE PER SET, so it has no instance: the set's number is
+        // what names it.
+        if declared.leads && id.instance != 0 {
+            return Some("an instance of a lead (a set has one lead, named by the set)");
+        }
         if declared.instances == 0 && id.instance != 0 {
             return Some("an instance of a mark that is one");
         }
         if declared.instances != 0 && !(1..=declared.instances).contains(&id.instance) {
             return Some("an instance its manifest does not declare");
         }
-        if id.label.is_some() && id.instance == 0 {
+        // A LABEL NAMES AN INSTANCE OR A MARK OF A SET — the account a lead
+        // says, the folder an agent works in.
+        if id.label.is_some() && id.instance == 0 && id.set == 0 {
             return Some("a label on a mark that is one");
+        }
+        // A KEY IS WHAT A CLICK ON ONE INSTANCE OF A SET HANDS ITS COMMAND,
+        // and a word the command line carries whole.
+        if let Some(key) = &id.key {
+            if id.set == 0 || id.instance == 0 {
+                return Some("a key on anything but an instance of a set");
+            }
+            if !key_is_well_formed(key) {
+                return Some("a key that is not a word of [a-z0-9-] up to 64 bytes");
+            }
+        }
+        // A SET OPENS, AND IS ONE THING: its click is its command's
+        // (`MarkId::opening`), and a case of another mark would be a second
+        // meaning inside one glyph of a ribbon of them.
+        if id.set != 0 && (mark.act.is_some() || !id.also.is_empty()) {
+            return Some(
+                "an action or another case on a mark of a set (a set opens through `MarkId::opening`)",
+            );
+        }
+        if let Some(why) = self.set_refusal_of(id, declared, earlier) {
+            return Some(why);
         }
         // AN INSTANCE IS OPENED, NEVER ACTED ON: `brain-act` names a module
         // and an action, and the instance clicked would not reach it — the
@@ -315,9 +358,11 @@ impl Manifest {
         if mark.tone == Tone::Quiet && !declared.resting {
             return Some("a mark at rest its manifest does not declare `resting`");
         }
+        // WHICH MARK IT IS: its name, its set and its instance — the lead of
+        // the first set and the lead of the third are two marks.
         if earlier
             .iter()
-            .any(|e| e.id.name == id.name && e.id.instance == id.instance)
+            .any(|e| e.id.name == id.name && e.id.set == id.set && e.id.instance == id.instance)
         {
             return Some("the same mark twice");
         }
@@ -340,6 +385,42 @@ impl Manifest {
             if also.hint != other.hint {
                 return Some("another case with a hint its manifest does not declare");
             }
+        }
+        None
+    }
+
+    /// Why a mark of a set may not stand where it was published, against
+    /// what the module already showed in the same face — or `None`.
+    ///
+    /// THE LEAD FIRST, ONE PER SET: the set's segment says whose it is with
+    /// its first glyph, so a mark published into a set nobody leads yet
+    /// would be drawn with no owner (the module publishes the lead, then
+    /// what stands with it). And ONE MARK PER PLACE of a set: an agent is
+    /// one glyph, whatever it is doing — two names at one instance of one
+    /// set would draw it twice. Read against the DECLARATIONS, as the rest.
+    fn set_refusal_of(
+        &self,
+        id: &MarkId,
+        declared: &MarkId,
+        earlier: &[&Mark],
+    ) -> Option<&'static str> {
+        if id.set == 0 {
+            return None;
+        }
+        let leads = |e: &Mark| self.mark(&e.id.name).is_some_and(|d| d.leads);
+        let led = earlier.iter().any(|e| e.id.set == id.set && leads(e));
+        if declared.leads && led {
+            return Some("a second lead in one set");
+        }
+        if !declared.leads && !led {
+            return Some("a mark of a set published before its set's lead");
+        }
+        if id.instance != 0
+            && earlier
+                .iter()
+                .any(|e| e.id.set == id.set && e.id.instance == id.instance && e.id.name != id.name)
+        {
+            return Some("one place of a set taken by two marks");
         }
         None
     }
@@ -431,8 +512,9 @@ pub struct MarkId {
     /// running containers open the containers' view). `None`: the click is
     /// the mark's action, or the module's page. The shell runs it by name,
     /// so it reaches nothing the keyboard does not (`LEADER :`), and names
-    /// no module to do so. For one of a mark's instances the click hands the
-    /// command the instance's number as its argument.
+    /// no module to do so. The click hands the command, as its argument, the
+    /// mark's [`MarkId::key`] when it has one, else its instance's number,
+    /// else its set's — nothing for a mark that is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opens: Option<Word>,
     /// DECLARED: how many of it a module may show at once (`instances = N`
@@ -470,6 +552,45 @@ pub struct MarkId {
     /// that is one case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<Also>,
+    // THE 2026-11-02 WAVE: the modeline's SETS — a lead glyph and the marks
+    // that stand with it, drawn as one segment on a ground of its own (the
+    // LLM accounts: an account, then its agents).
+    /// DECLARED: how many sets it may stand in (`sets = N` in the manifest,
+    /// from 1 to 9 — `nix/brain-modules.nix` refuses any other); `0` is a
+    /// mark that stands in none. Read from the MANIFEST, like `instances`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sets: u8,
+    /// DECLARED: whether it LEADS its set — the first glyph, saying whose the
+    /// set is. A lead has no instance: there is one per set.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub leads: bool,
+    /// Which set it stands in, from 1; `0` for a mark in none. The set is
+    /// one segment, `brain:<module>/<set>`, and a click on a mark in it hands
+    /// [`MarkId::opens`] the mark's [`MarkId::key`], or its instance, or this.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub set: u8,
+    /// What a click on THIS instance hands [`MarkId::opens`] in place of its
+    /// number: the module's own word for the thing it stands for (an agent's
+    /// session). Only a mark of a set with an instance carries one, and only
+    /// one the core takes ([`key_is_well_formed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<Word>,
+}
+
+/// The longest [`MarkId::key`] the core takes: a session's id fits with room
+/// to spare, and the click's argument stays a word.
+pub const KEY_MOST: usize = 64;
+
+/// Whether a word may be a mark's [`MarkId::key`]: lowercase letters, digits
+/// and dashes, from one to [`KEY_MOST`] bytes — what a command's argument can
+/// carry as one word and a log can say as it is.
+#[must_use]
+pub fn key_is_well_formed(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= KEY_MOST
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// Another case a mark stands for ([`MarkId::also`]): a mark its module
@@ -515,6 +636,22 @@ impl MarkId {
         instances: u8,
         resting: bool,
     ) -> Self {
+        Self::declared_in_sets(name, glyph, hint, instances, resting, 0, false)
+    }
+
+    /// A declaration that stands in sets, and whether it leads one — what the
+    /// generator writes for a mark whose manifest says `sets` ([`MarkId::declared`]
+    /// for every other, so a module without sets is generated as it was).
+    #[must_use]
+    pub const fn declared_in_sets(
+        name: &'static str,
+        glyph: &'static str,
+        hint: &'static str,
+        instances: u8,
+        resting: bool,
+        sets: u8,
+        leads: bool,
+    ) -> Self {
         Self {
             name: Cow::Borrowed(name),
             glyph: Cow::Borrowed(glyph),
@@ -525,6 +662,10 @@ impl MarkId {
             instance: 0,
             label: None,
             also: Vec::new(),
+            sets,
+            leads,
+            set: 0,
+            key: None,
         }
     }
 
@@ -559,25 +700,62 @@ impl MarkId {
     ///
     /// A BLANK LABEL IS NO LABEL: an account the person left unnamed is
     /// named by its number in the hint, never by a hole in the sentence.
+    /// And NONE KEEPS THE ONE IT HAD: a mark placed in its set with a label
+    /// ([`MarkId::in_set`]) and then numbered keeps it.
     #[must_use]
     pub fn numbered(&self, n: u8, label: Option<String>) -> Self {
         Self {
             instance: n,
-            label: label.filter(|l| !l.trim().is_empty()).map(Cow::Owned),
+            label: named(label).or_else(|| self.label.clone()),
             ..self.clone()
         }
     }
 
-    /// Its name inside its module, as the segment carries it: `full`, or
-    /// `claude.3` for an instance — the part after `brain:<module>/`.
+    /// The same mark standing in set `n` (from 1), named `label` — the
+    /// account a lead says, the folder an agent works in. The core refuses a
+    /// set its manifest does not declare. A blank label is none, and none
+    /// keeps the one it had, as [`MarkId::numbered`].
+    #[must_use]
+    pub fn in_set(&self, n: u8, label: Option<String>) -> Self {
+        Self {
+            set: n,
+            label: named(label).or_else(|| self.label.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// The same instance, clicked with `key` in place of its number
+    /// ([`MarkId::key`]). The core refuses a key on anything but an instance
+    /// of a set, and one that is not a word ([`key_is_well_formed`]).
+    #[must_use]
+    pub fn keyed(&self, key: String) -> Self {
+        Self {
+            key: Some(Cow::Owned(key)),
+            ..self.clone()
+        }
+    }
+
+    /// Its name inside its module, for the log and the segment: `full`,
+    /// `claude.3` for an instance — the part after `brain:<module>/` — and
+    /// with `@<set>` after it for a mark of a set (`agent-done.2@3`), which
+    /// the footer draws in its set's segment, `brain:<module>/<set>`.
     #[must_use]
     pub fn local(&self) -> Cow<'_, str> {
-        if self.instance == 0 {
+        let mut said = if self.instance == 0 {
             Cow::Borrowed(self.name.as_ref())
         } else {
             Cow::Owned(format!("{}.{}", self.name, self.instance))
+        };
+        if self.set != 0 {
+            said = Cow::Owned(format!("{said}@{}", self.set));
         }
+        said
     }
+}
+
+/// A person's word for an instance or a set, or none when it is blank.
+fn named(label: Option<String>) -> Option<Word> {
+    label.filter(|l| !l.trim().is_empty()).map(Cow::Owned)
 }
 
 /// A notice a module may raise, as the manifest declared it.
@@ -1236,6 +1414,238 @@ mod tests {
         let second = mark(seat.numbered(2, None), Tone::Warning);
         assert!(manifest.refusal_of(&again, &[&first]).is_some(), "twice");
         assert_eq!(manifest.refusal_of(&second, &[&first]), None);
+    }
+
+    /// THE MARKS OF A SET, as a module of sets declares them: a lead that
+    /// rests, an agent of nine places, and a count that rests — fictional,
+    /// as every fixture here.
+    static SET_MARKS: [MarkId; 4] = [
+        MarkId::declared_in_sets(
+            "desk",
+            "fixture-desk",
+            "fixture-mark-desk",
+            0,
+            true,
+            9,
+            true,
+        ),
+        MarkId::declared_in_sets(
+            "busy",
+            "fixture-busy",
+            "fixture-mark-busy",
+            9,
+            false,
+            9,
+            false,
+        ),
+        MarkId::declared_in_sets(
+            "idle",
+            "fixture-idle",
+            "fixture-mark-idle",
+            9,
+            true,
+            9,
+            false,
+        ),
+        MarkId::declared_in_sets(
+            "more",
+            "fixture-more",
+            "fixture-mark-more",
+            0,
+            true,
+            9,
+            false,
+        ),
+    ];
+
+    fn with_sets() -> Manifest {
+        Manifest {
+            marks: &SET_MARKS,
+            ..FIXTURE
+        }
+    }
+
+    fn set_mark(id: MarkId) -> Mark {
+        Mark {
+            id,
+            tone: Tone::Warning,
+            count: 0,
+            act: None,
+        }
+    }
+
+    /// The lead of set `n`, named.
+    fn lead(n: u8) -> Mark {
+        set_mark(SET_MARKS[0].in_set(n, Some(format!("account {n}"))))
+    }
+
+    /// FAILS IF: a mark of a set is shown before its set's lead — drawn in a
+    /// set that says nobody's — or is refused once its lead stands.
+    #[test]
+    fn a_set_needs_its_lead_first() {
+        let m = with_sets();
+        let busy = set_mark(
+            SET_MARKS[1]
+                .in_set(2, Some("~/src".into()))
+                .numbered(1, None),
+        );
+        assert!(m.refusal_of(&busy, &[]).is_some(), "no lead at all");
+        let other = lead(1);
+        assert!(
+            m.refusal_of(&busy, &[&other]).is_some(),
+            "the lead of another set"
+        );
+        let mine = lead(2);
+        assert_eq!(m.refusal_of(&busy, &[&other, &mine]), None);
+        // AND THE COUNT THAT STANDS WITH THEM, after its lead too.
+        let more = Mark {
+            count: 3,
+            ..set_mark(SET_MARKS[3].in_set(2, None))
+        };
+        assert!(m.refusal_of(&more, &[&other]).is_some());
+        assert_eq!(m.refusal_of(&more, &[&mine, &busy]), None);
+        // A MARK OF SETS IS IN ONE: outside any, or past the ninth, is
+        // nowhere the footer can draw it.
+        for set in [0, 10] {
+            let lost = set_mark(SET_MARKS[0].in_set(set, None));
+            assert!(m.refusal_of(&lost, &[]).is_some(), "set {set}");
+        }
+        // AND A MARK OF NO SETS STANDS IN NONE.
+        let plain = Manifest {
+            marks: std::slice::from_ref(&FIXTURE.marks[0]),
+            ..FIXTURE
+        };
+        let placed = set_mark(FIXTURE.marks[0].in_set(1, None));
+        assert!(plain.refusal_of(&placed, &[]).is_some());
+    }
+
+    /// FAILS IF: one place of a set — an agent — is drawn twice under two
+    /// names (working and idle at once), or two places of one set are taken
+    /// for one.
+    #[test]
+    fn a_place_in_a_set_is_one_agent() {
+        let m = with_sets();
+        let first = lead(1);
+        let busy = set_mark(SET_MARKS[1].in_set(1, None).numbered(4, None));
+        let idle_there = set_mark(SET_MARKS[2].in_set(1, None).numbered(4, None));
+        let idle_beside = set_mark(SET_MARKS[2].in_set(1, None).numbered(5, None));
+        assert!(m.refusal_of(&idle_there, &[&first, &busy]).is_some());
+        assert_eq!(m.refusal_of(&idle_beside, &[&first, &busy]), None);
+        // THE SAME PLACE IN ANOTHER SET is another agent.
+        let second = lead(2);
+        let idle_elsewhere = set_mark(SET_MARKS[2].in_set(2, None).numbered(4, None));
+        assert_eq!(
+            m.refusal_of(&idle_elsewhere, &[&first, &busy, &second]),
+            None
+        );
+        // AND THE SAME MARK AT ONE PLACE TWICE is still one mark twice.
+        assert!(m.refusal_of(&busy, &[&first, &busy]).is_some());
+    }
+
+    /// FAILS IF: a lead is shown with an instance — a set has one lead,
+    /// named by the set — a set with two leads is shown, or a mark whose
+    /// sets or lead are not its manifest's is.
+    #[test]
+    fn a_lead_has_no_instance() {
+        let m = with_sets();
+        let numbered = set_mark(SET_MARKS[0].in_set(1, None).numbered(1, None));
+        assert!(m.refusal_of(&numbered, &[]).is_some());
+        let first = lead(1);
+        assert_eq!(m.refusal_of(&first, &[]), None);
+        assert!(
+            m.refusal_of(&lead(1), &[&first]).is_some(),
+            "two leads in one set"
+        );
+        // AND A LEAD SAYS WHOSE THE SET IS: its label is allowed with no
+        // instance, as an agent's folder is.
+        assert_eq!(first.id.label.as_deref(), Some("account 1"));
+        // A MARK OF A SET OPENS: an action or another case on it is refused.
+        let acted = Mark {
+            act: Some("forget".into()),
+            ..lead(3)
+        };
+        assert!(m.refusal_of(&acted, &[]).is_some());
+        let besides = set_mark(SET_MARKS[0].in_set(3, None).besides(&SET_MARKS[3], 2));
+        assert!(m.refusal_of(&besides, &[]).is_some());
+        // A MARK THAT SAYS IT LEADS where its manifest does not — which the
+        // footer would draw first, a second lead — or says it does not where
+        // it does, is refused: the lead is the declaration's.
+        let claims = set_mark(MarkId {
+            leads: true,
+            ..SET_MARKS[1].in_set(1, None).numbered(1, None)
+        });
+        assert!(m.refusal_of(&claims, &[&first]).is_some());
+        let denies = set_mark(MarkId {
+            leads: false,
+            ..SET_MARKS[0].in_set(4, None)
+        });
+        assert!(m.refusal_of(&denies, &[]).is_some());
+        let fewer = set_mark(MarkId {
+            sets: 3,
+            ..SET_MARKS[0].in_set(4, None)
+        });
+        assert!(m.refusal_of(&fewer, &[]).is_some());
+    }
+
+    /// FAILS IF: a key is shown on anything but an instance of a set — a
+    /// lead's click would hand a word where its set's number belongs — or a
+    /// key that is not a word of `[a-z0-9-]` up to 64 bytes reaches a
+    /// command line; or a well-formed one is refused.
+    #[test]
+    fn a_key_only_on_an_instance() {
+        let m = with_sets();
+        let first = lead(1);
+        let session = "3f2a1c9e-7b44-4d1a-9c1e-0b5d2e6f8a90".to_owned();
+        let keyed = set_mark(
+            SET_MARKS[1]
+                .in_set(1, None)
+                .numbered(2, None)
+                .keyed(session.clone()),
+        );
+        assert_eq!(m.refusal_of(&keyed, &[&first]), None);
+        let on_a_lead = set_mark(SET_MARKS[0].in_set(1, None).keyed(session.clone()));
+        assert!(m.refusal_of(&on_a_lead, &[]).is_some());
+        let on_the_count = set_mark(SET_MARKS[3].in_set(1, None).keyed(session));
+        assert!(m.refusal_of(&on_the_count, &[&first]).is_some());
+        for bad in [
+            String::new(),
+            "Upper-Case".to_owned(),
+            "two words".to_owned(),
+            "a/b".to_owned(),
+            "x".repeat(KEY_MOST + 1),
+        ] {
+            let mark = set_mark(
+                SET_MARKS[1]
+                    .in_set(1, None)
+                    .numbered(3, None)
+                    .keyed(bad.clone()),
+            );
+            assert!(m.refusal_of(&mark, &[&first]).is_some(), "{bad:?}");
+        }
+        assert!(key_is_well_formed(&"x".repeat(KEY_MOST)));
+        // ON THE SOCKET, the key and the set cross; a mark without them
+        // says nothing of them.
+        let wire = serde_json::to_string(&keyed.id).unwrap();
+        assert_eq!(serde_json::from_str::<MarkId>(&wire).unwrap(), keyed.id);
+        let plain = serde_json::to_string(&FIXTURE.marks[0]).unwrap();
+        for absent in ["\"sets\"", "\"leads\"", "\"set\"", "\"key\""] {
+            assert!(!plain.contains(absent), "{absent} in {plain}");
+        }
+    }
+
+    /// FAILS IF: the lead of one set and the lead of another are taken for
+    /// one mark twice — identity is the name, the set and the instance — or
+    /// an agent's place in one set is taken for the same place in another.
+    #[test]
+    fn two_sets_hold_one_lead_each() {
+        let m = with_sets();
+        let (one, three) = (lead(1), lead(3));
+        assert_eq!(m.refusal_of(&three, &[&one]), None);
+        let busy_one = set_mark(SET_MARKS[1].in_set(1, None).numbered(1, None));
+        let busy_three = set_mark(SET_MARKS[1].in_set(3, None).numbered(1, None));
+        assert_eq!(m.refusal_of(&busy_three, &[&one, &three, &busy_one]), None);
+        assert_eq!(one.id.local(), "desk@1");
+        assert_eq!(busy_three.id.local(), "busy.1@3");
     }
 
     #[test]

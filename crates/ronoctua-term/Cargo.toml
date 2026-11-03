@@ -1,21 +1,39 @@
 [package]
 name = "ronoctua-term"
-description = "The VT engine trait and the alacritty implementation (section 7.10)."
+description = "The terminal's engine (libghostty-vt) and its holder: the PTY, the inbound filter (sixel, kitty media), the program status records and the process that keeps a terminal alive."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# THE HOLDER: one process per terminal, in a scope of its own — the PTY, the
+# program and the authoritative engine (`src/holder.rs`). Started by the
+# window through `ronoctua_terminals::spawn::start`, which finds it beside
+# the shell.
 [[bin]]
-name = "ronoctua-term-diff"
-path = "src/bin/differential.rs"
+name = "ronoctua-term-holder"
+path = "src/bin/holder.rs"
+
+# NO DIFFERENTIAL HERE. Its second engine (alacritty), its canonical grid and
+# the colour table both engines are handed are `ronoctua-term-differential`'s,
+# a crate of its own whose program is a driver: a feature of this one left
+# them one `--features` away from every program that links the engine.
 
 [dependencies]
-alacritty_terminal.workspace = true
 anyhow.workspace = true
+# The kitty commands the inbound filter writes carry their pixels in base64.
+base64.workspace = true
 rustix.workspace = true
+serde_json.workspace = true
+# `SIGTERM` and `SIGHUP` hang the holder's terminal up, in their safe
+# spelling.
+signal-hook.workspace = true
 tracing.workspace = true
+# The holder program's log, on its stderr.
+tracing-subscriber.workspace = true
+# The wire, the state, the registry and the holder's arguments.
+ronoctua-terminals = { path = "../ronoctua-terminals" }
 
 [lints]
 workspace = true
@@ -23,4 +41,4 @@ workspace = true
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
 env = ["RONOCTUA_GHOSTTY_VT", "RONOCTUA_SETSID", "RONOCTUA_TERMINFO_DIRS"]
-bins = { "ronoctua-term-diff" = "driver" }
+bins = { "ronoctua-term-holder" = "ship" }

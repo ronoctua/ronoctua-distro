@@ -435,17 +435,25 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    # THE USER MANAGER FIRST, as a session has one: a terminal a scene opens
+    # is held in a scope of its own, and with no manager it would run in its
+    # window's process and say so on its last row.
+    start_user_manager()
     # THE BRAIN IS QUIET HERE TOO: nothing starts by itself. A scene that
     # photographs its line asks it for a run, or raises what it photographs.
     start_xvfb()
     start_compositor("compositor", "${scroll}")
     sock = socket_of("compositor")
 
-    machine.succeed(
-        "systemd-run --unit=bus "
-        "${pkgs.dbus}/bin/dbus-daemon --session --nofork "
-        "--address=unix:path=/run/user/0/bus"
-    )
+    # THE SESSION BUS is the user manager's, at the address the footer is
+    # given; a bus of the stage's own only where the manager brought none —
+    # two at one address, and the second is refused it.
+    if machine.execute("test -S /run/user/0/bus")[0] != 0:
+        machine.succeed(
+            "systemd-run --unit=bus "
+            "${pkgs.dbus}/bin/dbus-daemon --session --nofork "
+            "--address=unix:path=/run/user/0/bus"
+        )
     machine.wait_until_succeeds("test -S /run/user/0/bus", timeout=timedelta(seconds=30))
     machine.succeed(
         "systemd-run --unit=footer ${xvfb.env} "

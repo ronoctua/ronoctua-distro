@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-shell-agents"
-description = "The person's LLM accounts (LEADER m a): the view, its window, its region in the footer, its camera and its keys."
+description = "The person's LLM accounts (LEADER / a): the view, its window, its region in the footer, its camera and its keys."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

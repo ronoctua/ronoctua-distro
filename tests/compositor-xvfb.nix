@@ -204,6 +204,17 @@ rec {
   # width=… height=…` on every relayout, so the last one is the height on
   # screen; nothing new is computed.
   #
+  # `start_user_manager` — root's own user manager, for what a session starts
+  # in it: a held terminal is a `systemd-run --user --scope` (the window
+  # falls back to running it in its own process when there is no manager to
+  # ask). BEFORE `start_xvfb`, because the manager's runtime directory is a
+  # tmpfs that `user-runtime-dir@0` MOUNTS over `/run/user/0`: started after
+  # the compositor it would hide the compositor's sockets, and the footer's,
+  # under an empty mount. By lingering, so logind keeps a manager no login
+  # session asked for. It also brings the session bus to `/run/user/0/bus`
+  # (its socket, activated on demand), so a test that starts a bus of its own
+  # at that address after this one is refused the address.
+  #
   # `_datetime` — the driver takes its durations as `timedelta`s, and the
   # scripts that splice this in import `timedelta` themselves: a second
   # import of the same name is a lint error (`F811`) in every one of them, so
@@ -248,6 +259,16 @@ rec {
             "${pkgs.xorg-server}/bin/Xvfb :99 -screen 0 ${toString width}x${toString height}x24"
         )
         machine.wait_until_succeeds("test -S /tmp/.X11-unix/X99", timeout=_datetime.timedelta(minutes=1))
+
+
+    def start_user_manager():
+        """Root's user manager up, with its bus. BEFORE `start_xvfb`: the
+        argument is in the Nix comment above this string."""
+        machine.succeed("loginctl enable-linger root")
+        machine.wait_for_unit("user@0.service")
+        machine.wait_until_succeeds(
+            "test -S /run/user/0/systemd/private", timeout=_datetime.timedelta(minutes=1)
+        )
 
 
     def stop_compositor(unit):

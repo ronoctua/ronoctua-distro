@@ -72,6 +72,13 @@ pub struct Usage {
     pub seven_day_opus: Option<Window>,
     /// The weekly window of Sonnet.
     pub seven_day_sonnet: Option<Window>,
+    /// The endpoint's word that the plan HAS no five-hour window — it
+    /// answers `"five_hour": null`, the way it says an absent
+    /// `seven_day_opus`; Claude's Ultra has the week alone (2026-11-02). A
+    /// window that is only not running yet (`resets_at` null) leaves this
+    /// false.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub no_five_hour: bool,
 }
 
 #[cfg(feature = "fetch")]
@@ -190,39 +197,19 @@ fn read(answer: &Answer) -> Result<Usage, Refusal> {
         401 | 403 => return Err(Refusal::of(Why::Expired)),
         _ => return Err(Refusal::of(Why::Failed)),
     }
-    #[derive(Deserialize)]
-    struct Raw {
-        #[serde(default)]
-        five_hour: Option<RawWindow>,
-        #[serde(default)]
-        seven_day: Option<RawWindow>,
-        #[serde(default)]
-        seven_day_opus: Option<RawWindow>,
-        #[serde(default)]
-        seven_day_sonnet: Option<RawWindow>,
-    }
-    #[derive(Deserialize)]
-    struct RawWindow {
-        #[serde(default)]
-        utilization: Option<f64>,
-        #[serde(default)]
-        resets_at: Option<String>,
-    }
-    let raw: Raw = serde_json::from_slice(&answer.body).map_err(|_| Refusal::of(Why::Failed))?;
+    // EACH WINDOW ALONE: one whose shape changed is not known, and the
+    // others still are; only a body that is not an object is a failure.
+    let raw: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&answer.body).map_err(|_| Refusal::of(Why::Failed))?;
     // A window with no reset is one that is not running (nothing used in
     // it yet): there is no bar to draw and no time to say, so it is `None`.
-    let window = |w: Option<RawWindow>| {
-        let w = w?;
-        Some(Window {
-            used_percent: w.utilization? as f32,
-            resets_at_s: crate::time::parse_rfc3339(w.resets_at.as_deref()?)?,
-        })
-    };
+    let window = |name: &str| raw.get(name).and_then(|w| Window::read(w, "utilization"));
     Ok(Usage {
-        five_hour: window(raw.five_hour),
-        seven_day: window(raw.seven_day),
-        seven_day_opus: window(raw.seven_day_opus),
-        seven_day_sonnet: window(raw.seven_day_sonnet),
+        five_hour: window("five_hour"),
+        seven_day: window("seven_day"),
+        seven_day_opus: window("seven_day_opus"),
+        seven_day_sonnet: window("seven_day_sonnet"),
+        no_five_hour: raw.get("five_hour").is_some_and(serde_json::Value::is_null),
     })
 }
 
@@ -237,6 +224,8 @@ impl Usage {
             seven_day: running(self.seven_day),
             seven_day_opus: running(self.seven_day_opus),
             seven_day_sonnet: running(self.seven_day_sonnet),
+            // What the plan has does not reset with a window.
+            no_five_hour: self.no_five_hour,
         }
     }
 }
@@ -247,7 +236,9 @@ impl Usage {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Kept {
-    /// Always 1.
+    /// 1, or 2 when the numbers say [`Usage::no_five_hour`]: a reader from
+    /// before refuses the field it does not know, which is honest, and only
+    /// an account whose plan lacks the window writes a 2.
     pub format: u32,
     /// When it was last asked, in seconds since the epoch.
     pub at_s: i64,
@@ -260,6 +251,16 @@ pub struct Kept {
     pub usage_at_s: Option<i64>,
     /// Why the last ask was not answered; `None` when it was.
     pub refused: Option<Why>,
+}
+
+impl Kept {
+    /// The format a file with these numbers is written in.
+    const fn format_of(usage: Option<&Usage>) -> u32 {
+        match usage {
+            Some(u) if u.no_five_hour => 2,
+            _ => 1,
+        }
+    }
 }
 
 /// The file's name, in the account's state folder.
@@ -281,7 +282,7 @@ pub(crate) fn kept_in(state: &Path, account: &Account) -> Option<Kept> {
     let bytes = crate::files::read_bounded(&kept_path(state, account)?, MOST_BYTES).ok()?;
     serde_json::from_slice::<Kept>(&bytes)
         .ok()
-        .filter(|k| k.format == 1)
+        .filter(|k| k.format == Kept::format_of(k.usage.as_ref()))
 }
 
 /// Keeps an answer for `account`, written whole and atomically: an answer
@@ -306,7 +307,7 @@ pub(crate) fn keep_in(
     let path = kept_path(state, account).ok_or(Refusal::of(Why::Unknown))?;
     let kept = match answer {
         Ok(usage) => Kept {
-            format: 1,
+            format: Kept::format_of(Some(&usage)),
             at_s: now_s,
             usage: Some(usage),
             usage_at_s: Some(now_s),
@@ -316,10 +317,11 @@ pub(crate) fn keep_in(
             // A file that does not read keeps no numbers to carry over: it is
             // ours, and the next answer writes it whole again.
             let before = kept_in(state, account);
+            let usage = before.and_then(|k| k.usage);
             Kept {
-                format: 1,
+                format: Kept::format_of(usage.as_ref()),
                 at_s: now_s,
-                usage: before.and_then(|k| k.usage),
+                usage,
                 usage_at_s: before.and_then(|k| k.usage_at_s),
                 refused: Some(refusal.why),
             }
@@ -400,8 +402,65 @@ mod tests {
                 }),
                 seven_day_opus: None,
                 seven_day_sonnet: None,
+                no_five_hour: false,
             }
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an Ultra answer — `"five_hour": null`, the week alone — is
+    /// read as a five-hour window "not known yet", or a window that is only
+    /// not running is read as one the plan lacks, or the plan's word does
+    /// not survive the kept file (format 2) and a refusal after it.
+    #[test]
+    fn an_ultra_answer_has_no_five_hours() {
+        let ultra = br#"{"five_hour":null,"seven_day":{"utilization":71.0,"resets_at":"2026-11-03T20:00:00+00:00"},"seven_day_opus":null,"seven_day_sonnet":null,"limits":[{"kind":"weekly"}]}"#;
+        let usage = read(&Answer {
+            status: 200,
+            body: ultra.to_vec(),
+        })
+        .unwrap();
+        assert!(usage.no_five_hour);
+        assert_eq!(usage.five_hour, None);
+        assert_eq!(usage.seven_day.map(|w| w.used_percent), Some(71.0));
+        assert!(
+            usage.at(i64::MAX - 1).no_five_hour,
+            "the plan does not reset"
+        );
+
+        let fresh = br#"{"five_hour":{"utilization":0.0,"resets_at":null},"seven_day":{"utilization":3.0,"resets_at":1793728800}}"#;
+        let usage_fresh = read(&Answer {
+            status: 200,
+            body: fresh.to_vec(),
+        })
+        .unwrap();
+        assert!(!usage_fresh.no_five_hour, "not running is not absent");
+        assert_eq!(
+            usage_fresh.seven_day.map(|w| w.resets_at_s),
+            Some(1_793_728_800),
+            "a reset given in seconds is read too"
+        );
+
+        let dir = scratch("ultra");
+        let account = Account {
+            id: "claude-1".to_owned(),
+            kind: crate::Kind::Claude,
+            name: "Work".to_owned(),
+            dir: dir.join("account"),
+            default: true,
+        };
+        keep_in(&dir, &account, Ok(usage), 1_700_000_000).unwrap();
+        let kept = kept_in(&dir, &account).unwrap();
+        assert_eq!((kept.format, kept.usage), (2, Some(usage)));
+        keep_in(
+            &dir,
+            &account,
+            Err(Refusal::of(Why::Offline)),
+            1_700_000_100,
+        )
+        .unwrap();
+        let kept = kept_in(&dir, &account).unwrap();
+        assert_eq!((kept.format, kept.usage), (2, Some(usage)));
         let _ = std::fs::remove_dir_all(dir);
     }
 

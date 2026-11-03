@@ -153,3 +153,24 @@ fi
 if command -v starship >/dev/null 2>&1; then
     eval "$(starship init zsh)"
 fi
+
+
+# -----------------------------------------------------------------------------
+# 10. The terminal's marks — after starship, whose prompt they wrap
+# -----------------------------------------------------------------------------
+# `.shellrc` says what the marks are and when they are wanted. The prompt hook
+# goes FIRST in `precmd_functions`: it is the one that reads `$?`, and every
+# hook before it could change it. The prompt is wrapped once (starship sets it
+# once, at its init), between the start of the prompt (133;A) and the start of
+# what is typed (133;B).
+
+if __ronoctua_marks_wanted 2>/dev/null; then
+    __ronoctua_mark_prompt() {
+        local code=$?
+        __ronoctua_mark_precmd "$code"
+        [[ $PROMPT == *$'\e]133;A'* ]] || PROMPT=$'%{\e]133;A\e\\%}'"$PROMPT"$'%{\e]133;B\e\\%}'
+    }
+    autoload -Uz add-zsh-hook
+    precmd_functions=(__ronoctua_mark_prompt $precmd_functions)
+    add-zsh-hook preexec __ronoctua_mark_preexec
+fi

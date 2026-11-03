@@ -1060,3 +1060,37 @@ askpass-bar-title-host = Unknown host
 askpass-bar-ask-host = Type yes to trust this host
 askpass-bar-title-ssh-other = SSH
 askpass-bar-ask-ssh-other = SSH is asking
+
+## the held terminals (surface/terminals.rs): the modeline's mark for the ones
+## no window shows, showing one, and what one nobody is looking at asks for.
+
+cmd-terminal-show = Show a terminal: its window, or a window for its group
+cmd-window-of-process = Show the window of a process, or of the nearest process above it
+hint-terminals-away = { $count ->
+        [one] One terminal with no window. Click for the list.
+       *[other] { $count } terminals with no window. Click for the list.
+    }
+hint-terminals-away-asking = { $count ->
+        [one] One terminal with no window, and it asks for you. Click for the list.
+       *[other] { $count } terminals with no window, and one of them asks for you. Click for the list.
+    }
+echo-terminal-gone = That terminal is not there any more.
+echo-terminal-not-one = { $id } names no terminal.
+echo-no-window-of-process = No window shows process { $pid }, nor a process above it.
+echo-window-of-process-wants-a-pid = Which process? The command takes its number.
+echo-not-this-windows = The window in front does not do { $command }.
+notif-terminal-app = terminal
+# A notification a PROGRAM asked for: what is said is the program's own text,
+# and these two only describe the entry.
+notif-terminal-notice-summary = A terminal's notification
+notif-terminal-notice-body = What a program in a terminal asked to tell you.
+notif-terminal-bell-summary = { $title } rang its bell
+notif-terminal-bell-body = A terminal nobody is looking at rang its bell.
+notif-terminal-waiting-summary = { $program } is waiting for you in { $title }
+notif-terminal-waiting-body = It cannot go on until you answer it.
+notif-terminal-finished-summary = { $code ->
+        [0] { $title }: the command finished
+       *[other] { $title }: the command failed ({ $code })
+    }
+notif-terminal-finished-body = A long command ended in a terminal nobody is looking at.
+notif-action-see = Show it

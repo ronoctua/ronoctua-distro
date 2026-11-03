@@ -57,6 +57,12 @@
 # `resting = true` — drawn while all is well, which the modeline at rest
 # otherwise never is. Only the marks the owner approved may rest
 # (`assets/brain-resting-marks.nix`, and AGENTS.md beside the rule).
+#
+# AND MARKS IN SETS (2026-11-02): `sets = N` (from 1 to 9) for a mark drawn
+# inside one of its module's sets — a segment of its own, on a ground of its
+# own — and `leads = true` for the one that comes first in each and says
+# whose the set is. A lead stands in sets and has no instance (one per set),
+# and a module that puts marks in sets has a lead for them.
 {
   lib,
   # The folder every module lives in. A test passes the fixture's instead.
@@ -437,6 +443,15 @@ let
           ) (attrNames glyphs);
 
       marks = m.marks or { };
+      # A MODULE OF SETS HAS A LEAD: a set's segment says whose it is with its
+      # first glyph, and a module whose marks stand in sets with no lead
+      # declared would publish sets of nobody's.
+      inSets =
+        isAttrs marks
+        && lib.any (k: isAttrs marks.${k} && (marks.${k}.sets or null) != null) (attrNames marks);
+      hasLead =
+        isAttrs marks
+        && lib.any (k: isAttrs marks.${k} && (marks.${k}.leads or false) == true) (attrNames marks);
       markProblems =
         if !(isAttrs marks) then
           [ "marks is an attrset: { <name> = { glyph; hint; }; }" ]
@@ -447,6 +462,8 @@ let
               mk = marks.${k};
               instances = mk.instances or null;
               resting = mk.resting or false;
+              sets = mk.sets or null;
+              leads = mk.leads or false;
             in
             lib.optional (!(isWord k)) "marks.${k}: the name is an English kebab word"
             ++ (
@@ -465,6 +482,18 @@ let
                   instances != null && !(isInt instances && instances >= 1 && instances <= mostInstances)
                 ) "marks.${k}.instances is a whole number from 1 to ${toString mostInstances}"
                 ++ lib.optional (!(isBool resting)) "marks.${k}.resting is a boolean"
+                # ONE DIGIT'S WORTH OF SETS too: the sets are the accounts the
+                # modeline has room for, nine at most.
+                ++ lib.optional (
+                  sets != null && !(isInt sets && sets >= 1 && sets <= mostInstances)
+                ) "marks.${k}.sets is a whole number from 1 to ${toString mostInstances}"
+                ++ lib.optional (!(isBool leads)) "marks.${k}.leads is a boolean"
+                ++ lib.optional (
+                  leads == true && sets == null
+                ) "marks.${k}.leads: a lead stands in sets (`sets = N`)"
+                ++ lib.optional (
+                  leads == true && instances != null
+                ) "marks.${k}.leads: a lead has no instances (one per set)"
                 # THE MODELINE AT REST IS SILENT, but for the marks the owner
                 # approved one by one — and never a person's.
                 ++ lib.optional (
@@ -473,7 +502,7 @@ let
                 ++
                   lib.optional (resting == true && !person && !(elem "${id}/${k}" restingApproved))
                     "marks.${k}.resting: `${id}/${k}` is not a mark the owner approved to be drawn at rest (assets/brain-resting-marks.nix, AGENTS.md)"
-                ++ map (f: "marks.${k}.${f} is not a field (glyph, hint, instances, resting)") (
+                ++ map (f: "marks.${k}.${f} is not a field (glyph, hint, instances, resting, sets, leads)") (
                   filter (
                     f:
                     !(elem f [
@@ -481,11 +510,17 @@ let
                       "hint"
                       "instances"
                       "resting"
+                      "sets"
+                      "leads"
                     ])
                   ) (attrNames mk)
                 )
             )
-          ) (attrNames marks);
+          ) (attrNames marks)
+          # AND THE MODULE'S OWN: marks in sets have their lead declared.
+          ++ lib.optional (
+            inSets && !hasLead
+          ) "marks: a module whose marks stand in sets declares the lead of them (`leads = true`)";
 
       notices = m.notices or { };
       noticeProblems =
@@ -768,13 +803,16 @@ let
       prefixes = lib.unique ([ id ] ++ (m.keys or [ ]));
       whys = m.whys or [ ];
       glyphs = m.glyphs or { };
-      # EVERY MARK SAYS how many it is and whether it rests: `0` and `false`
-      # for a mark that is one and says nothing at rest.
+      # EVERY MARK SAYS how many it is, whether it rests, in how many sets it
+      # stands and whether it leads one: `0` and `false` for a mark that is
+      # one, says nothing at rest and stands in no set.
       marks = lib.mapAttrs (
         _: mk:
         {
           instances = 0;
           resting = false;
+          sets = 0;
+          leads = false;
         }
         // mk
       ) (m.marks or { });

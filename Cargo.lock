@@ -3849,6 +3849,7 @@ dependencies = [
  "ronoctua-memory",
  "ronoctua-person",
  "ronoctua-store",
+ "ronoctua-terminals",
  "ronoctua-xdg",
  "serde",
  "serde_json",
@@ -4282,6 +4283,7 @@ dependencies = [
  "base64",
  "ronoctua-consent",
  "ronoctua-http",
+ "ronoctua-memory",
  "ronoctua-store",
  "ronoctua-xdg",
  "ruzstd",
@@ -5149,6 +5151,7 @@ dependencies = [
  "ronoctua-store",
  "ronoctua-studio",
  "ronoctua-syncthing",
+ "ronoctua-terminals",
  "ronoctua-tokens",
  "ronoctua-transfers",
  "ronoctua-tunnel",
@@ -5760,12 +5763,22 @@ name = "ronoctua-shell-terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cosmic-text",
+ "ronoctua-cmd",
+ "ronoctua-design",
+ "ronoctua-files",
  "ronoctua-i18n",
+ "ronoctua-keymap",
  "ronoctua-protocol",
+ "ronoctua-render",
  "ronoctua-shell-door",
  "ronoctua-shell-kit",
+ "ronoctua-store",
  "ronoctua-term",
+ "ronoctua-terminals",
  "ronoctua-tokens",
+ "serde",
+ "serde_json",
  "smithay-client-toolkit",
  "tracing",
 ]
@@ -5999,10 +6012,35 @@ dependencies = [
 name = "ronoctua-term"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "base64",
+ "ronoctua-terminals",
+ "rustix 1.1.4",
+ "serde_json",
+ "signal-hook 0.4.4",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ronoctua-term-differential"
+version = "0.1.0"
+dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "ronoctua-term",
+]
+
+[[package]]
+name = "ronoctua-terminals"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "ronoctua-xdg",
  "rustix 1.1.4",
- "tracing",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -557,14 +557,13 @@
         inherit syntaxRs;
       };
 
-      # THE TERMINAL ENGINE, from a pinned Ghostty commit. In the `let` and not
+      # THE TERMINAL ENGINE, from a pinned Ghostty tag. In the `let` and not
       # only under `packages` because `nix/rust.nix` needs the PATH: the crate
       # that links it has to be told where it is, like every other data file this
       # project hands the Rust.
-      # Zig 0.16 explicitly: libghostty-vt's build.zig.zon pins
-      # `minimum_zig_version = "0.16.0"`, and nixos-unstable's default `zig` is
-      # now 0.17 (was 0.16 on the old pin). See nix/ghostty-vt.nix.
-      ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { zig = pkgs.zig_0_16; };
+      # Zig 0.17 explicitly: the tag's build.zig.zon pins
+      # `minimum_zig_version = "0.17.0"`. See nix/ghostty-vt.nix.
+      ghosttyVt = pkgs.callPackage ./nix/ghostty-vt.nix { zig = pkgs.zig_0_17; };
 
       # THE C BORDER IN FRONT OF LIBTORRENT, built on its own so that no `.cpp`
       # has to survive `nix/rust.nix`'s file set — and so `build.rs` stays a
@@ -1284,6 +1283,7 @@
         ./nix/modules/keys.nix
         ./nix/modules/icons.nix
         ./nix/modules/foreign.nix
+        ./nix/modules/input-method.nix
         ./nix/modules/terminal.nix
         ./nix/modules/network.nix
         # The two tunnels beside the network they ride on: Tailscale's socket
@@ -1639,13 +1639,8 @@
         # Generated glyph layer: icons.json, glyphs.json, coverage.md.
         glyphdb = glyphdb.db;
 
-        # THE TERMINAL ENGINE, built from a pinned Ghostty commit.
-        #
-        # Exposed by name so it is reachable and buildable, and NOT yet wired
-        # into any crate: nothing links it, so nothing can pretend to use it. The
-        # step that makes `nix flake check` build it is the FFI, which is where a
-        # half-written engine would start returning an empty grid — see
-        # `docs/PENDING.md`, item 1.
+        # THE TERMINAL ENGINE, built from a pinned Ghostty tag — exposed by
+        # name so it can be built and its headers read on their own.
         ghostty-vt = ghosttyVt;
 
         # THE COMPOSITOR UNDER EVALUATION, exposed so it can be built and run on
@@ -1873,9 +1868,10 @@
                 # `ship` program in the form a machine runs it
                 # (`nix/rust/outputs.nix`). No test driver and no benchmark:
                 # crane's workspace brought all fifty programs along with the
-                # shell — and, through the terminal differential (a driver),
-                # `libghostty-vt` and its toolchain, which nothing a machine
-                # runs links.
+                # shell, test drivers and benchmarks among them. (The terminal's
+                # engine, `libghostty-vt`, IS shipped now — the shell and the
+                # holder link it — and comes along by reference; its Zig
+                # toolchain does not, see `terminal-closure-has-no-toolchain`.)
                 #
                 # The wrapper and NOT the bare program: the five wasm buffers
                 # used to arrive by carriage, exactly as the superpack below

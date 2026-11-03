@@ -278,6 +278,124 @@
       ];
     };
 
+    # A HELD TERMINAL NOBODY IS LOOKING AT ASKS FOR THE PERSON — the footer's
+    # census of the terminals' state files (`surface/terminals.rs`) raises
+    # these on a CHANGE of a terminal that is not seen: in the background, or
+    # behind another in its window, or in a window without the keyboard. A
+    # footer that starts takes in what the terminals already say, and raises
+    # nothing for it. Each offers to show THAT terminal — the notification's
+    # subject, which only the footer names (`Notification::subject`), so a
+    # program on the bus cannot aim the command.
+    #
+    # A PROGRAM'S OWN NOTIFICATION (OSC 9, OSC 777): its words, kept as they
+    # came (`rewrite = false`), one per terminal — the next replaces it.
+    terminal-notice = {
+      when = [
+        {
+          field = "tag";
+          is = "terminal-notice";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 40;
+      icon = "terminal";
+      tags = [
+        "terminal-notice"
+        "terminal"
+      ];
+      actions = [
+        {
+          id = "see";
+          command = "terminal-show";
+        }
+      ];
+    };
+
+    # ITS BELL. A bell rung while a program in it waits on the person is that
+    # wait's, and folds into `terminal-waiting`: one event, not two.
+    terminal-bell = {
+      when = [
+        {
+          field = "tag";
+          is = "terminal-bell";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 40;
+      icon = "terminal";
+      tags = [
+        "terminal-bell"
+        "terminal"
+      ];
+      actions = [
+        {
+          id = "see";
+          command = "terminal-show";
+        }
+      ];
+    };
+
+    # A PROGRAM IN IT CANNOT GO ON until the person answers (OSC 7501's
+    # `blocked` — an agent asking for a permission). Higher and longer than
+    # the bell: something is stopped until somebody looks.
+    terminal-waiting = {
+      when = [
+        {
+          field = "tag";
+          is = "terminal-waiting";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "long";
+      loud = false;
+      level = 60;
+      icon = "terminal";
+      tags = [
+        "terminal-waiting"
+        "terminal"
+      ];
+      actions = [
+        {
+          id = "see";
+          command = "terminal-show";
+        }
+      ];
+    };
+
+    # A LONG COMMAND ENDED in it (OSC 133 `D`, with how it ended): the build
+    # somebody went to make coffee during.
+    terminal-finished = {
+      when = [
+        {
+          field = "tag";
+          is = "terminal-finished";
+        }
+      ];
+      rewrite = false;
+      show = "full";
+      life = "normal";
+      loud = false;
+      level = 30;
+      icon = "terminal";
+      tags = [
+        "terminal-finished"
+        "terminal"
+      ];
+      actions = [
+        {
+          id = "see";
+          command = "terminal-show";
+        }
+      ];
+    };
+
     # THE OTHER SIDE IS ASKING, and the view could not open to say so —
     # another view is in the footer holding something somebody built by hand.
     # The question is the one thing here another machine is waiting on, so it

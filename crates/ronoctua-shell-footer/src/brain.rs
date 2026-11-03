@@ -630,6 +630,9 @@ pub fn mark_text(glyph: char, instance: u8, count: u32) -> String {
 /// first to go when the line is short, so the FIRST instance is the one that
 /// leaves first. Reading `1 2 3` is the order a person counts in; the line
 /// keeps its one rule of which segment goes.
+///
+/// A MARK OF A SET IS NOT HERE: it is drawn inside its set's segment
+/// ([`sets`]), which the modeline places on a rung of its own.
 #[must_use]
 pub fn from_the_edge(drawn: &[Drawn]) -> Vec<&Drawn> {
     // A MARK, whichever of its instances: `brain:<module>/<name>` — the id
@@ -642,7 +645,7 @@ pub fn from_the_edge(drawn: &[Drawn]) -> Vec<&Drawn> {
         }
     };
     let first = |d: &Drawn| drawn.iter().position(|e| mark(e) == mark(d));
-    let mut order: Vec<&Drawn> = drawn.iter().collect();
+    let mut order: Vec<&Drawn> = drawn.iter().filter(|d| d.set == 0).collect();
     // STABLE, so marks of one place keep the order they were published in.
     order.sort_by_key(|d| (first(d), std::cmp::Reverse(d.instance)));
     order
@@ -680,6 +683,17 @@ pub struct Drawn {
     /// (`MarkId::also`): the hint says each after the mark's own, and the
     /// click opens where they all are.
     pub also: Vec<ronoctua_brain::module::Also>,
+    /// Which of its module's sets it stands in, from 1 (`MarkId::set`); `0`
+    /// for a mark that is a segment of its own. A mark of a set is drawn in
+    /// the set's segment — [`Drawn::id`] is the SET's, `brain:<module>/<n>`
+    /// — and found there by its cell ([`member_at`]).
+    pub set: u8,
+    /// Whether it leads its set: the first glyph, saying whose it is.
+    pub leads: bool,
+    /// What a click hands its command in place of its number
+    /// (`MarkId::key`): the module's word for the one thing it stands for.
+    /// Never interned: there are as many as there are agents.
+    pub key: Option<String>,
 }
 
 /// The marks one mind publishes, in the order the modules published them.
@@ -703,18 +717,29 @@ pub fn remember(drawn: &[Drawn]) {
 fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
     let mark = &posted.what;
     // `brain:<module>/<mark>`, and `brain:<module>/<mark>.<n>` for one of its
-    // instances — each its own segment, hint and click.
-    let id = interned(&format!(
-        "{MARK_PREFIX}{}/{}",
-        posted.module,
-        mark.id.local()
-    ))?;
+    // instances — each its own segment, hint and click. A MARK OF A SET is
+    // drawn in its set's segment, `brain:<module>/<n>`: a bare number, which
+    // no mark's name can be (a name starts with a letter), and nine of them
+    // at most per module, so the names kept stay bounded whatever the agents.
+    let id = interned(&if mark.id.set == 0 {
+        format!("{MARK_PREFIX}{}/{}", posted.module, mark.id.local())
+    } else {
+        format!("{MARK_PREFIX}{}/{}", posted.module, mark.id.set)
+    })?;
     // THE GLYPH IS A TOKEN, by the name the module declared — measured into
     // the brain's catalogue. One the catalogue does not know draws the brain's own
     // mark rather than nothing: a mark exists only when it says something, so
     // it must at least be seen.
     let glyph = glyph_of(&mark.id.glyph).unwrap_or(tokens::icon::BRAIN);
-    let text = mark_text(glyph, mark.id.instance, mark.count);
+    // A MARK OF A SET DRAWS NO DIGIT: its place in the set is where it
+    // stands, and nine glyphs each with a number would be a row of figures.
+    // A count it still draws — the hidden agents' `⋯ 3`.
+    let digit = if mark.id.set == 0 {
+        mark.id.instance
+    } else {
+        0
+    };
+    let text = mark_text(glyph, digit, mark.count);
     Some(Drawn {
         id,
         module: posted.module.clone(),
@@ -729,7 +754,176 @@ fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
         instance: mark.id.instance,
         label: mark.id.label.as_deref().map(ToOwned::to_owned),
         also: mark.id.also.clone(),
+        set: mark.id.set,
+        leads: mark.id.leads,
+        key: mark.id.key.as_deref().map(ToOwned::to_owned),
     })
+}
+
+/// One of a module's sets, as the modeline draws it: ONE segment, its
+/// members side by side on a ground of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkSet<'a> {
+    /// The segment's id, `brain:<module>/<set>` — every member's [`Drawn::id`].
+    pub id: &'static str,
+    /// Which set of its module, from 1.
+    pub set: u8,
+    /// Its marks in the order they are drawn: the lead, then the rest by
+    /// instance, then the ones with none (the count of what did not fit).
+    pub members: Vec<&'a Drawn>,
+}
+
+/// The sets among these marks, in the order their modules published them.
+#[must_use]
+pub fn sets(drawn: &[Drawn]) -> Vec<MarkSet<'_>> {
+    let mut out: Vec<MarkSet<'_>> = Vec::new();
+    for d in drawn.iter().filter(|d| d.set != 0) {
+        match out.iter_mut().find(|s| s.id == d.id) {
+            Some(set) => set.members.push(d),
+            None => out.push(MarkSet {
+                id: d.id,
+                set: d.set,
+                members: vec![d],
+            }),
+        }
+    }
+    for set in &mut out {
+        // STABLE: two of one instance — a mind written by hand — keep the
+        // order they came in.
+        set.members
+            .sort_by_key(|d| (!d.leads, d.instance == 0, d.instance));
+    }
+    out
+}
+
+/// The cells around a set's glyphs, on each side, inside its ground.
+const SET_PAD: u16 = tokens::space::MODELINE_SETPAD;
+
+/// The cell of air between two glyphs of a set — the player's pair's.
+const SET_BOND: u16 = tokens::space::MODELINE_BONDGAP;
+
+/// Where each member of a set is drawn, from the set's first cell: its first
+/// cell and its width — the layout [`set_text`] writes out, and the one the
+/// painter ([`set_runs`]) and the pointer ([`member_at`]) both read.
+#[must_use]
+pub fn member_cells(set: &MarkSet<'_>) -> Vec<(u16, u16)> {
+    let mut at = SET_PAD;
+    set.members
+        .iter()
+        .map(|d| {
+            let cells = (at, layout::width(&d.text));
+            at += cells.1 + SET_BOND;
+            cells
+        })
+        .collect()
+}
+
+/// What a set's segment says: the pad, its members' texts a bond apart, the
+/// pad — measured as it is drawn, so the layout gives it the cells its ground
+/// takes (`a-row-is-never-drawn-small`).
+#[must_use]
+pub fn set_text(set: &MarkSet<'_>) -> String {
+    let pad = " ".repeat(usize::from(SET_PAD));
+    let bond = " ".repeat(usize::from(SET_BOND));
+    let members: Vec<&str> = set.members.iter().map(|d| d.text.as_str()).collect();
+    format!("{pad}{}{pad}", members.join(&bond))
+}
+
+/// THE MEMBER OF A SET AT `cell` of its segment — the one answer the
+/// painter, the hint under the pointer and the click all read, so a glyph is
+/// taken where it is drawn (`player_mark::zone_at`'s rule). The pads and the
+/// air between glyphs are no member.
+#[must_use]
+pub fn member_at<'a>(set: &MarkSet<'a>, cell: u16) -> Option<&'a Drawn> {
+    member_index_at(set, cell).map(|i| set.members[i])
+}
+
+/// Which member of a set is at `cell` of its segment, by its index.
+fn member_index_at(set: &MarkSet<'_>, cell: u16) -> Option<usize> {
+    member_cells(set)
+        .iter()
+        .position(|(at, width)| cell >= *at && cell < at + width)
+}
+
+/// Whether a segment is one of the brain's sets — `brain:<module>/<n>`.
+#[must_use]
+pub fn is_set(id: &str) -> bool {
+    is_mark(id)
+        && id
+            .rsplit_once('/')
+            .is_some_and(|(_, set)| !set.is_empty() && set.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The mark last drawn at `cell` of the segment `id`: the member of a set
+/// there ([`member_at`]), or the mark that is the whole segment.
+#[must_use]
+pub fn drawn_at(id: &str, cell: u16) -> Option<Drawn> {
+    if !is_set(id) {
+        return drawn_mark(id);
+    }
+    let shown = SHOWN.lock().ok()?;
+    let all = sets(&shown);
+    let set = all.iter().find(|s| s.id == id)?;
+    member_at(set, cell).cloned()
+}
+
+/// The first cell of the member of a set at `cell` of its segment — what the
+/// pointer remembers, so it moves only from one glyph to another. `None` on
+/// the pads and the air.
+#[must_use]
+pub fn start_at(set: &MarkSet<'_>, cell: u16) -> Option<u16> {
+    let i = member_index_at(set, cell)?;
+    member_cells(set).get(i).map(|(at, _)| *at)
+}
+
+/// What the painter draws of a set: each member's text from its first cell
+/// in the segment, in its tone's colour — the runs [`member_at`] answers for.
+#[must_use]
+pub fn set_runs<'a>(set: &MarkSet<'a>) -> Vec<(u16, &'a str, tokens::Color)> {
+    set.members
+        .iter()
+        .zip(member_cells(set))
+        .map(|(d, (at, _))| (at, d.text.as_str(), tone_colour(d.tone)))
+        .collect()
+}
+
+/// The set last drawn under the segment `id`, as its runs ([`set_runs`]) —
+/// what the painter asks by the segment's id alone, as it asks a mark's
+/// colour ([`colour_of`]).
+#[must_use]
+pub fn painted_set(id: &str) -> Vec<(u16, String, tokens::Color)> {
+    let Ok(shown) = SHOWN.lock() else {
+        return Vec::new();
+    };
+    sets(&shown)
+        .iter()
+        .find(|s| s.id == id)
+        .map(|set| {
+            set_runs(set)
+                .into_iter()
+                .map(|(at, text, colour)| (at, text.to_owned(), colour))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The first cell of the member of a set at `cell` of the segment `id`, as
+/// last drawn ([`start_at`]). `None` off a set, and on its pads and air.
+#[must_use]
+pub fn member_start(id: &str, cell: u16) -> Option<u16> {
+    if !is_set(id) {
+        return None;
+    }
+    let shown = SHOWN.lock().ok()?;
+    let all = sets(&shown);
+    start_at(all.iter().find(|s| s.id == id)?, cell)
+}
+
+/// What the minibuffer says while the pointer rests on `cell` of a mark's
+/// segment: the hint of the member of a set there, or of the mark.
+#[must_use]
+pub fn hint_at(id: &str, cell: u16, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    hint_in(&drawn_at(id, cell)?, texts)
 }
 
 /// The marks last drawn — what [`colour_of`] and [`drawn_mark`] read.
@@ -772,7 +966,7 @@ pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
 #[must_use]
 pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
     (!d.hint.is_empty()).then(|| {
-        let number = d.instance.to_string();
+        let number = number_of(d).to_string();
         let own = texts.t_args(&d.hint, &hint_args(d, &number));
         // EVERY OTHER CASE, after the mark's own (owner, 2026-11-02): the
         // shield of two things that are off said one of them, and the other
@@ -794,15 +988,26 @@ pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
     })
 }
 
+/// The number that names a mark when the person gave it no word: its
+/// instance's, or — for a set's lead, which has none — its set's, the
+/// account's place in the list. A lead named by its instance would say
+/// "account “0”".
+#[must_use]
+pub const fn number_of(d: &Drawn) -> u8 {
+    if d.instance == 0 { d.set } else { d.instance }
+}
+
 /// The values a mark's hint is made with: `$count`; for one of its
 /// instances `$instance` — A NUMBER, so a selector can branch on it — and
-/// `$label`, the person's own word for it, or the instance's `number` when
-/// they gave none: a Fluent selector cannot ask whether a text is empty, so
+/// `$label`, the person's own word for it, or `number` when they gave none
+/// (the instance's, or a lead's set's — [`number_of`]): a Fluent selector
+/// cannot ask whether a text is empty, so
 /// a sentence that names the instance always has something to name it by.
 /// A BLANK word is none (`MarkId::numbered` drops one already; a mind written
-/// by hand may still carry it): "Seat  is taken" would be a hole.
+/// by hand may still carry it): "Seat  is taken" would be a hole. And
+/// `$set`, a number too, for a mark of a set.
 #[must_use]
-pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_i18n::Arg<'a>); 3] {
+pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_i18n::Arg<'a>); 4] {
     let label = d
         .label
         .as_deref()
@@ -815,15 +1020,16 @@ pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_
             ronoctua_i18n::Arg::Number(i64::from(d.instance)),
         ),
         ("label", ronoctua_i18n::Arg::Text(label)),
+        ("set", ronoctua_i18n::Arg::Number(i64::from(d.set))),
     ]
 }
 
 /// What a click on a mark runs, and with what: a command of the registry the
 /// mark's id names (`MarkId::opens` — the ONE way a mark opens an app of the
-/// shell), with the instance's number after it for one of a mark's
-/// instances and nothing otherwise; else the mark's own action through
-/// `brain-act`, or the module's page through `brain-open` — all reachable by
-/// name, and `brain-open` is `LEADER b`.
+/// shell), with the mark's key after it when it has one, else its instance's
+/// number, else its set's, and nothing for a mark that is one; else the
+/// mark's own action through `brain-act`, or the module's page through
+/// `brain-open` — all reachable by name, and `brain-open` is `LEADER b`.
 #[must_use]
 pub fn click_of(d: &Drawn) -> (&str, String) {
     // A MODULE WITH A CENTRE OF ITS OWN: the security centre's watch opens
@@ -835,13 +1041,15 @@ pub fn click_of(d: &Drawn) -> (&str, String) {
         return ("security-open", section.to_owned());
     }
     // AN APP OF THE SHELL, when the module's mark opens one: the command the
-    // module named — with the instance's number after it for one of its
-    // instances (the third account opens on the third), nothing otherwise.
+    // module named — with the key after it (an agent's session), or the
+    // instance's number, or the set's (the third account's lead opens on the
+    // third), nothing for a mark that is one.
     if let Some(command) = d.opens {
-        let argument = if d.instance > 0 {
-            d.instance.to_string()
-        } else {
-            String::new()
+        let argument = match (&d.key, d.instance, d.set) {
+            (Some(key), _, _) => key.clone(),
+            (None, n, _) if n > 0 => n.to_string(),
+            (None, _, n) if n > 0 => n.to_string(),
+            _ => String::new(),
         };
         return (command, argument);
     }
@@ -1790,6 +1998,189 @@ mod tests {
             .map(|n| column(&format!("brain:fixture/seat.{n}")))
             .collect();
         assert!(seats.windows(2).all(|w| w[0] < w[1]), "{seats:?}");
+    }
+
+    /// A set of a fictional module: its lead in set `set`, an agent at place
+    /// 3 with a key, one at place 5 without, and the count of four more.
+    fn a_set(set: u8) -> Vec<Posted<Mark>> {
+        static LEAD: MarkId = MarkId::declared_in_sets(
+            "desk",
+            "fixture-desk",
+            "fixture-mark-desk",
+            0,
+            true,
+            9,
+            true,
+        );
+        static BUSY: MarkId = MarkId::declared_in_sets(
+            "busy",
+            "fixture-busy",
+            "fixture-mark-busy",
+            9,
+            false,
+            9,
+            false,
+        );
+        static MORE: MarkId = MarkId::declared_in_sets(
+            "more",
+            "fixture-more",
+            "fixture-mark-more",
+            0,
+            true,
+            9,
+            false,
+        );
+        let posted = |id: MarkId, tone: Tone, count: u32| Posted {
+            module: "fixture".to_owned(),
+            what: Mark {
+                id: id.opening("fixture-open"),
+                tone,
+                count,
+                act: None,
+            },
+        };
+        vec![
+            posted(LEAD.in_set(set, Some("Work".to_owned())), Tone::Quiet, 0),
+            posted(
+                BUSY.in_set(set, Some("~/src".to_owned())).numbered(5, None),
+                Tone::Watching,
+                0,
+            ),
+            posted(
+                BUSY.in_set(set, Some("~/doc".to_owned()))
+                    .numbered(3, None)
+                    .keyed("abc-123".to_owned()),
+                Tone::Warning,
+                0,
+            ),
+            posted(MORE.in_set(set, None), Tone::Danger, 4),
+        ]
+    }
+
+    /// FAILS IF: a mark of a set draws its instance's digit — a set reads as
+    /// a row of figures — or is not drawn under its SET's segment, its lead
+    /// is not drawn first and the count last, the count loses its number, a
+    /// click hands its command anything but the mark's key, else its
+    /// instance, else its set, or an unnamed lead's hint names it by
+    /// anything but its set.
+    #[test]
+    fn a_set_member_draws_no_digit() {
+        let drawn = marks(Some(&Mind {
+            marks: a_set(2),
+            ..Mind::default()
+        }));
+        assert!(drawn.iter().all(|d| d.id == "brain:fixture/2"), "{drawn:?}");
+        assert!(is_set(drawn[0].id) && !is_set("brain:fixture/full"));
+        let glyph = tokens::icon::BRAIN;
+        for d in &drawn[..3] {
+            assert_eq!(d.text, glyph.to_string(), "{}", d.hint);
+        }
+        assert_eq!(
+            drawn[3].text,
+            format!("{glyph} 4"),
+            "the count lost its number"
+        );
+        // THE DRAWING ORDER: the lead, the places, the count.
+        let all = sets(&drawn);
+        assert_eq!(all.len(), 1);
+        let order: Vec<(bool, u8, u32)> = all[0]
+            .members
+            .iter()
+            .map(|d| (d.leads, d.instance, d.count))
+            .collect();
+        assert_eq!(
+            order,
+            [(true, 0, 0), (false, 3, 0), (false, 5, 0), (false, 0, 4)]
+        );
+        // NOT A SEGMENT OF ITS OWN: no member is pushed as a mark is.
+        assert!(from_the_edge(&drawn).is_empty());
+        // THE CLICK: the key, else the instance, else the set.
+        let by = |instance: u8, count: u32| {
+            drawn
+                .iter()
+                .find(|d| d.instance == instance && d.count == count)
+                .expect("a member")
+        };
+        assert_eq!(click_of(by(0, 0)), ("fixture-open", "2".to_owned()));
+        assert_eq!(click_of(by(3, 0)), ("fixture-open", "abc-123".to_owned()));
+        assert_eq!(click_of(by(5, 0)), ("fixture-open", "5".to_owned()));
+        assert_eq!(click_of(by(0, 4)), ("fixture-open", "2".to_owned()));
+        // AND THE HINT KNOWS ITS SET, as a number.
+        let number = by(3, 0).instance.to_string();
+        let args = hint_args(by(3, 0), &number);
+        let said = |name: &str| {
+            args.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| format!("{v:?}"))
+        };
+        assert_eq!(said("set").as_deref(), Some("Number(2)"));
+        assert_eq!(said("label").as_deref(), Some(r#"Text("~/doc")"#));
+        // A LEAD THE PERSON LEFT UNNAMED is named by its set — the account's
+        // place — and never by the instance it does not have.
+        let unnamed = Drawn {
+            label: None,
+            ..by(0, 0).clone()
+        };
+        let number = number_of(&unnamed).to_string();
+        let label = hint_args(&unnamed, &number)
+            .into_iter()
+            .find(|(n, _)| *n == "label")
+            .map(|(_, v)| format!("{v:?}"));
+        assert_eq!(label.as_deref(), Some(r#"Text("2")"#));
+        assert_eq!(number_of(by(5, 0)), 5);
+    }
+
+    /// FAILS IF: the glyph the painter draws at a cell of a set and the one
+    /// the pointer takes there are two answers — a hint or a click landing on
+    /// the neighbour — the pads or the air between glyphs answer at all, the
+    /// set's text is not as wide as what it draws, or a glyph is drawn in any
+    /// colour but its own tone's.
+    #[test]
+    fn member_at_is_the_painters_answer() {
+        let drawn = marks(Some(&Mind {
+            marks: a_set(1),
+            ..Mind::default()
+        }));
+        let all = sets(&drawn);
+        let set = &all[0];
+        let text = set_text(set);
+        let runs = set_runs(set);
+        assert_eq!(runs.len(), set.members.len());
+        let mut lit = 0;
+        for cell in 0..layout::width(&text) {
+            let run = runs
+                .iter()
+                .find(|(at, t, _)| cell >= *at && cell < at + layout::width(t));
+            let member = member_at(set, cell);
+            assert_eq!(
+                member.map(|d| (d.instance, d.count)),
+                run.map(|(at, _, _)| {
+                    let d = member_at(set, *at).expect("a run's first cell is its member's");
+                    (d.instance, d.count)
+                }),
+                "cell {cell}"
+            );
+            assert_eq!(
+                start_at(set, cell),
+                run.map(|(at, _, _)| *at),
+                "cell {cell}"
+            );
+            if let (Some(d), Some((_, _, colour))) = (member, run) {
+                assert_eq!(*colour, tone_colour(d.tone), "cell {cell}");
+                lit += 1;
+            }
+        }
+        // THE PADS AND THE AIR answer nothing, and what is lit is the glyphs.
+        assert!(member_at(set, 0).is_none(), "the pad answered");
+        assert!(member_at(set, layout::width(&text) - 1).is_none());
+        let glyphs: u16 = set.members.iter().map(|d| layout::width(&d.text)).sum();
+        assert_eq!(lit, glyphs);
+        assert_eq!(
+            layout::width(&text),
+            glyphs
+                + 2 * tokens::space::MODELINE_SETPAD
+                + tokens::space::MODELINE_BONDGAP * (u16::try_from(set.members.len()).unwrap() - 1)
+        );
     }
 
     /// FAILS IF: a notice appearing or going ON ITS OWN leaves the footer's

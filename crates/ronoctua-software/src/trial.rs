@@ -182,6 +182,11 @@ pub fn launch_argv(key: &str, attr: &str, command: &[String]) -> Vec<String> {
 }
 
 /// What the unit runs: `trial-exec`, directly or inside our terminal.
+///
+/// The terminal runs IN ITS WINDOW'S PROCESS (`--here`), inside the trial's
+/// unit: a trial ends when its unit stops, and a terminal held in a scope of
+/// its own would outlive the stop it was meant to end with. `--` keeps the
+/// program's words from being read as the terminal's.
 #[must_use]
 pub fn unit_command(software: &Path, record: &Path, terminal: Option<&Path>) -> Vec<String> {
     let exec = [
@@ -190,10 +195,15 @@ pub fn unit_command(software: &Path, record: &Path, terminal: Option<&Path>) -> 
         record.display().to_string(),
     ];
     match terminal {
-        Some(shell) => std::iter::once(shell.display().to_string())
-            .chain(std::iter::once("terminal".to_owned()))
-            .chain(exec)
-            .collect(),
+        Some(shell) => [
+            shell.display().to_string(),
+            "terminal".to_owned(),
+            "--here".to_owned(),
+            "--".to_owned(),
+        ]
+        .into_iter()
+        .chain(exec)
+        .collect(),
         None => exec.to_vec(),
     }
 }
@@ -1017,6 +1027,8 @@ mod tests {
             [
                 "/t/bin/ronoctua-shell",
                 "terminal",
+                "--here",
+                "--",
                 "/s/bin/ronoctua-software",
                 "trial-exec",
                 "/r/trial.json"
@@ -1484,8 +1496,9 @@ mod tests {
             .find(|l| l.starts_with("systemd-run"))
             .unwrap();
         assert!(
-            launch
-                .contains("-- /t/bin/ronoctua-shell terminal /s/bin/ronoctua-software trial-exec "),
+            launch.contains(
+                "-- /t/bin/ronoctua-shell terminal --here -- /s/bin/ronoctua-software trial-exec "
+            ),
             "{launch}"
         );
         let record = read_record(&trials_dir(&c.roots).unwrap().join("gimp").join(RECORD)).unwrap();

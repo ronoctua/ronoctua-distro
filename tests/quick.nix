@@ -27,6 +27,9 @@
   "rust-tests"
   # The tables the compiler does not check: keys and texts.
   "keymap-no-collision"
+  # The shells' prompt marks, run on a pty in a second (the distro's
+  # terminal reads them; nothing else may see them).
+  "shell-rc-marks-the-prompt"
   "i18n-complete"
   "buffer-commands-have-labels"
   "buffer-keys-have-text"

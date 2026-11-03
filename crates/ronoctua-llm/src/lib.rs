@@ -5,11 +5,14 @@
 //!
 //! - `llm-accounts.json` ([`Accounts`], through the person's store): which
 //!   accounts, of which kind, in which folder, which is the default of its
-//!   kind. Every edit is applied to what the file says NOW, so two doors
+//!   program. Every edit is applied to what the file says NOW, so two doors
 //!   editing two accounts keep both.
 //! - [`credentials::facts`]: only the subscription, the tier and when the
 //!   token expires — read into memory that is wiped, the token itself never
-//!   deserialized.
+//!   deserialized; and for an API key's account only WHETHER a key is
+//!   there ([`credentials::facts_of`]).
+//! - [`credits`]: an API key's account's one word on its balance — that
+//!   Claude Code said the credits ran out, and since when.
 //! - [`statusline`]: the official status line's `rate_limits`, written by
 //!   `ronoctua-llm statusline` (which CHAINS the status line the person
 //!   already had); Codex's, out of its own logs.
@@ -18,6 +21,10 @@
 //!   says it is unofficial.
 //! - [`tokens::by_day_and_model`]: the local transcripts, counted once each,
 //!   incrementally, inside a bounded window.
+//! - [`sessions`]: the Claude Code sessions the machine runs, as the managed
+//!   hook ([`hook`], `ronoctua-llm hook`) keeps them — and [`agents::merged`],
+//!   the one reader that puts them in their accounts, with what Claude Code
+//!   told our terminals (OSC 7501).
 //!
 //! # And what it writes
 //!
@@ -25,10 +32,11 @@
 //! the shell sources so `claude` and `codex` typed in a terminal use them);
 //! one field of a Claude account's `settings.json`, with the person's value
 //! kept beside it (given back when the account is removed); and its own
-//! state: `$XDG_STATE_HOME/ronoctua/llm/<id>/` (`limits.json`, `usage.json`)
-//! and `$XDG_CACHE_HOME/ronoctua/llm/<id>/` (the token count), written by
-//! [`refresh::run`] — and watched through [`watched`], so nobody else learns
-//! those paths.
+//! state: `$XDG_STATE_HOME/ronoctua/llm/<id>/` (`limits.json`, `usage.json`,
+//! an API key's `credits.json`) and `$XDG_CACHE_HOME/ronoctua/llm/<id>/` (the
+//! token count), written by [`refresh::run`] and [`credits`]; and the hook's
+//! records of the sessions, `$XDG_RUNTIME_DIR/ronoctua-agents/` — all watched
+//! through [`watched`], so nobody else learns those paths.
 
 #![forbid(unsafe_code)]
 
@@ -37,12 +45,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 // THE HALF THAT READS A LOGIN AND ASKS THE NETWORK, behind `fetch`.
+pub mod agents;
 #[cfg(feature = "fetch")]
 pub mod credentials;
+pub mod credits;
 mod files;
+pub mod hook;
 mod jsontext;
 #[cfg(feature = "fetch")]
 pub mod refresh;
+pub mod sessions;
 pub mod statusline;
 mod time;
 pub mod tokens;
@@ -66,8 +78,9 @@ pub enum Why {
     /// No such account.
     Unknown,
     /// What was given is not an account: an id, a name or a folder that does
-    /// not fit, one already taken — or a Codex account asked for a status
-    /// line, which only Claude Code has.
+    /// not fit, one already taken — or an account asked for what its kind
+    /// has not: a status line (only a Claude Code subscription's tells
+    /// windows), or credits (only an API key's run out).
     Invalid,
     /// The agent is not installed on this machine.
     NotInstalled,
@@ -140,60 +153,133 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Which agent an account is for.
+/// Which agent an account is for — and, for Claude Code, how it is paid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
-    /// Claude Code (`CLAUDE_CONFIG_DIR`).
+    /// Claude Code on a subscription (`CLAUDE_CONFIG_DIR`): its plan's
+    /// windows, told by its status line and Anthropic's usage endpoint.
     Claude,
+    /// Claude Code on an API key from Anthropic's Console: the same program,
+    /// variable, launch and login as [`Kind::Claude`], paid by the token. So
+    /// no plan windows (its status line sends `rate_limits` null), no usage
+    /// endpoint (a subscription's) and no balance anybody can read — only
+    /// Claude Code's own word that the credits ran out ([`credits`]).
+    ClaudeApi,
     /// Codex (`CODEX_HOME`).
     Codex,
 }
 
-impl Kind {
+/// The program an account's sessions run. Two kinds run one — Claude Code
+/// on a subscription and on an API key — and they share what is the
+/// program's: the folder variable, the store path, and ONE default, since
+/// `claude` typed in a terminal opens one folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Agent {
+    ClaudeCode,
+    Codex,
+}
+
+impl Agent {
     /// Both.
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+    const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+
+    /// The variable that points it at an account's folder.
+    const fn dir_variable(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "CLAUDE_CONFIG_DIR",
+            Self::Codex => "CODEX_HOME",
+        }
+    }
+
+    /// The folder it uses when no variable says otherwise, under the home.
+    const fn native_folder(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => ".claude",
+            Self::Codex => ".codex",
+        }
+    }
+
+    /// The variable the session hands its store path in (set where the
+    /// agents are installed, `nix/modules/dev.nix`).
+    const fn program_variable(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "RONOCTUA_CLAUDE",
+            Self::Codex => "RONOCTUA_CODEX",
+        }
+    }
+}
+
+impl Kind {
+    /// Every one.
+    pub const ALL: [Self; 3] = [Self::Claude, Self::ClaudeApi, Self::Codex];
 
     /// Its kebab-case name — also the stem of its accounts' ids.
     #[must_use]
     pub const fn id(self) -> &'static str {
         match self {
             Self::Claude => "claude",
+            Self::ClaudeApi => "claude-api",
             Self::Codex => "codex",
+        }
+    }
+
+    /// The program its sessions run.
+    const fn agent(self) -> Agent {
+        match self {
+            Self::Claude | Self::ClaudeApi => Agent::ClaudeCode,
+            Self::Codex => Agent::Codex,
+        }
+    }
+
+    /// Whether its plan has rate-limit WINDOWS — five hours, a week — that
+    /// fill and start over. An API key has none: it pays by the token, and
+    /// its status line sends `rate_limits` null.
+    #[must_use]
+    pub const fn has_windows(self) -> bool {
+        match self {
+            Self::Claude | Self::Codex => true,
+            Self::ClaudeApi => false,
+        }
+    }
+
+    /// The first format of `llm-accounts.json` that may name it: an older
+    /// reader does not know the API kind, and refuses the file by its
+    /// format rather than misreading it ([`Accounts::format`]).
+    const fn format(self) -> u32 {
+        match self {
+            Self::Claude | Self::Codex => 1,
+            Self::ClaudeApi => 2,
         }
     }
 
     /// The variable that points the agent at an account's folder.
     const fn dir_variable(self) -> &'static str {
-        match self {
-            Self::Claude => "CLAUDE_CONFIG_DIR",
-            Self::Codex => "CODEX_HOME",
-        }
+        self.agent().dir_variable()
     }
 
-    /// The folder the agent uses when no variable says otherwise, under the
-    /// home.
-    const fn native_folder(self) -> &'static str {
-        match self {
-            Self::Claude => ".claude",
-            Self::Codex => ".codex",
-        }
-    }
-
-    /// The variable the session hands the agent's store path in (set where
-    /// the agents are installed, `nix/modules/dev.nix`).
+    /// The variable the session hands the agent's store path in.
     const fn program_variable(self) -> &'static str {
+        self.agent().program_variable()
+    }
+
+    /// The name a NEW account's folder starts from, under the home: the
+    /// agent's own folder, then `<it>-2`, `<it>-3`… An API key's never starts
+    /// in Claude Code's own `~/.claude`: a subscription's login may already
+    /// be there, and Claude Code would run on it instead of the key — so it
+    /// starts at a folder of its own, `~/.claude-api`.
+    const fn fresh_folder(self) -> &'static str {
         match self {
-            Self::Claude => "RONOCTUA_CLAUDE",
-            Self::Codex => "RONOCTUA_CODEX",
+            Self::Claude | Self::Codex => self.agent().native_folder(),
+            Self::ClaudeApi => ".claude-api",
         }
     }
 
     /// The folder the agent uses with no variable set: `~/.claude`,
-    /// `~/.codex`.
+    /// `~/.codex` — Claude Code's for both its kinds.
     #[must_use]
     pub fn native_dir(self, home: &Path) -> PathBuf {
-        home.join(self.native_folder())
+        home.join(self.agent().native_folder())
     }
 }
 
@@ -209,7 +295,7 @@ pub struct Account {
     pub name: String,
     /// Its configuration folder.
     pub dir: PathBuf,
-    /// Whether it is the default of its kind.
+    /// Whether it is the default of its program ([`Accounts::default_of`]).
     pub default: bool,
 }
 
@@ -217,7 +303,11 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Accounts {
-    /// Always 1.
+    /// 1, or 2 when an account is an API key's ([`Kind::ClaudeApi`]): a
+    /// reader from before does not know that kind, and refuses the file by
+    /// this number, which is honest; this one reads both. Written as the
+    /// lowest that names every kind in the list ([`Accounts::keep`]), so a
+    /// list without an API key stays readable by an older reader.
     pub format: u32,
     /// The accounts, in the person's order.
     pub accounts: Vec<Account>,
@@ -296,20 +386,39 @@ impl Accounts {
         self.accounts.iter().find(|a| a.id == id)
     }
 
-    /// The default of a kind.
+    /// The default of a kind's PROGRAM: Claude Code on a subscription and
+    /// on an API key share one — `claude` typed in a terminal opens one
+    /// folder, and `llm-default.env` can point it at one.
     #[must_use]
     pub fn default_of(&self, kind: Kind) -> Option<&Account> {
-        self.accounts.iter().find(|a| a.kind == kind && a.default)
+        self.accounts
+            .iter()
+            .find(|a| a.kind.agent() == kind.agent() && a.default)
     }
 
-    /// Whether the list is one: format 1, every account fine, ids and
-    /// folders distinct, at most one default of each kind.
+    /// The newest format this reader reads.
+    const FORMAT: u32 = 2;
+
+    /// The format a list of these accounts is written in: the lowest that
+    /// names every kind in it.
+    fn format_for(accounts: &[Account]) -> u32 {
+        accounts.iter().map(|a| a.kind.format()).fold(1, u32::max)
+    }
+
+    /// Whether the format the file says is one this reader reads, and one
+    /// that may name every kind in it.
+    fn reads_format(&self) -> bool {
+        (1..=Self::FORMAT).contains(&self.format) && self.format >= Self::format_for(&self.accounts)
+    }
+
+    /// Whether the list is one: a format this reader reads, every account
+    /// fine, ids and folders distinct, at most one default of each program.
     ///
     /// # Errors
     ///
     /// [`Why::Unreadable`] for another format; [`Why::Invalid`] otherwise.
     pub fn check(&self) -> Result<(), Refusal> {
-        if self.format != 1 {
+        if !self.reads_format() {
             return Err(Refusal::of(Why::Unreadable));
         }
         for (n, a) in self.accounts.iter().enumerate() {
@@ -319,11 +428,11 @@ impl Accounts {
                 return Err(Refusal::of(Why::Invalid));
             }
         }
-        for kind in Kind::ALL {
+        for agent in Agent::ALL {
             let defaults = self
                 .accounts
                 .iter()
-                .filter(|a| a.kind == kind && a.default)
+                .filter(|a| a.kind.agent() == agent && a.default)
                 .count();
             if defaults > 1 {
                 return Err(Refusal::of(Why::Invalid));
@@ -332,8 +441,9 @@ impl Accounts {
         Ok(())
     }
 
-    /// Adds an account. The first of its kind, or one added as the default,
-    /// becomes the default of its kind.
+    /// Adds an account. The first of its program, or one added as the
+    /// default, becomes the default of its program; the format becomes one
+    /// that names its kind.
     ///
     /// # Errors
     ///
@@ -349,6 +459,7 @@ impl Accounts {
             return Err(Refusal::of(Why::Invalid));
         }
         let (id, kind, default) = (account.id.clone(), account.kind, account.default);
+        self.format = self.format.max(kind.format());
         self.accounts.push(Account {
             default: false,
             ..account
@@ -379,7 +490,7 @@ impl Accounts {
     }
 
     /// Removes one (its folder stays: it holds the person's sessions and
-    /// login). When it was the default, the next of its kind becomes it.
+    /// login). When it was the default, the next of its program becomes it.
     ///
     /// Through [`Accounts::keep`], a removed Claude Code account gets its own
     /// status line back first ([`statusline::unwrap`]): ours would otherwise
@@ -396,14 +507,17 @@ impl Accounts {
             .ok_or(Refusal::of(Why::Unknown))?;
         let gone = self.accounts.remove(at);
         if gone.default
-            && let Some(next) = self.accounts.iter_mut().find(|a| a.kind == gone.kind)
+            && let Some(next) = self
+                .accounts
+                .iter_mut()
+                .find(|a| a.kind.agent() == gone.kind.agent())
         {
             next.default = true;
         }
         Ok(())
     }
 
-    /// Makes one the default of its kind.
+    /// Makes one the default of its program.
     ///
     /// # Errors
     ///
@@ -416,20 +530,21 @@ impl Accounts {
         Ok(())
     }
 
-    /// `id` the default of its kind, and no other of that kind.
+    /// `id` the default of its program, and no other of that program.
     fn make_default(&mut self, id: &str) {
-        let Some(kind) = self.find(id).map(|a| a.kind) else {
+        let Some(agent) = self.find(id).map(|a| a.kind.agent()) else {
             return;
         };
-        for a in self.accounts.iter_mut().filter(|a| a.kind == kind) {
+        for a in self.accounts.iter_mut().filter(|a| a.kind.agent() == agent) {
             a.default = a.id == id;
         }
     }
 
     /// A new account of `kind` named `name`, not yet added: the next free
     /// id (`claude-2`), the agent's own folder when no account has it yet
-    /// and `~/.claude-2` otherwise (never one that exists), the default when
-    /// its kind has none.
+    /// and `~/.claude-2` otherwise (never one that exists) — an API key's
+    /// from `~/.claude-api` (`Kind::fresh_folder`) — the default when its
+    /// program has none.
     ///
     /// # Errors
     ///
@@ -440,15 +555,16 @@ impl Accounts {
             .find(|n| !taken(&format!("{}-{n}", kind.id())))
             .unwrap_or(1);
         let native = kind.native_dir(home);
-        let used = |dir: &Path| self.accounts.iter().any(|a| a.dir == dir);
-        let dir = if used(&native) {
-            (2..)
-                .map(|m| home.join(format!("{}-{m}", kind.native_folder())))
-                .find(|d| !used(d) && !d.exists())
-                .unwrap_or(native)
-        } else {
-            native
+        let stem = kind.fresh_folder();
+        // THE AGENT'S OWN FOLDER is taken as it is — the login in it is the
+        // person's own; any other only while nothing is there yet.
+        let free = |dir: &Path| {
+            !self.accounts.iter().any(|a| a.dir == dir) && (dir == native || !dir.exists())
         };
+        let dir = std::iter::once(home.join(stem))
+            .chain((2..).map(|m| home.join(format!("{stem}-{m}"))))
+            .find(|d| free(d))
+            .unwrap_or(native);
         let account = Account {
             id: format!("{}-{n}", kind.id()),
             kind,
@@ -509,14 +625,18 @@ impl Accounts {
         }
         // `parsed` and never `read`: this writes the whole list back.
         let mut now = store.parsed().ok_or(Refusal::of(Why::Unreadable))?;
-        if now.format != 1 {
+        if !now.reads_format() {
             return Err(Refusal::of(Why::Unreadable));
         }
         let before = now.accounts.clone();
         edit(&mut now)?;
+        // THE LOWEST FORMAT that names what is left: a list whose API key
+        // went is readable by an older reader again.
+        now.format = Self::format_for(&now.accounts);
         now.check()?;
         // The removed ones give their status line back before the list
         // forgets where their folder is.
+        // (An API key's account has no status line of ours to give back.)
         for gone in before
             .iter()
             .filter(|a| a.kind == Kind::Claude && now.find(&a.id).is_none())
@@ -539,7 +659,9 @@ impl Accounts {
     /// use the default accounts: an `export` for a default that is not the
     /// agent's own folder, and an `unset` otherwise — for the agent's own
     /// folder (setting the variable to it would move Claude Code's
-    /// `~/.claude.json` into the folder) and for a kind with no default.
+    /// `~/.claude.json` into the folder) and for a program with no default.
+    /// ONE line per program, never per kind: the two kinds of Claude Code
+    /// share the variable, and a second line would undo the first.
     ///
     /// The `unset` is what makes a CHANGE of default reach a shell that
     /// inherited the old one: a terminal multiplexer started while another
@@ -550,18 +672,20 @@ impl Accounts {
         let mut text = String::from(
             "# Written by ronoctua-llm from llm-accounts.json; the shell sources it.\n",
         );
-        for kind in Kind::ALL {
+        for agent in Agent::ALL {
             let elsewhere = self
-                .default_of(kind)
-                .filter(|a| a.dir != kind.native_dir(home) && fine_dir(&a.dir))
+                .accounts
+                .iter()
+                .find(|a| a.kind.agent() == agent && a.default)
+                .filter(|a| a.dir != home.join(agent.native_folder()) && fine_dir(&a.dir))
                 .and_then(|a| a.dir.to_str());
             match elsewhere {
                 Some(dir) => text.push_str(&format!(
                     "export {}='{}'\n",
-                    kind.dir_variable(),
+                    agent.dir_variable(),
                     dir.replace('\'', r"'\''")
                 )),
-                None => text.push_str(&format!("unset {}\n", kind.dir_variable())),
+                None => text.push_str(&format!("unset {}\n", agent.dir_variable())),
             }
         }
         text
@@ -576,6 +700,41 @@ pub struct Window {
     pub used_percent: f32,
     /// When it resets, in seconds since the epoch.
     pub resets_at_s: i64,
+}
+
+impl Window {
+    /// One window of an agent's answer, read ALONE: `percent` names the
+    /// field that says how much is used (`used_percentage` in the status
+    /// line, `utilization` at the endpoint), and `resets_at` may be seconds
+    /// since the epoch or an RFC 3339 text — the two places already disagree
+    /// on that, and a shape that changes in one window must not take the
+    /// others down with it. `None` when it does not say both how much and
+    /// when: a missing percentage read as 0 % would keep the mark calm while
+    /// the person is at the edge.
+    pub(crate) fn read(value: &serde_json::Value, percent: &str) -> Option<Self> {
+        let used = value
+            .get(percent)?
+            .as_f64()
+            .filter(|p| p.is_finite() && *p >= 0.0)?;
+        let at = match value.get("resets_at")? {
+            serde_json::Value::Number(n) => n
+                .as_f64()
+                .filter(|at| at.is_finite() && *at > 0.0)
+                .map(|at| at as i64)?,
+            serde_json::Value::String(text) => crate::time::parse_rfc3339(text)?,
+            _ => return None,
+        };
+        Some(Self {
+            used_percent: used as f32,
+            resets_at_s: at,
+        })
+    }
+}
+
+/// Serde's question for a flag written only when it is set.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) const fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 /// Where this crate keeps and finds things; `None` keeps nothing.
@@ -615,32 +774,47 @@ impl Roots {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Watched {
     /// The files of ours its numbers are kept in: the limits the status line
-    /// wrote and the usage endpoint's last answer (a Claude Code account's),
-    /// and the token count. Each is REPLACED by a rename, and may not exist
-    /// yet: a watcher watches its folder.
+    /// wrote and the usage endpoint's last answer (a Claude Code
+    /// subscription's), the word on its credits (an API key's), and the
+    /// token count. Each is REPLACED by a rename, and may not exist yet: a
+    /// watcher watches its folder.
     pub files: Vec<PathBuf>,
     /// The agent's log trees — Claude Code's transcripts, Codex's session
     /// logs (which carry its limits too) — whose files grow while it works.
     /// Folders appear under them as it does, at most [`tokens::DEPTH`] deep;
     /// a tree may not exist yet either.
     pub trees: Vec<PathBuf>,
+    /// For a Claude Code account, the folder the managed hook keeps the
+    /// machine's sessions in ([`sessions::folder`]) — one for every account,
+    /// its records replaced by renames, come and gone with the sessions. A
+    /// watcher makes it with [`sessions::make_folder`] (it is private,
+    /// `0700`), never as it makes the folders of [`Watched::files`].
+    pub sessions: Option<PathBuf>,
 }
 
 /// What to watch for `account`, under the machine's roots.
 #[must_use]
 pub fn watched(account: &Account) -> Watched {
-    watched_in(&Roots::of_env(), account)
+    watched_in(&Roots::of_env(), sessions::folder().as_deref(), account)
 }
 
-/// [`watched`], under given roots: the very paths the crate writes and
-/// reads, from the functions that write and read them.
-pub(crate) fn watched_in(roots: &Roots, account: &Account) -> Watched {
+/// [`watched`], under given roots and sessions' folder: the very paths the
+/// crate writes and reads, from the functions that write and read them.
+pub(crate) fn watched_in(
+    roots: &Roots,
+    sessions_folder: Option<&Path>,
+    account: &Account,
+) -> Watched {
     let mut files = Vec::new();
-    if account.kind == Kind::Claude
-        && let Some(state) = &roots.state
-    {
-        files.extend(statusline::limits_path(state, &account.id));
-        files.extend(usage::kept_path(state, account));
+    if let Some(state) = &roots.state {
+        match account.kind {
+            Kind::Claude => {
+                files.extend(statusline::limits_path(state, &account.id));
+                files.extend(usage::kept_path(state, account));
+            }
+            Kind::ClaudeApi => files.extend(credits::kept_path(state, account)),
+            Kind::Codex => {}
+        }
     }
     if let Some(cache) = &roots.cache {
         files.extend(tokens::kept_path(cache, account));
@@ -648,6 +822,10 @@ pub(crate) fn watched_in(roots: &Roots, account: &Account) -> Watched {
     Watched {
         files,
         trees: tokens::trees_of(&account.dir, account.kind),
+        sessions: match account.kind {
+            Kind::Claude | Kind::ClaudeApi => sessions_folder.map(Path::to_path_buf),
+            Kind::Codex => None,
+        },
     }
 }
 
@@ -681,7 +859,8 @@ fn agent_program(kind: Kind, var: Lookup<'_>) -> Result<String, Refusal> {
 /// The program and environment that open a session of `account` (`env
 /// CLAUDE_CONFIG_DIR=…` or `CODEX_HOME=…`, then the agent's store path; the
 /// agent's own folder is opened with the variable UNSET, so a value
-/// inherited from elsewhere does not move it).
+/// inherited from elsewhere does not move it). An API key's account opens
+/// exactly as a subscription's: the key is in its folder.
 ///
 /// # Errors
 ///
@@ -711,7 +890,8 @@ fn launch_from(
 }
 
 /// The arguments that log `account` in: Codex's `login`; Claude Code asks
-/// for a login itself when it starts in a folder that has none.
+/// for a login itself when it starts in a folder that has none — and offers
+/// the Console's there, which is how an API key's account gets its key.
 ///
 /// # Errors
 ///
@@ -786,6 +966,13 @@ mod tests {
             serde_json::from_str::<Accounts>(r#"{"format":1,"accounts":[],"extra":1}"#).is_err(),
             "an unknown field is refused"
         );
+        // EVERY KIND crosses by the name its accounts' ids are made of.
+        for kind in Kind::ALL {
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.id())
+            );
+        }
         for why in Why::ALL {
             assert_eq!(Why::of_id(why.id()), Some(why));
             assert_eq!(
@@ -1124,7 +1311,7 @@ mod tests {
         tokens::keep_in(cache, &codex, &tokens::Cache::default()).unwrap();
         // A log in every tree watched is a log counted.
         for account in [&claude, &codex] {
-            let watched = watched_in(&roots, account);
+            let watched = watched_in(&roots, None, account);
             for tree in &watched.trees {
                 let day = tree.join("2026").join("10").join("05");
                 std::fs::create_dir_all(&day).unwrap();
@@ -1141,12 +1328,163 @@ mod tests {
             tokens::count(&account.dir, account.kind, &mut counted, 1_759_665_600).unwrap();
             assert_eq!(counted.offsets.len(), watched.trees.len(), "{account:?}");
         }
-        let watched = watched_in(&roots, &claude);
+        let sessions = dir.join("runtime").join("ronoctua-agents");
+        let watched = watched_in(&roots, Some(&sessions), &claude);
         assert_eq!(watched.files.len(), 3);
         assert!(watched.files[0].ends_with("llm/claude-1/limits.json"));
         assert!(watched.files[1].exists(), "usage.json is where it is kept");
         assert!(watched.files[2].exists(), "tokens.json is where it is kept");
-        assert_eq!(watched_in(&roots, &codex).files.len(), 1);
+        // THE SESSIONS' FOLDER is a Claude Code account's, every one's.
+        assert_eq!(watched.sessions.as_deref(), Some(sessions.as_path()));
+        let codex_watched = watched_in(&roots, Some(&sessions), &codex);
+        assert_eq!(codex_watched.files.len(), 1);
+        assert_eq!(codex_watched.sessions, None, "Codex has no hook of ours");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an API key's account does not cross `llm-accounts.json`
+    /// and back; a list carrying one is written in a format an older reader
+    /// would read (it cannot know the kind, and must refuse honestly); a
+    /// list without one is not written in the old format still; an old file
+    /// stops reading; or a file whose format cannot name what it carries is
+    /// read, or written over.
+    #[test]
+    fn an_api_key_crosses_in_a_format_of_its_own_and_an_old_file_still_reads() {
+        let dir = scratch("format");
+        let roots = roots(&dir);
+        let file = dir.join("config").join(Accounts::FILE);
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        // A FILE AS THE READER BEFORE WROTE IT.
+        std::fs::write(
+            &file,
+            r#"{"format":1,"accounts":[{"id":"claude-1","kind":"claude","name":"Work","dir":"/home/p/.claude","default":true}]}"#,
+        )
+        .unwrap();
+        let old = Accounts::store_in(roots.config.clone()).parsed().unwrap();
+        assert_eq!(old.check(), Ok(()));
+        Accounts::keep_in(&roots, |list| list.rename("claude-1", "Office")).unwrap();
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("\"format\": 1")
+        );
+
+        let api = Account {
+            id: "claude-api-1".to_owned(),
+            kind: Kind::ClaudeApi,
+            name: "Console".to_owned(),
+            dir: "/home/p/.claude-api".into(),
+            default: false,
+        };
+        let with = Accounts::keep_in(&roots, |list| list.add(api.clone())).unwrap();
+        assert_eq!(with.format, 2);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("\"format\": 2") && text.contains("\"kind\": \"claude-api\""),
+            "{text}"
+        );
+        let back: Accounts = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, with);
+        assert_eq!(back.find("claude-api-1"), Some(&api));
+
+        // A FORMAT THAT CANNOT NAME THE KIND, or one from after this reader.
+        let before = std::fs::read(&file).unwrap();
+        for wrong in [1, 3] {
+            let forged = Accounts {
+                format: wrong,
+                ..back.clone()
+            };
+            assert_eq!(forged.check().unwrap_err().why, Why::Unreadable, "{wrong}");
+            std::fs::write(&file, serde_json::to_vec(&forged).unwrap()).unwrap();
+            assert_eq!(
+                Accounts::keep_in(&roots, |list| list.rename("claude-1", "X"))
+                    .unwrap_err()
+                    .why,
+                Why::Unreadable
+            );
+            assert_eq!(
+                std::fs::read(&file).unwrap(),
+                serde_json::to_vec(&forged).unwrap(),
+                "never written over"
+            );
+        }
+        std::fs::write(&file, &before).unwrap();
+
+        // THE KEY GONE, the list is readable by the reader before again.
+        let without = Accounts::keep_in(&roots, |list| list.remove("claude-api-1")).unwrap();
+        assert_eq!(without.format, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: Claude Code on a subscription and on an API key keep a
+    /// default EACH — `claude` typed in a terminal opens one folder, and
+    /// `llm-default.env` would export the variable and then unset it — a
+    /// new API key's account is offered Claude Code's own folder (where a
+    /// subscription's login may be), or it opens, or is watched, as
+    /// anything but a Claude Code folder with its credits beside it.
+    #[test]
+    fn an_api_key_shares_claude_codes_one_default_and_a_folder_of_its_own() {
+        let dir = scratch("api");
+        let roots = roots(&dir);
+        let home = dir.join("home");
+        let first = Accounts::default()
+            .fresh(Kind::ClaudeApi, "Console", &home)
+            .unwrap();
+        assert_eq!(
+            (first.id.as_str(), first.dir.clone(), first.default),
+            ("claude-api-1", home.join(".claude-api"), true),
+            "never ~/.claude, even with nobody in it"
+        );
+        let mut list = Accounts::default();
+        list.add(list.fresh(Kind::Claude, "Work", &home).unwrap())
+            .unwrap();
+        let api = list.fresh(Kind::ClaudeApi, "Console", &home).unwrap();
+        assert!(!api.default, "Claude Code has its default already");
+        list.add(api.clone()).unwrap();
+        assert_eq!(list.default_of(Kind::ClaudeApi).unwrap().id, "claude-1");
+        assert_eq!(list.default_of(Kind::Claude).unwrap().id, "claude-1");
+
+        list.set_default("claude-api-1").unwrap();
+        assert!(!list.find("claude-1").unwrap().default);
+        assert_eq!(list.check(), Ok(()));
+        let env = list.default_env(&home);
+        assert_eq!(env.matches("CLAUDE_CONFIG_DIR").count(), 1, "{env}");
+        assert!(env.contains(&format!(
+            "export CLAUDE_CONFIG_DIR='{}'\n",
+            home.join(".claude-api").display()
+        )));
+        let mut twice = list.clone();
+        for a in &mut twice.accounts {
+            a.default = true;
+        }
+        assert_eq!(twice.check().unwrap_err().why, Why::Invalid);
+
+        list.remove("claude-api-1").unwrap();
+        assert!(list.find("claude-1").unwrap().default, "handed back");
+
+        // OPENED as Claude Code is, from the program the session hands it.
+        let claude = dir.join("claude");
+        std::fs::write(&claude, b"#!/bin/sh\n").unwrap();
+        let path = claude.to_str().unwrap().to_owned();
+        let given = |name: &str| (name == "RONOCTUA_CLAUDE").then(|| path.clone().into());
+        assert_eq!(
+            launch_from(&api, &given, Some("/e"), Some(&home)).unwrap(),
+            [
+                "/e".to_owned(),
+                format!("CLAUDE_CONFIG_DIR={}", api.dir.display()),
+                path.clone()
+            ]
+        );
+        // WATCHED: its credits and its count, and the transcripts.
+        let watched = watched_in(&roots, Some(Path::new("/run/user/1/ronoctua-agents")), &api);
+        assert_eq!(watched.files.len(), 2, "{watched:?}");
+        assert!(
+            watched.sessions.is_some(),
+            "an API key's sessions are Claude Code's"
+        );
+        assert!(watched.files[0].ends_with("llm/claude-api-1/credits.json"));
+        assert!(watched.files[1].ends_with("llm/claude-api-1/tokens.json"));
+        assert_eq!(watched.trees, [api.dir.join("projects")]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -6156,7 +6156,7 @@ mod tests {
             deeds,
             [
                 Deed::Invoke("reply".into()),
-                Deed::Command("bluetooth-open".into()),
+                Deed::Command("bluetooth-open".into(), None),
                 Deed::CopyPath("/home/a/shots/one shot.png".into()),
                 Deed::CopyImage(file),
                 Deed::Run(
@@ -6181,7 +6181,7 @@ mod tests {
             kept,
             [
                 Deed::Invoke("reply".into()),
-                Deed::Command("bluetooth-open".into())
+                Deed::Command("bluetooth-open".into(), None)
             ]
         );
     }
@@ -6196,7 +6196,7 @@ mod tests {
         );
         let copied = crate::clipboard_copy::COPIED.with(|c| c.borrow().clone());
         assert_eq!(copied, [(None, b"/tmp/a b".to_vec())]);
-        assert_eq!(copy_it(&Deed::Command("x".into())), None);
+        assert_eq!(copy_it(&Deed::Command("x".into(), None)), None);
     }
 
     /// THE WINDOW'S ORDER NAMES THE RECORD WHOLE and reads back as it was

@@ -1,9 +1,11 @@
 //! `ronoctua-llm refresh` — what the usage unit runs.
 //!
 //! For every account (or one): its transcripts counted from where the last
-//! count stopped, the count kept; and for a Claude Code account, the usage
-//! endpoint asked when the person let its host, the answer — or why there is
-//! none — kept beside the last numbers it gave ([`usage::keep`]).
+//! count stopped, the count kept; and for a Claude Code subscription's
+//! account, the usage endpoint asked when the person let its host, the answer
+//! — or why there is none — kept beside the last numbers it gave
+//! ([`usage::keep`]). An API key's is counted and never asked: the endpoint
+//! is a subscription's, and says nothing of a key.
 //!
 //! It asks nothing of anybody. The pass is minted from the person's consent
 //! at the moment of asking, so a host taken back stops the next request, and
@@ -28,7 +30,7 @@ pub struct Refreshed {
     /// The count, kept — or why not.
     pub counted: Result<(), Refusal>,
     /// The usage endpoint's answer — or why there is none; `None` for a
-    /// Codex account, which has no endpoint.
+    /// Codex account or an API key's, which have no endpoint.
     pub asked: Option<Result<(), Refusal>>,
     /// Whether the answer (or its refusal) was kept.
     pub kept: Result<(), Refusal>,
@@ -83,7 +85,7 @@ pub(crate) fn run_at(
         .collect())
 }
 
-/// One account, counted and (a Claude Code one) asked.
+/// One account, counted and (a Claude Code subscription's) asked.
 fn one(
     roots: &Roots,
     account: &Account,
@@ -314,6 +316,61 @@ mod tests {
             run_at(&roots, None, &mint, &mut ask, later).unwrap_err(),
             Refusal::of(Why::Unreadable)
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: an API key's account is not counted — its tokens are all
+    /// there is of its spending — or the usage endpoint, a subscription's,
+    /// is asked for it (with its OAuth leftovers, or anything) even when the
+    /// host is let.
+    #[test]
+    fn an_api_key_is_counted_and_never_asked() {
+        let dir = scratch("api");
+        let (roots, claude, _) = machine(&dir);
+        let api = Account {
+            id: "claude-api-1".to_owned(),
+            kind: Kind::ClaudeApi,
+            name: "Console".to_owned(),
+            dir: dir.join("home").join(".claude-api"),
+            default: false,
+        };
+        let project = api.dir.join("projects").join("-home-p-work");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::copy(
+            claude
+                .dir
+                .join("projects")
+                .join("-home-p-work")
+                .join("s1.jsonl"),
+            project.join("s1.jsonl"),
+        )
+        .unwrap();
+        crate::Accounts::keep_in(&roots, |list| list.add(api.clone())).unwrap();
+        let consent = ronoctua_consent::store_at(Some(dir.join("consent")));
+        ronoctua_consent::let_hosts_in(&consent, &[usage::HOST], true).unwrap();
+        let mint = || ronoctua_consent::pass_in(&consent, usage::HOST).ok();
+        let asked_for = RefCell::new(Vec::new());
+        let mut ask = |_: &Pass, at: &Path| {
+            asked_for.borrow_mut().push(at.to_path_buf());
+            Err(Refusal::of(Why::Offline))
+        };
+        let done = run_at(&roots, Some("claude-api-1"), &mint, &mut ask, noon()).unwrap();
+        assert_eq!(
+            done,
+            [Refreshed {
+                id: "claude-api-1".to_owned(),
+                counted: Ok(()),
+                asked: None,
+                kept: Ok(()),
+            }]
+        );
+        assert!(asked_for.borrow().is_empty(), "the endpoint was asked");
+        let cache = roots.cache.as_deref().unwrap();
+        assert_eq!(
+            tokens::kept_in(cache, &api).tally_in(&|_| 0).by_model["claude-opus-4-1"],
+            30
+        );
+        assert!(usage::kept_in(roots.state.as_deref().unwrap(), &api).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

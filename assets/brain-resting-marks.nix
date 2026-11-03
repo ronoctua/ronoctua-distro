@@ -10,8 +10,15 @@
 # to, and `resting-marks-are-the-approved-ones` keeps the two lists one.
 #
 # 2026-10-05: the LLM accounts — one mark per account, its usage told by the
-# tone, so it is there while the account is quiet too.
+# tone, so it is there while the account is quiet too. 2026-11-02: and Claude
+# Code on an API key, its tone telling whether its credits ran out; the three
+# now LEAD their account's set. And in the set, an agent that is done — still
+# there to go back to — and the count of the agents past the ninth place,
+# whose tone is the loudest of theirs and is quiet when they are all done.
 [
+  "agent-accounts/agent-done"
+  "agent-accounts/agent-more"
   "agent-accounts/claude"
+  "agent-accounts/claude-api"
   "agent-accounts/codex"
 ]

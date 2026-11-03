@@ -62,6 +62,10 @@ ronoctua-store = { path = "../ronoctua-store" }
 ronoctua-files = { path = "../ronoctua-files" }
 # The ONLY border with /proc: the camera held open, the process a mark names.
 ronoctua-memory = { path = "../ronoctua-memory" }
+# THE HELD TERMINALS WITHOUT THEIR ENGINE: their state files, read for the
+# modeline's mark of the ones no window shows and for what they ask for
+# (`surface/terminals.rs`). Never `ronoctua-term`, which links the engine.
+ronoctua-terminals = { path = "../ronoctua-terminals" }
 # THE POWER BORDER — UPower, power-profiles-daemon, logind — for the
 # modeline's battery and profile marks, the three battery alarms and the
 # locks the footer holds.

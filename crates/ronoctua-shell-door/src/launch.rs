@@ -129,7 +129,14 @@ pub fn argv_of(e: &ronoctua_apps::DesktopEntry) -> Option<(String, Vec<String>, 
     let me = std::env::current_exe().ok()?;
     let mut inside = vec!["terminal".to_owned(), program.clone()];
     inside.extend_from_slice(args);
-    Some((me.to_string_lossy().into_owned(), inside, None))
+    // THE ENTRY'S `Path=` IS THE TERMINAL'S FOLDER TOO: the terminal starts
+    // its program where it was itself started, so the folder rides on the
+    // launch and not on a flag of ours.
+    Some((
+        me.to_string_lossy().into_owned(),
+        inside,
+        e.working_directory.clone(),
+    ))
 }
 
 /// How a window's launch by desktop id ended.

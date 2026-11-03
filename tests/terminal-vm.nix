@@ -8,14 +8,35 @@
 # The whole chain, and each of its links is a place where the text disappears
 # silently:
 #
-#   xdotool -> the compositor -> wl_keyboard -> key_bytes -> Pty::write_bytes
-#      -> process -> Pty::pump -> VT thread -> Grid
-#      -> grid_list -> DisplayList -> wgpu -> pixel -> OCR
+#   xdotool -> the compositor -> wl_keyboard -> the window's Key frame
+#      -> the holder's encoder -> PTY -> process -> PTY -> the holder's engine
+#      -> Bytes frame -> the window's mirror -> render state -> cells -> wgpu
+#      -> pixel -> OCR
 #
-# A unit test covers the ends (`key_bytes`, `grid_list`) and cannot
-# cover the middle: calloop's `ping`, the keyboard focus, the conversion of
-# size into cells. If the Enter's `\r` became `\n`, everything would compile,
-# every unit test would pass, and the line would never be accepted.
+# A unit test covers the ends (the key's frame, a frame made cells) and
+# cannot cover the middle: calloop's channel and ping, the keyboard focus, the
+# conversion of size into cells, a grid drawn on a real surface. If the
+# Enter's `\r` became `\n`, everything would compile, every unit test would
+# pass, and the line would never be accepted.
+#
+# EACH TERMINAL IS HELD IN A SCOPE OF ITS OWN, as in a session: root's user
+# manager is up (`start_user_manager`), so the window's `systemd-run --user
+# --scope` starts a holder (`ronoctua-term-<id>.scope`) and the window
+# attaches to it — and closing the window, or killing it, leaves the
+# terminal running. Without a manager the window would fall back to the
+# holder's core in its own process (`terminal_link.rs`), and the first
+# subtest says which one it got.
+#
+# AND WHAT A HOLDER MUST SURVIVE, after the floating windows are gone: a
+# window closed, a window killed, the other terminal's holder killed — each
+# read from outside the window (the holder's scope, its state file, a
+# heartbeat its program writes) and the screen read only for what only the
+# screen says (the earlier output a reopened window shows).
+#
+# THE PROGRAM IN THOSE TERMINALS IS DRIVEN FROM OUTSIDE (`held` below): it
+# runs the lines a test writes into its FIFO, writes what it ran, and beats
+# once a second — so "its program runs on" is a file that grows, not a
+# screen somebody reads.
 #
 # WHY `cat`, AND NOT A SHELL
 # --------------------------
@@ -64,6 +85,45 @@ let
   # `0`/`O` and eats hyphens in a small monospaced font. What is asserted is that
   # the text crossed over, and not that tesseract is good.
   needle = "terminal working";
+
+  # A PROGRAM A TEST DRIVES FROM OUTSIDE, named by the terminal it runs in
+  # (`RONOCTUA_TERMINAL`, which only a held terminal exports). Under
+  # `/tmp/held/`: `started` (one id per program, in the order they began),
+  # `<id>.path` (its PATH, as it was given), `<id>.in` (a FIFO: each line
+  # written there is run), `<id>.ran` (each line it ran, after running it)
+  # and `<id>.beat` (a line a second, while it runs). The FIFO is held open
+  # read-write, so a writer never waits for a reader and `read -t` beats on
+  # with nothing to read. Every program by its store path: the PATH it gets
+  # is the one under test.
+  #
+  # A READ THAT TIMES OUT KEEPS WHAT IT HAD READ: when the beat's second ends
+  # just after a line's first byte came, bash leaves that byte in `line` and
+  # answers a timeout, and the rest arrives on the next read — `echo kept
+  # before` ran as `cho kept before`. The part is kept and joined to the rest.
+  held = pkgs.writeShellScript "held-program" ''
+    set -u
+    name=''${RONOCTUA_TERMINAL:-here}
+    dir=/tmp/held
+    ${pkgs.coreutils}/bin/mkdir -p "$dir"
+    printf '%s' "$PATH" > "$dir/$name.path"
+    : > "$dir/$name.ran"
+    ${pkgs.coreutils}/bin/rm -f "$dir/$name.in"
+    ${pkgs.coreutils}/bin/mkfifo "$dir/$name.in"
+    exec 3<>"$dir/$name.in"
+    echo "$name" >> "$dir/started"
+    part=""
+    while :; do
+      ${pkgs.coreutils}/bin/date +%s%N >> "$dir/$name.beat"
+      if IFS= read -r -t 1 line <&3; then
+        line="$part$line"
+        part=""
+        eval "$line"
+        printf '%s\n' "$line" >> "$dir/$name.ran"
+      else
+        part="$part$line"
+      fi
+    done
+  '';
 in
 pkgs.testers.runNixOSTest {
   name = "ronoctua-terminal";
@@ -97,13 +157,174 @@ pkgs.testers.runNixOSTest {
     ${xvfb.prelude}
 
 
+    # WHERE A HELD TERMINAL IS SEEN FROM OUTSIDE: its holder's state file
+    # (`ronoctua-terminals`' registry), the held program's files, and the
+    # user manager its scope is a unit of.
+    REGISTRY = "/run/user/0/ronoctua-terms"
+    HELD = "/tmp/held"
+    USER = "XDG_RUNTIME_DIR=/run/user/0 systemctl --user"
+    # THE SESSION'S PATH, as the windows below are given it: a folder no
+    # manager's PATH has first, so a program that got any other PATH — the
+    # user manager's, the system's — reads as different.
+    SESSION_PATH = "/tmp/session-path/bin:/run/current-system/sw/bin"
+
+
+    def open_terminal(unit, words):
+        """`ronoctua-shell terminal <words>` in a unit of its own, as a session would start it."""
+        machine.succeed(
+            f"systemd-run --unit={unit} "
+            "${xvfb.env} "
+            "--setenv=WAYLAND_DISPLAY=wayland-1 "
+            f"--setenv=PATH={SESSION_PATH} "
+            "--setenv=RUST_LOG=ronoctua_shell=debug "
+            "${ronoctua-shell}/bin/ronoctua-shell terminal " + words
+        )
+
+
+    def main_pid(unit):
+        return int(machine.succeed(f"systemctl show -p MainPID --value {unit}").strip())
+
+
+    def opened_id(unit):
+        """The id of the terminal a window's journal says it opened — once it says so: the
+        holder writes its viewer before the window hears the attach answered and logs it."""
+        import re
+
+        machine.wait_until_succeeds(
+            f"journalctl -u {unit} --no-pager | grep 'terminal opened' > /dev/null",
+            timeout=timedelta(minutes=1),
+        )
+        said = re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed(f"journalctl -u {unit} --no-pager"))
+        found = re.findall(r"terminal opened .*?\bid=([0-9a-f]{16})", said)
+        assert found, f"{unit} opened no terminal:\n{said[-3000:]}"
+        return found[-1]
+
+
+    def started(count):
+        """The ids of the held programs, in the order they began — once there are `count`."""
+        machine.wait_until_succeeds(
+            f"test $(wc -l < {HELD}/started) -ge {count}", timeout=timedelta(minutes=1)
+        )
+        return machine.succeed(f"cat {HELD}/started").split()
+
+
+    def state(terminal):
+        import json
+
+        return json.loads(machine.succeed(f"cat {REGISTRY}/{terminal}.json"))
+
+
+    def wait_viewer(terminal, pid):
+        """Until the holder's state says which window shows it: `pid`, or none for `None`.
+        Its whole line as serde writes it, so a pid is never read as the start of another."""
+        said = "null" if pid is None else str(pid)
+        machine.wait_until_succeeds(
+            f"grep -qF '\"viewer\":{said},' {REGISTRY}/{terminal}.json",
+            timeout=timedelta(minutes=1),
+        )
+
+
+    def scope_of(terminal):
+        return f"ronoctua-term-{terminal}.scope"
+
+
+    def held_alive(terminal):
+        return machine.execute(f"{USER} is-active {scope_of(terminal)}")[0] == 0
+
+
+    def beats_go_on(terminal):
+        """Its program still runs: two heartbeats more than now."""
+        beats = f"{HELD}/{terminal}.beat"
+        now = int(machine.succeed(f"wc -l < {beats}").strip())
+        machine.wait_until_succeeds(
+            f"test $(wc -l < {beats}) -ge {now + 2}", timeout=timedelta(seconds=30)
+        )
+
+
+    def tell(terminal, line):
+        """`line`, run by the program in `terminal` — and waited for: it writes what it ran."""
+        import shlex
+
+        ran = f"{HELD}/{terminal}.ran"
+        before = int(machine.succeed(f"wc -l < {ran}").strip())
+        # A TIMEOUT, because a FIFO nobody reads any more takes no writer:
+        # the open would wait for ever on a program that died.
+        machine.succeed(
+            "timeout 10 bash -c "
+            + shlex.quote(f"printf '%s\\n' {shlex.quote(line)} > {HELD}/{terminal}.in")
+        )
+        machine.wait_until_succeeds(
+            f"test $(wc -l < {ran}) -gt {before}", timeout=timedelta(seconds=30)
+        )
+
+
+    def terminal_windows():
+        """Every terminal window in the compositor's tree: its pid and its rectangle."""
+        import json
+
+        found = []
+
+        def walk(node):
+            if node.get("pid") and node.get("app_id") == "br.ronoctua.terminal":
+                found.append({"pid": node["pid"], "rect": node["rect"]})
+            for kid in node.get("nodes", []) + node.get("floating_nodes", []):
+                walk(kid)
+
+        walk(json.loads(machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree")))
+        return found
+
+
+    def wait_window(pid):
+        """Until the compositor lists a terminal window of `pid`: a holder may take its
+        window's attach before the window is mapped."""
+        for _ in range(60):
+            if pid in [w["pid"] for w in terminal_windows()]:
+                return
+            machine.sleep(duration=timedelta(seconds=1))
+        raise AssertionError(f"the compositor never listed a terminal window of {pid}")
+
+
+    def close_window(pid):
+        """The window of `pid` closed as a person closes one: the compositor asks it to."""
+        machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[pid={pid}] kill'")
+
+
+    def holder_pid(terminal):
+        """The holder's own process, among its scope's: the one that runs the holder's program."""
+        group = machine.succeed(f"{USER} show -p ControlGroup --value {scope_of(terminal)}").strip()
+        assert group, f"{scope_of(terminal)} has no control group"
+        for pid in machine.succeed(f"cat /sys/fs/cgroup{group}/cgroup.procs").split():
+            if machine.execute(f"readlink /proc/{pid}/exe")[1].strip().endswith("/ronoctua-term-holder"):
+                return int(pid)
+        raise AssertionError(f"no holder among the processes of {scope_of(terminal)}")
+
+
+    def window_says(pid):
+        """What the terminal window of `pid` shows, by OCR — its own rectangle, asked of the
+        compositor, for the reason `read_the_screen` below gives."""
+        boxes = [w["rect"] for w in terminal_windows() if w["pid"] == pid]
+        assert boxes, f"there is no terminal window of {pid}"
+        r = boxes[0]
+        _, _, x0, y0 = compositor_geometry()
+        machine.succeed("${pkgs.xwd}/bin/xwd -display :99 -root -out /tmp/screen.xwd")
+        machine.succeed(
+            f"${pkgs.imagemagick}/bin/magick /tmp/screen.xwd "
+            f"-crop {r['width']}x{r['height']}+{x0 + r['x']}+{y0 + r['y']} +repage "
+            "-colorspace gray -negate -resize 200% /tmp/held.png"
+        )
+        return machine.succeed(
+            "${pkgs.tesseract}/bin/tesseract /tmp/held.png stdout --psm 6 2>/dev/null"
+        ).strip()
+
+
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    start_user_manager()
     start_xvfb()
     start_compositor("compositor", "${scroll}", config="${configFloating}")
     sock = socket_of("compositor")
 
-    with subtest("the terminal comes up with the VT engine on a thread of its own"):
+    with subtest("the terminal comes up on the product's engine"):
         machine.succeed(
             "systemd-run --unit=term ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 "
@@ -122,12 +343,17 @@ pkgs.testers.runNixOSTest {
             print(machine.execute("journalctl -u term --no-pager")[1])
             raise
         journal = machine.succeed("journalctl -u term --no-pager")
-        # The engine's name comes from INSIDE the thread (`Terminal::name`). If the
-        # thread had not come up, there would be no name here at all.
+        # The engine's name is said once the terminal is REACHED — its holder
+        # started and attached to. If it had not come up, there would be no
+        # name here at all.
         #
-        # WITH QUOTES: `tracing` quotes a `Debug` value, and `engine=alacritty`
+        # WITH QUOTES: `tracing` quotes a `Debug` value, and `engine=ghostty`
         # without them does not match. It is the trap already recorded in the AGENTS.md.
-        assert 'engine="alacritty"' in journal, journal
+        assert 'engine="ghostty"' in journal, journal
+        # AND HELD IN A SCOPE OF ITS OWN, not the window's process: the user
+        # manager gave it one, which every subtest after the floating ones
+        # stands on. The fallback says why it fell back, in this journal.
+        assert "in_process=false" in journal, journal
 
     with subtest("the COMPOSITOR sees a window, not a region of ours"):
         # Invariant 4: a terminal drawn inside our surface would not show up in
@@ -230,7 +456,7 @@ pkgs.testers.runNixOSTest {
         )
         # AND THE ORDINARY TERMINAL DOES NOT FLOAT. Without this the test would
         # pass just as well with a rule matching every window, which is the
-        # mistake `LEADER RET /` would pay for.
+        # mistake `LEADER RET RET` would pay for.
         assert not open_now["br.ronoctua.terminal"]["floating"], (
             "the rule caught the ordinary terminal too"
         )
@@ -280,8 +506,8 @@ pkgs.testers.runNixOSTest {
             + machine.execute("journalctl -u ronoctua-rescue --no-pager")[1]
         )
 
-        # AND THE PROGRAM STAYS UP. When the child exits the pty closes and the
-        # window goes with it (see the `ping` at the end of the pty's thread), so
+        # AND THE PROGRAM STAYS UP. When the child exits the holder says so
+        # (`Exited`) and the window goes with it, so
         # a window still there is a btop still running — which is what proves
         # the terminal gave it what a TUI needs. Without `TERM`, ncurses dies at
         # once; without a UTF-8 locale, btop does.
@@ -374,5 +600,160 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u calc --no-pager")
         for bad in ["panicked", "refused the calculator's place"]:
             assert bad not in journal, f"the calculator reported: {bad}"
+
+    with subtest("the window closes when its last program exits"):
+        # PROVES the end of a held terminal: the `cat` above reads the end of
+        # its input (`C-d`, typed into its window), ends, and its holder says
+        # so; the window lets its last terminal go and quits, and the holder
+        # goes with it — its scope and its state file. A window left up over
+        # a program that ended, or a holder that outlived the window it told,
+        # fails here and nowhere above.
+        cat = opened_id("term")
+        window = main_pid("term")
+        assert held_alive(cat), f"the cat's holder, {scope_of(cat)}, is not running"
+        machine.succeed(f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[pid={window}] focus'")
+        focus_compositor()
+        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+d")
+        try:
+            machine.wait_until_fails("systemctl is-active term", timeout=timedelta(minutes=1))
+        except Exception:
+            print(machine.execute("journalctl -u term --no-pager")[1])
+            raise
+        for _ in range(30):
+            if window not in [w["pid"] for w in terminal_windows()]:
+                break
+            machine.sleep(duration=timedelta(seconds=1))
+        else:
+            raise AssertionError("the window's process ended and the compositor still lists its window")
+        machine.wait_until_fails(f"{USER} is-active {scope_of(cat)}", timeout=timedelta(seconds=30))
+        machine.wait_until_fails(f"test -e {REGISTRY}/{cat}.json", timeout=timedelta(seconds=30))
+
+        # THE ROOM, for the held terminals below: the floating windows go, so
+        # each window there is alone on the screen it is read off.
+        machine.succeed("systemctl stop monitor ronoctua-rescue calc")
+        await_windows(sock, 0, timeout=60)
+        machine.succeed(f"mkdir -p /tmp/session-path/bin {HELD}")
+
+    with subtest("closing a window keeps its holder, and the program in it runs on"):
+        # PROVES what a held terminal is: the window closed as a person closes
+        # one, and its terminal is still there — its scope active in the user
+        # manager, its state file saying no window shows it, its program
+        # still beating. A window that ended its program (the in-process
+        # fallback, a holder taken down with the window) stops the beat.
+        open_terminal("alpha", "-- ${held}")
+        alpha = started(1)[0]
+        window = main_pid("alpha")
+        wait_viewer(alpha, window)
+        wait_window(window)
+        # SAID WHILE THE WINDOW SHOWED IT, for the reopening below.
+        tell(alpha, "echo kept before")
+        close_window(window)
+        try:
+            machine.wait_until_fails("systemctl is-active alpha", timeout=timedelta(minutes=1))
+        except Exception:
+            print(machine.execute("journalctl -u alpha --no-pager")[1])
+            raise
+        wait_viewer(alpha, None)
+        assert held_alive(alpha), f"{scope_of(alpha)} went with its window"
+        beats_go_on(alpha)
+
+    with subtest("a held program's PATH is the session's, and not the user manager's"):
+        # PROVES the holder carries the window's environment: a scope runs in
+        # the environment of whoever asks for it, and a holder that was a
+        # SERVICE of the user manager would hand its program the manager's
+        # PATH instead — every program installed in the person's profile
+        # missing, in a terminal that otherwise works. The second assertion
+        # is what makes the first answerable: the two PATHs differ here.
+        got = machine.succeed(f"cat {HELD}/{alpha}.path")
+        assert got == SESSION_PATH, f"the program got PATH={got!r}, and the session's is {SESSION_PATH!r}"
+        manager = [
+            line.split("=", 1)[1]
+            for line in machine.succeed(f"{USER} show-environment").splitlines()
+            if line.startswith("PATH=")
+        ]
+        assert manager != [SESSION_PATH], (
+            f"the user manager's PATH is the session's ({manager}), so this cannot tell them apart"
+        )
+
+    with subtest("reopened with --show, a terminal shows what it said before, and while away"):
+        # PROVES the holder kept the screen and went on feeding it with no
+        # window: a line said while a window showed it, a line said while
+        # none did, and a new window — `terminal --show <id>`, attached to the
+        # running holder — draws both. Read off the screen, because that is
+        # where a snapshot that lost its history, or a holder that stopped
+        # reading its program while away, shows.
+        tell(alpha, "echo heard meanwhile")
+        open_terminal("again", f"--show {alpha}")
+        again = main_pid("again")
+        wait_viewer(alpha, again)
+        wait_window(again)
+        assert opened_id("again") == alpha, "--show opened another terminal than the one it named"
+        read_back = ""
+        for _ in range(30):
+            read_back = window_says(again).lower()
+            print(f"OCR: {read_back!r}")
+            if "before" in read_back and "meanwhile" in read_back:
+                break
+            machine.sleep(duration=timedelta(seconds=1))
+        assert "before" in read_back and "meanwhile" in read_back, (
+            f"the reopened window does not show what the terminal said; OCR read {read_back!r}"
+        )
+
+    with subtest("killing a window leaves its holders running, and away"):
+        # PROVES a window that dies without a word — `kill -9`, no close, no
+        # detach — takes none of its terminals with it: each holder hears its
+        # window's socket end, says no window shows it, and its program goes
+        # on. Two terminals in ONE window (`--show a,b`), so a holder that
+        # only noticed its own window's goodbye fails on both.
+        open_terminal("beta", "-- ${held}")
+        beta = started(2)[1]
+        wait_viewer(beta, main_pid("beta"))
+        wait_window(main_pid("beta"))
+        close_window(main_pid("beta"))
+        close_window(again)
+        wait_viewer(alpha, None)
+        wait_viewer(beta, None)
+        await_windows(sock, 0, timeout=60)
+        open_terminal("both", f"--show {alpha},{beta}")
+        both = main_pid("both")
+        wait_viewer(alpha, both)
+        wait_viewer(beta, both)
+        # ONE WINDOW holds the two.
+        await_windows(sock, 1, timeout=60)
+        assert [w["pid"] for w in terminal_windows()] == [both], terminal_windows()
+        machine.succeed(f"kill -9 {both}")
+        wait_viewer(alpha, None)
+        wait_viewer(beta, None)
+        for terminal in (alpha, beta):
+            assert held_alive(terminal), f"{scope_of(terminal)} died with the window that was killed"
+            beats_go_on(terminal)
+
+    with subtest("killing one holder leaves the other terminal running, in its window"):
+        # PROVES a holder is one terminal's and no more: `kill -9` of the
+        # first's holder, and the second — in the same window — is still
+        # held, still shown by that window, still beating; the window lets
+        # the dead one go and stays. A holder that was the whole group's, or
+        # a window that closed when one of its terminals vanished, fails it.
+        open_terminal("pair", f"--show {alpha},{beta}")
+        pair = main_pid("pair")
+        wait_viewer(alpha, pair)
+        wait_viewer(beta, pair)
+        wait_window(pair)
+        holder = holder_pid(alpha)
+        machine.succeed(f"kill -9 {holder}")
+        machine.wait_until_fails(f"test -d /proc/{holder}", timeout=timedelta(seconds=30))
+        # `> /dev/null` AND NOT `-q`: a grep that quits at its first match
+        # leaves journalctl writing into a closed pipe, and under `pipefail`
+        # the line fails because it was found.
+        machine.wait_until_succeeds(
+            "journalctl -u pair --no-pager | grep \"a terminal's holder went away\" > /dev/null",
+            timeout=timedelta(minutes=1),
+        )
+        assert held_alive(beta), f"{scope_of(beta)} died with the other terminal's holder"
+        assert state(beta)["viewer"] == pair, state(beta)
+        assert pair in [w["pid"] for w in terminal_windows()], (
+            "the window closed when one of its two terminals went away"
+        )
+        beats_go_on(beta)
   '';
 }

@@ -1,4 +1,4 @@
-# The LLM accounts' view (`LEADER m a`, `crate::agents` in the shell): the
+# The LLM accounts' view (`LEADER / a`, `crate::agents` in the shell): the
 # agents' programs, handed to the footer by store path.
 #
 # WHY THE FOOTER NEEDS THEM

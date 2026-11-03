@@ -257,6 +257,15 @@
     # equipment, switched with the profile, and its entry comes along.
     "remote-viewer.desktop" =
       "the console of the person's Incus virtual machines, which comes with Incus and not as a program";
+    # The input method's own windows (`nix/modules/input-method.nix`): the
+    # session runs fcitx5 for the IME, and these are its settings, its
+    # migration helper and its layout viewer, which come with it.
+    "fcitx5-configtool.desktop" =
+      "the input method's own settings, which come with the session's input method and not as a program";
+    "org.fcitx.fcitx5-migrator.desktop" =
+      "the input method's settings migrator, which comes with the session's input method";
+    "kbd-layout-viewer5.desktop" =
+      "the input method's keyboard layout viewer, which comes with the session's input method";
   };
 
   # THE CRAFTS GROUP (`nix/modules/crafts.nix`, on in the full profile): since

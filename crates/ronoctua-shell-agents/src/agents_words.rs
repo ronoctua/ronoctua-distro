@@ -1,7 +1,8 @@
 //! The LLM accounts' words: which text key each closed set of
 //! `ronoctua-llm` is drawn with — the refusals, the agents, the status line's
-//! three states — and the few numbers the view writes in the language's own
-//! marks (a per cent, a count of tokens).
+//! three states, what a running agent is doing (and its glyph) — and the few
+//! numbers the view writes in the language's own marks (a per cent, a count
+//! of tokens).
 //!
 //! # Why a file of its own
 //!
@@ -11,10 +12,12 @@
 //! grows a case, and the census test below reads every case in every
 //! language — a variant with no sentence would draw its raw key.
 
+use crate::agents::Doing;
 use crate::key;
 use ronoctua_i18n::Arg;
 use ronoctua_llm::statusline::Wrapping;
 use ronoctua_llm::{Kind, Why};
+use ronoctua_tokens as tokens;
 
 /// The sentence of a refusal of the accounts' crate.
 #[must_use]
@@ -73,6 +76,7 @@ pub fn clause(why: Why, texts: &ronoctua_i18n::Texts) -> String {
 pub const fn agent_key(kind: Kind) -> &'static str {
     match kind {
         Kind::Claude => key::AGENTS_KIND_CLAUDE,
+        Kind::ClaudeApi => key::AGENTS_KIND_CLAUDE_API,
         Kind::Codex => key::AGENTS_KIND_CODEX,
     }
 }
@@ -82,6 +86,7 @@ pub const fn agent_key(kind: Kind) -> &'static str {
 pub const fn adding_key(kind: Kind) -> &'static str {
     match kind {
         Kind::Claude => key::AGENTS_ADD_CLAUDE,
+        Kind::ClaudeApi => key::AGENTS_ADD_CLAUDE_API,
         Kind::Codex => key::AGENTS_ADD_CODEX,
     }
 }
@@ -94,6 +99,29 @@ pub const fn wrapping_key(w: Wrapping) -> &'static str {
         Wrapping::Ours => key::AGENTS_LINE_OURS,
         Wrapping::Replaced => key::AGENTS_LINE_REPLACED,
         Wrapping::Not => key::AGENTS_LINE_NOT,
+    }
+}
+
+/// What a running agent is doing, as its row's value says it.
+#[must_use]
+pub const fn doing_key(doing: Doing) -> &'static str {
+    match doing {
+        Doing::Working => key::AGENTS_DOING_WORKING,
+        Doing::Waiting => key::AGENTS_DOING_WAITING,
+        Doing::Done => key::AGENTS_DOING_DONE,
+        Doing::Failed => key::AGENTS_DOING_FAILED,
+    }
+}
+
+/// Its glyph: the terminals' own for a program's state (OSC 7501), the ones
+/// its mark on the modeline wears — failing is the done glyph, and its row's
+/// danger colour says the rest: danger is a colour, not another drawing.
+#[must_use]
+pub const fn doing_glyph(doing: Doing) -> char {
+    match doing {
+        Doing::Working => tokens::icon::PROGRAM_WORKING,
+        Doing::Waiting => tokens::icon::PROGRAM_BLOCKED,
+        Doing::Done | Doing::Failed => tokens::icon::PROGRAM_DONE,
     }
 }
 
@@ -160,6 +188,7 @@ mod tests {
                     .into_iter()
                     .map(wrapping_key),
             )
+            .chain(Doing::ALL.into_iter().map(doing_key))
             .collect();
         for language in ronoctua_i18n::LANGUAGES {
             let texts = ronoctua_i18n::Texts::fresh(language).expect("the language");

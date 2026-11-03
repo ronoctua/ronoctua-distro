@@ -17,6 +17,15 @@
 //! password manager pasted the copy BEFORE it into a masked line, where
 //! nobody could see it was the wrong one. What is pasted, in both doors, is
 //! what is copied NOW: the live selection, read here.
+//!
+//! # And the primary selection
+//!
+//! The text a pointer last swept, anywhere — X's PRIMARY, which Wayland
+//! keeps as a selection of its own. A middle click and `S-Insert` paste it,
+//! where `C-v` pastes the clipboard; [`primary_then`] reads it the same way,
+//! with the same deadline. The clipboard's history never keeps it
+//! (`crate::clipboard` lets its events go), because it changes on every
+//! drag.
 
 use anyhow::{Context as _, Result};
 use std::io::Read as _;
@@ -34,6 +43,28 @@ pub const IMAGE_CEILING: usize = 32 << 20;
 /// `wl-paste`, by store path — `nix/rust.nix` sets it.
 const WL_PASTE: Option<&str> = option_env!("RONOCTUA_WL_PASTE");
 
+/// Which selection a paste reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    /// The clipboard: what was copied.
+    Clipboard,
+    /// The primary selection: what a pointer last swept.
+    Primary,
+}
+
+impl Selection {
+    /// What `wl-paste` is asked to read a TEXT of this selection with.
+    ///
+    /// `--type text` asks for a TEXT type and no other: without it, an image
+    /// on the clipboard was read in full and then refused as not UTF-8.
+    const fn text_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Clipboard => &["--no-newline", "--type", "text"],
+            Self::Primary => &["--primary", "--no-newline", "--type", "text"],
+        }
+    }
+}
+
 /// The clipboard's text, read on a thread of its own, and `done` called with
 /// it there. An empty clipboard — or one holding no text — is `Ok("")`.
 pub fn text_then(done: impl FnOnce(Result<String>) + Send + 'static) {
@@ -42,6 +73,18 @@ pub fn text_then(done: impl FnOnce(Result<String>) + Send + 'static) {
         .spawn(move || done(text()));
     if let Err(e) = born {
         tracing::error!(error = %e, "could not start the thread that reads the clipboard");
+    }
+}
+
+/// The PRIMARY selection's text, read on a thread of its own, and `done`
+/// called with it there — [`text_then`] for what a pointer last swept. None
+/// swept is `Ok("")`.
+pub fn primary_then(done: impl FnOnce(Result<String>) + Send + 'static) {
+    let born = std::thread::Builder::new()
+        .name("paste-primary".to_owned())
+        .spawn(move || done(text_of(Selection::Primary)));
+    if let Err(e) = born {
+        tracing::error!(error = %e, "could not start the thread that reads the primary selection");
     }
 }
 
@@ -67,16 +110,21 @@ pub fn image_then(done: impl FnOnce(Result<Option<Vec<u8>>>) + Send + 'static) {
 /// `wl-paste` was not put in the build, could not run, took too long, handed
 /// over more than [`TEXT_CEILING`], or what it handed over is not UTF-8.
 pub fn text() -> Result<String> {
-    let bytes = read_within(
-        wl_paste()?,
-        &["--no-newline", "--type", "text"],
-        PATIENCE,
-        TEXT_CEILING,
-    )?;
+    text_of(Selection::Clipboard)
+}
+
+/// The text of `selection`, now — BLOCKING, for [`PATIENCE`] at most. See
+/// [`text`], whose errors these are.
+///
+/// # Errors
+///
+/// As [`text`]'s.
+pub fn text_of(selection: Selection) -> Result<String> {
+    let bytes = read_within(wl_paste()?, selection.text_args(), PATIENCE, TEXT_CEILING)?;
     let Some(bytes) = bytes else {
         return Ok(String::new());
     };
-    String::from_utf8(bytes).context("what was on the clipboard is not UTF-8 text")
+    String::from_utf8(bytes).context("what was selected is not UTF-8 text")
 }
 
 /// The clipboard's image, now — BLOCKING, for twice [`PATIENCE`] at most:
@@ -207,6 +255,24 @@ mod tests {
     use std::time::Duration;
 
     const SH: &str = "/bin/sh";
+
+    /// FAILS IF: the primary selection is read without `--primary` — a
+    /// middle click would paste the clipboard — or the clipboard with it,
+    /// or either stops asking for TEXT only.
+    #[test]
+    fn the_primary_is_its_own_selection() {
+        let clipboard = Selection::Clipboard.text_args();
+        let primary = Selection::Primary.text_args();
+        assert!(primary.contains(&"--primary"));
+        assert!(!clipboard.contains(&"--primary"));
+        let rest: Vec<&str> = primary
+            .iter()
+            .copied()
+            .filter(|a| *a != "--primary")
+            .collect();
+        assert_eq!(rest, clipboard, "the two read text differently");
+        assert!(clipboard.windows(2).any(|w| w == ["--type", "text"]));
+    }
 
     #[test]
     fn what_is_written_is_what_is_read() {

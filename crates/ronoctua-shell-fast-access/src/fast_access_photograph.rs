@@ -649,7 +649,7 @@ fn shoot<C: Host>(mut d: Detached<C>, asked: &Asked, queue: &Arc<Mutex<Vec<Back>
     images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
     let (drawn, rects, pictures) = (&text, &quads, &images);
     gpu.frame(tokens::color::SURFACE_CHROME.to_linear(), |pass| {
-        composed.draw(pass, drawn, rects, pictures)
+        composed.draw(pass, drawn, rects, pictures, None)
     })?;
     let rgba = gpu.read_rgba()?;
     ronoctua_render::offscreen::write_png(&asked.out, &rgba, gpu.width, gpu.height)?;

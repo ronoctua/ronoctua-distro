@@ -11,7 +11,8 @@
 //!
 //! # Where
 //!
-//! - Claude Code: `<dir>/projects/<project>/<session>.jsonl` (and the
+//! - Claude Code (on a subscription or an API key alike):
+//!   `<dir>/projects/<project>/<session>.jsonl` (and the
 //!   sub-agents' files below a session). An answer is written as several
 //!   lines with the same `message.id` and `requestId`, and a resumed session
 //!   copies earlier answers into its new file — so each answer is counted
@@ -246,7 +247,7 @@ struct Log {
 /// The folders an account's logs are in — what [`logs_of`] walks.
 pub(crate) fn trees_of(dir: &Path, kind: Kind) -> Vec<PathBuf> {
     match kind {
-        Kind::Claude => vec![dir.join(CLAUDE_LOGS)],
+        Kind::Claude | Kind::ClaudeApi => vec![dir.join(CLAUDE_LOGS)],
         Kind::Codex => CODEX_LOGS.iter().map(|d| dir.join(d)).collect(),
     }
 }
@@ -258,7 +259,7 @@ fn logs_of(dir: &Path, kind: Kind) -> Vec<Log> {
         name.starts_with("rollout-") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"))
     };
     let keep: &dyn Fn(&str) -> bool = match kind {
-        Kind::Claude => &transcript,
+        Kind::Claude | Kind::ClaudeApi => &transcript,
         Kind::Codex => &rollout,
     };
     let mut found = Vec::new();
@@ -266,7 +267,7 @@ fn logs_of(dir: &Path, kind: Kind) -> Vec<Log> {
         walk(&tree, DEPTH, keep, &mut found);
     }
     match kind {
-        Kind::Claude => found
+        Kind::Claude | Kind::ClaudeApi => found
             .into_iter()
             .map(|path| Log {
                 key: path
@@ -423,7 +424,7 @@ fn read_lines(
             Line::Whole(n) => {
                 at += n as u64;
                 match kind {
-                    Kind::Claude => claude_line(&buf, cache, start),
+                    Kind::Claude | Kind::ClaudeApi => claude_line(&buf, cache, start),
                     Kind::Codex => codex_line(&buf, key, cache, start),
                 }
             }

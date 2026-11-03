@@ -616,6 +616,7 @@ mod tests {
             side: Side::Left,
             shrink: Shrink::Cut,
             removable,
+            place: None,
         }
     }
 

@@ -110,7 +110,13 @@ in
   # them from (`/run/current-system/sw/share/zsh-{autosuggestions,syntax-highlighting}`)
   # and the `-r` guard there skips both in silence — a packaging gap wearing the
   # disguise of a declined package. `zsh-plugins-are-linked` holds the path.
+  #
+  # And bash's hook, the same gap: `bash-preexec` installs into `/share/bash`,
+  # which NixOS does not link either, so `.bashrc`'s `-r` guard skipped it and
+  # bash had no preexec at all — atuin loaded and recorded nothing, and the
+  # terminal's prompt marks had nothing to hang on.
   environment.pathsToLink = [
+    "/share/bash"
     "/share/nix-direnv"
     "/share/zsh-autosuggestions"
     "/share/zsh-syntax-highlighting"

@@ -44,6 +44,20 @@ critério de pronto, em poucas linhas.
     primeiro boot e não distingue as partes da pessoa das da distro; um hardware sem sonda falha no
     `build-first`; o `wide` do `nix/modules/person.nix` sobrou.
 
+- **Escala fracionária (125%, 150%)**: a distro inteira desenha em escala inteira; o terminal
+  seguiria o resto (um protocolo novo, `wp_fractional_scale_v1` com o viewporter, seria exceção ao
+  inv. 3).
+- **O terminal, o que ficou de fora da paridade com o Ghostty**: a forma do ponteiro que um programa
+  pede (OSC 22), a área de transferência do kitty com tipos (OSC 5522 além do texto), o contraste
+  mínimo, e o texto escrito sobre um sixel não apagar a imagem como no xterm. Um guardião de outra
+  versão (depois de um `switch`) ainda não é anexado: a janela só diz que não pode. Abrir pela vista
+  um terminal cujo programa já terminou mostra a janela e a fecha na hora, em vez de guardar a
+  última tela até uma tecla. A marca dos terminais sem janela pisca por um instante quando um
+  terminal novo abre, antes de a janela dele se ligar.
+- **O IME além do terminal**: as perguntas das portas, o acesso rápido e a busca do terminal ainda
+  não recebem texto do fcitx5; a janela de candidatos veste o tema do fcitx5, não os nossos tokens; o
+  Chrome só usa o IME com `--enable-wayland-ime --wayland-text-input-version=3`.
+
 ## O que só uma máquina de verdade, uma foto ou um servidor provam
 
 ### Fotos que faltam
@@ -95,6 +109,13 @@ resto. Faltam fotos, com asserção, de:
   com um sudo e um systemd de verdade.
 - **Contas de LLM**: o total de um dia bate com o `ccusage`/`/usage`; a marca muda de cor depois de
   uma conversa; o login de uma conta nova termina no terminal que abriu.
+- **Os agentes com um Claude Code de verdade**: o gancho gerenciado roda (o `sh -c`, o ambiente
+  herdado, o dono do arquivo em `/etc` aceito pela checagem dele); o conjunto da conta acende com o
+  estado certo, pelo OSC 7501 no nosso terminal e pelo gancho fora dele; o clique foca a janela, ou
+  abre o grupo de um terminal no background; uma conta de API sem créditos fica em perigo.
+- **O IME numa sessão de verdade**: com o Mozc ligado uma vez nas configurações do fcitx5,
+  `Ctrl+Espaço` e `nihon` mostram a composição sublinhada no cursor e os candidatos ao lado, e o
+  texto confirmado chega ao programa; o Compose continua funcionando no nosso terminal e no Ghostty.
 - **O player com o YouTube de verdade no `.#dev`**: toca, ganha o título, uma recusa diz a linha do
   yt-dlp, um álbum ganha o nome do álbum, o mesmo endereço duas vezes pergunta "já está na fila".
 - **O catálogo de vídeos contra o YouTube de verdade** (um canal por `@handle`, uma varredura).

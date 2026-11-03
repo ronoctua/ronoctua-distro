@@ -469,6 +469,13 @@
       kept = true;
       reason = "preference";
     };
+    # THE TERMINAL'S SETTINGS (`terminal_settings.rs`): how much history a
+    # terminal keeps, what a selection copies, the cursor and the text size —
+    # habits of the person's, not facts of the machine.
+    "config/terminal.json" = {
+      kept = true;
+      reason = "preference";
+    };
     # THE LOCK SCREEN'S AUTOMATIC MODE AND ITS MINUTES (`lock_choice.rs`): a
     # habit of the person's, not a fact of the machine — it travels.
     "config/lock.json" = {

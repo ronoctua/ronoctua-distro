@@ -52,6 +52,7 @@ pub const CONTRIBUTIONS: &[&Contribution] = &[
     &ronoctua_shell_software::software::KEYS,
     &ronoctua_shell_stick::stick::KEYS,
     &ronoctua_shell_syncthing::syncthing::KEYS,
+    &ronoctua_shell_terminal::KEYS,
     &ronoctua_shell_transfers::transfers::KEYS,
     &ronoctua_shell_update::update_window::KEYS,
     &ronoctua_shell_video_metrics::video_metrics::KEYS,
@@ -466,6 +467,10 @@ mod tests {
         assert_eq!(runs("/ r"), Some("dev-resizer"));
         assert_eq!(runs("/ b"), Some("build-toggle"));
         assert_eq!(runs("/ p"), Some("build-open"));
+        // THE LLM ACCOUNTS ARE DEVELOPMENT WORK (2026-11-02, from `m a`):
+        // the group folds into the key that opens the view.
+        assert_eq!(runs("/ a"), Some("agents-open"));
+        assert_eq!(runs("m a"), None, "the accounts left the misc group");
         assert_eq!(runs("g"), Some("world-glance"));
         assert_eq!(GLANCE_KEYS, "g");
         assert_eq!(runs(GLANCE_KEYS), Some("world-glance"));
@@ -739,7 +744,13 @@ mod tests {
             ("c", "clipboard-open", "clipboard-window"),
             ("s z", "stick-open", "stick-window"),
             ("s x", "incus-open", "incus-window"),
-            ("m a", "agents-open", "agents-window"),
+            ("/ a", "agents-open", "agents-window"),
+            ("RET b", "terminals-open", "terminals-window"),
+            (
+                "RET s",
+                "terminal-settings-open",
+                "terminal-settings-window",
+            ),
         ]
         .into_iter()
         .map(|(g, f, w)| (g.to_owned(), f, w))
@@ -759,7 +770,9 @@ mod tests {
     }
 
     /// FAILS IF: the full set stops being the whole tree, or a folded key
-    /// keeps its submenu in the default set.
+    /// keeps its submenu in the default set — or, in any set, the doubled
+    /// `RET` opens anything but the distro's own terminal and `RET /`
+    /// anything but the external one.
     #[test]
     fn the_three_trees_are_the_three_sets() {
         use ronoctua_keymap::Resolution;
@@ -787,8 +800,14 @@ mod tests {
                 resolve(set, "w f"),
                 Resolution::Command("window-screen-full", None)
             );
+            // THE DOUBLED KEY IS OURS (R7, 2026-11-02): the terminal this
+            // distro draws, and `/` the external one.
             assert_eq!(
                 resolve(set, "RET RET"),
+                Resolution::Command("buffer-terminal", None)
+            );
+            assert_eq!(
+                resolve(set, "RET /"),
                 Resolution::Command("buffer-terminal-external", None)
             );
             assert!(matches!(resolve(set, "s"), Resolution::Prefix(_)));
@@ -1115,6 +1134,11 @@ mod tests {
             "files-window",
             "buffer-terminal",
             "buffer-terminal-external",
+            // A TERMINAL SHOWN AND THE WINDOW OF A PROCESS, which the
+            // background terminals' view and the agents' rows run by name
+            // with their argument (`surface/terminals.rs`).
+            "terminal-show",
+            "window-of-process",
             // THE CAPTURE IS OURS. The compositor takes none, so the shell
             // runs `grim` and builds the name — see `capture_the_screen`.
             "screen-capture",
@@ -1519,10 +1543,31 @@ mod tests {
             "agents-remove",
             "agents-refresh",
             "agents-add-claude",
+            "agents-add-claude-api",
+            "agents-show",
             "agents-add-codex",
             "agents-status-line",
             "agents-warn-at",
             "agents-danger-at",
+            // THE TERMINALS WITH NO WINDOW: the two doors and the view's four
+            // gestures, which the region answers open and closed
+            // (`terminals_region`).
+            "terminals-open",
+            "terminals-window",
+            "terminals-up",
+            "terminals-down",
+            "terminals-enter",
+            "terminals-end",
+            // THE TERMINAL'S SETTINGS: the two doors and the view's five
+            // gestures, answered by its region open and closed
+            // (`terminal_settings_region`).
+            "terminal-settings-open",
+            "terminal-settings-window",
+            "terminal-settings-up",
+            "terminal-settings-down",
+            "terminal-settings-less",
+            "terminal-settings-more",
+            "terminal-settings-enter",
         ];
         let (tree, registry) = build().unwrap();
         for id in reachable(&tree.full) {

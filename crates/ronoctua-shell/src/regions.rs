@@ -49,6 +49,11 @@ pub const REGIONS: &[region::Entry] = &[
     ronoctua_shell_software::software_region::ENTRY,
     ronoctua_shell_stick::stick_region::ENTRY,
     ronoctua_shell_syncthing::syncthing_region::ENTRY,
+    // `LEADER RET s s` — the terminal's settings (`terminal.json`).
+    ronoctua_shell_terminal::terminal_settings_region::ENTRY,
+    // `LEADER RET b b` — the terminals no window shows, and the modeline's
+    // mark for them.
+    ronoctua_shell_terminal::terminals_region::ENTRY,
     ronoctua_shell_transfers::transfers_region::ENTRY,
     ronoctua_shell_update::update_region::ENTRY,
     // `LEADER v v` — the video catalogue.

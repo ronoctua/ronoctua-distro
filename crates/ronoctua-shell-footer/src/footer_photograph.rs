@@ -87,6 +87,16 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
   --accounts-marks      the LLM accounts' marks, made by their brain module
                         over the room's files (`--room`) and laid over
                         `--mind`'s: never a mark written by hand
+  --agents <file>       the agents at work in those accounts, planted as
+                        data (a JSON list, as their brain module reads one:
+                        account, session, folder, doing, since) and drawn by
+                        the module in their accounts' sets — implies
+                        `--accounts-marks`
+  --terminals <file>    the held terminals, as the census reads their state
+                        files (a JSON list of them, each a holder's whole
+                        state): the modeline's mark for the ones no window
+                        shows, in caution while one asks for the person, and
+                        the background view's rows — never this machine's
   --out <file>          where to write                 (default: footer.png)
   --language <id>       pt-BR or en-GB                 (default: pt-BR)
   --theme <id>          a theme of assets/themes       (default: the default)
@@ -168,6 +178,9 @@ pub(crate) struct Scene {
     /// What the player's watch hears — the queue's outline, then the state —
     /// delivered as its thread delivers them.
     pub player: Vec<ronoctua_player::client::Heard>,
+    /// The held terminals, delivered as the census's thread delivers one
+    /// reading of their state files.
+    pub terminals: Vec<ronoctua_terminals::state::TerminalState>,
     pub steps: Vec<Step>,
 }
 
@@ -199,6 +212,8 @@ struct Asked {
     room: Option<std::path::PathBuf>,
     software: Option<String>,
     accounts_marks: bool,
+    agents: Option<std::path::PathBuf>,
+    terminals: Option<std::path::PathBuf>,
     out: std::path::PathBuf,
     language: String,
     theme: tokens::theme::Theme,
@@ -256,6 +271,8 @@ fn parse(words: &[String]) -> Result<Asked> {
         room: None,
         software: None,
         accounts_marks: false,
+        agents: None,
+        terminals: None,
         out: std::path::PathBuf::from("footer.png"),
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
@@ -327,6 +344,13 @@ fn parse(words: &[String]) -> Result<Asked> {
             "--room" => me.room = Some(std::path::PathBuf::from(value()?)),
             "--software" => me.software = Some(value()?),
             "--accounts-marks" => me.accounts_marks = true,
+            // THE AGENTS ARE IN THE ACCOUNTS' SETS: planting them plants the
+            // accounts' marks they stand among.
+            "--agents" => {
+                me.agents = Some(std::path::PathBuf::from(value()?));
+                me.accounts_marks = true;
+            }
+            "--terminals" => me.terminals = Some(std::path::PathBuf::from(value()?)),
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--language" => me.language = value()?,
             "--theme" => {
@@ -424,8 +448,12 @@ fn parse(words: &[String]) -> Result<Asked> {
 #[derive(Clone, Copy)]
 pub struct Plantings {
     /// The LLM accounts' marks, made by their brain module over the room's
-    /// files at `now` (seconds since the epoch), laid over `mind`.
-    pub accounts_marks: fn(mind: &mut ronoctua_brain::Mind, now: i64),
+    /// files at `now` (seconds since the epoch), laid over `mind` — with the
+    /// agents planted in their sets when `agents` is the text of a list of
+    /// them (`--agents`), which the module reads as it reads its own: a
+    /// planted agent is data, and its mark is the module's drawing of it.
+    pub accounts_marks:
+        fn(mind: &mut ronoctua_brain::Mind, now: i64, agents: Option<&str>) -> Result<()>,
     /// The software centre's reading of `room`, as the machine `host` reads
     /// it, kept for the next opening of its region — where its feed's thread
     /// would put one.
@@ -584,7 +612,16 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         if mind.now == 0 {
             mind.now = now;
         }
-        (composition.plantings.accounts_marks)(&mut mind, now);
+        let agents = asked
+            .agents
+            .as_ref()
+            .map(|file| {
+                std::fs::read_to_string(file)
+                    .with_context(|| format!("could not read `{}`", file.display()))
+            })
+            .transpose()?;
+        (composition.plantings.accounts_marks)(&mut mind, now, agents.as_deref())
+            .with_context(|| "the agents planted with `--agents` do not read")?;
         Some(mind)
     } else {
         mind
@@ -615,6 +652,13 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
             .with_context(|| format!("`{}` is not a state of the player", file.display()))?;
         player.push(ronoctua_player::client::Heard::State(Box::new(state)));
     }
+    // THE HELD TERMINALS, read as the census reads their state files: each a
+    // holder's whole state, the list one reading of the folder.
+    let terminals = match asked.terminals.as_deref() {
+        Some(file) => serde_json::from_str(&read(file)?)
+            .with_context(|| format!("`{}` is not a list of terminals' states", file.display()))?,
+        None => Vec::new(),
+    };
     // THE SOFTWARE CENTRE'S READING of this very room — the window's camera's,
     // so one room is one machine in both doors — kept where its feed's thread
     // would put one, for the view a step opens.
@@ -638,6 +682,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         mind,
         notifications,
         player,
+        terminals,
         steps: asked.steps.clone(),
     };
     let taken = crate::surface::photographed(&conn, scene, composition)?;
@@ -974,6 +1019,47 @@ mod tests {
         assert!(parse(&words(&["--door", "footer", "--hover", "4"])).is_err());
         assert!(parse(&words(&["--door", "footer", "--hover", "4,2,double"])).is_err());
         assert!(parse(&words(&["--door", "footer", "--press", "4,2,triple"])).is_err());
+    }
+
+    /// FAILS IF: `--agents` loses its file, or plants agents without the
+    /// accounts' marks they stand among — their sets are those marks' — or a
+    /// footer asked for the accounts' marks alone is planted agents.
+    #[test]
+    fn the_agents_are_planted_with_their_accounts() {
+        let a = parse(&words(&["--door", "footer", "--agents", "agents.json"]))
+            .expect("the words parse");
+        assert_eq!(
+            a.agents.as_deref(),
+            Some(std::path::Path::new("agents.json"))
+        );
+        assert!(
+            a.accounts_marks,
+            "agents planted with no accounts to stand in"
+        );
+        let b = parse(&words(&["--door", "footer", "--accounts-marks"])).expect("the words parse");
+        assert!(b.accounts_marks && b.agents.is_none());
+        assert!(parse(&words(&["--door", "footer", "--agents"])).is_err());
+        assert!(USAGE.contains("--agents <file>"), "the word is not taught");
+    }
+
+    /// FAILS IF: `--terminals` loses its file — the photo of the background
+    /// terminals' mark would be taken over no terminals, and say nothing —
+    /// takes none, or is not taught.
+    #[test]
+    fn the_terminals_are_planted_from_their_file() {
+        let a = parse(&words(&["--door", "footer", "--terminals", "held.json"]))
+            .expect("the words parse");
+        assert_eq!(
+            a.terminals.as_deref(),
+            Some(std::path::Path::new("held.json"))
+        );
+        let b = parse(&words(&["--door", "footer"])).expect("the words parse");
+        assert!(b.terminals.is_none(), "terminals planted unasked");
+        assert!(parse(&words(&["--door", "footer", "--terminals"])).is_err());
+        assert!(
+            USAGE.contains("--terminals <file>"),
+            "the word is not taught"
+        );
     }
 
     /// FAILS IF: a walk that points is offered no seat, the seat does not

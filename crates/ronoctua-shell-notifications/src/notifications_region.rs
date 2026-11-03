@@ -102,7 +102,7 @@ impl Desk for ToTheFooter {
             .get::<Queue>()
             .and_then(|q| q.history().iter().find(|r| r.key() == key))
             .and_then(|r| crate::desk::deed_of(r, which))
-            .is_some_and(|d| matches!(d, Deed::Command(_)));
+            .is_some_and(|d| matches!(d, Deed::Command(..)));
         if commands {
             way.close();
         }

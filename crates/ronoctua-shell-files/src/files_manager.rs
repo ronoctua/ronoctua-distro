@@ -486,6 +486,10 @@ impl Manager {
     /// A root shell in this directory, through polkit — `--keep-cwd`, or the
     /// root shell lands in `/` and the gesture stops meaning "here". polkit
     /// is what asks; this process never sees a password.
+    ///
+    /// IN THE WINDOW'S OWN PROCESS (`--here`): a root shell is never held in
+    /// the background, where nobody sees it is open — it lives and dies with
+    /// the window it was asked for in.
     fn root_terminal(dir: &Path, way: &mut dyn Doorway) {
         let (Ok(me), Some(pkexec), Some(shell)) = (
             std::env::current_exe(),
@@ -500,6 +504,8 @@ impl Manager {
             program: me.to_string_lossy().into_owned(),
             args: vec![
                 "terminal".to_owned(),
+                "--here".to_owned(),
+                "--".to_owned(),
                 pkexec.to_owned(),
                 "--keep-cwd".to_owned(),
                 shell.to_owned(),

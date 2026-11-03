@@ -84,7 +84,14 @@ in
     # behaviour, needing no IBus/Fcitx, which is right for a machine that ships
     # no input-method framework. The shell's own windows compose in their own
     # reader (`ronoctua_shell_door::door::compose`) and never read this.
-    environment.sessionVariables.GTK_IM_MODULE = "simple";
+    #
+    # ONLY WITHOUT THE INPUT METHOD (2026-11-02): the session runs fcitx5
+    # (`nix/modules/input-method.nix`), and GTK apps reach it through its
+    # Wayland frontend — `simple` would keep Ghostty and Emacs away from it.
+    # fcitx5 composes the Compose key itself, so accents keep working.
+    environment.sessionVariables.GTK_IM_MODULE = lib.mkIf (
+      !config.ronoctua.inputMethod.enable
+    ) "simple";
 
     # What the settings portal answers: `programs.dconf.enable` is the compositor module's.
     programs.dconf.profiles.user.databases = [

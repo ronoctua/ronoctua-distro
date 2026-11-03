@@ -90,4 +90,72 @@
       " * "
     ];
   };
+
+  # THE LLM ACCOUNTS' MARKS — the first glyph of each account's set on the
+  # modeline, which says whose set it is (owner, 2026-11-02: "um glifo similar
+  # ou igual ao logo da empresa"; the owner chose SIMILAR). Ours, in dots, like
+  # Tailscale's above: a reading of the company's mark at 13 px, not a copy of
+  # it — this repository is public, and nothing here rests on nominative use.
+  # They reverse the earlier rule "no brand on the modeline", which drew a
+  # robot per account; the reversal is the owner's.
+
+  # Claude's: a spark. The four rays solid, the four between them light — the
+  # burst Claude's own mark is, at the size a modeline draws.
+  claude = {
+    at = 1;
+    box = 24;
+    first = 2;
+    step = 5;
+    radius = 2;
+    light = 1.4;
+    hollow = 0;
+    rows = [
+      "  *  "
+      " o*o "
+      "*****"
+      " o*o "
+      "  *  "
+    ];
+  };
+
+  # Codex's (OpenAI): a ring around a light core. The blossom OpenAI draws is
+  # interlocking curves, which a grid of dots cannot carry and this file would
+  # need a path for; a closed ring with a heart is the shape that survives at
+  # 13 px, and the one that reads as that mark beside Claude's spark.
+  codex = {
+    at = 2;
+    box = 24;
+    first = 2;
+    step = 5;
+    radius = 2;
+    light = 1.6;
+    hollow = 0;
+    rows = [
+      " *** "
+      "*   *"
+      "* o *"
+      "*   *"
+      " *** "
+    ];
+  };
+
+  # A Claude account on an API key (Anthropic's Console, billed by credits):
+  # Anthropic's "A", so the two Claude kinds are told apart at a glance — the
+  # spark is the subscription's, the letter the API's.
+  claude-api = {
+    at = 3;
+    box = 24;
+    first = 2;
+    step = 5;
+    radius = 2;
+    light = 1.4;
+    hollow = 0;
+    rows = [
+      "  *  "
+      " * * "
+      " * * "
+      "*****"
+      "*   *"
+    ];
+  };
 }

@@ -1569,6 +1569,17 @@ pub const BASE: Contribution = Contribution {
             id: "window-shortcuts",
             label: key::CMD_WINDOW_SHORTCUTS,
         },
+        // THE HELD TERMINALS' TWO (`surface/terminals.rs`): a terminal shown —
+        // its window, or one opened for its group — and the window of a
+        // process, found by walking up from it.
+        Command {
+            id: "terminal-show",
+            label: key::CMD_TERMINAL_SHOW,
+        },
+        Command {
+            id: "window-of-process",
+            label: key::CMD_WINDOW_OF_PROCESS,
+        },
     ],
     // `(sequence, command, argument)`: see `bindings::Row` for why the
     // sequence leaves the leader out and the label is not here.
@@ -1622,10 +1633,13 @@ pub const BASE: Contribution = Contribution {
         // ---------------------------------------------------------------
         // `w` is about windows in general, and opening a TERMINAL is one
         // program, so it has a prefix of its own (the owner's decision). The
-        // doubled key is the external one — Ghostty, the terminal a person
-        // reaches for — and `/` is the one this distro draws itself.
-        ("RET RET", "buffer-terminal-external", None),
-        ("RET /", "buffer-terminal", None),
+        // doubled key is OURS — the terminal this distro draws itself, held
+        // by a process of its own so it outlives its window, the one
+        // `$mod+Return` opens too — and `/` is Ghostty, the external one,
+        // for whoever wants the whole of it (the owner, 2026-11-02: the swap
+        // came with the native terminal becoming usable).
+        ("RET RET", "buffer-terminal", None),
+        ("RET /", "buffer-terminal-external", None),
         // ---------------------------------------------------------------
         // WORKSPACE — `TAB`, and not `e`.
         //
@@ -1857,6 +1871,13 @@ pub const BASE: Contribution = Contribution {
         // the leader's root opens them (`LEADER Alt`) — its row's click and
         // `LEADER :` both reach it.
         "window-shortcuts",
+        // A TERMINAL SHOWN, and the window of a process: what the marks' and
+        // the views' clicks run with an argument — a terminal's id, an
+        // agent's pid — that no sequence can carry. The keyboard reaches the
+        // same terminals by the background view's `RET` (`LEADER RET b`) and
+        // the agents' rows of the accounts view (`LEADER / a`).
+        "terminal-show",
+        "window-of-process",
     ],
     generated: base_generated,
     reached: base_reached,

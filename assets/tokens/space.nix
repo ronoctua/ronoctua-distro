@@ -17,6 +17,13 @@
     # reads as one thing and not as two marks that happen to sit together.
     # The cell belongs to neither glyph: a click on it does nothing.
     bondGap = 1;
+    # THE AIR INSIDE A SET'S GROUND, on each side (2026-11-02): an LLM
+    # account's set is the one segment drawn on a ground of its own, and its
+    # glyphs need a cell of it before the first and after the last, or the
+    # ground ends at the ink. Part of the set's text, so it is measured as it
+    # is drawn. Sets touch one another: the two alternating grounds are what
+    # tells one from the next.
+    setPad = 1;
     # Margin at the screen's edges, in cells.
     #
     # THE RIGHT ONE USED TO BE ZERO, and it was wrong. The reasoning was
@@ -1481,6 +1488,23 @@
   terminal = {
     columns = 80;
     lines = 24;
+    # THE GROUP'S STRIP (2026-11-02, the owner's exception to invariant 4):
+    # with two terminals or more in one window, a thin line per terminal
+    # across the top, the one in front lit. LOGICAL pixels — it is thinner
+    # than a cell on purpose — times the window's scale. The strip's whole
+    # height is the click target, split in as many parts as lines.
+    strip = {
+      heightPx = 7;
+      linePx = 2;
+      gapPx = 3;
+    };
+    # THE FAINT INK (SGR 2), in percent of a whole one: what a program's
+    # dimmed text is drawn at, whatever colour it asked for — the alpha the
+    # cells are drawn with, not a role, because the colour under it is the
+    # program's (`crate::terminal`'s `faint_alpha`). Ghostty's
+    # `faint-opacity` default, a half, so a dim line reads alike in both
+    # terminals.
+    faintPct = 50;
   };
 
   # THE RESIZER'S READY SIZES (`LEADER / r`, then `p` / `P`, `crate::resizer`):

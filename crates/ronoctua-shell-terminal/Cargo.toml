@@ -1,23 +1,48 @@
 [package]
 name = "ronoctua-shell-terminal"
-description = "A terminal in an xdg_toplevel of its own: the shell's terminal, the monitor and the rescue console."
+description = "A terminal in an xdg_toplevel of its own: the viewer of a held terminal, the monitor and the rescue console — and the views of the terminals with no window and of the terminal's settings."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# THE TERMINAL WINDOW (the 2026-10-12 wave): the Wayland half of
-# `ronoctua-term`'s engine — one window, three identities (the terminal, the
-# monitor, the rescue console). On the kit and the door only.
+# THE TERMINAL WINDOW: a VIEWER. The terminal itself — the PTY, the program,
+# the authoritative engine — lives in a holder (`ronoctua-term-holder`, one
+# process per terminal, in a scope of its own), and the window attaches to it,
+# decodes its snapshot into a mirror and draws the mirror as a grid of cells.
+# Three identities (the terminal, the monitor, the rescue console), one
+# viewer. On the kit and the door only.
 [dependencies]
 ronoctua-shell-kit = { path = "../ronoctua-shell-kit" }
 ronoctua-shell-door = { path = "../ronoctua-shell-door" }
 
 ronoctua-tokens = { path = "../ronoctua-tokens" }
 ronoctua-i18n = { path = "../ronoctua-i18n" }
+# A grapheme's cells, for the words this window writes over its grid.
 ronoctua-protocol = { path = "../ronoctua-protocol" }
+# The mirror, its render state and the holder's core (the in-process one).
 ronoctua-term = { path = "../ronoctua-term" }
+# The holder's wire, the registry beside its socket and the spawner.
+ronoctua-terminals = { path = "../ronoctua-terminals" }
+# The grid of cells the door draws (`Content::sheet`).
+ronoctua-render = { path = "../ronoctua-render" }
+# A scrollbar's arithmetic, the same on every list.
+ronoctua-design = { path = "../ronoctua-design" }
+# The group's commands, registered by name (`terminal::KEYS`).
+ronoctua-cmd = { path = "../ronoctua-cmd" }
+# A key as the footer's region reads it (`terminals_region`, the settings').
+ronoctua-keymap = { path = "../ronoctua-keymap" }
+# The registry's folder watched (`Notice`) by the background terminals'
+# window, and `terminal.json` by every terminal window.
+ronoctua-files = { path = "../ronoctua-files" }
+# The person's terminal settings (`terminal.json`, `terminal_settings`).
+ronoctua-store = { path = "../ronoctua-store" }
+serde.workspace = true
+# The background terminals' camera reads a planted census (`--terminals`).
+serde_json.workspace = true
+# The face a cell is measured from (`cells::Geometry::measure`).
+cosmic-text.workspace = true
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true
@@ -26,9 +51,15 @@ tracing.workspace = true
 [dev-dependencies]
 # The door's and the kit's guards hold in these tests too (`test-support`).
 ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
+ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
 
 [lints]
 workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
+env = ["RONOCTUA_KEYS_DIR", "RONOCTUA_XDG_OPEN"]
+# NO `beside` HERE: the holder is looked for beside the program by
+# `ronoctua_terminals::spawn::holder_beside`, and that crate declares it —
+# a declaration here would be one nothing in this crate looks for
+# (`siblings-are-beside`).

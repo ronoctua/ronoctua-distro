@@ -1,4 +1,4 @@
-//! `ronoctua-shell-agents` — the person's LLM accounts (`LEADER m a`):
+//! `ronoctua-shell-agents` — the person's LLM accounts (`LEADER / a`):
 //! Claude Code and Codex, their plans, limits, usage and tokens, a session
 //! and a login of each.
 //!
@@ -31,7 +31,7 @@ pub mod agents_words;
 pub mod key;
 
 /// THE LLM ACCOUNTS' WINDOW the binary runs by name (`ronoctua-shell agents
-/// [n]`, `LEADER m a w`), on the account at place `n` when one is given: the
+/// [n]`, `LEADER / a w`), on the account at place `n` when one is given: the
 /// SAME `agents::View` the footer's region draws.
 pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[ronoctua_shell_kit::doors::Door {
     name: "agents",

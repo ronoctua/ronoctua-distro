@@ -30,6 +30,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cells;
 pub mod chain;
 pub mod gpu;
 
@@ -51,6 +52,7 @@ pub mod image;
 pub mod layout;
 pub mod offscreen;
 pub mod quad;
+pub mod sprite;
 pub mod text;
 
 pub use text::{

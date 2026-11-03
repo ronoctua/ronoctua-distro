@@ -472,6 +472,11 @@ mod tests {
         );
         assert_eq!(args, ["terminal", "/bin/htop", "-d", "5"]);
         assert_eq!(cwd, None);
+        // A terminal entry keeps its folder: the terminal starts where it is
+        // started, so the `Path=` rides on the launch.
+        top.working_directory = Some("/srv".to_owned());
+        let (_, _, cwd) = crate::launch::argv_of(&top).expect("this binary names itself");
+        assert_eq!(cwd.as_deref(), Some("/srv"));
     }
 
     #[test]

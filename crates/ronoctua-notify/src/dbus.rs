@@ -102,6 +102,108 @@ fn text_hint(hints: &HashMap<String, Value<'_>>, name: &str) -> Option<String> {
     String::try_from(raw).ok().filter(|s| !s.is_empty())
 }
 
+/// What a program sent with `Notify`, as the bus delivered it.
+struct Sent<'a, 'v> {
+    app_name: String,
+    app_icon: String,
+    summary: String,
+    body: String,
+    actions: &'a [String],
+    hints: &'a HashMap<String, Value<'v>>,
+    expire_timeout: i32,
+}
+
+/// The notification a program's `Notify` makes, under the id it was given.
+///
+/// What a sender may say is the specification's fields and two hints of
+/// ours — the tags and where its image is — and NOTHING it sends becomes the
+/// notification's [`Notification::subject`]: that is what a command of ours
+/// runs on, and only the footer names it, for what it raises itself. A hint
+/// read into it would let any program on the bus aim `terminal-show` (or
+/// whatever an entry offers) at a thing of its choosing.
+fn of_the_bus(id: u32, sent: Sent<'_, '_>) -> Notification {
+    let Sent {
+        app_name,
+        app_icon,
+        summary,
+        body,
+        actions,
+        hints,
+        expire_timeout,
+    } = sent;
+    let urgency = hints
+        .get("urgency")
+        .and_then(|v| u8::try_from(v).ok())
+        .map_or(Urgency::Normal, Urgency::from_protocol);
+
+    // TAGS, SO AN APP OF OURS CAN NAME ITSELF AT THE SOURCE.
+    //
+    // This is the whole of "one of the distro's apps raises a customised
+    // notification": it sends `--hint=string:tags:transfer,media` and the
+    // catalogue recognises it by the tag, exactly as the out-of-memory one
+    // does from inside the shell. Without it, an app that is not the shell
+    // would have to be recognised by its summary — an English string, in a
+    // system that translates.
+    //
+    // A hint and not a new method: the specification's `Notify` is what
+    // every client already speaks, and a method of our own would make
+    // OUR apps the ones that need a special library.
+    //
+    // Comma separated, trimmed, empties dropped. An app that sends
+    // nonsense here gets a notification with no tags rather than an error:
+    // this is a hint, and a hint that refuses the whole message would be
+    // worse than one that is ignored.
+    let tags: Vec<String> = text_hint(hints, "tags")
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // WHERE THE IMAGE IS, and there are two places by convention.
+    //
+    // A `file://` URL straight in `app_icon` is one of them, and it is what
+    // our own capture writes — that path does not come through this module,
+    // but a sender on the bus may do the same. libnotify does not:
+    // `notify-send -i` loads the file and sends the standard `image-path`
+    // hint instead, leaving `app_icon` empty.
+    //
+    // Reading only the first made every action that needs a file vanish for
+    // every libnotify client, and the symptom was a band two lines tall
+    // where three were expected. `image_path` with an underscore is the
+    // spelling of the older specification, and clients still send it.
+    let icon = Some(app_icon)
+        .filter(|s| !s.is_empty())
+        .or_else(|| text_hint(hints, "image-path"))
+        .or_else(|| text_hint(hints, "image_path"));
+
+    let mut n =
+        Notification::fresh_one(id, app_name, icon, summary, body, urgency).asking(expire_timeout);
+    // THE ACTIONS WERE BEING DROPPED ON THE FLOOR, and the parameter was
+    // called `_actions` to say so. An application that offers a button and
+    // gets no `ActionInvoked` waits for ever — and `GetCapabilities` was
+    // honest about it, which is why nothing broke and nothing worked.
+    n.actions = Action::from_protocol(actions);
+    n.tags = tags;
+    tracing::info!(
+        id,
+        urgency = ?n.urgency,
+        app = %n.app,
+        actions = n.actions.len(),
+        tags = n.tags.len(),
+        // THE ICON FIELD, RAW. It is where a `file://` URL arrives — a
+        // capture puts its path there — and when the actions that need a
+        // file all vanish, this line is the difference between "the sender
+        // did not send one" and "we did not read it".
+        icon = n.icon.as_deref().unwrap_or("-"),
+        "notification received"
+    );
+    n
+}
+
 /// The object exported on the bus.
 struct Server {
     channel: Sender<Event>,
@@ -137,75 +239,17 @@ impl Server {
             self.next_id.fetch_add(1, Ordering::Relaxed).max(1)
         };
 
-        let urgency = hints
-            .get("urgency")
-            .and_then(|v| u8::try_from(v).ok())
-            .map_or(Urgency::Normal, Urgency::from_protocol);
-
-        // TAGS, SO AN APP OF OURS CAN NAME ITSELF AT THE SOURCE.
-        //
-        // This is the whole of "one of the distro's apps raises a customised
-        // notification": it sends `--hint=string:tags:transfer,media` and the
-        // catalogue recognises it by the tag, exactly as the out-of-memory one
-        // does from inside the shell. Without it, an app that is not the shell
-        // would have to be recognised by its summary — an English string, in a
-        // system that translates.
-        //
-        // A hint and not a new method: the specification's `Notify` is what
-        // every client already speaks, and a method of our own would make
-        // OUR apps the ones that need a special library.
-        //
-        // Comma separated, trimmed, empties dropped. An app that sends
-        // nonsense here gets a notification with no tags rather than an error:
-        // this is a hint, and a hint that refuses the whole message would be
-        // worse than one that is ignored.
-        let tags: Vec<String> = text_hint(&hints, "tags")
-            .map(|s| {
-                s.split(',')
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // WHERE THE IMAGE IS, and there are two places by convention.
-        //
-        // A `file://` URL straight in `app_icon` is one of them, and it is what
-        // our own capture writes — that path does not come through this module,
-        // but a sender on the bus may do the same. libnotify does not:
-        // `notify-send -i` loads the file and sends the standard `image-path`
-        // hint instead, leaving `app_icon` empty.
-        //
-        // Reading only the first made every action that needs a file vanish for
-        // every libnotify client, and the symptom was a band two lines tall
-        // where three were expected. `image_path` with an underscore is the
-        // spelling of the older specification, and clients still send it.
-        let icon = Some(app_icon)
-            .filter(|s| !s.is_empty())
-            .or_else(|| text_hint(&hints, "image-path"))
-            .or_else(|| text_hint(&hints, "image_path"));
-
-        let mut n = Notification::fresh_one(id, app_name, icon, summary, body, urgency)
-            .asking(expire_timeout);
-        // THE ACTIONS WERE BEING DROPPED ON THE FLOOR, and the parameter was
-        // called `_actions` to say so. An application that offers a button and
-        // gets no `ActionInvoked` waits for ever — and `GetCapabilities` was
-        // honest about it, which is why nothing broke and nothing worked.
-        n.actions = Action::from_protocol(&actions);
-        n.tags = tags;
-        tracing::info!(
+        let n = of_the_bus(
             id,
-            urgency = ?n.urgency,
-            app = %n.app,
-            actions = n.actions.len(),
-            tags = n.tags.len(),
-            // THE ICON FIELD, RAW. It is where a `file://` URL arrives — a
-            // capture puts its path there — and when the actions that need a
-            // file all vanish, this line is the difference between "the sender
-            // did not send one" and "we did not read it".
-            icon = n.icon.as_deref().unwrap_or("-"),
-            "notification received"
+            Sent {
+                app_name,
+                app_icon,
+                summary,
+                body,
+                actions: &actions,
+                hints: &hints,
+                expire_timeout,
+            },
         );
 
         // A send error only happens with the main loop already dead. There is nothing
@@ -351,5 +395,41 @@ pub fn notification_was_closed(id: u32, reason: Closed) {
     let n = reason as u32;
     if let Err(e) = c.emit_signal(None::<&str>, PATH, NAME, "NotificationClosed", &(id, n)) {
         tracing::warn!(id, reason = n, error = %e, "could not announce the closing");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: anything a program sends on the bus reaches the
+    /// notification's subject — a hint named for it, or one of ours — so a
+    /// foreign app could aim the command of an entry that recognises it
+    /// (`terminal-show`) at a terminal of its choosing.
+    #[test]
+    fn a_bus_notification_never_carries_a_subject() {
+        let mut hints: HashMap<String, Value<'_>> = HashMap::new();
+        for name in ["subject", "terminal", "tags", "x-ronoctua-subject"] {
+            hints.insert(name.to_owned(), Value::from("0123456789abcdef"));
+        }
+        let actions = vec!["see".to_owned(), "See".to_owned()];
+        let n = of_the_bus(
+            7,
+            Sent {
+                app_name: "a program".to_owned(),
+                app_icon: String::new(),
+                summary: "0123456789abcdef".to_owned(),
+                body: String::new(),
+                actions: &actions,
+                hints: &hints,
+                expire_timeout: -1,
+            },
+        );
+        assert_eq!(n.subject, None);
+        // AND THE REST OF WHAT IT SENT IS READ: the test is not passing on a
+        // notification that read nothing at all.
+        assert_eq!(n.id, 7);
+        assert_eq!(n.tags, ["0123456789abcdef"]);
+        assert_eq!(n.actions.len(), 1);
     }
 }

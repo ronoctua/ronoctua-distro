@@ -29,7 +29,7 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
 
    | Protocolo | Para quê | Arquivo | Check |
    |---|---|---|---|
-   | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface/mod.rs`, o rodapé; `files_window.rs`; `software_window.rs`) | — |
+   | `wl_data_device` | arrastar e soltar | `carry.rs` (recebem: `surface/mod.rs`, o rodapé; `files_window.rs`; `software_window.rs`; `terminal.rs`, que cola o caminho, 2026-11-02) | — |
    | `ext-image-copy-capture-v1` | captura de tela do estúdio | `ronoctua-studio`, `screen.rs` | — |
    | `zwlr_screencopy_v1` | a mesma captura, quando falta o de cima (2026-10-04) | `ronoctua-studio`, `screen.rs` | — |
    | `zwp_virtual_keyboard_v1` | teclado na tela (2026-09-25) | `virtual_keys.rs` | `one-virtual-keyboard` |
@@ -37,13 +37,17 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    | `wp_cursor_shape_v1` | a seta do ponteiro (2026-09-25) | `cursor_shape.rs` | `one-cursor-shape` |
    | `ext-session-lock-v1` | a tela de bloqueio (2026-10-31) | `session_lock.rs` | `one-session-lock` |
    | `ext-idle-notify-v1` | o bloqueio sozinho, depois de um tempo sem uso (2026-10-31) | `idle_notify.rs` | `one-idle-notify` |
+   | `zwp_text_input_v3` | o IME (fcitx5) em toda porta que digita (2026-11-02) | `text_input.rs` | `one-text-input` |
 
    O `wp_cursor_shape_v1` existe porque uma superfície que não nomeia um cursor herda a última
    imagem do compositor (a de redimensionar a borda). Pede-se uma forma, e não uma imagem, porque
    cada assento veste o próprio tema recolorido. Porta, rodapé e linha de vida pedem a seta a cada
    `enter`.
 4. **O shell nunca reimplementa layout de janelas.** Um `xdg_toplevel` por buffer nativo; quem
-   posiciona é o compositor.
+   posiciona é o compositor. Exceção do dono (2026-11-02): os grupos de terminais — uma janela de
+   terminal mostra um de vários, com uma linha fina por terminal no topo, só a partir de dois, e
+   um clique numa linha já a traz para a frente (`terminal_strip.rs`; cobra `one-terminal-strip`).
+   Dividir dentro da janela continua do compositor.
 5. **Sem lógica Nix reimplementada em Rust.**
 6. **A máquina se mantém na última versão sozinha.** O flake declara **quais** apps existem e **de
    onde** vêm; o sistema segue o `nixos-unstable` e se reconstrói sozinho toda semana, valendo a
@@ -122,7 +126,11 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    `Name=` de um `.desktop`, igual em todo idioma (2026-10-20, aprovado no plano da leva); a moldura
    em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
-   token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.)
+   token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.) Exceção do
+   dono (2026-11-02): a cor que um programa pede a um terminal — SGR de 256 cores e de 24 bits, e
+   o que OSC 4/10/11/12 troca — é conteúdo, como o emoji e a imagem, e chega ao desenho como dado
+   (`ronoctua_render::cells::Rgba`); os 16 ANSI, o fundo, o cursor e a seleção padrão continuam
+   papéis `terminal.*` da página da porta, ao vivo.
 10. **Ícone de interface é glifo de fonte.** O superpacote de ícones é só fallback de pixmap para
     apps de fora; nenhum componente do design system o consulta. Marca que nenhuma fonte tem é
     desenhada numa fonte nossa (`assets/icons/marks.nix` → `nix/marksgen.nix`, a partir de
@@ -238,6 +246,13 @@ no PATH, o KVM e o `nix-direnv`.
   `ronoctua-player`, `ronoctua-studio`. Falam por socket, um JSON por linha, sempre a mensagem
   inteira (nunca delta); o grande que quase ninguém mostra não vai no estado — ele leva a geração e
   a porta pede fora do laço.
+- **Os terminais** (2026-11-02): um processo guardião por terminal (`ronoctua-term-holder`, num
+  scope transitório `<nome>-term-<id>` em `app.slice`, com o ambiente da sessão) segura o PTY e o
+  motor (`libghostty-vt`) e sobrevive à janela, ao rodapé e ao compositor; a janela é um visor que
+  espelha o motor a partir de um snapshot. O estado é sempre inteiro (`<id>.json` ao lado do
+  socket, o arquivo é o broadcast); a tela, não — ela é um fluxo de bytes para UM visor, como um
+  PTY (desvio aprovado do "nunca delta"). Monitor, resgate, o `man` e o terminal root ficam no
+  próprio processo (`--here`).
 - **`ronoctua-software`**: não é daemon — biblioteca e CLI dos programas da pessoa (`LEADER i`); toda
   ordem é um `Work::Software` que a fila roda como filho, e instalar para a pessoa é DECLARAR
   (`Order::Declare`, grava em `declared.json`).
@@ -441,7 +456,8 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | `cryptsetup`, `losetup` e a imagem do `/private` | `ronoctua-private` (cobra `one-private-boundary`) |
 | os Releases da distro no GitHub e a escrita crua num pendrive | `ronoctua-stick` (cobra `one-stick-boundary`) |
 | o Incus (a API REST pelo socket e o CLI) | `ronoctua-incus` (cobra `one-incus-boundary`) |
-| o estado do Claude Code e do Codex, e o endpoint de uso da Anthropic | `ronoctua-llm` (cobra `one-llm-boundary`) |
+| o estado do Claude Code e do Codex, o endpoint de uso da Anthropic e o registro das sessões que o gancho gerenciado escreve | `ronoctua-llm` (cobra `one-llm-boundary`) |
+| o registro dos terminais (`<id>.json` e `<id>.sock`), o protocolo guardião↔visor e o lançador dos guardiões; o rodapé e o brain leem só os arquivos, nunca o socket no laço | `ronoctua-terminals` |
 | `bootctl`, as variáveis EFI, o `reboot-on-error` do `loader.conf`, o `grub-editenv` e o `grubenv` (BIOS), e o diretório da máquina | `ronoctua-machine` (cobra `one-bootctl-driver`) |
 | os dados declarados da pessoa (`declared.json`, `declined.json`, os relatórios) e a cópia root deles (`person/`, `local/approved.json`, `local/signer.json` no diretório da máquina) | `ronoctua-person` (cobra `one-person-boundary`) |
 | o Cachix: o cache binário da pessoa, o token de envio, o netrc do root e o envio depois da atualização | `ronoctua-cachix` (cobra `binary-cache-token-never-prints`) |
@@ -503,7 +519,11 @@ por um instante só.
 <!-- anchor: L14 --> O `ronoctua-llm` só EMBRULHA a statusline de uma conta do Claude Code e devolve
 a da pessoa byte a byte (cobra `statusline-chains`). O token OAuth é lido só no `usage.rs`, em
 memória zerada, nunca renovado (cobra `llm-tokens-never-linger`). Quem vigia uma conta pergunta os
-caminhos ao `ronoctua_llm::watched`.
+caminhos ao `ronoctua_llm::watched`. O gancho é um drop-in gerenciado que a distro declara
+(`/etc/claude-code/managed-settings.d/`, só `hooks`, nunca `allowManagedHooksOnly`): roda
+`ronoctua-llm hook`, que nunca imprime e nunca sai com 2, e grava o registro das sessões (cobram
+`claude-hook-is-managed`, `claude-hook-is-quiet`); dentro do nosso terminal o estado do agente é o
+OSC 7501, que o guardião lê.
 
 <!-- anchor: L17 -->
 
@@ -545,12 +565,17 @@ caminhos ao `ronoctua_llm::watched`.
 - Perigo é cor, não outro desenho. A modeline em repouso é muda: uma marca só existe quando diz algo.
 
 <!-- anchor: L11 -->
-- Exceção: as marcas das contas LLM (`brain:agent-accounts/claude.<n>`,
-  `brain:agent-accounts/codex.<n>`) ficam na modeline em repouso, uma por conta, o tom dizendo o
-  uso. Declaram `resting = true`, e só as de `assets/brain-resting-marks.nix` podem (cobra
+- Exceção: as contas LLM ficam na modeline em repouso, um conjunto por conta (`sets = N`,
+  `leads`): o glifo da conta (`brain:agent-accounts/claude`, `brain:agent-accounts/claude-api`,
+  `brain:agent-accounts/codex`), o tom dizendo o uso (numa chave de API, se os créditos acabaram),
+  e depois os agentes dela; o agente pronto (`brain:agent-accounts/agent-done.<n>`) e a contagem
+  dos que passam do nono lugar (`brain:agent-accounts/agent-more`) também repousam (2026-11-02).
+  Declaram `resting = true`, e só as de `assets/brain-resting-marks.nix` podem (cobra
   `resting-marks-are-the-approved-ones`); o núcleo descarta uma `Tone::Quiet` sem `resting`. Uma
-  marca tem até 9 instâncias (`instances = N`; cobra `mark-instances-are-bounded`), cada uma
-  `brain:<módulo>/<marca>.<n>`, e o clique entrega o número ao comando de `MarkId::opening`.
+  marca tem até 9 instâncias e um módulo até 9 conjuntos (cobra `mark-instances-are-bounded`); a
+  instância é `brain:<módulo>/<marca>.<n>`, o conjunto um segmento `brain:<módulo>/<n>` em fundos
+  alternados a partir da borda, e o clique entrega ao comando de `MarkId::opening` a chave da
+  instância, ou o número dela, ou o do conjunto.
 - Módulos do brain da pessoa (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`): o id é `my-` + palavra
   kebab, e `my`/`my-…` são só dela, prefixos de chave inclusive (cobra
   `brain-person-module-ids-are-prefixed`). Precisa só de `manifest.nix`, `module.rs` e um `.ftl` por
@@ -617,11 +642,12 @@ caminhos ao `ronoctua_llm::watched`.
   (`keymap-no-collision` derruba o build). `LEADER :` alcança qualquer comando pelo nome.
 - **As teclas de um crate são dele** (um `bindings::Contribution` ao lado da vista), juntadas só pelo
   binário (`keymap::CONTRIBUTIONS`; cobra `every-contribution-is-assembled`).
-- Grupos da leader: `s` sistema (`s q` saídas e o bloqueio de tela, `s e` segurança, `s o`/`s x`
+- Grupos da leader: `RET` terminal (`RET RET` o nosso, `RET /` o Ghostty, `RET b` os terminais sem
+  janela, `RET s` as configurações do terminal), `s` sistema (`s q` saídas e o bloqueio de tela, `s e` segurança, `s o`/`s x`
   containers/Incus, `s z` instalador, `s v` pertences, `s r` rodapé), `w` janela/buffer (a mesma
-  coisa, inv. 4), `m` miscelânea (`m i` ícones, `m a` contas LLM), `c` clipboard, `d` acesso rápido
+  coisa, inv. 4), `m` miscelânea (`m i` ícones), `c` clipboard, `d` acesso rápido
   (`LEADER SPC` flutuando), `=` calculadora, `v` video-metrics, `/` desenvolvimento (`/ r`
-  redimensiona, `/ c` clona o repo), `,` o buffer em foco, `g` o relance (`world-glance`). Em
+  redimensiona, `/ c` clona o repo, `/ a` contas LLM), `,` o buffer em foco, `g` o relance (`world-glance`). Em
   buffer, `, r` é o acorde `C-r`; letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles (`LEADER`/`LEADER LEADER`/`LEADER
   LEADER LEADER` → padrão, janelas, árvore; `bindings::Set::next`). Um toque de `Ctrl`
@@ -774,7 +800,7 @@ caminhos ao `ronoctua_llm::watched`.
 - A API gráfica mudou muito entre versões: leia a fonte da versão pinada, não suponha.
 - `take` é teto, nunca contagem, e `usize::MAX` é sentinela: materializar "todas" as linhas estoura a
   memória e o `systemd-oomd` mata o cgroup.
-- O `tracing` põe aspas em valor `Debug` (procure `engine="alacritty"`). O alvo é o crate que loga, e
+- O `tracing` põe aspas em valor `Debug` (procure `engine="ghostty"`). O alvo é o crate que loga, e
   um `[[bin]]` é um crate com o nome dele: o núcleo e os módulos do brain logam sob
   `ronoctua_brain_daemon::…`, a biblioteca e o `main` sob `ronoctua_brain`.
 - `pub mod key;` entre um `#[cfg(…)]` e o item leva o atributo. E o `cargo clippy` local de uma

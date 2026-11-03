@@ -1,15 +1,20 @@
-# THE PERSON'S LLM ACCOUNTS, one mark each on the modeline, coloured by how
-# much of the account's limits is used.
+# THE PERSON'S LLM ACCOUNTS, one SET each on the modeline: the account's own
+# glyph first, coloured by how much of its limits is used — or, for Claude
+# Code on an API key, which has no limits, whether Claude Code said its
+# credits ran out — and then one glyph per agent working in it.
 #
 # A watch and a run. The watch hears the accounts' numbers move (the limits
 # Claude Code's status line keeps, the usage endpoint's last answer, Codex's
-# session logs) and their agents work (the transcripts) — inotify, never a
-# poll. The run is the usage unit (`ronoctua-llm refresh`): it counts the
+# session logs), their agents work (the transcripts), and each agent start,
+# wait and end (the sessions the managed hook keeps, and what Claude Code
+# tells one of our terminals of itself) — inotify, never a poll; the one
+# clock beside it asks an agent outside our terminals whether it still
+# lives, and only while one is drawn. The run is the usage unit (`ronoctua-llm refresh`): it counts the
 # transcripts and asks the usage endpoint, and the brain starts it only after
 # an account was used and the last start was a while ago — no clock at rest.
 # Why each is so is in `why.md`, beside this.
 {
-  what = "Mark the modeline with each LLM account, coloured by how much of its limits is used; count and ask again after one was used.";
+  what = "Mark the modeline with a set per LLM account — its glyph, coloured by how much of its limits is used (or whether an API key's credits ran out), and one glyph per agent working in it; count and ask again after one was used.";
 
   needs = {
     root = false;
@@ -20,12 +25,17 @@
     network = false;
     # WHERE THE ACCOUNTS ARE AND WHAT THEY SAID comes from the one crate that
     # reads the agents' state (`ronoctua_llm`: the list, `watched`, the
-    # limits and the endpoint's last answer); the lines a mark changes colour
-    # at are a file of the person's (`ronoctua_store`); and the agents' trees
-    # are heard through the one inotify door the brain already uses
-    # (`ronoctua_files::notice`).
+    # limits, the endpoint's last answer and an API key's word on its
+    # credits, the sessions the managed hook keeps and the one reader that
+    # merges them into agents); what a program in one of our terminals says
+    # of itself (OSC 7501) is its holder's state file, read through the
+    # engine-free terminals crate (`ronoctua_terminals`) — never a socket;
+    # the lines a mark changes colour at are a file of the person's
+    # (`ronoctua_store`); and the agents' trees are heard through the one
+    # inotify door the brain already uses (`ronoctua_files::notice`).
     boundaries = [
       "ronoctua-llm"
+      "ronoctua-terminals"
       "ronoctua-store"
       "ronoctua-files"
     ];
@@ -61,31 +71,92 @@
     "unkept"
   ];
 
-  # A ROBOT, two of them: no brand on the modeline (the owner's rule for the
-  # accounts' marks). Claude Code's is the plain one, Codex's the industrial
-  # one; the account's number is drawn beside it.
+  # EACH ACCOUNT LEADS WITH ITS COMPANY'S MARK, read again in dots
+  # (`assets/icons/marks.nix`): Claude Code's spark, the "A" of Claude Code
+  # on an API key, and Codex's ring — similar, not the same. The owner took
+  # back the rule of no brand on the modeline (2026-11-02): the robots that
+  # stood for the accounts said "an agent" and not whose, and an account's
+  # set has to say whose it is with its first glyph. The agents are a glyph
+  # per state, the tone saying it again: working, waiting for you, done.
+  # Failing is the done glyph in danger — danger is a colour, not another
+  # drawing.
   glyphs = {
-    claude = "md-robot_outline";
-    codex = "md-robot_industrial_outline";
+    claude = "ours-claude";
+    claude-api = "ours-claude-api";
+    codex = "ours-codex";
+    working = "md-progress_clock";
+    waiting = "md-progress_question";
+    done = "md-progress_check";
+    more = "md-dots_horizontal";
   };
 
-  # ONE MARK PER ACCOUNT, at rest too — the owner's exception
+  # ONE SET PER ACCOUNT, at rest too — the owner's exception
   # (`assets/brain-resting-marks.nix`, AGENTS.md): the account is there while
-  # it is quiet, and its colour says when it is not. The digit is the
+  # it is quiet, and its colour says when it is not. The set is the
   # account's place in the person's list, the same in the accounts' view, so
-  # nine accounts at most carry one. A click opens the accounts' view on that
-  # account (`agents-open <n>`).
+  # nine accounts at most have one; its lead draws no digit, and a click on
+  # it opens the accounts' view on that account (`agents-open <n>`). An API
+  # key's turns to danger while Claude Code says its credits ran out, and is
+  # quiet otherwise: a key has no window to fill.
+  #
+  # THE AGENTS stand in their account's set, one glyph each and no digit: a
+  # place of nine an agent keeps for as long as it lives, the lowest free one
+  # when it is first seen. A tenth takes the ninth place's agent with it into
+  # `agent-more`, the count of the hidden ones in the loudest of their tones
+  # — so one waiting for you is still seen. A done agent and the count rest
+  # (approved, 2026-11-02): an agent that finished is still there to go back
+  # to. A click on an agent goes to it (`agents-show <session>`).
   marks = {
     claude = {
       glyph = "claude";
       hint = "agent-accounts-mark-claude";
-      instances = 9;
+      sets = 9;
+      leads = true;
+      resting = true;
+    };
+    claude-api = {
+      glyph = "claude-api";
+      hint = "agent-accounts-mark-claude-api";
+      sets = 9;
+      leads = true;
       resting = true;
     };
     codex = {
       glyph = "codex";
       hint = "agent-accounts-mark-codex";
+      sets = 9;
+      leads = true;
+      resting = true;
+    };
+    agent-working = {
+      glyph = "working";
+      hint = "agent-accounts-mark-agent-working";
+      sets = 9;
       instances = 9;
+    };
+    agent-waiting = {
+      glyph = "waiting";
+      hint = "agent-accounts-mark-agent-waiting";
+      sets = 9;
+      instances = 9;
+    };
+    agent-done = {
+      glyph = "done";
+      hint = "agent-accounts-mark-agent-done";
+      sets = 9;
+      instances = 9;
+      resting = true;
+    };
+    agent-failed = {
+      glyph = "done";
+      hint = "agent-accounts-mark-agent-failed";
+      sets = 9;
+      instances = 9;
+    };
+    agent-more = {
+      glyph = "more";
+      hint = "agent-accounts-mark-agent-more";
+      sets = 9;
       resting = true;
     };
   };
@@ -101,10 +172,13 @@
     };
   };
 
-  # WHAT IT RELIES ON AND DOES NOT OWN: the accounts' crate, and the NixOS
-  # module that puts its CLI on the PATH — the program the unit runs.
+  # WHAT IT RELIES ON AND DOES NOT OWN: the accounts' crate, the terminals'
+  # (their state files, where OSC 7501 is kept), and the NixOS module that
+  # puts the accounts' CLI on the PATH — the program the unit runs, and the
+  # managed hook that writes the sessions.
   uses = [
     "crates/ronoctua-llm"
+    "crates/ronoctua-terminals"
     "nix/modules/llm.nix"
   ];
 
@@ -112,7 +186,7 @@
   # with the same colours, so it asks this module for them (`lines`,
   # `tone_of`, the glyphs of its marks) instead of keeping a second copy
   # that could disagree. And the owner's list of the marks drawn at rest
-  # names these two.
+  # names the three leads, the done agent and the count.
   namedBy = {
     "assets/belongings.nix" = [ "agent-accounts" ];
     "assets/brain-resting-marks.nix" = [ "agent-accounts" ];

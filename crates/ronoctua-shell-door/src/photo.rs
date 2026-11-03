@@ -164,11 +164,85 @@ pub struct Film<'a> {
     pub out: std::path::PathBuf,
 }
 
-/// Prints the frame, or draws it into the PNG asked for.
+/// Prints the frame, or draws it into the PNG asked for — on the chrome's
+/// ground, with no grid of cells: every window's frame but a grid's
+/// ([`draw_with`]).
 pub fn draw(
     gpu: &mut ronoctua_render::offscreen::Offscreen,
     images: &mut ronoctua_render::image::Images,
     composed: &crate::door::Composed,
+    logical: (u32, u32),
+    film: &Film<'_>,
+    scale: i32,
+) -> Result<()> {
+    draw_with(
+        gpu,
+        images,
+        composed,
+        Grid {
+            clear: tokens::color::SURFACE_CHROME.to_linear(),
+            sheet: None,
+        },
+        logical,
+        film,
+        scale,
+    )
+}
+
+/// What a window draws past its composed frame: the colour it is cleared
+/// with and its grid of cells (`Content::clear`, `Content::sheet`) — asked of
+/// the window as the door asks it at every present, so a photograph of a
+/// grid IS the grid and not the chrome's empty ground.
+#[derive(Clone, Copy)]
+pub struct Grid<'a> {
+    /// The ground, linear.
+    pub clear: [f32; 4],
+    /// The cells, when the window draws some.
+    pub sheet: Option<&'a ronoctua_render::cells::Sheet>,
+}
+
+impl<'a> Grid<'a> {
+    /// What `content` answers.
+    #[must_use]
+    pub fn of<C: crate::door::Content>(content: &'a C) -> Self {
+        Self {
+            clear: content.clear(),
+            sheet: content.sheet(),
+        }
+    }
+
+    /// The cells on `gpu`'s picture, prepared as the door prepares them:
+    /// over the PHYSICAL pixels, shaped through the text's own faces — none
+    /// for a window that draws no grid.
+    fn prepared(
+        &self,
+        gpu: &ronoctua_render::offscreen::Offscreen,
+        format: wgpu::TextureFormat,
+        text: &mut ronoctua_render::Text,
+    ) -> Result<Option<ronoctua_render::cells::Cells>> {
+        let Some(sheet) = self.sheet else {
+            return Ok(None);
+        };
+        let mut cells = ronoctua_render::cells::Cells::new(&gpu.device, format)?;
+        cells.prepare(
+            &gpu.device,
+            &gpu.queue,
+            sheet,
+            text.fonts(),
+            (gpu.width, gpu.height),
+        );
+        Ok(Some(cells))
+    }
+}
+
+/// [`draw`], over the window's own ground and its grid of cells — drawn
+/// after the rectangles and pictures and under the text, as the door draws
+/// it (`Composed::draw`). Listed, the grid is printed a line a row.
+pub fn draw_with(
+    gpu: &mut ronoctua_render::offscreen::Offscreen,
+    images: &mut ronoctua_render::image::Images,
+    composed: &crate::door::Composed,
+    grid: Grid<'_>,
     logical: (u32, u32),
     film: &Film<'_>,
     scale: i32,
@@ -186,6 +260,9 @@ pub fn draw(
                 "picture {key} {:.1},{:.1} {:.1}x{:.1}",
                 a.x, a.y, a.width, a.height
             );
+        }
+        if let Some(sheet) = grid.sheet {
+            print_sheet(sheet);
         }
         return Ok(());
     }
@@ -225,9 +302,10 @@ pub fn draw(
         &composed.quads,
     );
     images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
+    let cells = grid.prepared(gpu, format, &mut text)?;
     let (drawn, rects, pictures) = (&text, &quads, &*images);
-    gpu.frame(tokens::color::SURFACE_CHROME.to_linear(), |pass| {
-        composed.draw(pass, drawn, rects, pictures)
+    gpu.frame(grid.clear, |pass| {
+        composed.draw(pass, drawn, rects, pictures, cells.as_ref())
     })?;
     let rgba = gpu.read_rgba()?;
     let out = &film.out;
@@ -241,6 +319,25 @@ pub fn draw(
         film.language
     );
     Ok(())
+}
+
+/// A grid, printed: one line a row, its graphemes in a row — what `--list`
+/// says of a window that draws cells.
+fn print_sheet(sheet: &ronoctua_render::cells::Sheet) {
+    use ronoctua_render::cells::{Grapheme, Width};
+    println!("cells {}x{}", sheet.columns(), sheet.lines());
+    for line in 0..sheet.lines() {
+        let text: String = sheet
+            .row(line)
+            .iter()
+            .filter(|c| c.width != Width::Spacer)
+            .map(|c| match &c.grapheme {
+                Grapheme::One(ch) => ch.to_string(),
+                Grapheme::Many(s) => s.to_string(),
+            })
+            .collect();
+        println!("cells line {line} {:?}", text.trim_end());
+    }
 }
 
 /// The variable that says the camera is already in its room.
@@ -276,7 +373,7 @@ pub mod scenes {
     use ronoctua_tokens as tokens;
     use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 
-    use super::{Film, draw, number};
+    use super::{Film, Grid, draw_with, number};
     use crate::door::{Content, Detached, LEFT_BUTTON, RIGHT_BUTTON, Ui};
 
     /// The words every scene's camera takes, after its own.
@@ -724,10 +821,12 @@ Steps — walked in the order they appear:
             println!("the message line says: {m}");
         }
         let logical = (d.ui.width, d.ui.height);
-        draw(
+        // THE WINDOW'S OWN GROUND AND GRID, asked after the frame it painted.
+        draw_with(
             &mut gpu,
             &mut images,
             &composed,
+            Grid::of(&d.content),
             logical,
             &asked.film(),
             d.ui.scale,
@@ -1075,9 +1174,12 @@ keeps no file of its own refuses it."
             &composed.quads,
         );
         images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
+        // THE WINDOW'S GROUND AND ITS GRID, as `super::draw_with` draws them.
+        let grid = super::Grid::of(&d.content);
+        let cells = grid.prepared(&gpu, format, &mut text)?;
         let (drawn, rects, pictures) = (&text, &quads, &images);
-        gpu.frame(tokens::color::SURFACE_CHROME.to_linear(), |pass| {
-            composed.draw(pass, drawn, rects, pictures)
+        gpu.frame(grid.clear, |pass| {
+            composed.draw(pass, drawn, rects, pictures, cells.as_ref())
         })?;
         let rgba = gpu.read_rgba()?;
         ronoctua_render::offscreen::write_png(&asked.out, &rgba, gpu.width, gpu.height)?;
@@ -1100,6 +1202,82 @@ keeps no file of its own refuses it."
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window with a grid of its own, cleared in a ground of its own.
+    struct Gridded(ronoctua_render::cells::Sheet);
+
+    impl crate::door::Content for Gridded {
+        type Hand = ();
+        fn app_id(&self) -> &'static str {
+            "test"
+        }
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+        fn typed(
+            &mut self,
+            _: &mut crate::door::Ui,
+            _: &smithay_client_toolkit::seat::keyboard::KeyEvent,
+            _: smithay_client_toolkit::seat::keyboard::Modifiers,
+        ) {
+        }
+        fn clear(&self) -> [f32; 4] {
+            [0.25, 0.5, 0.75, 1.0]
+        }
+        fn sheet(&self) -> Option<&ronoctua_render::cells::Sheet> {
+            Some(&self.0)
+        }
+    }
+
+    /// FAILS IF: a photograph of a window that draws a grid of cells is
+    /// developed on the chrome's empty ground — the grid and the window's
+    /// own ground left out, as they were before the camera asked for them.
+    #[test]
+    fn a_photograph_asks_the_window_for_its_ground_and_its_grid() {
+        let stroke = ronoctua_render::sprite::Stroke {
+            top: 0,
+            thickness: 1,
+        };
+        let geometry = ronoctua_render::cells::Geometry {
+            cell_width: 10,
+            cell_height: 20,
+            baseline: 15,
+            stroke: 1,
+            underline: stroke,
+            strike: stroke,
+            overline: stroke,
+            size: 14.0,
+            scale: 1,
+        };
+        let defaults = ronoctua_render::cells::Defaults {
+            foreground: ronoctua_render::cells::Rgba::opaque(1, 2, 3),
+            background: ronoctua_render::cells::Rgba::opaque(4, 5, 6),
+            faint: 128,
+        };
+        let window = Gridded(ronoctua_render::cells::Sheet::new(geometry, 3, 2, defaults));
+        let grid = Grid::of(&window);
+        assert_eq!(grid.clear, [0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(grid.sheet.map(|s| (s.columns(), s.lines())), Some((3, 2)));
+        // AND A WINDOW WITH NO GRID has none drawn.
+        struct Plain;
+        impl crate::door::Content for Plain {
+            type Hand = ();
+            fn app_id(&self) -> &'static str {
+                "test"
+            }
+            fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+                String::new()
+            }
+            fn typed(
+                &mut self,
+                _: &mut crate::door::Ui,
+                _: &smithay_client_toolkit::seat::keyboard::KeyEvent,
+                _: smithay_client_toolkit::seat::keyboard::Modifiers,
+            ) {
+            }
+        }
+        assert!(Grid::of(&Plain).sheet.is_none());
+    }
 
     /// FAILS IF: a scene of screens stops planting, or one that is not a
     /// scene plants something.

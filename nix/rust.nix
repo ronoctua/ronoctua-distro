@@ -153,6 +153,16 @@ let
   # emoji: the primary face wins the fallback chain, and with them it drew `UP!`
   # in monochrome next to a coloured `ATM`. See `nix/primary-font.nix`.
   regularFont = primaryFontFile;
+  # AND ITS THREE OTHER STYLES, cut the same way — read at run time, never
+  # embedded (`RONOCTUA_TERMINAL_FACES` in `atRunTime`, below).
+  terminalFaces = pkgs.callPackage ./primary-font.nix {
+    inherit fonts;
+    styles = [
+      "Bold"
+      "Italic"
+      "BoldItalic"
+    ];
+  };
   # THE EMOJI FACE, embedded alongside the Iosevka.
   #
   # The Iosevka draws 75 of the 1,184 single-codepoint emoji (6%), and none of the
@@ -480,15 +490,18 @@ let
     # shortcut runs, and neither implies the other.
     RONOCTUA_BTOP = "${btop}/bin/btop";
     RONOCTUA_BOTTOM = "${bottom}/bin/btm";
-    # WHERE ncurses FINDS `xterm-256color`.
+    # WHERE ncurses FINDS THE TERMINAL'S NAME — `xterm-ghostty`, since the
+    # engine is Ghostty's, and `xterm-256color` for what falls back.
     #
-    # The terminal now tells the program what terminal it is (`TERM`), and a
-    # name whose terminfo is missing brings back the very failure that fixes:
-    # `cannot initialize terminal type`, and the process dies. NixOS does define
-    # `TERMINFO_DIRS` for every profile — this is the floor for when it does not
-    # (the nested loop on a host that is not NixOS), and the variable is only
-    # set when the environment left it empty.
-    RONOCTUA_TERMINFO_DIRS = "${ncurses}/share/terminfo";
+    # The terminal tells the program what terminal it is (`TERM`), and a name
+    # whose terminfo is missing brings back the very failure that fixes:
+    # `cannot initialize terminal type`, and the process dies. NixOS does
+    # define `TERMINFO_DIRS` for every profile — this is the floor for when it
+    # does not (the nested loop on a host that is not NixOS), and the variable
+    # is only set when the environment left it empty. Ghostty's entry comes
+    # from its own terminfo output, not from the Ghostty app the person may
+    # decline.
+    RONOCTUA_TERMINFO_DIRS = "${pkgs.ghostty.terminfo}/share/terminfo:${ncurses}/share/terminfo";
     # What seals the Wi-Fi password into the TPM. A store path for the same reason
     # as the others: the agent runs as a systemd unit, where PATH is minimal.
     RONOCTUA_SYSTEMD_CREDS = "${systemd}/bin/systemd-creds";
@@ -545,8 +558,8 @@ let
     # `PATH` is minimal and a bare name fails far from the cause.
     RONOCTUA_ASK_PASSWORD = "${systemd}/bin/systemd-ask-password";
     # The terminal engine. `ronoctua-term`'s `build.rs` reads this to find the
-    # library; without it the crate compiles with the alacritty engine alone,
-    # and the differential degrades to a golden file — which it says out loud.
+    # library, and refuses to build without it: the product has no other
+    # engine (alacritty is the differential's second opinion only).
     RONOCTUA_GHOSTTY_VT = "${ghosttyVt}";
 
     # THE TORRENT ENGINE. `ronoctua-torrent`'s `build.rs` reads this to find the
@@ -864,6 +877,13 @@ let
     # says how many it has (`Text::coverage`) — which is what the installer and
     # the rescue console run with, and they draw two Latin languages.
     RONOCTUA_COVERAGE_FONTS = "${coverageFonts}";
+    # THE PRIMARY FAMILY'S BOLD, ITALIC AND BOLDITALIC, for a grid of cells
+    # (`ronoctua_render::cells`), cut of their emoji as the embedded Regular
+    # is (`nix/primary-font.nix`). At run time for the coverage faces' reason:
+    # ~45 MB that `include_bytes!` would put in the binary and, the expensive
+    # half, a store path in every unit's compilation. Absent — the installer,
+    # the rescue console — the grid synthesises bold and italic.
+    RONOCTUA_TERMINAL_FACES = "${terminalFaces}";
     # THE ZONE FILES, for the glance's other places.
     #
     # `tzdata` was already here as a BUILD input (`RONOCTUA_TZ_TAB`, the

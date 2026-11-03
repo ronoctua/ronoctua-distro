@@ -117,6 +117,7 @@ pub fn line(
             side: layout::Side::Left,
             shrink: layout::Shrink::AtTheEnd,
             removable: true,
+            place: None,
         },
         layout::Segment {
             id: "sound-number",
@@ -129,6 +130,7 @@ pub fn line(
             side: layout::Side::Left,
             shrink: layout::Shrink::Cut,
             removable: false,
+            place: None,
         },
     ];
     if !bar.is_empty() {
@@ -145,6 +147,7 @@ pub fn line(
                 side: layout::Side::Left,
                 shrink: layout::Shrink::AtTheEnd,
                 removable: true,
+                place: None,
             },
         );
     }

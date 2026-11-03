@@ -1413,6 +1413,58 @@ mod tests {
         assert!(core.shared.snapshot().0.marks.is_empty());
     }
 
+    /// FAILS IF: the mind takes the lead of one set and the lead of another
+    /// for one mark twice and drops the second — identity is the name, the
+    /// set and the instance — or carries a mark of a set published before
+    /// its lead, and in doing so loses the good ones beside it.
+    #[test]
+    fn the_mind_carries_a_lead_in_each_set_and_nothing_before_its_lead() {
+        static SET_MARKS: [MarkId; 2] = [
+            MarkId::declared_in_sets("desk", "desks-desk", "desks-mark-desk", 0, true, 9, true),
+            MarkId::declared_in_sets("busy", "desks-busy", "desks-mark-busy", 9, false, 9, false),
+        ];
+        fn mark(id: MarkId) -> Mark {
+            Mark {
+                id,
+                tone: Tone::Warning,
+                count: 0,
+                act: None,
+            }
+        }
+        let fake = Fake::new(Manifest {
+            schedule: None,
+            marks: &SET_MARKS,
+            ..manifest("desks")
+        })
+        .face(|_| Face {
+            marks: vec![
+                mark(SET_MARKS[1].in_set(2, None).numbered(1, None)),
+                mark(SET_MARKS[0].in_set(1, Some("home".to_owned()))),
+                mark(SET_MARKS[1].in_set(1, None).numbered(1, None)),
+                mark(SET_MARKS[0].in_set(3, Some("work".to_owned()))),
+                mark(SET_MARKS[1].in_set(3, None).numbered(1, None)),
+            ],
+            ..Face::default()
+        });
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        core.publish(1000, Pulse::default());
+        let (mind, _) = core.shared.snapshot();
+        let shown: Vec<String> = mind
+            .marks
+            .iter()
+            .map(|m| format!("{}/{}", m.module, m.what.id.local()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "desks/desk@1",
+                "desks/busy.1@1",
+                "desks/desk@3",
+                "desks/busy.1@3"
+            ]
+        );
+    }
+
     #[test]
     fn a_module_switched_off_shows_nothing() {
         let (fake, _) = noisy();

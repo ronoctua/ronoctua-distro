@@ -10,7 +10,7 @@
 //! whoever knows each daemon and handed in as [`Marks`]; this module only
 //! places it.
 
-use ronoctua_render::layout::{Segment, Shrink, Side};
+use ronoctua_render::layout::{Place, Segment, Shrink, Side};
 use ronoctua_tokens as tokens;
 
 /// The layer-shell surface's namespace.
@@ -21,6 +21,26 @@ use ronoctua_tokens as tokens;
 /// use — so it is an identity rather than a join, and it is the name a
 /// `WAYLAND_DEBUG` trace shows when one is looking for our surface.
 pub const NAMESPACE: &str = "ronoctua-footer";
+
+/// THE RUNG THE BRAIN'S SETS SIT AT — the LLM accounts', one per account:
+/// the farthest from the edge of any on the right, to the left of every
+/// glyph there (the owner, 2026-11-02). A PLACE and not a priority
+/// (`layout::Place`): they go after the workspace numbers, the player, the
+/// devices and the camera, at the brain's own priority ([`SETS_PRIORITY`]).
+pub const SETS_RUNG: u8 = 18;
+
+/// The priority the sets give way at: a brain mark's.
+pub const SETS_PRIORITY: u8 = 9;
+
+/// THE PRIORITY THE BACKGROUND TERMINALS' MARK GIVES WAY AT: a brain mark's,
+/// and not its rung's. It sits on the windows' rung, beside the drawer
+/// (`layout::Place`), but it is the only way a pointer has to a terminal no
+/// window shows — the numbers beside it are each also `LEADER 1`…`9`, and
+/// they go first.
+pub const TERMINALS_AWAY_PRIORITY: u8 = 9;
+
+/// The rung it sits at: the windows' — the numbers', the drawer's.
+pub const WINDOWS_RUNG: u8 = 17;
 
 /// The right-hand side's optional marks, as text — each `None` at rest.
 ///
@@ -82,6 +102,10 @@ pub struct Marks<'a> {
     pub workspaces: &'a [crate::workspaces::Shown],
     /// How many windows the drawer holds — zero draws nothing.
     pub drawer: usize,
+    /// The held terminals no window shows — in the background, or ended and
+    /// not seen since — and whether one of them asks for the person: `None`
+    /// while every terminal has a window (`surface/terminals.rs`).
+    pub terminals_away: Option<(usize, bool)>,
     /// The selection, when something is selected: how many windows, when
     /// that can be counted (`crate::selection`).
     pub selection: Option<Option<usize>>,
@@ -183,6 +207,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // 3. THE TRANSFERS, next to the bell — and it goes away when there is
@@ -206,6 +231,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // 5. THE UPDATE, and it is a mark rather than a measurement.
@@ -237,6 +263,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // 8. THE BATTERY, and 9. THE PROFILE — both absent at rest by the owner's
@@ -263,6 +290,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // SILENCE, AND THE MICROPHONE. Two marks and no ladder: a volume is
@@ -283,6 +311,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE CLIPBOARD'S SYNC AND THE SHELL HISTORY'S, at the same rung and for
@@ -302,6 +331,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if let Some(syncing) = marks.history {
@@ -317,6 +347,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // SYNCTHING, at the same rung and for the same reason: "a thing is not as
@@ -335,6 +366,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if marks.listening {
@@ -346,6 +378,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE PLAYER, the FARTHEST of the right-hand marks from the edge — only
@@ -367,6 +400,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE WORKSPACES THAT HOLD SOMETHING, one number each: one segment per
@@ -388,6 +422,29 @@ pub fn segments(
     // focus and no number, and this is where the pointer finds them. The
     // numbers' rung, pushed before them so it sits between the numbers and
     // the player — it is about windows too.
+    // THE TERMINALS NO WINDOW SHOWS, while there are any: the glyph and how
+    // many. Beside the drawer and nearer the edge, on its rung — they are
+    // windows put away too, a shell still running in each — but a PLACE and
+    // not a rung's priority: it is the only way a pointer reaches them, so
+    // it goes late, after the numbers and the drawer
+    // ([`TERMINALS_AWAY_PRIORITY`]). Whole or not at all: a glyph without
+    // its count would say there is something and not how much.
+    if let Some((count, _)) = marks.terminals_away {
+        let text = format!("{} {count}", tokens::icon::TERMINALS_AWAY);
+        out.push(Segment {
+            id: "terminals-away",
+            min_cols: ronoctua_protocol::cells(&text),
+            text,
+            priority: TERMINALS_AWAY_PRIORITY,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+            place: Some(Place {
+                rung: WINDOWS_RUNG,
+                touching: false,
+            }),
+        });
+    }
     if marks.drawer > 0 {
         out.push(Segment {
             id: "drawer",
@@ -397,6 +454,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // PUSHED FROM THE EDGE INWARDS, all on the numbers' rung, so they read
@@ -417,6 +475,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE TRAILS, while one exists: the glyph with how many windows the one
@@ -436,6 +495,7 @@ pub fn segments(
                 side: Side::Right,
                 shrink: Shrink::Cut,
                 removable: true,
+                place: None,
             });
         }
     }
@@ -448,6 +508,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     for shown in marks.workspaces.iter().rev() {
@@ -462,6 +523,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE CAMERA, between the player and the devices — the owner's order: the
@@ -479,6 +541,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // HAND GESTURES, beside the camera and to its left: the camera is open
@@ -492,6 +555,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE RESIZER, at the top rung and beside the gestures, whose colour it
@@ -508,6 +572,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // WHICH BUILD IS RUNNING, on a machine that builds from a LOCAL checkout.
@@ -530,6 +595,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     } else if let Some(build) = marks.build {
         let (id, glyph) = match build {
@@ -546,6 +612,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // A KEY MODE, at the top rung: while it is on every key means something
@@ -561,6 +628,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // AND RECORDING, one rung above: a recording that nobody remembers is
@@ -574,6 +642,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE WAY OUT, before everything else on this side: whether anything
@@ -592,6 +661,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if marks.adrift {
@@ -603,6 +673,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if let Some(place) = marks.tunnel {
@@ -621,6 +692,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // AND THE OTHER TWO TUNNELS, beside the first and at its priority: they
@@ -639,6 +711,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if marks.tor {
@@ -650,6 +723,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // THE DEVICES, after the battery and the profile: they are about things
@@ -677,6 +751,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     if let Some(p) = profile {
@@ -688,6 +763,7 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
 
@@ -707,6 +783,30 @@ pub fn segments(
             side: Side::Right,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
+        });
+    }
+    // AND THE MODULES' SETS, `brain:<module>/<n>` — an account and its
+    // agents: ONE segment each, its glyphs on a ground of its own
+    // (`brain::sets`), drawn whole or not at all. At their own rung, far from
+    // the edge ([`SETS_RUNG`]), and TOUCHING: the two alternating grounds are
+    // what tells one from the next. Pushed from the last to the first, so
+    // they read `1 2 3` from the left — and the price, the one rule's: the
+    // first is the first of them to go.
+    for set in crate::brain::sets(marks.brain).iter().rev() {
+        let text = crate::brain::set_text(set);
+        out.push(Segment {
+            id: set.id,
+            min_cols: ronoctua_protocol::cells(&text),
+            text,
+            priority: SETS_PRIORITY,
+            side: Side::Right,
+            shrink: Shrink::Cut,
+            removable: true,
+            place: Some(Place {
+                rung: SETS_RUNG,
+                touching: true,
+            }),
         });
     }
 
@@ -721,6 +821,7 @@ pub fn segments(
             side: Side::Left,
             shrink: Shrink::InTheMiddle,
             removable: false,
+            place: None,
         });
     }
     // The mode only exists if there is a buffer with a mode. See the header.
@@ -733,6 +834,7 @@ pub fn segments(
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     // 7. THE STATE — what the buffer is DOING, next to what kind of buffer it is.
@@ -755,6 +857,7 @@ pub fn segments(
             side: Side::Left,
             shrink: Shrink::Cut,
             removable: true,
+            place: None,
         });
     }
     out
@@ -875,6 +978,9 @@ mod tests {
                 instance: 0,
                 label: None,
                 also: Vec::new(),
+                set: 0,
+                leads: false,
+                key: None,
             })
             .collect();
         for columns in [20_u16, 40, 80, 200] {
@@ -934,8 +1040,10 @@ mod tests {
                         tor: true,
                         workspaces: &[],
                         // AND THE DRAWER HOLDING SOMETHING, a selection and
-                        // three trails: more marks the fullest line carries.
+                        // three trails: more marks the fullest line carries —
+                        // and a dozen terminals no window shows, one asking.
                         drawer: 3,
+                        terminals_away: Some((12, true)),
                         selection: Some(Some(2)),
                         trails: ronoctua_compositor::Trails {
                             count: 3,
@@ -1050,6 +1158,205 @@ mod tests {
                 "at {columns} columns the devices pushed the bell off: {ids:?}"
             );
         }
+    }
+
+    /// Three accounts' sets, as the brain draws them: each its lead and an
+    /// agent — and one mark of a module that is a segment of its own.
+    fn three_sets() -> Vec<crate::brain::Drawn> {
+        use ronoctua_brain::mind::Posted;
+        use ronoctua_brain::module::{Mark, MarkId, Tone};
+        static LEAD: MarkId = MarkId::declared_in_sets(
+            "desk",
+            "fixture-desk",
+            "fixture-mark-desk",
+            0,
+            true,
+            9,
+            true,
+        );
+        static BUSY: MarkId = MarkId::declared_in_sets(
+            "busy",
+            "fixture-busy",
+            "fixture-mark-busy",
+            9,
+            false,
+            9,
+            false,
+        );
+        let posted = |id: MarkId| Posted {
+            module: "fixture".to_owned(),
+            what: Mark {
+                id,
+                tone: Tone::Warning,
+                count: 0,
+                act: None,
+            },
+        };
+        let mut marks = vec![posted(MarkId::of(
+            "full",
+            "fixture-full",
+            "fixture-mark-full",
+        ))];
+        for n in 1..=3 {
+            marks.push(posted(LEAD.in_set(n, None)));
+            marks.push(posted(BUSY.in_set(n, None).numbered(1, None)));
+        }
+        crate::brain::marks(Some(&ronoctua_brain::Mind {
+            marks,
+            ..ronoctua_brain::Mind::default()
+        }))
+    }
+
+    /// FAILS IF: a set sits anywhere but to the left of every glyph on the
+    /// right — the workspace numbers, the player, the camera, the devices,
+    /// the other brain marks — two sets stand apart instead of touching, they
+    /// read in any order but `1 2 3` from the left, or a set leaves a line
+    /// that still draws a workspace number, the player or a device: they
+    /// sit far from the edge and go late.
+    #[test]
+    fn the_sets_sit_left_of_every_mark_and_go_after_the_numbers() {
+        let brain = three_sets();
+        let shown = [1, 2, 3].map(|number| crate::workspaces::Shown {
+            number,
+            current: number == 1,
+        });
+        let devices: Vec<crate::bluez_words::Shown> = crate::bluez_words::POOL
+            .iter()
+            .take(2)
+            .map(|at| crate::bluez_words::Shown {
+                at: (*at).to_owned(),
+                text: crate::bluez_words::glyph(ronoctua_bluetooth::Kind::Headphones).to_string(),
+                alarmed: false,
+            })
+            .collect();
+        let marks = Marks {
+            workspaces: &shown,
+            player: Some(tokens::icon::PLAYER),
+            camera: true,
+            drawer: 2,
+            devices: &devices,
+            brain: &brain,
+            ..Marks::default()
+        };
+        let segs = segments("main.rs", "rust", "", 1, &marks);
+        let sets: Vec<&str> = crate::brain::sets(&brain).iter().map(|s| s.id).collect();
+        assert_eq!(sets.len(), 3);
+        let late = |id: &str| {
+            crate::workspaces::number_of(id).is_some()
+                || id == "player"
+                || id == "drawer"
+                || id == "camera"
+                || crate::bluez_words::POOL.contains(&id)
+        };
+        let mut narrowed_past_the_numbers = false;
+        for columns in (20_u16..=200).rev() {
+            let placed = layout::resolve(columns, &segs);
+            let column = |id: &str| placed.iter().find(|c| c.id == id).map(|c| c.column);
+            let drawn: Vec<&layout::Placed> = sets
+                .iter()
+                .filter_map(|id| placed.iter().find(|c| c.id == *id))
+                .collect();
+            if columns == 200 {
+                assert_eq!(drawn.len(), 3, "a set is missing from the widest line");
+                for c in placed.iter().filter(|c| c.edge && !sets.contains(&c.id)) {
+                    for set in &drawn {
+                        assert!(set.column < c.column, "`{}` is left of a set", c.id);
+                    }
+                }
+                // TOUCHING, and `1 2 3` from the left.
+                for pair in drawn.windows(2) {
+                    assert_eq!(
+                        pair[0].column + layout::width(&pair[0].text),
+                        pair[1].column
+                    );
+                }
+                assert!(column(sets[0]) < column(sets[2]));
+            }
+            if drawn.len() < 3 {
+                let left: Vec<&str> = placed.iter().map(|c| c.id).filter(|id| late(id)).collect();
+                assert!(
+                    left.is_empty(),
+                    "at {columns} columns a set went before {left:?}"
+                );
+            }
+            if drawn.len() == 3 && !placed.iter().any(|c| late(c.id)) {
+                narrowed_past_the_numbers = true;
+            }
+        }
+        assert!(
+            narrowed_past_the_numbers,
+            "no width kept the sets and dropped the numbers: the test proved nothing"
+        );
+    }
+
+    /// FAILS IF: the background terminals' mark is drawn with every terminal
+    /// in a window, says anything but its glyph and how many, stands
+    /// anywhere but beside the drawer on the windows' side of the player —
+    /// or goes before the workspace numbers and the drawer on a narrowing
+    /// line: it is the only way a pointer has to those terminals.
+    #[test]
+    fn the_background_terminals_sit_by_the_drawer_and_go_late() {
+        let shown = [1, 2, 3].map(|number| crate::workspaces::Shown {
+            number,
+            current: number == 1,
+        });
+        let marks = Marks {
+            workspaces: &shown,
+            player: Some(tokens::icon::PLAYER),
+            drawer: 2,
+            terminals_away: Some((3, false)),
+            ..Marks::default()
+        };
+        let segs = segments("main.rs", "rust", "", 0, &marks);
+        let away = segs
+            .iter()
+            .find(|s| s.id == "terminals-away")
+            .expect("the mark is drawn");
+        assert_eq!(away.text, format!("{} 3", tokens::icon::TERMINALS_AWAY));
+        let none = segments("main.rs", "rust", "", 0, &Marks::default());
+        assert!(
+            !none.iter().any(|s| s.id == "terminals-away"),
+            "a mark with every terminal in a window"
+        );
+        // BESIDE THE DRAWER, between it and the player, on the widest line.
+        let placed = layout::resolve(200, &segs);
+        let column = |placed: &[layout::Placed], id: &str| {
+            placed.iter().find(|c| c.id == id).map(|c| c.column)
+        };
+        let (Some(drawer), Some(at), Some(player)) = (
+            column(&placed, "drawer"),
+            column(&placed, "terminals-away"),
+            column(&placed, "player"),
+        ) else {
+            panic!("the widest line lost a mark: {placed:?}");
+        };
+        assert!(drawer < at && at < player, "{drawer} {at} {player}");
+        assert_eq!(
+            drawer
+                + layout::width(&tokens::icon::DRAWER.to_string())
+                + tokens::space::MODELINE_SEGMENTGAP,
+            at,
+            "the mark does not stand by the drawer"
+        );
+        // AND IT GOES LATE: no width keeps a number or the drawer without it.
+        let mut kept_it_alone = false;
+        for columns in (10_u16..=200).rev() {
+            let placed = layout::resolve(columns, &segs);
+            let has = |id: &str| placed.iter().any(|c| c.id == id);
+            let windows = has("drawer")
+                || placed
+                    .iter()
+                    .any(|c| crate::workspaces::number_of(c.id).is_some());
+            if windows {
+                assert!(has("terminals-away"), "at {columns} columns it went first");
+            } else if has("terminals-away") {
+                kept_it_alone = true;
+            }
+        }
+        assert!(
+            kept_it_alone,
+            "no width dropped the numbers and kept it: the test proved nothing"
+        );
     }
 
     #[test]

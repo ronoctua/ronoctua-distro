@@ -1060,3 +1060,37 @@ askpass-bar-title-host = Host desconhecido
 askpass-bar-ask-host = Digite yes para confiar neste host
 askpass-bar-title-ssh-other = SSH
 askpass-bar-ask-ssh-other = O SSH está pedindo
+
+## the held terminals (surface/terminals.rs): the modeline's mark for the ones
+## no window shows, showing one, and what one nobody is looking at asks for.
+
+cmd-terminal-show = Mostrar um terminal: a janela dele, ou uma janela para o grupo dele
+cmd-window-of-process = Mostrar a janela de um processo, ou do processo mais próximo acima dele
+hint-terminals-away = { $count ->
+        [one] Um terminal sem janela. Clique para ver a lista.
+       *[other] { $count } terminais sem janela. Clique para ver a lista.
+    }
+hint-terminals-away-asking = { $count ->
+        [one] Um terminal sem janela, e ele chama você. Clique para ver a lista.
+       *[other] { $count } terminais sem janela, e um deles chama você. Clique para ver a lista.
+    }
+echo-terminal-gone = Esse terminal não existe mais.
+echo-terminal-not-one = { $id } não é um terminal.
+echo-no-window-of-process = Nenhuma janela mostra o processo { $pid }, nem um processo acima dele.
+echo-window-of-process-wants-a-pid = Qual processo? O comando recebe o número dele.
+echo-not-this-windows = A janela da frente não faz { $command }.
+notif-terminal-app = terminal
+# A notification a PROGRAM asked for: what is said is the program's own text,
+# and these two only describe the entry.
+notif-terminal-notice-summary = A notificação de um terminal
+notif-terminal-notice-body = O que um programa num terminal pediu para dizer a você.
+notif-terminal-bell-summary = { $title } tocou o sino
+notif-terminal-bell-body = Um terminal que ninguém está vendo tocou o sino.
+notif-terminal-waiting-summary = { $program } está esperando por você em { $title }
+notif-terminal-waiting-body = Ele não pode continuar até você responder.
+notif-terminal-finished-summary = { $code ->
+        [0] { $title }: o comando terminou
+       *[other] { $title }: o comando falhou ({ $code })
+    }
+notif-terminal-finished-body = Um comando longo terminou num terminal que ninguém está vendo.
+notif-action-see = Mostrar

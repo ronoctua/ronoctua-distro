@@ -1,0 +1,17 @@
+0:0-0 bold
+0:2-2 italic
+0:4-4 faint
+0:6-6 inverse
+0:8-8 underline
+0:10-10 strike
+0:12-12 invisible
+1:0-0 fg=p1
+1:1-1 fg=p1 bg=p2
+1:3-3 fg=p9
+1:5-5 fg=p208
+1:7-7 fg=#010203
+1:8-8 fg=#010203 bg=#040506
+2:0-2 bold underline fg=p1
+2:3-5 fg=p1
+2:10-10 underline
+replies: none

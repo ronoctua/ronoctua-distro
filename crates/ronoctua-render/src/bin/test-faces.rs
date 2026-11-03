@@ -109,6 +109,41 @@ fn main() -> Result<()> {
         bail!("the database has {n} faces and should have {FACES}");
     }
 
+    // THE PRIMARY FAMILY'S OTHER STYLES — Bold, Italic, BoldItalic — loaded by
+    // PATH, exactly as `Text::new` does (`text::load_styles`). The cell grid
+    // draws a program's bold in the family's own bold; without the three it
+    // synthesises them, which is the installer's case and reported, not passed.
+    let styles = ronoctua_render::text::load_styles(&mut db);
+    let wanted_styles = std::env::var_os("RONOCTUA_TERMINAL_FACES").is_some();
+    if wanted_styles && styles != ronoctua_render::text::STYLES {
+        bail!(
+            "{styles} of the primary family's {} styles loaded from RONOCTUA_TERMINAL_FACES",
+            ronoctua_render::text::STYLES
+        );
+    }
+    if wanted_styles {
+        let bold = db.query(&glyphon::fontdb::Query {
+            families: &[glyphon::fontdb::Family::Name(tokens::font::FAMILY_MONO)],
+            weight: glyphon::fontdb::Weight::BOLD,
+            ..glyphon::fontdb::Query::default()
+        });
+        let heavy = bold
+            .and_then(|id| db.face(id))
+            .is_some_and(|f| f.weight.0 >= 600);
+        if !heavy {
+            bail!(
+                "a bold `{}` resolved to no bold face",
+                tokens::font::FAMILY_MONO
+            );
+        }
+        println!("styles: {styles} of the primary family, a bold one among them");
+    } else {
+        println!(
+            "styles: SKIPPED, RONOCTUA_TERMINAL_FACES is not set (bold and italic synthesised)"
+        );
+    }
+    let n = db.faces().count();
+
     // THE COVERAGE FACES, exactly as `Text::new` loads them. Without them the
     // four embedded ones stand alone and every check below that names a script
     // is skipped — which is the installer's situation, and is reported rather

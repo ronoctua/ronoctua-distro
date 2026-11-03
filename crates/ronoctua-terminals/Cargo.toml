@@ -1,0 +1,41 @@
+[package]
+name = "ronoctua-terminals"
+description = "The held terminals without their engine: the holder's wire, each terminal's whole state, the registry beside the sockets, the census and the spawner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NO ENGINE, AND THAT IS THE CRATE. The footer counts the terminals nobody is
+# looking at and the brain reads what an agent inside one says; both stand on
+# this, and neither may link `libghostty-vt` for it — `ronoctua-term` links it
+# (its `build.rs` refuses to build without it), so the holder's vocabulary
+# lives here, beside the engine and not inside it.
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A clipboard a program writes may be an image: its bytes cross as base64.
+base64.workspace = true
+# The registry is `$XDG_RUNTIME_DIR/<name>-terms/`, per instance, and the
+# state file is written whole through its atomic write.
+ronoctua-xdg = { path = "../ronoctua-xdg" }
+
+# A test makes the socket a dead holder leaves (an inode nobody listens on)
+# with `mknodat`: binding one and closing it races any test thread that forks
+# meanwhile, whose child holds the listener until it execs.
+[dev-dependencies]
+rustix.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.ronoctua]
+# What this crate reads and what its programs are: `nix/rust/units.nix`.
+#
+# The spawner runs `setsid`, `systemd-run`, `choom` and (for its probe)
+# `true` by store path: the caller may be a unit, whose `PATH` is minimal.
+env = ["RONOCTUA_CHOOM", "RONOCTUA_SETSID", "RONOCTUA_SYSTEMD_RUN", "RONOCTUA_TRUE"]
+# `spawn::start` finds the holder beside its own program.
+beside = ["ronoctua-term-holder"]

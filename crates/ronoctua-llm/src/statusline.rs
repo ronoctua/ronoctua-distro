@@ -3,8 +3,9 @@
 //! # Why a status line at all
 //!
 //! Claude Code hands its status line command, on stdin, the account's
-//! `rate_limits` — the five-hour and the weekly window, in per cent, with the
-//! instant each resets — after every answer. It is the official way to know
+//! `rate_limits` — the windows the plan has, in per cent, with the instant
+//! each resets: five hours and a week, or the week alone (Claude's Ultra,
+//! 2026-11-02) — after every answer. It is the official way to know
 //! them, it costs nothing, and it is fresh exactly when it matters: while the
 //! person is working.
 //!
@@ -36,10 +37,13 @@
 //! and the chained child carries `RONOCTUA_LLM_CHAINED`, which stops a
 //! person's script that calls us from calling itself through us.
 //!
-//! # And Codex
+//! # And Codex, and an API key
 //!
 //! Codex has no status line: it writes its `rate_limits` into its own
-//! session logs, and [`limits`] reads them there.
+//! session logs, and [`limits`] reads them there. Claude Code on an API key
+//! has one, and sends it `rate_limits` null — a key has no windows — so
+//! nothing of ours is put in front of it: it would edit the person's
+//! `settings.json` to keep nothing.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -75,6 +79,12 @@ pub struct Limits {
     pub five_hour: Option<Window>,
     /// The weekly window.
     pub seven_day: Option<Window>,
+    /// The agent's own word that the plan HAS no five-hour window: Claude's
+    /// Ultra has the week alone, and its status line then carries
+    /// `rate_limits` without `five_hour`. A window that is merely not known
+    /// yet leaves this false, so its row still says "not known yet".
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub no_five_hour: bool,
 }
 
 impl Limits {
@@ -86,6 +96,8 @@ impl Limits {
         Self {
             five_hour: running(self.five_hour),
             seven_day: running(self.seven_day),
+            // What the plan has does not reset with a window.
+            no_five_hour: self.no_five_hour,
         }
     }
 }
@@ -196,8 +208,8 @@ fn current(text: &str) -> Option<serde_json::Value> {
     crate::jsontext::raw(text, FIELD).and_then(|raw| serde_json::from_str(raw).ok())
 }
 
-/// A Claude Code account, or the refusal for a Codex one (it has no status
-/// line).
+/// A Claude Code subscription's account, or the refusal for a Codex one (it
+/// has no status line) and an API key's (its status line tells no window).
 fn claude(account: &Account) -> Result<(), Refusal> {
     if account.kind == Kind::Claude && crate::fine_id(&account.id) {
         Ok(())
@@ -211,8 +223,9 @@ fn claude(account: &Account) -> Result<(), Refusal> {
 ///
 /// # Errors
 ///
-/// [`Why::Invalid`] for a Codex account (it has no status line);
-/// [`Why::Unreadable`] when `settings.json` is not a JSON object — it is
+/// [`Why::Invalid`] for a Codex account (it has no status line) or an API
+/// key's (it tells no window); [`Why::Unreadable`] when `settings.json` is
+/// not a JSON object — it is
 /// never rewritten then; [`Why::Failed`] when a file could not be written:
 /// the settings are untouched if the person's line could not be saved, and
 /// the saved line is put back as it was if ours could not be written.
@@ -294,8 +307,8 @@ pub(crate) fn wrap_as(account: &Account, instance: Option<&str>) -> Result<(), R
 ///
 /// # Errors
 ///
-/// [`Why::Invalid`] for a Codex account; [`Why::Unreadable`] when a file is
-/// not what it should be — a saved line beside a `settings.json` that is not
+/// [`Why::Invalid`] for a Codex account or an API key's; [`Why::Unreadable`]
+/// when a file is not what it should be — a saved line beside a `settings.json` that is not
 /// a JSON object included (the person may be editing it): nothing is written
 /// or deleted then, so their line is never lost; [`Why::Failed`] when a file
 /// could not be written.
@@ -339,8 +352,8 @@ pub fn unwrap(account: &Account) -> Result<(), Refusal> {
 ///
 /// # Errors
 ///
-/// [`Why::Invalid`] for a Codex account; [`Why::Unreadable`] when
-/// `settings.json` does not read.
+/// [`Why::Invalid`] for a Codex account or an API key's;
+/// [`Why::Unreadable`] when `settings.json` does not read.
 pub fn wrapped(account: &Account) -> Result<Wrapping, Refusal> {
     claude(account)?;
     let (text, _) = settings_text(&account.dir)?;
@@ -361,7 +374,9 @@ pub fn wrapped(account: &Account) -> Result<Wrapping, Refusal> {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct Kept {
-    /// Always 1.
+    /// 1, or 2 when [`Kept::no_five_hour`] is said: a reader from before
+    /// refuses the field it does not know as unreadable, which is honest,
+    /// and only an account whose plan lacks the window writes a 2.
     format: u32,
     /// When these numbers were first seen, in seconds since the epoch.
     at_s: i64,
@@ -369,6 +384,9 @@ struct Kept {
     five_hour: Option<Window>,
     /// The weekly window.
     seven_day: Option<Window>,
+    /// [`Limits::no_five_hour`].
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    no_five_hour: bool,
 }
 
 /// The file's name, in the account's state folder.
@@ -376,7 +394,7 @@ const LIMITS_FILE: &str = "limits.json";
 
 /// The limits an account's agent last said, without a window that has
 /// reset since: Claude Code's from what our status line kept, Codex's from
-/// its newest session logs.
+/// its newest session logs — and none for an API key, which has no window.
 ///
 /// # Errors
 ///
@@ -387,6 +405,7 @@ pub fn limits(account: &Account) -> Result<Limits, Refusal> {
     let now = crate::time::now_s();
     match account.kind {
         Kind::Codex => crate::tokens::codex_limits(&account.dir).map(|l| l.at(now)),
+        Kind::ClaudeApi => Ok(Limits::default()),
         Kind::Claude => {
             let Some(state) = ronoctua_store::state_dir() else {
                 return Ok(Limits::default());
@@ -402,10 +421,11 @@ fn kept_limits(state: &Path, id: &str) -> Result<Limits, Refusal> {
     match crate::files::read_bounded(&path, MOST_BYTES) {
         Ok(bytes) => serde_json::from_slice::<Kept>(&bytes)
             .ok()
-            .filter(|k| k.format == 1)
+            .filter(|k| k.format == 1 || (k.format == 2 && k.no_five_hour))
             .map(|k| Limits {
                 five_hour: k.five_hour,
                 seven_day: k.seven_day,
+                no_five_hour: k.no_five_hour,
             })
             .ok_or(Refusal::of(Why::Unreadable)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Limits::default()),
@@ -419,43 +439,23 @@ pub(crate) fn limits_path(state: &Path, id: &str) -> Option<PathBuf> {
 }
 
 /// The `rate_limits` of a status line's stdin, when it carries them.
+///
+/// Each window is read alone ([`Window::read`]): one whose shape changed is
+/// not known, and the others still are. Claude Code leaves out a window the
+/// plan does not have rather than sending it empty, so `rate_limits` with
+/// the week and no `five_hour` is the plan's own word ([`Limits::no_five_hour`]).
 fn limits_of(input: &[u8]) -> Option<Limits> {
-    #[derive(Deserialize)]
-    struct Input {
-        #[serde(default)]
-        rate_limits: Option<RateLimits>,
-    }
-    #[derive(Deserialize)]
-    struct RateLimits {
-        #[serde(default)]
-        five_hour: Option<RateWindow>,
-        #[serde(default)]
-        seven_day: Option<RateWindow>,
-    }
-    #[derive(Deserialize)]
-    struct RateWindow {
-        #[serde(default)]
-        used_percentage: Option<f64>,
-        #[serde(default)]
-        resets_at: Option<f64>,
-    }
-    // A window says how much of it is used and when it resets, or it is not
-    // known: a missing percentage read as 0 % would keep the mark calm while
-    // the person is at the edge.
-    let window = |w: Option<RateWindow>| {
-        let w = w?;
-        let at = w.resets_at.filter(|at| at.is_finite() && *at > 0.0)?;
-        let used = w.used_percentage.filter(|p| p.is_finite() && *p >= 0.0)?;
-        Some(Window {
-            used_percent: used as f32,
-            resets_at_s: at as i64,
-        })
+    let input: serde_json::Value = serde_json::from_slice(input).ok()?;
+    let limits = input.get("rate_limits")?.as_object()?;
+    let window = |name: &str| {
+        limits
+            .get(name)
+            .and_then(|w| Window::read(w, "used_percentage"))
     };
-    let input: Input = serde_json::from_slice(input).ok()?;
-    let limits = input.rate_limits?;
     Some(Limits {
-        five_hour: window(limits.five_hour),
-        seven_day: window(limits.seven_day),
+        five_hour: window("five_hour"),
+        seven_day: window("seven_day"),
+        no_five_hour: !limits.contains_key("five_hour") && limits.contains_key("seven_day"),
     })
 }
 
@@ -472,10 +472,11 @@ fn keep_limits(state: &Path, id: &str, input: &[u8], now_s: i64) -> std::io::Res
         return Ok(());
     }
     let kept = Kept {
-        format: 1,
+        format: if limits.no_five_hour { 2 } else { 1 },
         at_s: now_s,
         five_hour: limits.five_hour,
         seven_day: limits.seven_day,
+        no_five_hour: limits.no_five_hour,
     };
     let bytes = serde_json::to_vec_pretty(&kept)?;
     crate::files::write_keeping(&path, &bytes, 0o644)
@@ -504,18 +505,25 @@ impl Chain {
     #[must_use]
     pub fn of_env() -> Self {
         let roots = crate::Roots::of_env();
-        // A relative folder is not one Claude Code could have meant for us:
-        // nothing is guessed then.
-        let agent_dir = match std::env::var_os(Kind::Claude.dir_variable()) {
-            Some(dir) => Some(PathBuf::from(dir)).filter(|d| d.is_absolute()),
-            None => roots.home.as_deref().map(|h| Kind::Claude.native_dir(h)),
-        };
+        let agent_dir = agent_dir_of(&|name| std::env::var_os(name), roots.home.as_deref());
         Self {
             roots,
             agent_dir,
             shell: option_env!("RONOCTUA_LLM_SH").map(PathBuf::from),
             chained: std::env::var_os(CHAINED).is_some(),
         }
+    }
+}
+
+/// The folder of the Claude Code a program of ours runs under — its status
+/// line, its hook: `CLAUDE_CONFIG_DIR` when the environment says it, and
+/// `~/.claude` when it does not (Claude Code's own, opened with the variable
+/// unset). A relative folder is not one Claude Code could have meant for us:
+/// nothing is guessed then.
+pub(crate) fn agent_dir_of(var: crate::Lookup<'_>, home: Option<&Path>) -> Option<PathBuf> {
+    match var(Kind::Claude.dir_variable()) {
+        Some(dir) => Some(PathBuf::from(dir)).filter(|d| d.is_absolute()),
+        None => home.map(|h| Kind::Claude.native_dir(h)),
     }
 }
 
@@ -733,6 +741,7 @@ mod tests {
                     used_percent: 41.2,
                     resets_at_s: 4_102_531_200
                 }),
+                no_five_hour: false,
             }
         );
         assert_eq!(
@@ -1008,10 +1017,73 @@ mod tests {
                     used_percent: 95.5,
                     resets_at_s: 4_102_531_200
                 }),
+                // The window is THERE, only unreadable: not a plan without it.
+                no_five_hour: false,
             })
         );
         let renamed = br#"{"rate_limits":{"five_hour":{"used_pct":12,"resets_at":4102444800}}}"#;
         assert_eq!(limits_of(renamed).unwrap().five_hour, None);
+    }
+
+    /// FAILS IF: an Ultra account — the week alone, the status line leaving
+    /// `five_hour` out — is read as a five-hour window "not known yet"
+    /// forever, or the plan's word is lost on the way to the file and back,
+    /// or after the week resets.
+    #[test]
+    fn an_ultra_status_line_says_the_week_alone() {
+        let input =
+            br#"{"rate_limits":{"seven_day":{"used_percentage":71,"resets_at":1793728800}}}"#;
+        let limits = limits_of(input).unwrap();
+        assert_eq!(
+            limits,
+            Limits {
+                five_hour: None,
+                seven_day: Some(Window {
+                    used_percent: 71.0,
+                    resets_at_s: 1_793_728_800
+                }),
+                no_five_hour: true,
+            }
+        );
+        assert!(
+            limits.at(1_793_728_801).no_five_hour,
+            "the plan does not reset with the week"
+        );
+
+        let dir = scratch("ultra");
+        let state = dir.join("state");
+        keep_limits(&state, "claude-1", input, 1_793_000_000).unwrap();
+        let text = std::fs::read_to_string(limits_path(&state, "claude-1").unwrap()).unwrap();
+        assert!(text.contains("\"format\": 2"), "{text}");
+        assert_eq!(kept_limits(&state, "claude-1").unwrap(), limits);
+
+        // A plan WITH the window writes what it always wrote.
+        let max = br#"{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":1793000600},"seven_day":{"used_percentage":30,"resets_at":1793728800}}}"#;
+        keep_limits(&state, "claude-1", max, 1_793_000_100).unwrap();
+        let text = std::fs::read_to_string(limits_path(&state, "claude-1").unwrap()).unwrap();
+        assert!(text.contains("\"format\": 1"), "{text}");
+        assert!(!text.contains("no-five-hour"), "{text}");
+        assert!(!kept_limits(&state, "claude-1").unwrap().no_five_hour);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: one window whose shape changed (a reset given as a text, a
+    /// percentage given as a string) takes the readable one down with it.
+    #[test]
+    fn a_window_that_changed_its_shape_leaves_the_others() {
+        let input = br#"{"rate_limits":{"five_hour":{"used_percentage":"12","resets_at":4102444800},"seven_day":{"used_percentage":40,"resets_at":"2100-01-02T00:00:00+00:00"}}}"#;
+        let limits = limits_of(input).unwrap();
+        assert_eq!(limits.five_hour, None);
+        assert_eq!(
+            limits.seven_day,
+            Some(Window {
+                used_percent: 40.0,
+                resets_at_s: crate::time::parse_rfc3339("2100-01-02T00:00:00Z").unwrap(),
+            })
+        );
+        assert!(!limits.no_five_hour);
+        assert_eq!(limits_of(br#"{"rate_limits":null}"#), None);
+        assert_eq!(limits_of(br#"{"model":"opus"}"#), None);
     }
 
     #[test]

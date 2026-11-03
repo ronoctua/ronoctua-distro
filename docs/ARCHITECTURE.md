@@ -3999,17 +3999,22 @@ reimplementa layout de janelas, e é o que mantém o invariante 3 possível.
 
 ---
 
-### Terminal: dois motores, e o trait que os torna intercambiáveis
+### Terminal: o motor do Ghostty, um guardião por terminal e a janela como visor
 
-`alacritty_terminal` e a `libghostty-vt`, atrás do mesmo trait `Engine`. O diferencial compara os
-dois e exige diff de grade **zero** nos quinze casos do corpus. Com um motor só ele degradaria para
-golden-file, que pega **regressão** (mudei algo e a saída mudou) e não **divergência** (dois motores
-discordam da mesma sequência) — e o binário imprime quantos motores tem, porque as duas coisas se
-chamam "o diferencial passou" e significam coisas diferentes.
+O motor é a `libghostty-vt`, pinada na tag v1.4.0 (`nix/ghostty-vt.nix`; os pacotes do Zig são a
+cópia do `build.zig.zon.nix` do upstream, porque o FOD que rodava `zig build --fetch` deixou de ser
+determinístico no Zig 0.17). O `alacritty_terminal` sobrou só como segunda opinião, no crate
+`ronoctua-term-differential`, que nunca chega a uma máquina: o diferencial exige diff **zero** entre
+os dois motores nos vinte casos do corpus, cada motor contra os próprios goldens, e o espelho contra
+o original cortado em todo byte.
 
-A `Grid` tem forma **canônica** porque sem ela dois motores nunca seriam comparáveis: espaço no fim
-da linha é removido e TAB vira espaço. Tab é movimento, nunca conteúdo — um motor guarda `\t` na
-célula de origem, outro preenche com espaço, e os dois estão no mesmo estado visual.
+Cada terminal é um processo guardião (`ronoctua-term-holder`, num scope transitório com o ambiente
+da sessão) que segura o PTY e o motor autoritativo — é ele quem responde às perguntas do programa e
+codifica teclas, mouse e colagem contra os modos reais. A janela é um visor: recebe um snapshot e
+depois os bytes já filtrados (o sixel vira imagem do kitty antes do motor), alimenta um espelho e
+desenha pelas células (`ronoctua_render::cells`). Por isso fechar a janela não mata nada, um crash
+leva só um terminal, e o rodapé e o brain leem o estado de cada um no arquivo ao lado do socket,
+sem tocar o socket no laço.
 
 #### `#[repr(C)]` promete arranjar, não conferir
 
@@ -4024,9 +4029,9 @@ bits, largura errada e tamanho errado são só registradores com conteúdo errad
 - `GhosttyCell` é `uint64_t`, não ponteiro. Mesma largura, mesmo registrador, nenhum aviso.
 
 **Quem achou os três foi um programa de vinte linhas em C.** O compilador C confere essas formas de
-graça; o `#[repr(C)]` só promete arranjar o que lhe mandaram arranjar. Seis iterações de tentativa e
-erro no Rust não responderam o que um `sizeof` respondeu de primeira. Os quatro tamanhos estão
-trancados num teste, para a próxima mudança de upstream falhar com número em vez de com tela vazia.
+graça; o `#[repr(C)]` só promete arranjar o que lhe mandaram arranjar. Hoje cada forma do binding é
+conferida contra o compilador C (`ghostty-layout-matches-c`), para a próxima quebra de ABI do
+upstream falhar com número em vez de com tela vazia.
 
 E o cursor **não sai da grade**: pergunta-se ao terminal (`ghostty_terminal_get`), porque ele não é
 conteúdo de célula. Deixá-lo na origem fazia os dois motores divergirem em quinze de quinze casos —
@@ -4040,10 +4045,10 @@ como unidade de usuário, onde `TERM` não existe, e o filho do pty herdava esse
 frase que o próprio `open_application` escreve ("o `htop` aberto direto abre e morre") valia também
 pelo nosso caminho.
 
-O `Pty::open` agora informa `xterm-256color` quando o ambiente não informa nada, e traz o
-`TERMINFO_DIRS` por caminho de store como piso (o NixOS define o dele; o laço aninhado num host que
-não é NixOS, não). Nenhuma das duas linhas sobrescreve o que já existe: quem define `TERM` está
-descrevendo o próprio terminal.
+O terminal diz `TERM=xterm-ghostty` (o motor é o do Ghostty; pelo ssh o rc da distro troca para
+`xterm-256color`) e traz o `TERMINFO_DIRS` por caminho de store como piso, com o terminfo do próprio
+Ghostty — e não o do app, que a pessoa pode recusar. Sem a entrada, cai em `xterm-256color` e avisa
+no log.
 
 O `btop` tem exigência diferente e **barulhenta**: sem locale UTF-8 ele escreve `No UTF-8 locale
 detected!` em vermelho e sai. Na máquina o `LANG` chega do `i18n.defaultLocale` pelo `pam_env`, então
@@ -4073,7 +4078,7 @@ exceção existe.
 **Quem faz flutuar é o compositor** (inv. 4). O que o shell decide é a IDENTIDADE da janela: o mesmo
 terminal sobe com `app_id` `br.ronoctua.monitor` em vez de `br.ronoctua.terminal`, e uma
 `window-rule` casa esse id. Com um `app_id` só, a regra flutuaria todo terminal — inclusive o
-`LEADER RET /`.
+`LEADER RET RET`.
 
 **E a regra é GERADA da mesma constante** (`export-window-rules`, como os acordes). Escrita à
 mão, a string existiria em três lugares — o Rust, `nix/modules/scroll.nix` e `nix/dev.nix` —, e o dia
@@ -4235,7 +4240,7 @@ não tofu, a coisa errada com toda a confiança. O gerador reescreve o `cmap` pa
 (o que a Lucide publica, o que se copia): `house` é `U+E0F5`.
 
 **A face primária vencia o fallback em 75 emoji**, que saíam monocromáticos; a cópia embutida pelo
-renderizador corta os de `Emoji_Presentation=Yes` (`renderer-loads-four-faces` nomeia os casos).
+renderizador corta os de `Emoji_Presentation=Yes` (`renderer-loads-its-faces` nomeia os casos).
 Cortar texto por codepoint inventa desenho (`👩‍❤` + `…`): o corte é por cluster.
 
 #### A página do ícone: um palco quadrado, e o ícone cresce do centro
@@ -20807,10 +20812,12 @@ motivo no log), nunca uma cena vazia que passaria por uma. As datas saem em UTC 
 
 <!-- anchor: L24 -->
 
-### Contas de LLM: a marca e a vista (`agent-accounts`, `LEADER m a`)
+### Contas de LLM: a marca e a vista (`agent-accounts`, `LEADER / a`)
 
-O módulo do brain `agent-accounts` põe uma marca por conta na modeline, e a vista `m a` mostra cada
-conta por inteiro, nas duas portas. O porquê do módulo — a cor, as duas vigias, a unidade só depois
+O módulo do brain `agent-accounts` põe um conjunto por conta na modeline — o glifo da conta (em
+pontos, parecido com o logo da empresa; o dono reverteu a regra "sem marca registrada" em
+2026-11-02) e depois os agentes dela —, e a vista `/ a` mostra cada conta por inteiro, nas duas
+portas. O porquê do módulo — a cor, as duas vigias, a unidade só depois
 de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
 
 - **Uma regra de cor, a do módulo.** A barra de uma janela na vista e a marca na modeline vestem a
@@ -20829,10 +20836,10 @@ de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
   caminho sem pasta fica sem vigia para sempre (numa máquina nova, a linha mudada na vista nunca
   chegaria à marca) — e, se a vigia das linhas cai, a página diz. A vista, se a pasta ainda não
   existe, vigia a pasta existente mais próxima até ela nascer (`Watching::ancestors`).
-- **O dígito é o lugar na lista.** A marca de uma conta leva como instância o lugar dela na lista
-  inteira (não dentro do tipo), e o clique entrega esse número ao `agents-open`, que abre a vista
-  com o cursor naquela conta (`View::aim_at_place`). Um número por tipo seria ambíguo num comando
-  só. Nove no máximo: um dígito.
+- **O conjunto é o lugar na lista.** O conjunto de uma conta é o lugar dela na lista inteira (não
+  dentro do tipo), e o clique no glifo da conta entrega esse número ao `agents-open`, que abre a
+  vista com o cursor naquela conta (`View::aim_at_place`); o de um agente entrega a sessão ao
+  `agents-show`, que vai à janela dele. Nove contas no máximo.
 - **Ler é numa thread.** Uma leitura abre credenciais, os números guardados, a contagem e o fim dos
   logs mais novos de uma conta do Codex; as duas portas a pedem a uma thread (`read_off_the_loop`),
   uma de cada vez, e a resposta chega pelo laço. Um `refresh` (contar e perguntar ao endpoint, com o

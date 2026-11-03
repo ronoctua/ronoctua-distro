@@ -253,6 +253,18 @@
   folder-open = "cod-folder_opened";
   file = "cod-file";
   terminal = "cod-terminal";
+  # TERMINALS WITH NO WINDOW — the modeline's one mark for them, the count
+  # beside it (2026-11-02). tmux's own glyph, because a terminal still running
+  # behind a closed window is exactly what a detached session is.
+  terminals-away = "cod-terminal_tmux";
+  # WHAT A PROGRAM IN A TERMINAL SAYS IT IS DOING (OSC 7501): one family, so
+  # the three read as states of one thing. An error is `program-done` in the
+  # danger colour — danger is a colour, never another drawing. Generic on purpose: the
+  # terminal's views draw any program's state, and the brain's agent marks
+  # name the same glyphs in their own manifest.
+  program-working = "md-progress_clock";
+  program-blocked = "md-progress_question";
+  program-done = "md-progress_check";
   settings = "cod-settings_gear";
   key = "cod-key";
   code = "cod-code";
@@ -577,6 +589,15 @@
   # in this system has it, so it is drawn into one of ours.
   tailscale = "ours-tailscale";
   tor = "linux-tor";
+
+  # ---- LLM accounts ----------------------------------------------------
+  # THE KIND OF AN ACCOUNT, the first glyph of its set on the modeline and
+  # the glyph of its row in the accounts' view (2026-11-02). Drawn by us —
+  # see `assets/icons/marks.nix` — similar to each company's mark and not a
+  # copy of it.
+  account-claude = "ours-claude";
+  account-claude-api = "ours-claude-api";
+  account-codex = "ours-codex";
 
   # ---- Bluetooth -----------------------------------------------------
   # THE DEVICE KINDS, for the modeline's marks and the list's rows.

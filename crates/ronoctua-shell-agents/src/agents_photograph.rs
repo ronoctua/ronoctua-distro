@@ -40,6 +40,10 @@ usage: ronoctua-shell photograph --door agents --places <folder> [options] [step
                         the token counts) — copied first; the copy is what
                         a key changes                        (required)
   --place <n>           open on the account at place n of the list
+  --agents <file>       the agents running in the accounts, planted: a JSON
+                        list as the brain module reads them (account,
+                        session, folder, doing, and optionally terminal and
+                        pid) — drawn in their accounts' sections
   --out <file>          where to write                 (default: agents.png)
   --columns <n>         the window's width, in cells
   --lines <n>           the height, in lines
@@ -62,6 +66,23 @@ const IN_THE_ROOM: &str = "RONOCTUA_AGENTS_CAMERA_ROOM";
 /// The folder the room was copied from, for the list's folders to follow.
 const COPIED_FROM: &str = "RONOCTUA_AGENTS_CAMERA_FROM";
 
+/// The agents a picture plants (`--agents <file>`), read once in the room
+/// and laid over every reading: a running agent is a live process and a
+/// session the hook wrote, which no folder copied into a room can be — so it
+/// is planted as data, in the brain module's own shape, and the view draws
+/// it as it draws any.
+static PLANTED: std::sync::OnceLock<Vec<crate::agents::AgentSeen>> = std::sync::OnceLock::new();
+
+/// The view's own reading, with the planted agents in place of the
+/// machine's.
+fn read_planted(zone: &ronoctua_files::when::Zone) -> crate::agents::Readings {
+    let mut r = crate::agents::read(zone);
+    if let Some(agents) = PLANTED.get() {
+        r.agents.clone_from(agents);
+    }
+    r
+}
+
 /// One step of the walk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
@@ -75,6 +96,7 @@ enum Step {
 struct Asked {
     places: std::path::PathBuf,
     place: Option<usize>,
+    agents: Option<std::path::PathBuf>,
     out: std::path::PathBuf,
     columns: Option<u16>,
     lines: Option<u16>,
@@ -105,6 +127,7 @@ fn parse(words: &[String]) -> Result<Asked> {
     let mut me = Asked {
         places: std::path::PathBuf::new(),
         place: None,
+        agents: None,
         out: std::path::PathBuf::from("agents.png"),
         columns: None,
         lines: None,
@@ -142,6 +165,11 @@ fn parse(words: &[String]) -> Result<Asked> {
                 places = Some(d);
             }
             "--place" => me.place = Some(number("--place", &value()?, 1..=99)?),
+            "--agents" => {
+                let f = std::path::PathBuf::from(value()?);
+                ensure!(f.is_file(), "`--agents {}` is not a file", f.display());
+                me.agents = Some(f);
+            }
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--columns" => me.columns = Some(number("--columns", &value()?, 1..=1000)?),
             "--lines" => me.lines = Some(number("--lines", &value()?, 1..=1000)?),
@@ -398,10 +426,16 @@ fn run(asked: &Asked) -> Result<()> {
     crate::when::prefs::set(crate::when::Choice::default());
     let texts = ronoctua_i18n::Texts::fresh(&asked.language)
         .with_context(|| format!("the language `{}` does not exist", asked.language))?;
+    if let Some(file) = &asked.agents {
+        let text = std::fs::read_to_string(file)
+            .with_context(|| format!("the agents' file `{}`", file.display()))?;
+        let planted = crate::agents::planted_agents(&text).map_err(anyhow::Error::msg)?;
+        let _ = PLANTED.set(planted);
+    }
     let ui = Ui::detached(texts, (1, 1), i32::from(asked.scale))?;
     let window = AgentsWindow::over(
         ronoctua_files::when::Zone::utc(),
-        Reader::Here(crate::agents::read),
+        Reader::Here(read_planted),
         Reach::Nowhere(Vec::new()),
         asked.place,
         &ui.texts,
@@ -488,6 +522,14 @@ mod tests {
         assert_eq!(asked.places, here);
         assert_eq!(asked.place, Some(2));
         assert_eq!(asked.steps.len(), 2);
+        assert_eq!(asked.agents, None);
+        // AGENTS ARE A FILE, planted: a folder or nothing is refused.
+        assert!(
+            parse(&words(&[
+                "--door", "agents", "--places", &dir, "--agents", &dir
+            ]))
+            .is_err()
+        );
         assert!(parse(&words(&["--door", "agents"])).is_err());
         assert!(parse(&words(&["--door", "files", "--places", &dir])).is_err());
     }

@@ -1,0 +1,7 @@
+blue line
+red
+
+
+
+
+cursor: 2,4

@@ -22,6 +22,15 @@ pub(crate) fn now_s() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// Now, in nanoseconds since the epoch: what orders the hook's words on one
+/// session (`sessions::Session::said_at_ns`), two of which can be spawned in
+/// the same second.
+pub(crate) fn now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+}
+
 /// Days since 1970-01-01 of a civil date (proleptic Gregorian).
 pub(crate) const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };

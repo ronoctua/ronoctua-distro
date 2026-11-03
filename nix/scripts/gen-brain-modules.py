@@ -232,16 +232,38 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
         # which is what the golden sample was written with.
         instances = spec.get("instances", 0)
         resting = spec.get("resting", False)
+        # AND ONE THAT STANDS IN SETS, or leads one, says that too
+        # (`MarkId::declared_in_sets`) — the loader has refused any other
+        # shape already; this only refuses to write one it was not handed.
+        sets = spec.get("sets", 0)
+        leads = spec.get("leads", False)
         if not isinstance(instances, int) or isinstance(instances, bool) or not 0 <= instances <= 9:
             fail(ident, f"the mark `{k}` declares {instances!r} instances; a mark has from 1 to 9")
-        if instances:
+        if not isinstance(sets, int) or isinstance(sets, bool) or not 0 <= sets <= 9:
+            fail(ident, f"the mark `{k}` declares {sets!r} sets; a mark stands in from 1 to 9")
+        if leads and (not sets or instances):
+            fail(ident, f"the mark `{k}` leads a set: it stands in sets and has no instances")
+        if sets and leads:
+            doc = f"`brain:{ident}/<1..={sets}>`'s lead, drawn first in its set with the glyph token `{token}`"
+        elif sets and instances:
+            doc = f"One of `brain:{ident}/<1..={sets}>`'s {instances} places, drawn in its set with the glyph token `{token}`"
+        elif sets:
+            doc = f"A mark of `brain:{ident}/<1..={sets}>`, drawn in its set with the glyph token `{token}`"
+        elif instances:
             doc = f"`brain:{ident}/{k}.<1..={instances}>`, drawn with the glyph token `{token}` and its instance"
         else:
             doc = f"`brain:{ident}/{k}`, drawn with the glyph token `{token}`"
         if resting:
             doc += ", and drawn at rest too"
         items.append(f"    /// {doc}.")
-        if instances or resting:
+        if sets:
+            items.append(
+                f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::declared_in_sets("
+                f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}, "
+                f"{instances}, {'true' if resting else 'false'}, "
+                f"{sets}, {'true' if leads else 'false'});"
+            )
+        elif instances or resting:
             items.append(
                 f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::declared("
                 f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}, "

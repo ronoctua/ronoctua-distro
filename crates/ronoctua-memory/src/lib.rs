@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 pub mod camera;
 pub mod emacs;
 pub mod guard;
+// WHOSE CHILD A PROCESS IS, and whether a pid is still the process it was.
+pub mod lineage;
 pub mod machine;
 pub mod net;
 pub mod scan;

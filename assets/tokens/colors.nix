@@ -166,6 +166,27 @@
     # whole argument is written where the rung is, in `NEUTRAL_PAINT`.
     header = "neutral.chrome-band";
 
+    # THE GROUNDS OF THE MODELINE'S SETS — one set per LLM account, its
+    # account's glyph and then its agents', drawn edge to edge on the right of
+    # the modeline, the two tones alternating set by set (owner, 2026-11-02:
+    # "ambas muito próximas a cor de background da modeline"). Two rungs of
+    # their own BELOW the modeline's (`chrome-raised`), between it and the
+    # minibuffer's chrome: above it the next rung is the hover band's, and a
+    # set must never read as the row under the pointer. Drawn only where the
+    # modeline has a band of its own: on a desk's page (the modeline IS the
+    # page) and veiled, a set is its glyphs alone. Gated as grounds (`MARK_SET_GROUNDS` in the generator): every tone
+    # a mark wears reads on both.
+    #
+    # ONE NEW RUNG, AND THE WINDOW'S FOR THE OTHER — measured, not chosen.
+    # Between the chrome (0) and the modeline (0,053) there is room for ONE
+    # rung a ladder step from each neighbour in every theme: two new ones at
+    # 0,027 and 0,040 came to ΔE 0,0093 apart in evilside, under the step the
+    # eye needs (a dark end compresses lightness into fewer visible steps).
+    # So the second tone is the rung that already exists there, the window's
+    # (0,018), and the new one sits halfway between it and the modeline.
+    mark-set = "neutral.mark-set";
+    mark-set-alternate = "neutral.window";
+
     # THE ONE SURFACE WITH AN ALPHA, and it is the film's controls.
     #
     # The file manager's transport is painted ON the picture — the owner asked

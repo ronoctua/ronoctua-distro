@@ -160,7 +160,10 @@ impl Footer {
             Deed::Invoke(action) => {
                 ronoctua_notify::dbus::action_was_invoked(key.id, &action);
             }
-            Deed::Command(cmd) => self.run_command(&cmd),
+            // A COMMAND OF OURS, with what its notification is about as its
+            // argument — the terminal a terminal's notice shows. Only a
+            // notification this footer raised names one.
+            Deed::Command(cmd, subject) => self.run_with(&cmd, subject.as_deref()),
             Deed::CopyPath(_) | Deed::CopyImage(_) => {}
             Deed::Run(program, argv) => {
                 let Some(path) = crate::actions::notification_program(program) else {

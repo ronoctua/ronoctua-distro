@@ -74,10 +74,14 @@ in
     # THE MODULE NAMES NO PATH OF THE AGENTS', AND ITS MARKS OPEN A COMMAND.
     #
     # Where an agent keeps its state is `ronoctua_llm`'s to say (`watched`,
-    # `one-llm-boundary`): a path spelled in the module would stay on the old
-    # layout the day the crate learnt a new one, and the marks would go quiet.
-    # The one file it names is its own lines'. Its marks open a command the
-    # shell's registry has, and every agent the crate knows has its mark.
+    # `one-llm-boundary`), and where our terminals keep theirs is
+    # `ronoctua_terminals`'s: a path spelled in the module would stay on the
+    # old layout the day a crate learnt a new one, and the marks would go
+    # quiet. The one file it names is its own lines'. Both commands its marks
+    # open — an account's lead and count the accounts' view (`OPENS`), an
+    # agent the agent itself (`SHOWS`) — are the shell's registry's, and the
+    # view REACHES the agent's from its rows (the keyboard's twin of a click
+    # on the glyph); and every agent the crate knows has its mark.
     #
     # NOT ASKED HERE: whether the bar in the view and the mark on the modeline
     # agree. That is behaviour, proven by the view's
@@ -124,6 +128,21 @@ in
               wrong.append("the module no longer says which command its marks open")
           elif f'id: "{opens.group(1)}"' not in registry:
               wrong.append(f"the marks open `{opens.group(1)}`, which the shell's registry does not have")
+          shows = re.search(r'const SHOWS: &str = "([a-z-]+)";', kept)
+          if not shows:
+              wrong.append("the module no longer says which command its agents' marks open")
+          elif f'id: "{shows.group(1)}"' not in registry:
+              wrong.append(f"the agents' marks open `{shows.group(1)}`, which the shell's registry "
+                           "does not have")
+          # THE KEYBOARD'S TWIN: the view's rows run the agent's command — its
+          # `OF_THE_ROWS` names the module's constant, cut at its own `];`.
+          rows_at = shown.find("pub const OF_THE_ROWS: &[&str] = &[")
+          of_the_rows = shown[rows_at : shown.find("];", rows_at)] if rows_at >= 0 else ""
+          floor(len(of_the_rows), 60, "characters of the view's `OF_THE_ROWS`")
+          if "SHOW_COMMAND" not in of_the_rows or "pub const SHOW_COMMAND: &str = agent_accounts::SHOWS;" not in shown:
+              wrong.append("the view's rows do not reach the agents' command (`OF_THE_ROWS`, "
+                           "`SHOW_COMMAND = agent_accounts::SHOWS`): a glyph a click goes to "
+                           "would have no key")
 
           if "fn a_bar_and_its_mark_wear_one_colour" not in view:
               wrong.append("the view's test that hands the module and the view one reading and "
@@ -133,8 +152,8 @@ in
           # Kind` first: `Why::id` comes before it in the file.
           kinds = must(scope(llm, r"impl Kind\b"), "ronoctua_llm: `impl Kind`")
           kind_id = must(body_of(kinds, "id"), "ronoctua_llm: `Kind::id`")
-          agents = re.findall(r'=> "([a-z]+)"', kind_id)
-          floor(len(agents), 2, "agents the crate knows")
+          agents = re.findall(r'=> "([a-z][a-z-]*)"', kind_id)
+          floor(len(agents), 3, "kinds the crate knows")
           marks = ${builtins.toJSON (builtins.attrNames module.marks)}
           for agent in agents:
               if agent not in marks:
@@ -144,8 +163,9 @@ in
               for w in wrong:
                   print("ERROR: " + w, file=sys.stderr)
               sys.exit(1)
-          print(f"OK: the module names no path but its lines', its marks open `{opens.group(1)}`, "
-                f"the colours' test is there, and {len(agents)} agents have a mark")
+          print(f"OK: the module names no path but its lines', its marks open `{opens.group(1)}` "
+                f"and `{shows.group(1)}`, the view reaches the second, the colours' test is there, "
+                f"and {len(agents)} agents have a mark")
           END
         '';
   };

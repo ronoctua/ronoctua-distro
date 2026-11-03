@@ -113,6 +113,38 @@ pub(crate) fn write_keeping(path: &Path, bytes: &[u8], fresh_mode: u32) -> std::
     written
 }
 
+/// Writes `bytes` as `path`, atomically, readable by its owner only — a file
+/// of OURS in a folder of ours (the sessions' records), so nothing is kept
+/// from what was there: not its mode, and not a link, which the rename
+/// replaces instead of writing through.
+///
+/// The draft is created `0600` already (`create_new` + `mode`), in the same
+/// folder, and renamed over the file: a reader sees the old record or the new
+/// one, never half of either.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a file with no folder or no name",
+        ));
+    };
+    let draft = dir.join(format!(".{name}.{}.new", std::process::id()));
+    let _ = std::fs::remove_file(&draft);
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&draft)?;
+        file.write_all(bytes)?;
+        std::fs::rename(&draft, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&draft);
+    }
+    written
+}
+
 /// One line of a log, as [`next_line`] found it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Line {
@@ -213,6 +245,32 @@ mod tests {
             .filter(|n| n.ends_with(".new"))
             .collect();
         assert!(left.is_empty(), "no draft left: {left:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: a file of ours is readable by anybody but its owner, keeps
+    /// a looser mode it was found with, or is written THROUGH a link put in
+    /// its place — the link's target would get the session's record.
+    #[test]
+    fn a_private_write_is_the_owners_and_replaces_a_link() {
+        let dir = scratch("private");
+        let file = dir.join("aa.json");
+        std::fs::write(&file, b"old").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&file, b"{}").unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().mode() & 0o777, 0o600);
+        let target = dir.join("elsewhere");
+        std::fs::write(&target, b"theirs").unwrap();
+        let link = dir.join("bb.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_private(&link, b"{}").unwrap();
+        assert!(
+            !std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
         let _ = std::fs::remove_dir_all(dir);
     }
 

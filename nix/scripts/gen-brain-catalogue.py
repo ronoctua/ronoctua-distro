@@ -134,6 +134,8 @@ def main() -> int:
                     "hint": spec["hint"],
                     "instances": spec["instances"],
                     "resting": spec["resting"],
+                    "sets": spec["sets"],
+                    "leads": spec["leads"],
                 }
             )
         for g in m["glyphs"]:

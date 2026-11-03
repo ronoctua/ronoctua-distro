@@ -136,8 +136,11 @@ pub fn act_of(argument: &str) -> Option<(RecordKey, usize)> {
 pub enum Deed {
     /// A foreign app's button: `ActionInvoked` with this action's id.
     Invoke(String),
-    /// A command of the registry, by id.
-    Command(String),
+    /// A command of the registry, by id — with what it is about, when the
+    /// notification names it (`Notification::subject`), as its argument: the
+    /// terminal a terminal's notice shows. `None` for every notification
+    /// from the bus, which never names one.
+    Command(String, Option<String>),
     /// This path, on the clipboard as text.
     CopyPath(String),
     /// This image file, on the clipboard as an image.
@@ -150,7 +153,7 @@ impl Deed {
     /// Whether only the footer can do it — the bus name, the registry.
     #[must_use]
     pub const fn the_footers(&self) -> bool {
-        matches!(self, Self::Invoke(_) | Self::Command(_))
+        matches!(self, Self::Invoke(_) | Self::Command(..))
     }
 }
 
@@ -164,7 +167,7 @@ pub fn deed_of(record: &Record, which: usize) -> Option<Deed> {
     let file = record.notification.file();
     Some(match &action.doing {
         Doing::Invoke => Deed::Invoke(action.id.clone()),
-        Doing::Command(id) => Deed::Command(id.clone()),
+        Doing::Command(id) => Deed::Command(id.clone(), record.notification.subject.clone()),
         Doing::CopyPath => Deed::CopyPath(file?.to_string_lossy().into_owned()),
         Doing::CopyImage => Deed::CopyImage(file?),
         Doing::Run { program, args } => {
@@ -194,7 +197,7 @@ pub fn copy_it(deed: &Deed) -> Option<&'static str> {
         Deed::CopyImage(file) => {
             crate::clipboard_copy::copy_image_to_clipboard(file).map(|()| key::ECHO_IMAGE_COPIED)
         }
-        Deed::Invoke(_) | Deed::Command(_) | Deed::Run(..) => return None,
+        Deed::Invoke(_) | Deed::Command(..) | Deed::Run(..) => return None,
     };
     Some(done.unwrap_or_else(|e| {
         tracing::error!(error = %e, "copying for a notification FAILED");
@@ -221,5 +224,54 @@ mod tests {
         for wrong in ["", "42", "x 1", "42 1 2", "42 -1"] {
             assert_eq!(record_named(wrong), None, "{wrong}");
         }
+    }
+
+    /// A record with one action that runs `command`, and the subject its
+    /// notification names.
+    fn commanding(command: &str, subject: Option<&str>) -> Record {
+        use ronoctua_notify::action::{Action, Doing, Label};
+        let mut n = ronoctua_notify::Notification::fresh_one(
+            3,
+            "terminal".to_owned(),
+            None,
+            "build".to_owned(),
+            "finished".to_owned(),
+            ronoctua_notify::Urgency::Normal,
+        );
+        n.actions = vec![Action {
+            id: "see".to_owned(),
+            label: Label::Text("see".to_owned()),
+            doing: Doing::Command(command.to_owned()),
+        }];
+        n.subject = subject.map(ToOwned::to_owned);
+        Record {
+            notification: n,
+            presentation: ronoctua_notify::Presentation::default(),
+            read: false,
+            place: ronoctua_notify::Place::Band,
+        }
+    }
+
+    /// FAILS IF: a command action loses what its notification is about —
+    /// "show it" on a terminal's notice would show no terminal (or the last
+    /// one) — or a notification that names nothing hands its command an
+    /// argument.
+    #[test]
+    fn a_command_action_carries_its_subject() {
+        let named = commanding("terminal-show", Some("0123456789abcdef"));
+        assert_eq!(
+            deed_of(&named, 0),
+            Some(Deed::Command(
+                "terminal-show".to_owned(),
+                Some("0123456789abcdef".to_owned())
+            ))
+        );
+        let bare = commanding("bluetooth-open", None);
+        assert_eq!(
+            deed_of(&bare, 0),
+            Some(Deed::Command("bluetooth-open".to_owned(), None))
+        );
+        assert!(deed_of(&named, 0).is_some_and(|d| d.the_footers()));
+        assert_eq!(deed_of(&named, 1), None, "an action that is not there");
     }
 }

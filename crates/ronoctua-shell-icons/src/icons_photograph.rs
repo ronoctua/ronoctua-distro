@@ -494,7 +494,7 @@ fn shoot(d: &mut Detached<crate::icons_window::IconsWindow>, asked: &Asked) -> R
     images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
     let (drawn, rects, pictures) = (&text, &quads, &images);
     gpu.frame(tokens::color::SURFACE_CHROME.to_linear(), |pass| {
-        composed.draw(pass, drawn, rects, pictures)
+        composed.draw(pass, drawn, rects, pictures, None)
     })?;
     let rgba = gpu.read_rgba()?;
     ronoctua_render::offscreen::write_png(&asked.out, &rgba, gpu.width, gpu.height)?;

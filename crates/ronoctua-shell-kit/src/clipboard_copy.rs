@@ -30,7 +30,23 @@ use anyhow::{Context as _, Result};
 ///
 /// The binary was not put in the build, did not run, or exited with an error.
 pub fn copy_to_clipboard(text: &str) -> Result<()> {
-    copy_bytes(text.as_bytes(), None)
+    copy_bytes(text.as_bytes(), None, false)
+}
+
+/// Puts a text on the PRIMARY selection — what a sweep of the pointer
+/// copies, and a middle click pastes — and NOT on the clipboard: selecting
+/// is not copying, and `C-v` still pastes what was copied.
+///
+/// The same `wl-copy`, told `--primary`, for the same reason a process
+/// serves the clipboard: the selection outlives the window it was swept in.
+/// The clipboard's history never keeps it — it ignores the primary
+/// selection's events, which change on every drag.
+///
+/// # Errors
+///
+/// As [`copy_to_clipboard`]'s.
+pub fn copy_to_primary(text: &str) -> Result<()> {
+    copy_bytes(text.as_bytes(), None, true)
 }
 
 /// Puts an IMAGE FILE on the system clipboard, as `image/png` — a capture,
@@ -45,7 +61,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
 pub fn copy_image_to_clipboard(file: &std::path::Path) -> Result<()> {
     let bytes =
         std::fs::read(file).with_context(|| format!("could not read {}", file.display()))?;
-    copy_bytes(&bytes, Some("image/png"))
+    copy_bytes(&bytes, Some("image/png"), false)
 }
 
 // UNDER EVERY CRATE'S TESTS, and not only this one's: `cfg(test)` is true in
@@ -61,25 +77,36 @@ thread_local! {
     /// entry is the type it was offered as, if any, and the bytes.
     pub static COPIED: std::cell::RefCell<Vec<(Option<String>, Vec<u8>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// WHAT THE TESTS PUT ON THE PRIMARY SELECTION, apart from [`COPIED`]:
+    /// the clipboard and the primary selection are two selections, and a
+    /// sweep that landed on the clipboard is the defect a test of it reads.
+    pub static COPIED_PRIMARY: std::cell::RefCell<Vec<Vec<u8>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The one way bytes reach `wl-copy`, with or without a type.
-fn copy_bytes(bytes: &[u8], mime: Option<&str>) -> Result<()> {
+/// The one way bytes reach `wl-copy`, with or without a type, onto the
+/// clipboard or the `primary` selection.
+fn copy_bytes(bytes: &[u8], mime: Option<&str>, primary: bool) -> Result<()> {
     #[cfg(any(test, feature = "test-support"))]
     {
-        COPIED.with(|c| {
-            c.borrow_mut()
-                .push((mime.map(ToOwned::to_owned), bytes.to_vec()))
-        });
+        if primary {
+            COPIED_PRIMARY.with(|c| c.borrow_mut().push(bytes.to_vec()));
+        } else {
+            COPIED.with(|c| {
+                c.borrow_mut()
+                    .push((mime.map(ToOwned::to_owned), bytes.to_vec()));
+            });
+        }
         Ok(())
     }
     #[cfg(not(any(test, feature = "test-support")))]
-    copy_bytes_for_real(bytes, mime)
+    copy_bytes_for_real(bytes, mime, primary)
 }
 
 /// [`copy_bytes`], outside the tests.
 #[cfg(not(any(test, feature = "test-support")))]
-fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>) -> Result<()> {
+fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>, primary: bool) -> Result<()> {
     use std::io::Write as _;
 
     // A STORE PATH, never a name: the `PATH` of a systemd scope is
@@ -90,6 +117,9 @@ fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>) -> Result<()> {
     )?;
 
     let mut cmd = std::process::Command::new(path);
+    if primary {
+        cmd.arg("--primary");
+    }
     if let Some(mime) = mime {
         cmd.args(["--type", mime]);
     }
@@ -135,4 +165,25 @@ fn copy_bytes_for_real(bytes: &[u8], mime: Option<&str>) -> Result<()> {
         anyhow::bail!("wl-copy exited with {status}; the reason is in the log above");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: a text swept onto the primary selection lands on the
+    /// clipboard — `C-v` would paste the last thing a pointer passed over,
+    /// and the clipboard's history would fill with every drag — or a copy to
+    /// the clipboard lands on the primary selection.
+    #[test]
+    fn the_primary_selection_is_not_the_clipboard() {
+        COPIED.with(|c| c.borrow_mut().clear());
+        COPIED_PRIMARY.with(|c| c.borrow_mut().clear());
+        copy_to_primary("swept").expect("copied");
+        copy_to_clipboard("copied").expect("copied");
+        let primary = COPIED_PRIMARY.with(|c| c.borrow().clone());
+        let clipboard = COPIED.with(|c| c.borrow().clone());
+        assert_eq!(primary, vec![b"swept".to_vec()]);
+        assert_eq!(clipboard, vec![(None, b"copied".to_vec())]);
+    }
 }
