@@ -1230,11 +1230,12 @@ impl Composed {
     /// Draws the frame, once its pipelines were handed it — the text and the
     /// cells over the PHYSICAL pixels, the rectangles and the pictures over
     /// the LOGICAL ones (`crate::hidpi`, and `Door::present`) — in the
-    /// canvas's order: the rectangles under, the pictures, the rectangles
-    /// over, a grid of cells if the window has one ([`Content::sheet`]), the
-    /// text. There is no depth test — later is on top: the window's own
-    /// header, line and messages stay over the grid, and the grid's
-    /// backgrounds over the window's ground.
+    /// canvas's order: the rectangles under, the pictures, a grid of cells if
+    /// the window has one ([`Content::sheet`]), the rectangles over, the
+    /// text. There is no depth test — later is on top: the grid's backgrounds
+    /// over the window's ground, and the top layer — a claim, a sweep, the
+    /// terminal's scrollbar while it is used — and the window's own header,
+    /// line and messages over the grid.
     ///
     /// # Errors
     ///
@@ -1250,10 +1251,10 @@ impl Composed {
         let total = u32::try_from(self.quads.len()).unwrap_or(u32::MAX);
         quads.draw_range(pass, 0, self.split);
         images.draw(pass);
-        quads.draw_range(pass, self.split, total);
         if let Some(cells) = cells {
             cells.draw(pass);
         }
+        quads.draw_range(pass, self.split, total);
         text.draw(ronoctua_render::Atlas::Pinned, pass)
     }
 }

@@ -111,6 +111,15 @@ const PIXELS_PER_POINT: f32 = 96.0 / 72.0;
 /// It is the other terminal's, and it moves when that one's does.
 const BLINK: std::time::Duration = std::time::Duration::from_millis(600);
 
+/// HOW LONG THE SCROLLBAR STAYS after the last thing that showed it — a
+/// wheel, a page key, a press on it, the pointer leaving its edge: GTK's
+/// overlay scrollbar's own pause, which Ghostty's bar keeps, so the bar comes
+/// and goes alike in both terminals.
+///
+/// A TIMING AND NOT A TOKEN, as the blink is: it is how long a thing that was
+/// used stays at hand, not what anything looks like.
+const BAR_SHOWN: std::time::Duration = std::time::Duration::from_millis(1000);
+
 /// THE LONGEST BETWEEN TWO CLICKS OF A DOUBLE CLICK: GTK's own default
 /// (`gtk-double-click-time`), which Ghostty takes when it is told none —
 /// what every other program on the desktop counts a double click by.
@@ -511,8 +520,21 @@ pub struct TerminalWindow {
     /// where a composition is drawn and the input method's guesses open,
     /// kept while the program hides it (as it does to redraw).
     ime_at: Option<(u16, u16)>,
-    /// The bar's track as last drawn — where a press grabs it.
+    /// The bar's track as last drawn — where a press grabs it. `None` while
+    /// it is hidden: a bar is grabbed only where it is drawn.
     bar_track: Option<chrome::Rect>,
+    /// Where the bar WOULD be while there is history to scroll, shown or not:
+    /// the pointer entering it is what shows it.
+    bar_zone: Option<chrome::Rect>,
+    /// THE BAR IS DRAWN, over the grid's right edge (the owner's exception,
+    /// 2026-11-03): only while it is used, so it never takes the program's
+    /// room.
+    bar_shown: bool,
+    /// The pointer is on the bar's edge: it stays while it is.
+    bar_hovered: bool,
+    /// The clock that hides it [`BAR_SHOWN`] after the last use — armed only
+    /// while it is shown.
+    bar_hide: Option<calloop::RegistrationToken>,
     /// A retitle waits for the loop.
     retitle_owed: bool,
     /// The window closes once its line was read: no terminal could start.
@@ -606,6 +628,10 @@ impl TerminalWindow {
             preedit: None,
             ime_at: None,
             bar_track: None,
+            bar_zone: None,
+            bar_shown: false,
+            bar_hovered: false,
+            bar_hide: None,
             retitle_owed: false,
             closing: false,
             refill: true,
@@ -1699,6 +1725,10 @@ impl TerminalWindow {
             }
             Kept::Group(_) | Kept::Search => {}
         }
+        // THE HISTORY PAGED THROUGH shows where in it the view is.
+        if matches!(kept, Kept::Leaf(_) | Kept::Prompt(_)) {
+            self.show_bar(ui);
+        }
         self.view_moved(ui);
     }
 
@@ -2004,6 +2034,51 @@ impl TerminalWindow {
         terminal_strip::height(self.group.len()) as f32
     }
 
+    /// THE BAR SHOWN, and its clock started over: it goes [`BAR_SHOWN`]
+    /// after this, unless the pointer is on it then.
+    fn show_bar(&mut self, ui: &mut Ui) {
+        if !self.bar_shown {
+            self.bar_shown = true;
+            ui.ask_paint();
+        }
+        if let (Some(token), Some(handle)) = (self.bar_hide.take(), &self.handle) {
+            handle.remove(token);
+        }
+        let Some(handle) = &self.handle else { return };
+        let armed = handle.insert_source(
+            calloop::timer::Timer::from_duration(BAR_SHOWN),
+            |_, (), door: &mut Door<Self>| {
+                let t = &mut door.content;
+                if t.bar_hovered {
+                    return calloop::timer::TimeoutAction::ToDuration(BAR_SHOWN);
+                }
+                t.bar_hide = None;
+                t.bar_shown = false;
+                door.ui.ask_paint();
+                calloop::timer::TimeoutAction::Drop
+            },
+        );
+        match armed {
+            Ok(token) => self.bar_hide = Some(token),
+            Err(e) => tracing::warn!(error = %e, "the scrollbar's pause could not be armed"),
+        }
+    }
+
+    /// The pointer at `at`: on the bar's edge, the bar shows and stays; off
+    /// it, its pause runs out.
+    fn hover_bar(&mut self, ui: &mut Ui, at: (f64, f64)) {
+        let on = self
+            .bar_zone
+            .is_some_and(|z| crate::bars::Track::of(z).holds(at.0, at.1));
+        if on && !self.bar_hovered {
+            self.bar_hovered = true;
+            self.show_bar(ui);
+        } else if !on && self.bar_hovered {
+            self.bar_hovered = false;
+            self.show_bar(ui);
+        }
+    }
+
     /// Whether `at` is on the bar's track, as the last frame drew it.
     fn on_the_bar(&self, at: (f64, f64)) -> bool {
         self.bar_track
@@ -2028,6 +2103,7 @@ impl TerminalWindow {
             front.mirrored.with(|m| m.scroll(Scroll::Row(row)));
         }
         self.view_moved(ui);
+        self.show_bar(ui);
     }
 
     /// Whether `at` is on the line drawn over the last row — a question or
@@ -2100,6 +2176,7 @@ impl TerminalWindow {
             Some(Wheel::View(by)) => {
                 front.mirrored.with(|m| m.scroll(Scroll::Lines(by)));
                 self.view_moved(ui);
+                self.show_bar(ui);
             }
             None => {}
         }
@@ -2776,8 +2853,10 @@ impl Content for TerminalWindow {
         if let Some(strip) = Strip::of(ui.width, self.group.len()) {
             canvas.under.extend(strip.quads(&self.strip_lines()));
         }
-        // THE BAR, in the right margin the grid never takes and under the
-        // strip, while there is history to scroll — grabbed where it is
+        // THE BAR, OVER THE GRID'S RIGHT EDGE and under the strip, while there
+        // is history to scroll AND it is used (the owner's exception,
+        // 2026-11-03: it takes the program no room, so it never changes its
+        // width) — on the top layer, over the cells; grabbed where it is
         // drawn (`pointer`), its track counted in the terminal's rows
         // (`terminal_pointer::bar`).
         let bar = self
@@ -2786,9 +2865,23 @@ impl Content for TerminalWindow {
             .and_then(|f| f.mirrored.with(|m| m.scrollbar()))
             .unwrap_or_default();
         self.scroll = terminal_pointer::scroll_of(bar);
-        ui.room = chrome::Room::of(self.scroll, w, h);
-        let (track, thumb) = terminal_pointer::bar(self.scroll, w, self.strip_top(), h, row);
-        canvas.under.extend(thumb.map(chrome::thumb));
+        let (zone, thumb) = terminal_pointer::bar(self.scroll, w, self.strip_top(), h, row);
+        self.bar_zone = zone;
+        let shown = self.bar_shown && zone.is_some();
+        // THE ROOM HAS A BAR only while it is drawn: hidden, its column is
+        // the grid's, under the pointer as under the eye.
+        ui.room = if shown {
+            chrome::Room::of(self.scroll, w, h)
+        } else {
+            chrome::Room {
+                width: w,
+                bar_from: None,
+            }
+        };
+        let track = zone.filter(|_| shown);
+        canvas
+            .over
+            .extend(thumb.filter(|_| shown).map(chrome::thumb));
         canvas.bar(track.map(crate::bars::Track::of));
         self.bar_track = track;
         // THE FIRST FRAME, said out loud — `terminal-vm` waits for it: a
@@ -2821,6 +2914,7 @@ impl Content for TerminalWindow {
                         self.grab_the_bar(ui, at.1);
                         continue;
                     }
+                    self.hover_bar(ui, at);
                     let busy = hand.extra.selecting || !hand.extra.reported.is_empty();
                     let line = if busy {
                         None
@@ -2865,6 +2959,7 @@ impl Content for TerminalWindow {
                 }
                 PointerEventKind::Leave { .. } => {
                     hand.extra.on_the_bar = false;
+                    self.bar_hovered = false;
                     self.hover_strip(ui, None);
                     if self.lit.take().is_some() {
                         ui.ask_paint();

@@ -1495,9 +1495,16 @@
     # height is the click target, split in as many parts as lines.
     strip = {
       heightPx = 7;
-      linePx = 2;
+      linePx = 3;
       gapPx = 3;
     };
+    # THE GRID'S SIDE PADDING, in LOGICAL pixels times the window's scale:
+    # Ghostty's `window-padding-x` default, 2, so the first letter does not
+    # touch the window's edge and nothing else is lost (2026-11-03, the
+    # owner: the interface's two-cell inset was room for nothing). The
+    # scrollbar takes no room: it is drawn over the grid's right edge, and
+    # only while it is used (`crate::terminal`).
+    paddingPx = 2;
     # THE FAINT INK (SGR 2), in percent of a whole one: what a program's
     # dimmed text is drawn at, whatever colour it asked for — the alpha the
     # cells are drawn with, not a role, because the colour under it is the

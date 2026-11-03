@@ -4,13 +4,14 @@
 //! # The grid's place
 //!
 //! The grid is whole cells of the TERMINAL's face, in physical pixels, inset
-//! from the window's left and right edges by the content's margin
-//! (`space.content.inset`, cells of the interface). The right margin is
-//! reserved whether a scrollbar is drawn there or not — so the bar coming and
-//! going never changes the program's width — and what is left over at the
-//! right and the bottom is ground. A group's strip takes its pixels off the
-//! grid's TOP (`crate::terminal_strip`): the grid starts under it, and the
-//! bar's track does too ([`Placed::under`], [`thumb`]).
+//! from the window's left and right edges by the terminal's own padding
+//! (`space.terminal.paddingPx`, Ghostty's two pixels), and what is left over
+//! at the right and the bottom is ground. The scrollbar takes no room: it is
+//! drawn OVER the grid's right edge, and only while it is used (the owner's
+//! exception, 2026-11-03, `crate::terminal`) — so it never changes the
+//! program's width. A group's strip takes its pixels off the grid's TOP
+//! (`crate::terminal_strip`): the grid starts under it, and the bar's track
+//! does too ([`Placed::under`], [`thumb`]).
 //!
 //! # The wheel has three owners
 //!
@@ -45,14 +46,12 @@ pub struct Placed {
     pub scale: u32,
 }
 
-/// The margin at each side of the grid, in PHYSICAL pixels: the content's
-/// inset, in cells of the interface's own text, at the screen's scale — the
-/// same margin every window of the shell keeps.
+/// The margin at each side of the grid, in PHYSICAL pixels: the terminal's
+/// padding (`space.terminal.paddingPx`, logical pixels) at the screen's
+/// scale.
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn inset_px(scale: u32) -> u32 {
-    let cell = tokens::metrics::cell_width(tokens::text::size());
-    (f32::from(tokens::space::CONTENT_INSET) * cell * scale as f32).ceil() as u32
+    u32::from(tokens::space::TERMINAL_PADDINGPX) * scale.max(1)
 }
 
 /// How many of `geometry`'s cells fit a window of `width` × `height`

@@ -598,7 +598,9 @@ OSC 7501, que o guardião lê.
   `the-pointer-lights-what-the-click-takes`).
 - A coluna da barra é dela enquanto desenhada (`bars.rs`; cobra `a-bar-owns-its-column`). Barra
   nenhuma desenha sobre o conteúdo: a vertical toma uma célula, a horizontal uma linha, só quando
-  existem.
+  existem. Exceção do dono (2026-11-03): a barra do terminal fica por cima da borda direita da
+  grade e só aparece enquanto se rola, arrasta ou passa o ponteiro ali (`terminal.rs`), para a
+  largura do programa nunca mudar por ela.
 - Toda janela que rola desenha a própria barra, que é um controle (`chrome::list_bar`; cobra
   `every-list-window-has-a-bar`). A roda tem uma aritmética só: a linha é a unidade, a sobra fica
   guardada (`wheel::axis_lines`).

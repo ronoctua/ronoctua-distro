@@ -743,12 +743,23 @@ const MASK: u32 = 1;
 const COLOUR: u32 = 2;
 
 /// One instance as the GPU sees it: a rectangle in physical pixels from the
-/// grid's origin, the colour, where its raster is, and how to draw it.
+/// grid's origin, the colour, the ground it is drawn on, where its raster is,
+/// and how to draw it.
+///
+/// THE GROUND is the cell's background under a raster of coverage (a glyph, a
+/// sprite, a line): what the shader blends the coverage against as the
+/// screen's own colour space would, and not as the linear one the `Srgb`
+/// target blends in. Blended linearly, light ink on a dark ground reads a
+/// weight heavier than the face is — every edge pixel's half coverage comes
+/// out three quarters as bright —, which is what put this terminal a weight
+/// over Ghostty, which blends in the screen's space (2026-11-03). A flat
+/// rectangle and an emoji ignore it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
     rect: [f32; 4],
     colour: [f32; 4],
+    ground: [f32; 4],
     texel: [f32; 2],
     kind: u32,
     padding: u32,
@@ -757,17 +768,19 @@ struct Instance {
 impl Instance {
     /// A flat rectangle.
     fn solid(x: i32, y: i32, width: u32, height: u32, colour: Rgba) -> Self {
+        let colour = colour.to_linear();
         Self {
             rect: [x as f32, y as f32, width as f32, height as f32],
-            colour: colour.to_linear(),
+            colour,
+            ground: colour,
             texel: [0.0, 0.0],
             kind: SOLID,
             padding: 0,
         }
     }
 
-    /// A raster of the atlas, its top-left at `(x, y)`.
-    fn sampled(x: i32, y: i32, placed: Placed, colour: Rgba) -> Self {
+    /// A raster of the atlas, its top-left at `(x, y)`, on `ground`.
+    fn sampled(x: i32, y: i32, placed: Placed, colour: Rgba, ground: Rgba) -> Self {
         let (kind, colour) = match placed.kind {
             Kind::Mask => (MASK, colour.to_linear()),
             // AN EMOJI KEEPS ITS COLOURS: only the alpha is the cell's, so a
@@ -782,6 +795,7 @@ impl Instance {
                 placed.height as f32,
             ],
             colour,
+            ground: ground.to_linear(),
             texel: [placed.x as f32, placed.y as f32],
             kind,
             padding: 0,
@@ -1252,7 +1266,8 @@ impl Assembly {
                 cell.fg
             };
             let x = x_of(column);
-            self.glyph_into(&mut built.ink, &g, cell, (x, y), span, ink, fonts);
+            let ground = cell.bg.unwrap_or(defaults.background);
+            self.glyph_into(&mut built.ink, &g, cell, (x, y), span, (ink, ground), fonts);
             let frame = g.frame(span);
             let under = cell.underline_colour.map_or(ink, |c| {
                 if cell.style.faint {
@@ -1271,7 +1286,7 @@ impl Assembly {
                     }
                 };
                 if let Some(p) = placed {
-                    out.push(Instance::sampled(x, y, p, colour));
+                    out.push(Instance::sampled(x, y, p, colour, ground));
                 }
             };
             if cell.style.underline != Underline::None {
@@ -1301,7 +1316,7 @@ impl Assembly {
         cell: &Cell,
         (x, y): (i32, i32),
         span: u32,
-        ink: Rgba,
+        (ink, ground): (Rgba, Rgba),
         fonts: &mut FontSystem,
     ) {
         // DRAWN, NOT READ, when it is one of the sprites: at the cell's exact
@@ -1319,7 +1334,7 @@ impl Assembly {
                 }
             };
             if let Some(p) = placed {
-                out.push(Instance::sampled(x + p.left, y, p, ink));
+                out.push(Instance::sampled(x + p.left, y, p, ink, ground));
             }
             return;
         }
@@ -1368,7 +1383,7 @@ impl Assembly {
             if let Some(p) = placed {
                 let gx = pen + (s.x * size).round() as i32 + p.left;
                 let gy = baseline - (s.y * size).round() as i32 - p.top;
-                out.push(Instance::sampled(gx, gy, p, ink));
+                out.push(Instance::sampled(gx, gy, p, ink, ground));
             }
         }
     }
@@ -1446,7 +1461,17 @@ impl Assembly {
                 // colour — what makes the letter under a block readable.
                 if !cell.style.invisible {
                     let mut glyph = Vec::new();
-                    self.glyph_into(&mut glyph, &g, cell, (x, y), span, c.text, fonts);
+                    // ON THE BLOCK: its colour is the ground the letter
+                    // is blended against.
+                    self.glyph_into(
+                        &mut glyph,
+                        &g,
+                        cell,
+                        (x, y),
+                        span,
+                        (c.text, c.colour),
+                        fonts,
+                    );
                     self.over.extend(glyph);
                 }
             }
@@ -1924,9 +1949,12 @@ impl Cells {
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Instance>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Instance,
+                    // IN THE STRUCT'S OWN ORDER: the macro lays the offsets
+                    // one after the other, and `ground` sits before `texel`.
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x4,
                         1 => Float32x4,
+                        4 => Float32x4,
                         2 => Float32x2,
                         3 => Uint32,
                     ],
@@ -2170,12 +2198,19 @@ mod tests {
         }
     }
 
-    /// FAILS IF: the instance stops being 48 bytes — the vertex layout's
-    /// stride and offsets are computed from it, and one field added without
-    /// them would misplace every instance with no error at all.
+    /// FAILS IF: the instance stops being 64 bytes, or a field moves from
+    /// where the vertex layout reads it — the stride and the offsets are the
+    /// struct's, laid one after the other in the layout's own order
+    /// (`rect`, `colour`, `ground`, `texel`, `kind`), and one field added or
+    /// moved without them would misplace every instance with no error at all.
     #[test]
-    fn the_instance_is_48_bytes() {
-        assert_eq!(std::mem::size_of::<Instance>(), 48);
+    fn the_instance_is_64_bytes_in_the_layouts_order() {
+        assert_eq!(std::mem::size_of::<Instance>(), 64);
+        assert_eq!(std::mem::offset_of!(Instance, rect), 0);
+        assert_eq!(std::mem::offset_of!(Instance, colour), 16);
+        assert_eq!(std::mem::offset_of!(Instance, ground), 32);
+        assert_eq!(std::mem::offset_of!(Instance, texel), 48);
+        assert_eq!(std::mem::offset_of!(Instance, kind), 56);
         assert_eq!(std::mem::size_of::<View>(), 16);
     }
 
