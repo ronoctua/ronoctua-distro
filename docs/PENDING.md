@@ -121,8 +121,7 @@ resto. Faltam fotos, com asserção, de:
   inclusive numa que teve outro sistema no disco.
 - **O IME numa sessão de verdade**: com o Mozc ligado uma vez nas configurações do fcitx5,
   `Ctrl+Espaço` e `nihon` mostram a composição sublinhada no cursor e os candidatos ao lado, e o
-  texto confirmado chega ao programa; o Compose continua funcionando no nosso terminal com o fcitx5
-  rodando.
+  texto confirmado chega ao programa.
 - **O player com o YouTube de verdade no `.#dev`**: toca, ganha o título, uma recusa diz a linha do
   yt-dlp, um álbum ganha o nome do álbum, o mesmo endereço duas vezes pergunta "já está na fila".
 - **O catálogo de vídeos contra o YouTube de verdade** (um canal por `@handle`, uma varredura).
