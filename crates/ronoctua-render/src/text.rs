@@ -45,7 +45,11 @@ pub const EMBEDDED_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_REGULAR"));
 ///
 /// CBDT/CBLC bitmaps — the format `swash` decodes and for which
 /// `glyphon` already has a separate colour atlas.
-pub const EMOJI_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_EMOJI"));
+///
+/// A `static` and not a `const`: a grid of cells finds this face in the bank
+/// by these bytes' address (`crate::cells`), and every use of a `const` may
+/// get an address of its own.
+pub static EMOJI_FONT: &[u8] = include_bytes!(env!("RONOCTUA_FONT_EMOJI"));
 
 /// The LUCIDE face, with its `cmap` rewritten by `nix/lucidegen.nix`.
 ///

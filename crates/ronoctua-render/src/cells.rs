@@ -1644,15 +1644,29 @@ fn shape(fonts: &mut FontSystem, text: &str, bold: bool, italic: bool) -> Shaped
     // of the coverage faces: a bold `x` in another typeface. Asked at the
     // regular weight, the cluster is the Regular's, and its bold is drawn
     // below, face by face.
-    let shaped_bold = bold && family_has_bold(fonts);
+    //
+    // AN EMOJI WHERE ONE IS ASKED FOR: a variation selector 16 is the program
+    // saying "draw the emoji" (starship's `❄️`). The primary face keeps the
+    // symbols whose default is text (`nix/primary-font.nix`), and asked by
+    // name it would answer with its own small `❄`, since whoever has the
+    // codepoint first wins. Ghostty draws the emoji, and so does this: such
+    // a cluster asks the emoji face by name, at its one weight and style.
+    let emoji = if text.contains(VS16) {
+        emoji_family(fonts)
+    } else {
+        None
+    };
+    let shaped_bold = bold && emoji.is_none() && family_has_bold(fonts);
     let attrs = Attrs::new()
-        .family(Family::Name(tokens::font::FAMILY_MONO))
+        .family(Family::Name(
+            emoji.as_deref().unwrap_or(tokens::font::FAMILY_MONO),
+        ))
         .weight(if shaped_bold {
             Weight::BOLD
         } else {
             Weight::NORMAL
         })
-        .style(if italic {
+        .style(if italic && emoji.is_none() {
             cosmic_text::Style::Italic
         } else {
             cosmic_text::Style::Normal
@@ -1698,6 +1712,23 @@ fn shape(fonts: &mut FontSystem, text: &str, bold: bool, italic: bool) -> Shaped
         glyphs,
         advance: pen,
     }
+}
+
+/// VARIATION SELECTOR-16, which asks for the emoji presentation of what it
+/// follows.
+const VS16: char = '\u{FE0F}';
+
+/// The family of the embedded emoji face ([`crate::text::EMOJI_FONT`]),
+/// found by its bytes rather than written down.
+fn emoji_family(fonts: &FontSystem) -> Option<String> {
+    fonts.db().faces().find_map(|f| match &f.source {
+        fontdb::Source::Binary(bytes)
+            if (**bytes).as_ref().as_ptr() == crate::text::EMOJI_FONT.as_ptr() =>
+        {
+            f.families.first().map(|(name, _)| name.clone())
+        }
+        _ => None,
+    })
 }
 
 /// Whether the primary family has a bold face loaded — its Bold or its
@@ -2304,6 +2335,54 @@ mod tests {
             "the emoji is not centred"
         );
         assert_eq!(emoji.kind, COLOUR, "the emoji lost its colours");
+    }
+
+    /// FAILS IF: a symbol a program asks for as an emoji (`❄` + VS16, the
+    /// prompt's nix mark) is drawn by the primary face's small text glyph
+    /// and not by the emoji face, in a bold run too — or the same symbol
+    /// without the selector stops being the text one.
+    #[test]
+    fn an_emoji_asked_for_is_the_emoji_faces() {
+        let mut fonts = fonts();
+        let mut sheet = sheet(&mut fonts, 8, 1);
+        let fg = sheet.defaults().foreground;
+        {
+            let row = sheet.row_mut(0);
+            row[0] = Cell {
+                grapheme: Grapheme::of("\u{2744}\u{FE0F}"),
+                fg,
+                width: Width::Wide,
+                style: Style {
+                    bold: true,
+                    ..Style::default()
+                },
+                ..Cell::default()
+            };
+            row[1] = Cell {
+                width: Width::Spacer,
+                ..Cell::default()
+            };
+            row[3] = Cell {
+                grapheme: Grapheme::One('\u{2744}'),
+                fg,
+                ..Cell::default()
+            };
+        }
+        let mut assembly = Assembly::new();
+        assembly.assemble(&sheet, &mut fonts);
+        let ink = &assembly.ink.all;
+        assert_eq!(ink.len(), 2, "one glyph each: {ink:?}");
+        assert_eq!(
+            ink[0].kind, COLOUR,
+            "the asked-for emoji is not the emoji face's"
+        );
+        assert_eq!(ink[1].kind, MASK, "the bare symbol stopped being text");
+        let cw = sheet.geometry().cell_width as f32;
+        assert!(
+            ink[0].rect[2] > 1.5 * cw,
+            "the emoji {:?} is not drawn across its two cells",
+            ink[0].rect
+        );
     }
 
     /// FAILS IF: an assembly rebuilds a row nobody wrote — a frame of a
