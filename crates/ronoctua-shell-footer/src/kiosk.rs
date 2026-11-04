@@ -974,11 +974,8 @@ impl Kiosks {
 
     /// The adapter over these kiosks.
     #[must_use]
-    pub const fn adapter(&self, address_line: bool) -> Adapter<'_> {
-        Adapter {
-            kiosks: self,
-            address_line,
-        }
+    pub const fn adapter(&self) -> Adapter<'_> {
+        Adapter { kiosks: self }
     }
 }
 
@@ -1046,10 +1043,9 @@ fn done_said(done: &wire::Done) -> Option<Errand> {
     })
 }
 
-/// The address line's text, `room` cells wide: the glyph, then the scheme
-/// and the host WHOLE — a deceptive subdomain must not hide behind an
-/// ellipsis — and the rest elided in the middle, so the end of the path
-/// stays too.
+/// The address's text, `room` cells wide: the glyph, then the scheme and the
+/// host WHOLE — a deceptive subdomain must not hide behind an ellipsis — and
+/// the rest elided in the middle, so the end of the path stays too.
 ///
 /// WHEN NOT EVEN THE HOST FITS (a long preview subdomain on a narrow or cut
 /// screen), its START goes and its end stays: the end is the registrable
@@ -1066,6 +1062,32 @@ pub fn address_text(address: &str, room: u16) -> (String, String) {
     );
     let left = room.saturating_sub(layout::width(&lead));
     (lead, layout::elide_middle(rest, left))
+}
+
+/// The command a click on the address runs: the minibuffer's question,
+/// starting from the address, whose `RET` loads what it says.
+pub const EDIT_ADDRESS: &str = "kiosk-address";
+
+/// What the FREE minibuffer says while a kiosk has the focus, `room` cells
+/// wide ([`address_text`]): the glyph and the host in the line's own ink, the
+/// rest in the words' — and the two halves ONE control, so a click on either
+/// edits the address and the pointer lights both.
+#[must_use]
+pub fn address_pieces(address: &str, room: u16) -> Vec<crate::chrome::Piece> {
+    let (lead, rest) = address_text(address, room);
+    let mut out = vec![
+        crate::chrome::Piece::said(lead)
+            .about(EDIT_ADDRESS)
+            .running(EDIT_ADDRESS),
+    ];
+    if !rest.is_empty() {
+        out.push(
+            crate::chrome::Piece::prose(rest)
+                .about(EDIT_ADDRESS)
+                .running(EDIT_ADDRESS),
+        );
+    }
+    out
 }
 
 /// What a segment of the kiosk's modeline is about.
@@ -1109,8 +1131,6 @@ pub enum Target {
     },
     /// The zoom of the tab in front, in percent.
     Zoom(u32),
-    /// The address line's switch, and whether the line is up.
-    AddressLine(bool),
     /// Chrome's bars, and whether they are hidden now.
     ChromeUi(Ui),
     /// The kiosk's view.
@@ -1119,10 +1139,9 @@ pub enum Target {
     Offline(Offline),
 }
 
-/// The kiosk's modeline: the kiosks, and whether the address line is up.
+/// The kiosk's modeline, over the kiosks.
 pub struct Adapter<'a> {
     kiosks: &'a Kiosks,
-    address_line: bool,
 }
 
 /// Which of a kiosk's tabs have a place in the pool: `(first, how many)`,
@@ -1347,18 +1366,6 @@ impl ModelineAdapter for Adapter<'_> {
             },
             Target::Zoom(zoom),
         ));
-        out.push((
-            mark(
-                "kiosk-address-line",
-                if self.address_line {
-                    tokens::icon::KIOSK_ADDRESS
-                } else {
-                    tokens::icon::KIOSK_ADDRESS_OFF
-                },
-                12,
-            ),
-            Target::AddressLine(self.address_line),
-        ));
         out.push((bars, Target::ChromeUi(pair.ui)));
         out.push((more, Target::More));
         out
@@ -1408,7 +1415,6 @@ impl ModelineAdapter for Adapter<'_> {
             (Target::Extensions { .. }, Left) => Some(Act::Run("kiosk-extensions")),
             (Target::Zoom(_), Left) => Some(Act::Run("kiosk-zoom")),
             (Target::Zoom(_), Right) => Some(Act::Run("kiosk-zoom-reset")),
-            (Target::AddressLine(_), Left) => Some(Act::Run("kiosk-address-line")),
             (Target::ChromeUi(_), Left) => Some(Act::Run("kiosk-chrome-ui")),
             (Target::More | Target::Offline(_), Left) => Some(Act::Run("kiosk-more")),
             _ => None,
@@ -1489,8 +1495,6 @@ impl ModelineAdapter for Adapter<'_> {
                 key::HINT_KIOSK_ZOOM,
                 &[("percent", Arg::Number(i64::from(*p)))],
             ),
-            Target::AddressLine(true) => texts.t(key::HINT_KIOSK_ADDRESS_LINE_ON),
-            Target::AddressLine(false) => texts.t(key::HINT_KIOSK_ADDRESS_LINE_OFF),
             Target::ChromeUi(Ui::Hidden) => texts.t(key::HINT_KIOSK_CHROME_HIDDEN),
             Target::ChromeUi(Ui::Shown) => texts.t(key::HINT_KIOSK_CHROME_SHOWN),
             Target::More => texts.t(key::HINT_KIOSK_MORE),
@@ -2048,7 +2052,7 @@ mod tests {
         }];
         k.heard(Heard::Connected(2));
         k.heard(Heard::Said(2, Said::State(second)));
-        let a = k.adapter(false);
+        let a = k.adapter();
         let hover = |w: u64| {
             let segs = a.segments(&window(w, APP_ID, "t", false), &t);
             let (_, target) = segs
@@ -2103,7 +2107,7 @@ mod tests {
     }
 
     fn adapter_line(k: &Kiosks, texts: &Texts) -> Line {
-        let a = Adapted::Kiosk(k.adapter(false));
+        let a = Adapted::Kiosk(k.adapter());
         let base = vec![Segment {
             id: "mode",
             text: "google-chrome".into(),
@@ -2128,7 +2132,7 @@ mod tests {
             tab(2, 1, true, "B"),
             tab(3, 2, false, "C"),
         ]);
-        let a = Adapted::Kiosk(k.adapter(false));
+        let a = Adapted::Kiosk(k.adapter());
         let line = adapter_line(&k, &t);
         let (wide, _) = crate::adapt::resolve(240, &line, Some(&a), &t);
         let names: Vec<&str> = wide
@@ -2180,7 +2184,7 @@ mod tests {
             })
             .collect();
         let k = a_paired_kiosk(tabs);
-        let a = Adapted::Kiosk(k.adapter(false));
+        let a = Adapted::Kiosk(k.adapter());
         for columns in [60_u16, 80, 120, 240] {
             let line = adapter_line(&k, &t);
             let (placed, drawn) = crate::adapt::resolve(columns, &line, Some(&a), &t);
@@ -2222,7 +2226,7 @@ mod tests {
     #[test]
     fn the_pointer_does_what_the_segment_says() {
         let k = a_paired_kiosk(vec![tab(1, 0, false, "A"), tab(2, 1, true, "B")]);
-        let a = k.adapter(false);
+        let a = k.adapter();
         let neighbour = Target::Tab {
             id: 1,
             index: 0,
@@ -2277,10 +2281,10 @@ mod tests {
         let mut k = a_paired_kiosk(vec![tab(1, 0, true, "A")]);
         k.heard(Heard::Gone(1));
         let w = window(7, APP_ID, "A", false);
-        let segs = k.adapter(false).segments(&w, &t);
+        let segs = k.adapter().segments(&w, &t);
         let ids: Vec<&str> = segs.iter().map(|(s, _)| s.id).collect();
         assert_eq!(ids, ["kiosk-offline", "kiosk-chrome-ui", "kiosk-more"]);
-        let said = k.adapter(false).hint(&segs[0].1, &t).expect("a sentence");
+        let said = k.adapter().hint(&segs[0].1, &t).expect("a sentence");
         assert_eq!(said, t.t(key::HINT_KIOSK_OFFLINE_CHROME));
         k.bridge_found(None);
         assert_eq!(k.offline(7), Some(Offline::Bridge));
@@ -2298,10 +2302,10 @@ mod tests {
         );
     }
 
-    /// FAILS IF: the address line cuts the host, where a deceptive
-    /// subdomain would hide.
+    /// FAILS IF: the address cuts the host, where a deceptive subdomain
+    /// would hide.
     #[test]
-    fn the_address_line_keeps_the_host_whole() {
+    fn the_address_keeps_the_host_whole() {
         let address = "https://bank.example.evil.io/a/very/long/path/that/does/not/fit?x=1";
         let (lead, rest) = address_text(address, 40);
         assert!(lead.ends_with("https://bank.example.evil.io"), "{lead}");
@@ -2322,6 +2326,27 @@ mod tests {
         let (lead, rest) = address_text(address, 12);
         assert!(lead.ends_with("evil.io"), "{lead}");
         assert!(rest.is_empty(), "{rest}");
+    }
+
+    /// FAILS IF: a half of the address on the minibuffer is not the control
+    /// that edits it, or the two halves run past the room they were given.
+    #[test]
+    fn the_address_on_the_minibuffer_is_one_control() {
+        let address = "https://bank.example.evil.io/a/very/long/path/that/does/not/fit?x=1";
+        let pieces = address_pieces(address, 40);
+        assert_eq!(pieces.len(), 2, "{pieces:?}");
+        for p in &pieces {
+            assert_eq!(p.id, Some(EDIT_ADDRESS), "{p:?}");
+            assert_eq!(
+                p.press,
+                Some(crate::chrome::Act::Run(EDIT_ADDRESS)),
+                "{p:?}"
+            );
+        }
+        let width: u16 = pieces.iter().map(|p| layout::width(&p.text)).sum();
+        assert!(width <= 40, "{width}");
+        // A HOST AND NO PATH is one half.
+        assert_eq!(address_pieces("https://example.org", 40).len(), 1);
     }
 
     /// FAILS IF: the address question is answered anywhere but where it was
@@ -2348,6 +2373,23 @@ mod tests {
                 }
             )
         ));
+        // AN ADDRESS ANSWERED loads in the tab it was asked over — the `RET`
+        // of the address the minibuffer says (`address_pieces`).
+        k.command("kiosk-address", None, Some(7));
+        let out = k.command("kiosk-address", Some("example.org/a"), None);
+        assert!(
+            matches!(
+                &out[0],
+                Errand::Send(
+                    _,
+                    Envelope {
+                        order: Order::Navigate { tab: 1, url },
+                        ..
+                    }
+                ) if url == "https://example.org/a"
+            ),
+            "{out:?}"
+        );
         k.command("kiosk-new-tab", None, Some(7));
         let out = k.command("kiosk-new-tab", Some(""), Some(7));
         assert!(matches!(

@@ -979,10 +979,6 @@ struct Footer {
     /// launch that failed is one nothing will answer (`crate::kiosk`).
     /// `None` outside the event loop.
     kiosk_launch_sender: Option<calloop::channel::Sender<(String, crate::foreign::Launch)>>,
-    /// Whether the kiosk's address line was up when the height was last
-    /// applied — what `kiosk_errands` compares with, because every caller
-    /// has already changed the state by the time it runs.
-    address_row_applied: bool,
     /// The modeline's switches (`modeline.json`, `crate::adapt`).
     modeline: crate::adapt::Prefs,
     /// The watch on `modeline.json`: the file is the broadcast.
@@ -991,8 +987,6 @@ struct Footer {
     /// them — beside `modeline_placed`, and for the same reason: a click, a
     /// wheel, a drag and a hover answer what was DRAWN.
     adapter_drawn: Vec<(&'static str, crate::adapt::Target)>,
-    /// What the address line says while the pointer rests on it.
-    address_hint: Option<String>,
     /// The screen a fullscreen window covers, while one does — see [`Edge`].
     edge: Option<Edge>,
     /// The footer's rows as they were last APPLIED — see `crate::hidden`.
@@ -3013,7 +3007,6 @@ fn assemble(
         kiosk_view: None,
         kiosk_timer: false,
         kiosk_launch_sender: None,
-        address_row_applied: false,
         // `adapt::at_start`, and not `read`: a file that does not read as
         // written is said with its sentence, not quietly the default or the
         // repair (`adapt::reread` is the same on a change).
@@ -3021,7 +3014,6 @@ fn assemble(
         modeline_refused,
         _modeline_watch: None,
         adapter_drawn: Vec::new(),
-        address_hint: None,
         edge: None,
         shape: crate::hidden::Shape::default(),
         revealed_on: None,
@@ -3167,6 +3159,31 @@ pub(crate) fn photographed(
     queue
         .roundtrip(&mut state)
         .context("the stand-in's first configure")?;
+    // A CHROME KIOSK, by the two doors its halves come in through: the pair
+    // as `kiosk.json` keeps one — the window in focus and the bridge's first
+    // kiosk, the bars as Chrome says them — and the bridge's whole state as
+    // its socket's thread delivers one, on a connection of its own.
+    if let (Some(bridge), Some(window)) = (scene.kiosk, scene.window.as_ref().map(|w| w.id)) {
+        let first = bridge.kiosks.first().context("the bridge names no kiosk")?;
+        let kept = [crate::kiosk::Kept {
+            nonce: first.nonce.clone(),
+            compositor: window,
+            chrome: first.window,
+            ui: if first.state == "fullscreen" {
+                crate::kiosk::Ui::Hidden
+            } else {
+                crate::kiosk::Ui::Shown
+            },
+        }];
+        state.kiosk = crate::kiosk::Kiosks::fresh(
+            &serde_json::to_vec(&kept).context("the kiosk's pair")?,
+            Some(crate::footer_photograph::KIOSK_EXTENSION.to_owned()),
+        );
+        state.kiosk_heard(ronoctua_browser::serve::Heard::Said(
+            1,
+            ronoctua_browser::wire::Said::State(bridge),
+        ));
+    }
     if let Some(w) = scene.window {
         state
             .windows
@@ -7338,13 +7355,11 @@ impl Footer {
         let mut dragging_fold = false;
         let mut fold_hit = false;
         // AN ADAPTER'S SEGMENTS: the middle button, the carried segment's
-        // release, the wheel, and the kiosk's address line — each decided by
-        // the `y` like the modeline's own clicks.
+        // release and the wheel — each decided by the `y` like the modeline's
+        // own clicks.
         let mut segment_middle = None;
         let mut segment_dropped: Option<(&'static str, Option<&'static str>)> = None;
         let mut wheel_point: Option<(f64, f64)> = None;
-        let mut address_click = false;
-        let address_before = self.address_hint.clone();
         for e in events {
             match e.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
@@ -7411,8 +7426,6 @@ impl Footer {
                         self.band_at(e.position.0, e.position.1)
                             .and_then(|p| p.explain.clone())
                     });
-                    // AND THE KIOSK'S ADDRESS LINE, one row down, the same way.
-                    self.address_hint = self.address_hint_at(e.position.1);
                     // AND WHICH SHORTCUT OF THE HINT LINE IT IS ON, which is
                     // the same question one line down: the hint is the
                     // minibuffer's line, and what a person points at there is
@@ -7507,7 +7520,6 @@ impl Footer {
                     self.here.set_member_under_pointer = None;
                     self.here.pointer_at = None;
                     self.here.segment_held = None;
-                    self.address_hint = None;
                     self.band_hint = None;
                     if self.sudo_bar.light(None) {
                         self.ask_paint();
@@ -7691,12 +7703,6 @@ impl Footer {
                     if self.on_fold_thumb(e.position.0, e.position.1) {
                         dragging_fold = true;
                         self.fold_drag_to(e.position.1);
-                        continue;
-                    }
-                    // THE KIOSK'S ADDRESS LINE, above the modeline: a click
-                    // edits the address, which is what the line is for.
-                    if self.address_line_at(e.position.1) {
-                        address_click = true;
                         continue;
                     }
                     if let Some((id, cell)) = self.segment_hit(e.position.0, e.position.1) {
@@ -7957,11 +7963,6 @@ impl Footer {
         // THE MODELINE'S CLICKS, before the region's: they are decided by the
         // `y`, so the two can never both be true for one press — and putting
         // them first keeps that obvious rather than incidental.
-        if address_click {
-            self.run_command("kiosk-address");
-            self.draw_and_paint();
-            return;
-        }
         if let Some((from, onto)) = segment_dropped {
             self.segment_released(from, onto);
             return;
@@ -8143,7 +8144,6 @@ impl Footer {
                 self.here.mark_zone_under_pointer,
                 self.here.set_member_under_pointer,
             )
-            || address_before != self.address_hint
             || before
                 != (
                     self.here.under_pointer,
@@ -9521,12 +9521,11 @@ impl Footer {
         if let Some(w) = self.windows.focused().map(|w| w.id)
             && self.kiosk.pair_of(w).is_some()
         {
-            self.buffer_bindings =
-                crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line))
-                    .local_bindings()
-                    .iter()
-                    .map(|(sequence, id, _)| (sequence.clone(), (*id).to_owned()))
-                    .collect();
+            self.buffer_bindings = crate::adapt::Adapted::Kiosk(self.kiosk.adapter())
+                .local_bindings()
+                .iter()
+                .map(|(sequence, id, _)| (sequence.clone(), (*id).to_owned()))
+                .collect();
             self.local_runs_here = Some(w);
             return;
         }
@@ -11566,7 +11565,6 @@ impl Footer {
         }
         let elsewhere = self.here.segment_under_pointer.is_some()
             || self.band_hint.is_some()
-            || self.address_hint.is_some()
             || self.brain_hint.is_some()
             || self.osk_hint.is_some()
             || self.hint_said.is_some()
@@ -12501,16 +12499,11 @@ impl Footer {
     /// row of the same kind would be a second term in six functions of this
     /// file, a second thing outside the expansion's budget, and a second
     /// countdown for a person to tell apart.
-    ///
-    /// AND A THIRD, which stays: the Chrome kiosk's address line, while it is
-    /// asked for. The two that come and go take the row from it and give it
-    /// back; the height is the same either way, so nothing moves.
     fn above_rows(&self) -> u16 {
         crate::world::rows(above_row_taken(
             self.glance.is_some(),
             self.sound.is_some(),
             self.sound_on_minibuffer,
-            self.address_line_shown(),
         ))
     }
 
@@ -15327,9 +15320,6 @@ impl Footer {
         let height = pixels_of(lines);
         let revealing = u32::from(fresh.lines().saturating_sub(without_the_edge.lines()));
         let line_px = tokens::metrics::line_height(tokens::text::size());
-        // THE KIOSK'S ADDRESS ROW this height counted — what a later change
-        // of it is measured against (`kiosk_errands`).
-        self.address_row_applied = self.address_line_shown();
         self.keyboard_hold
             .asked_for(matches!(keyboard, KeyboardInteractivity::Exclusive));
         // THE ZONE FOLLOWS THE HEIGHT. See the top of the module: the expansion
@@ -15905,16 +15895,6 @@ impl Footer {
         // WHETHER AN ADAPTER HOLDS THE LINE, asked once: the program's name
         // then takes the accent the title wore.
         let adapting = self.adapted().is_some();
-        // AND THE KIOSK'S ADDRESS, when its line is up.
-        let address_shown: Option<String> = self
-            .address_line_shown()
-            .then(|| {
-                self.windows
-                    .focused()
-                    .and_then(|w| self.kiosk.address_of(w.id))
-                    .map(ToOwned::to_owned)
-            })
-            .flatten();
         let mini_at_rest = crate::modeline::minibuffer_at_rest();
         // THE FOCUSED WINDOW'S SHORTCUTS, on the free line — the same set
         // `LEADER Alt` lists in the region, shown only while the header is
@@ -16172,12 +16152,6 @@ impl Footer {
             .band_hint
             .clone()
             .map(|t| vec![crate::chrome::Piece::said(t)])
-            // THE KIOSK'S ADDRESS LINE, between the band and the modeline.
-            .or_else(|| {
-                self.address_hint
-                    .clone()
-                    .map(|t| vec![crate::chrome::Piece::said(t)])
-            })
             .or_else(|| {
                 self.segment_hint()
                     .map(|t| vec![crate::chrome::Piece::said(t)])
@@ -16859,31 +16833,6 @@ impl Footer {
                 }
             } else {
                 self.glance_stripes.clear();
-                // THE THIRD TENANT OF THE ROW, while the other two leave it
-                // free: the kiosk's address — the host whole, the rest elided
-                // in the middle (`kiosk::address_text`).
-                if let Some(address) = address_shown.as_deref() {
-                    let at = tokens::space::MODELINE_EDGELEFT;
-                    let room = columns.saturating_sub(at + tokens::space::MODELINE_EDGERIGHT);
-                    let (lead, rest) = crate::kiosk::address_text(address, room);
-                    let row = self.above_line_at();
-                    spans.extend(glyph_and_text(
-                        &lead,
-                        at,
-                        row,
-                        tokens::color::TEXT_PRIMARY,
-                        false,
-                    ));
-                    if !rest.is_empty() {
-                        spans.extend(glyph_and_text(
-                            &rest,
-                            at + layout::width(&lead),
-                            row,
-                            tokens::color::TEXT_SECONDARY,
-                            false,
-                        ));
-                    }
-                }
             }
 
             // THE BRAIN'S LINE, under the minibuffer.
@@ -17005,6 +16954,40 @@ impl Footer {
             // branch below that carries it alone.
             let waiting = self.view() == ViewState::Leader && self.list_patience.withheld();
             let held_pieces = if waiting { None } else { hint() };
+            // THE SHORTCUTS GLYPH — the eye that hides or shows the relocated
+            // shortcuts, in either state, so it toggles both ways. Its CELL is
+            // kept whenever the "no header" mode is on, so the line does not
+            // reflow as the eye comes and goes with the hand; the eye itself is
+            // DRAWN only under the pointer (`hover`). Beside the chevron on one
+            // line; under it when the line opened to two or more.
+            let glyph = self.modeline.hide_header() && self.shape.draws_minibuffer();
+            // THE EYE MOVES BELOW THE CHEVRON ONLY WHEN THE LINE ACTUALLY GREW
+            // to two rows or more — a line break that made it taller. A drawer
+            // that opened onto a SINGLE row keeps the eye beside the chevron
+            // (and keeps the cell for it); `held.open` alone put it below even
+            // then, into the content under a line that had not grown at all.
+            // `fold::rows` is the opened line's measured height (0 while shut).
+            let stacked = held.open && crate::fold::rows(held) >= 2;
+            let glyph_beside = glyph && !stacked;
+            // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT —
+            // one arithmetic, `minibuffer_room`, for this screen and for the
+            // narrowest one the event's actions are placed for.
+            let indicator_cells = indicator.as_deref().map(layout::width);
+            // THE KIOSK'S ADDRESS, cut to the room the line gives its text with
+            // the chevron's cell kept — the hand coming over the line brings the
+            // chevron, and an address cut again under it would move under the
+            // hand — and short of the hours, which the free line draws at its
+            // right end (`hours_wanted`).
+            let address = self.kiosk_address_now().map(|address| {
+                let hours = if !held.open && indicator.is_none() && self.hours_wanted() {
+                    layout::width(&self.hours_now()) + 1
+                } else {
+                    0
+                };
+                let room = minibuffer_room(columns, indicator_cells, true, glyph_beside)
+                    .saturating_sub(hours);
+                crate::kiosk::address_pieces(address, room)
+            });
             // THE LINE AS PIECES, whatever is on it.
             //
             // The hint arrives in two registers already; the other five are
@@ -17073,6 +17056,14 @@ impl Footer {
                 // THE FLASH IS DRAWN BELOW, placed by `sound::line` — the
                 // same drawing the row above the modeline carries.
                 Vec::new()
+            } else if let Some(address) = &address {
+                // THE ADDRESS OF THE KIOSK IN FRONT, on the free line — Chrome's
+                // omnibox, which a kiosk hides: a click on it asks for the
+                // address on this line, starting from this one, and `RET` loads
+                // what it says (`kiosk-address`). Over the relocated shortcuts,
+                // which a kiosk's are the footer's own `,` group: those stay in
+                // `LEADER Alt`, and the page's address is nowhere else.
+                address.clone()
             } else if !mini_rest_pieces.is_empty() {
                 // THE RELOCATED SHORTCUTS, when the window in front gave some
                 // and the mode asks for them — the line the header gave up.
@@ -17099,28 +17090,15 @@ impl Footer {
             // OPENS when the line carries something — an event, a message, a
             // chord — OR when it carries the window's relocated shortcuts, which
             // routinely run past the line and want the chevron to read in full.
+            // NOT FOR A KIOSK'S ADDRESS, which takes their place and is cut to
+            // the line: the click that edits it is where it is read whole.
             let opens = self.shape.draws_minibuffer()
-                && (held.open || !at_rest || !mini_rest_pieces.is_empty());
+                && (held.open || !at_rest || (!mini_rest_pieces.is_empty() && address.is_none()));
             // THE POINTER IS OVER THE MINIBUFFER'S LINE. The controls come up
             // only then — the way the file manager's own line-0 chevron does —
             // so a resting minibuffer is bare and the glyphs appear under the
             // hand. `on_minibuffer` is set on every move and cleared on leave.
             let hover = self.shape.draws_minibuffer() && self.here.on_minibuffer;
-            // THE SHORTCUTS GLYPH — the eye that hides or shows the relocated
-            // shortcuts, in either state, so it toggles both ways. Its CELL is
-            // kept whenever the "no header" mode is on, so the line does not
-            // reflow as the eye comes and goes with the hand; the eye itself is
-            // DRAWN only under the pointer (`hover`). Beside the chevron on one
-            // line; under it when the line opened to two or more.
-            let glyph = self.modeline.hide_header() && self.shape.draws_minibuffer();
-            // THE EYE MOVES BELOW THE CHEVRON ONLY WHEN THE LINE ACTUALLY GREW
-            // to two rows or more — a line break that made it taller. A drawer
-            // that opened onto a SINGLE row keeps the eye beside the chevron
-            // (and keeps the cell for it); `held.open` alone put it below even
-            // then, into the content under a line that had not grown at all.
-            // `fold::rows` is the opened line's measured height (0 while shut).
-            let stacked = held.open && crate::fold::rows(held) >= 2;
-            let glyph_beside = glyph && !stacked;
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
             // and the page counter one cell of air to its left — so the air
             // after the control is the modeline's one cell at every width.
@@ -17142,10 +17120,6 @@ impl Footer {
                     None => crate::chrome::from_the_edge(columns, w),
                 }
             });
-            // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT —
-            // one arithmetic, `minibuffer_room`, for this screen and for the
-            // narrowest one the event's actions are placed for.
-            let indicator_cells = indicator.as_deref().map(layout::width);
             // THE CHEVRON'S CELL IS KEPT when the line opens OR the hand is over
             // it — the same `opens || hover` the chevron is placed by — so the
             // glyph's own hover text (and anything on a bare line under the
@@ -19268,16 +19242,10 @@ const fn minibuffer_free(view: ViewState, echo: bool, drawer_open: bool) -> bool
     matches!(view, ViewState::NoneOf) && !echo && !drawer_open
 }
 
-/// Does the row above the modeline hold anything? The glance does; the flash
-/// does only when it was NOT put on the minibuffer's line; and the kiosk's
-/// address line does while it is up.
-const fn above_row_taken(
-    glance: bool,
-    sound: bool,
-    sound_on_minibuffer: bool,
-    address: bool,
-) -> bool {
-    (glance && !(sound && sound_on_minibuffer)) || address
+/// Does the row above the modeline hold anything? The glance does, and the
+/// flash does only when it was NOT put on the minibuffer's line.
+const fn above_row_taken(glance: bool, sound: bool, sound_on_minibuffer: bool) -> bool {
+    glance && !(sound && sound_on_minibuffer)
 }
 
 /// A count of the footer's rows in pixels — `ceil(line height × rows)`, and
@@ -20119,19 +20087,13 @@ impl Footer {
     fn adapted(&self) -> Option<crate::adapt::Adapted<'_>> {
         let w = self.windows.focused()?;
         [
-            crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line)),
+            crate::adapt::Adapted::Kiosk(self.kiosk.adapter()),
             crate::adapt::Adapted::Terminals(crate::terminal_tabs::Adapter::new(
                 &self.terminals.census.terminals,
             )),
         ]
         .into_iter()
         .find(|a| self.modeline.adapts(a.id()) && a.claims(w))
-    }
-
-    /// `kiosk-address-line`: the kiosk's address line, up or down.
-    fn flip_the_address_line(&mut self) {
-        let wanted = !self.modeline.address_line;
-        self.write_the_modeline(|p| p.address_line = wanted);
     }
 
     /// `modeline-adapt-kiosk`: the modeline adapted to the kiosk, or not.
@@ -20271,46 +20233,14 @@ impl Footer {
         self.draw_and_paint();
     }
 
-    /// Whether the kiosk's address line is up: asked for (`modeline.json`),
-    /// on a kiosk the modeline is adapted to, with its bars hidden — in
-    /// normal mode Chrome's own omnibox is there — and with an address.
-    ///
-    /// FIELDS ONLY: `above_rows` asks this, and `Footer::metric` is built on
-    /// it (`the-footer-does-not-ask-itself`).
-    fn address_line_shown(&self) -> bool {
-        self.modeline.address_line
-            && self.modeline.adapts(crate::kiosk::ADAPTER)
-            && self
-                .windows
-                .focused()
-                .is_some_and(|w| self.kiosk.hidden(w.id) && self.kiosk.address_of(w.id).is_some())
-    }
-
-    /// Whether `y` is on the address line, while it is the row's tenant.
-    fn address_line_at(&self, y: f64) -> bool {
-        if !self.address_line_shown()
-            || (self.glance.is_some() && !self.flashing_on_the_minibuffer())
-        {
-            return false;
-        }
-        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
-        let top = f64::from(self.above_line_at()) * line_height;
-        line_height > 0.0 && y >= top && y < top + line_height
-    }
-
-    /// What the message line says with the pointer on the address line.
-    fn address_hint_at(&self, y: f64) -> Option<String> {
-        if !self.address_line_at(y) {
-            return None;
-        }
-        let url = self
-            .windows
+    /// The address the FREE minibuffer says: the tab in front of the focused
+    /// kiosk's, in either of its modes — with Chrome's bars hidden it is the
+    /// only place the address is, and shown it is one click from editing —
+    /// while the bridge says one.
+    fn kiosk_address_now(&self) -> Option<&str> {
+        self.windows
             .focused()
-            .and_then(|w| self.kiosk.address_of(w.id))?;
-        Some(
-            self.texts
-                .t_with(crate::key::HINT_KIOSK_ADDRESS, &[("url", url)]),
-        )
+            .and_then(|w| self.kiosk.address_of(w.id))
     }
 
     /// One press of a volume key, on the machine's own output.
@@ -21931,18 +21861,14 @@ mod tests {
             "the drawer is open"
         );
         // ON THE MINIBUFFER, the row above the modeline stays shut — no height.
-        assert!(!above_row_taken(true, true, true, false));
+        assert!(!above_row_taken(true, true, true));
         // OFF IT, the flash takes the row, as the glance does.
-        assert!(above_row_taken(true, true, false, false));
+        assert!(above_row_taken(true, true, false));
         assert!(
-            above_row_taken(true, false, true, false),
+            above_row_taken(true, false, true),
             "the glance keeps its row"
         );
-        assert!(!above_row_taken(false, false, false, false));
-        // AND THE KIOSK'S ADDRESS LINE holds it on its own, and keeps it — at
-        // the same height — while a flash on the minibuffer comes and goes.
-        assert!(above_row_taken(false, false, false, true));
-        assert!(above_row_taken(true, true, true, true));
+        assert!(!above_row_taken(false, false, false));
     }
 
     #[test]

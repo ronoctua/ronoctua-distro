@@ -27,7 +27,6 @@ impl Footer {
     pub(super) fn kiosk_facts(&self, window: u64) -> crate::kiosk_view::Facts {
         crate::kiosk_view::Facts {
             bars_shown: self.kiosk.pair_of(window).is_some() && !self.kiosk.hidden(window),
-            address_line: self.modeline.address_line,
         }
     }
 
@@ -52,7 +51,6 @@ impl Footer {
             }
             "kiosk-extensions" => self.open_kiosk_view(Level::Extensions, None, false),
             "kiosk-zoom" if arg.is_none() => self.open_kiosk_view(Level::Zoom, None, false),
-            "kiosk-address-line" => self.flip_the_address_line(),
             "modeline-adapt-kiosk" => self.flip_the_adaptation(),
             _ => {
                 let on = self.kiosk_target();
@@ -120,13 +118,6 @@ impl Footer {
     }
 
     /// Carries out what the kiosks asked for.
-    ///
-    /// AND SETTLES THE HEIGHT against what was APPLIED, never against a
-    /// reading taken here: every caller has already moved the state — the
-    /// bridge's state taken in, the focus moved onto or off a kiosk, the bars
-    /// flipped — so "before" read here is already "after", and the address
-    /// row would come and go inside a surface of the old height (the trap
-    /// `display_file_changed` records).
     pub(super) fn kiosk_errands(&mut self, errands: Vec<crate::kiosk::Errand>) {
         use crate::kiosk::Errand;
         for errand in errands {
@@ -173,8 +164,6 @@ impl Footer {
         {
             self.kiosk_view = None;
             self.first_page();
-            self.apply_geometry(self.interactivity());
-        } else if self.address_line_shown() != self.address_row_applied {
             self.apply_geometry(self.interactivity());
         }
     }

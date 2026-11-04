@@ -1425,10 +1425,6 @@ pub const BASE: Contribution = Contribution {
             label: key::CMD_KIOSK_CHROME_UI,
         },
         Command {
-            id: "kiosk-address-line",
-            label: key::CMD_KIOSK_ADDRESS_LINE,
-        },
-        Command {
             id: "kiosk-more",
             label: key::CMD_KIOSK_MORE,
         },

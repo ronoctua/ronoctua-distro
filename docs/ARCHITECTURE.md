@@ -2336,9 +2336,8 @@ nomeados pelo lugar (`kiosk-tab-1` a `kiosk-tab-16`, `kiosk-ext-1` a `kiosk-ext-
 diz a que cada lugar se refere. O `footer-mouse-reaches-nothing-new` nomeia os dois pools.
 
 **Liga e desliga por programa.** `modeline.json`, escrito pelo `ronoctua-store`, guarda uma chave
-por adaptador (ausente é ligado) e se a linha de endereço do quiosque está de pé (ausente é
-desligada). O arquivo é o broadcast: o rodapé o vigia e reconhece a própria escrita. O comando é
-`modeline-adapt-kiosk`, que a vista, o `,` e o `LEADER :` alcançam.
+por adaptador (ausente é ligado). O arquivo é o broadcast: o rodapé o vigia e reconhece a própria
+escrita. O comando é `modeline-adapt-kiosk`, que a vista, o `,` e o `LEADER :` alcançam.
 
 ---
 
@@ -5754,8 +5753,8 @@ extensão) e são limpos no `onStartup`. Uma janela que fechou enquanto não hav
 próximo estado é montado, e a última leva a porta junto. Um host que acaba com quiosques abertos é
 subido de novo depois de uma pausa (1 s, dobrando até 16 s, que fica abaixo do meio minuto que um
 worker parado ganha); uma porta que viveu mais que isso zera a pausa. As permissões novas são duas,
-cada uma com o motivo no gerador: `management` (só `getAll`) e `search` (a linha de endereço busca
-no motor da pessoa). O manifesto continua sem nenhuma das cinco chaves que deixam uma página
+cada uma com o motivo no gerador: `management` (só `getAll`) e `search` (o endereço que se edita no
+minibuffer busca no motor da pessoa). O manifesto continua sem nenhuma das cinco chaves que deixam uma página
 detectar a extensão: abrir `kiosk.html` pela linha de comando não precisa de
 `web_accessible_resources`.
 
@@ -5780,21 +5779,19 @@ o `kiosk-open` diz isso em vez de lançar um segundo quiosque tão surdo quanto 
 avançar e recarregar; `+N`; as abas vizinhas com o título curto (`space.kiosk.tabCells`) e a da
 frente (até `activeCells`, não removível, em `text.primary`; as outras em `text.secondary`, nunca no
 acento); `+N`; aba nova; as extensões fixadas uma a uma, pelo nome curto (`extensionCells`); a
-lista de extensões; o zoom (com a porcentagem quando não é 100%); a linha de endereço;
+lista de extensões; o zoom (com a porcentagem quando não é 100%);
 quiosque↔normal (o glifo diz o que o clique fará); e o `…`, que abre a vista. Numa aba vizinha, o
 clique a traz para a frente; em qualquer aba, arrastar muda o lugar, o botão direito abre a lista
 nela, o do meio a fecha e a roda troca de aba. No zoom, a roda muda o zoom. O piso da linha é o
 `mode` mais a aba da frente elidida.
 
-**A linha de endereço é uma linha nossa**, acima da modeline: a terceira ocupante da linha do
-relance e do volume. Os dois que vêm e vão tomam a linha e a devolvem, com a mesma altura, então
-nada se move. Ela mostra o host inteiro e elide só o caminho, no meio, para um subdomínio enganoso
-não se esconder, e o clique edita o endereço no minibuffer. Quando nem o host cabe (tela estreita ou
-cortada), sai o COMEÇO dele: o fim é o domínio que diz de quem é a página, e nada passa da borda. Só
-aparece com as barras escondidas: no modo normal, a omnibox do Chrome está lá. Ela nasce e some com
-o foco, o estado do Chrome e as barras, e todo caminho que mexe nisso já mudou o estado quando o
-rodapé olha; por isso a altura é conferida contra a que foi APLICADA (`address_row_applied`), nunca
-contra uma leitura de "antes".
+**O endereço mora no minibuffer livre**, sem chave: com um quiosque em foco (barras escondidas ou
+não) e nada na linha, ela diz o endereço da aba da frente (`kiosk::address_pieces`). O host vai
+inteiro e só o caminho é elidido, no meio, para um subdomínio enganoso não se esconder; quando nem
+o host cabe, sai o COMEÇO dele, porque o fim é o domínio que diz de quem é a página. O corte guarda
+a célula do chevron, para nada se mover quando a mão chega. As duas metades são um controle: o
+clique roda `kiosk-address`, que pergunta na mesma linha a partir do endereço, e o `RET` o carrega.
+Toma o lugar dos atalhos realocados (os de um quiosque continuam no `LEADER Alt`).
 
 **A vista existe só no rodapé** (`kiosk_view.rs`): uma janela tiraria o foco do quiosque que ela
 controla, e todo comando age na aba da frente. A grade tem a gramática do menu da janela, e a
@@ -5806,8 +5803,8 @@ guardam o id do item, nunca a linha, porque o Chrome reordena por baixo do curso
 Isso o deixa testável sem Chrome e impede os métodos do rodapé de se perguntarem em anel
 (`the-footer-does-not-ask-itself`).
 
-**Decidido aqui, e pode mudar:** a adaptação da modeline nasce ligada e a linha de endereço
-desligada; o clique do meio fecha a aba; as abas vizinhas mostram o título curto.
+**Decidido aqui, e pode mudar:** a adaptação da modeline nasce ligada; o clique do meio fecha a
+aba; as abas vizinhas mostram o título curto.
 
 #### Medido com o Chrome de verdade
 

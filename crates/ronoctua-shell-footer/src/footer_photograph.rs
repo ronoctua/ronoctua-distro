@@ -97,6 +97,11 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
                         state): the modeline's mark for the ones no window
                         shows, in caution while one asks for the person, and
                         the background view's rows — never this machine's
+  --kiosk <file>        the window in focus is a Chrome kiosk: what its
+                        bridge says (one state, JSON, the line the host
+                        writes), whose first kiosk is that window — Chrome's
+                        bars hidden when it says `fullscreen` — never this
+                        machine's Chrome
   --out <file>          where to write                 (default: footer.png)
   --language <id>       pt-BR or en-GB                 (default: pt-BR)
   --theme <id>          a theme of assets/themes       (default: the default)
@@ -181,8 +186,15 @@ pub(crate) struct Scene {
     /// The held terminals, delivered as the census's thread delivers one
     /// reading of their state files.
     pub terminals: Vec<ronoctua_terminals::state::TerminalState>,
+    /// What a kiosk's bridge says, the window in focus being its first
+    /// kiosk — delivered as the bridge's thread delivers a state.
+    pub kiosk: Option<ronoctua_browser::wire::State>,
     pub steps: Vec<Step>,
 }
+
+/// The bridge's extension in a photograph: an id in Chrome's alphabet, which
+/// a machine's own never is — it comes from a key made on that machine.
+pub(crate) const KIOSK_EXTENSION: &str = "abcdefghijklmnopabcdefghijklmnop";
 
 /// The footer's last frame.
 pub(crate) struct Taken {
@@ -214,6 +226,7 @@ struct Asked {
     accounts_marks: bool,
     agents: Option<std::path::PathBuf>,
     terminals: Option<std::path::PathBuf>,
+    kiosk: Option<std::path::PathBuf>,
     out: std::path::PathBuf,
     language: String,
     theme: tokens::theme::Theme,
@@ -273,6 +286,7 @@ fn parse(words: &[String]) -> Result<Asked> {
         accounts_marks: false,
         agents: None,
         terminals: None,
+        kiosk: None,
         out: std::path::PathBuf::from("footer.png"),
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
@@ -353,6 +367,7 @@ fn parse(words: &[String]) -> Result<Asked> {
                 me.accounts_marks = true;
             }
             "--terminals" => me.terminals = Some(std::path::PathBuf::from(value()?)),
+            "--kiosk" => me.kiosk = Some(std::path::PathBuf::from(value()?)),
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--language" => me.language = value()?,
             "--theme" => {
@@ -439,6 +454,10 @@ fn parse(words: &[String]) -> Result<Asked> {
                 && me.states.is_empty()
                 && me.local.is_empty()),
         "`--title`, `--state`, `--states` and `--local` describe the window in focus, and there is none without `--app`"
+    );
+    ensure!(
+        me.app.is_some() || me.kiosk.is_none(),
+        "`--kiosk` makes the window in focus a kiosk, and there is none without `--app`"
     );
     Ok(me)
 }
@@ -661,6 +680,21 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
             .with_context(|| format!("`{}` is not a list of terminals' states", file.display()))?,
         None => Vec::new(),
     };
+    // THE KIOSK'S BRIDGE, read as the socket's line is — and a state with no
+    // kiosk is refused: the window in focus would be paired with nothing.
+    let kiosk = match asked.kiosk.as_deref() {
+        Some(file) => {
+            let state: ronoctua_browser::wire::State = serde_json::from_str(&read(file)?)
+                .with_context(|| format!("`{}` is not a state of the bridge", file.display()))?;
+            ensure!(
+                !state.kiosks.is_empty(),
+                "`{}` names no kiosk for the window in focus to be",
+                file.display()
+            );
+            Some(state)
+        }
+        None => None,
+    };
     // THE SOFTWARE CENTRE'S READING of this very room — the window's camera's,
     // so one room is one machine in both doors — kept where its feed's thread
     // would put one, for the view a step opens.
@@ -685,6 +719,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         notifications,
         player,
         terminals,
+        kiosk,
         steps: asked.steps.clone(),
     };
     let taken = crate::surface::photographed(&conn, scene, composition)?;
@@ -1070,6 +1105,27 @@ mod tests {
             USAGE.contains("--terminals <file>"),
             "the word is not taught"
         );
+    }
+
+    /// FAILS IF: `--kiosk` loses its file, is taken with no window in focus
+    /// to be the kiosk, or is not taught.
+    #[test]
+    fn the_kiosk_is_the_window_in_focus() {
+        let a = parse(&words(&[
+            "--door",
+            "footer",
+            "--app",
+            "google-chrome",
+            "--kiosk",
+            "bridge.json",
+        ]))
+        .expect("the words parse");
+        assert_eq!(
+            a.kiosk.as_deref(),
+            Some(std::path::Path::new("bridge.json"))
+        );
+        assert!(parse(&words(&["--door", "footer", "--kiosk", "bridge.json"])).is_err());
+        assert!(USAGE.contains("--kiosk <file>"), "the word is not taught");
     }
 
     /// FAILS IF: a walk that points is offered no seat, the seat does not

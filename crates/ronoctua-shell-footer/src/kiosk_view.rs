@@ -111,7 +111,7 @@ const fn door(key: &'static str, label: &'static str, command: &'static str, to:
 ///
 /// `h l r` are a browser's three, on vi's sideways keys; `[ ]` walk the tabs
 /// and `; '`, the two keys under them, carry the tab in front with them. The
-/// zoom is `= - 0`, Chrome's own. `k` is the bars, `a` the address line, and
+/// zoom is `= - 0`, Chrome's own. `k` is the bars, `e` edits the address, and
 /// `o` changes what the kiosk IS: back to an ORDINARY window. Every key is ONE
 /// key with no Shift, because this group is what `LEADER Alt` lists over a
 /// kiosk (`chrome::is_one_key`) — it was `{ }` and `R`. The modeline's adaptation was `M` here
@@ -150,12 +150,6 @@ pub const ROOT: &[Cell] = &[
         key::KIOSK_MENU_SHOW_CHROME,
         key::KIOSK_MENU_HIDE_CHROME,
         "kiosk-chrome-ui",
-    ),
-    switch(
-        "a",
-        key::KIOSK_MENU_ADDRESS_SHOW,
-        key::KIOSK_MENU_ADDRESS_HIDE,
-        "kiosk-address-line",
     ),
     run("o", key::KIOSK_MENU_RELEASE, "kiosk-release", false),
 ];
@@ -221,8 +215,6 @@ pub fn local_bindings() -> &'static [Generated] {
 pub struct Facts {
     /// Chrome's bars are showing.
     pub bars_shown: bool,
-    /// The address line is up.
-    pub address_line: bool,
 }
 
 impl Facts {
@@ -230,7 +222,6 @@ impl Facts {
     fn on(self, command: &str) -> bool {
         match command {
             "kiosk-chrome-ui" => self.bars_shown,
-            "kiosk-address-line" => self.address_line,
             _ => false,
         }
     }
@@ -1147,13 +1138,7 @@ mod tests {
         let t = texts();
         let v = View::fresh(7, Level::Root);
         let hidden = v.entries(Facts::default(), &t);
-        let shown = v.entries(
-            Facts {
-                bars_shown: true,
-                ..Facts::default()
-            },
-            &t,
-        );
+        let shown = v.entries(Facts { bars_shown: true }, &t);
         let k = |e: &[Entry]| e.iter().find(|e| e.key == "k").map(|e| e.label.clone());
         assert_eq!(k(&hidden), Some(t.t(key::KIOSK_MENU_SHOW_CHROME)));
         assert_eq!(k(&shown), Some(t.t(key::KIOSK_MENU_HIDE_CHROME)));

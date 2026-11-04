@@ -32,9 +32,8 @@
 //!
 //! # On and off
 //!
-//! `modeline.json` keeps one switch per adapter (absent is ON) and whether
-//! the kiosk's address line is up (absent is OFF). The file is the broadcast:
-//! the footer watches it and recognises its own write.
+//! `modeline.json` keeps one switch per adapter (absent is ON). The file is
+//! the broadcast: the footer watches it and recognises its own write.
 
 use std::collections::BTreeMap;
 
@@ -480,8 +479,6 @@ pub struct Prefs {
     /// One switch per adapter, by its id — ABSENT IS ON: an adapter is what
     /// a person gets until they say otherwise.
     pub adapt: BTreeMap<String, bool>,
-    /// Whether the kiosk's address line is up. Absent is off.
-    pub address_line: bool,
     /// Whether the modeline and the minibuffer are hidden, and how — see
     /// `crate::hidden`. ABSENT IS VISIBLE: the bars are what a person gets
     /// until they say otherwise.
@@ -744,12 +741,12 @@ mod tests {
         assert_eq!(repaired, ["/hidden"]);
         // ANOTHER SWITCH IS WRITTEN, and the person's word stays.
         let mut p = reading.value;
-        p.address_line = true;
+        p.hours = true;
         store.write(&p).expect("written");
         let raw: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join(FILE)).expect("read")).expect("json");
         assert_eq!(raw["hidden"], "sideways");
-        assert_eq!(raw["address_line"], true);
+        assert_eq!(raw["hours"], true);
         std::fs::write(dir.join(FILE), r#"{"hidden":"push"}"#).expect("written");
         assert_eq!(store.parsed().and_then(|p| p.hidden), Some(Hidden::Push));
         let _ = std::fs::remove_dir_all(&dir);
@@ -769,12 +766,11 @@ mod tests {
             ronoctua_store::Store::at(Some(dir.clone()), FILE);
         let held = Prefs {
             hidden: Some(Hidden::Push),
-            address_line: true,
+            hours: true,
             ..Prefs::default()
         };
         // A WORD MISSPELT BY HAND: capital C.
-        std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"Cover"}"#)
-            .expect("written");
+        std::fs::write(dir.join(FILE), r#"{"hours":true,"hidden":"Cover"}"#).expect("written");
         let Reread::Refused(Unread::Part(partly)) = reread(&store, &held) else {
             panic!("a value repaired was taken by the watcher");
         };
@@ -782,18 +778,14 @@ mod tests {
         // AT THE START, the same bytes: the rest of the switches, and the
         // same sentence owed.
         let (start, owed) = at_start(&store);
-        assert!(
-            start.address_line,
-            "the rest of the file was lost at the start"
-        );
+        assert!(start.hours, "the rest of the file was lost at the start");
         assert_eq!(start.hidden, None);
         assert_eq!(owed, Some(Unread::Part(partly)));
         // NOT JSON: the same refusal both ways, the other sentence.
         std::fs::write(dir.join(FILE), "{ not json").expect("written");
         assert_eq!(reread(&store, &held), Reread::Refused(Unread::Whole));
         assert_eq!(at_start(&store), (Prefs::default(), Some(Unread::Whole)));
-        std::fs::write(dir.join(FILE), r#"{"address_line":true,"hidden":"push"}"#)
-            .expect("written");
+        std::fs::write(dir.join(FILE), r#"{"hours":true,"hidden":"push"}"#).expect("written");
         assert_eq!(reread(&store, &held), Reread::Same);
         std::fs::write(dir.join(FILE), r#"{"hidden":"cover"}"#).expect("written");
         assert_eq!(
@@ -810,16 +802,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FAILS IF: an absent switch reads as off, one adapter's switch turns
-    /// another's, or the address line is up before anybody asked.
+    /// FAILS IF: an absent switch reads as off, or one adapter's switch
+    /// turns another's.
     #[test]
     fn an_absent_switch_is_on() {
         let p = Prefs::default();
         assert!(p.adapts("kiosk"));
-        assert!(!p.address_line);
         let read: Prefs = serde_json::from_str(r#"{"adapt":{"kiosk":false}}"#).expect("parses");
         assert!(!read.adapts("kiosk"));
         assert!(read.adapts("another"));
-        assert!(!read.address_line);
     }
 }

@@ -882,6 +882,11 @@ pub fn lit(pieces: &[Piece], id: Option<&str>) -> Vec<Piece> {
                 Register::Contextual => Register::ContextualLit,
                 Register::Prose => Register::ProseLit,
                 Register::Action => Register::ActionLit,
+                // WHAT THE LINE SAYS, when it is a control too — the kiosk's
+                // address on the free minibuffer, which a click edits. `Said`
+                // is `Key`'s ink (see `Register::Said`), so its lit tone is
+                // `Key`'s.
+                Register::Said => Register::KeyLit,
                 other => other,
             };
             Piece {
@@ -4724,6 +4729,14 @@ mod tests {
             "a read-only key does not light"
         );
         assert_eq!(lit(&line, None), line.to_vec());
+        // WHAT THE LINE SAYS lights in its ink's lit tone when a click takes
+        // it, and stays as it is when it is only said.
+        let said = [
+            Piece::said("example.org").about("edit").running("edit"),
+            Piece::said("only said").about("read"),
+        ];
+        assert_eq!(lit(&said, Some("edit"))[0].register, Register::KeyLit);
+        assert_eq!(lit(&said, Some("read"))[1].register, Register::Said);
     }
 
     /// EVERY CELL A SHORTCUT WAS DRAWN IN NAMES THAT SHORTCUT — the key and

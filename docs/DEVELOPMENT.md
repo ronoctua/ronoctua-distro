@@ -303,9 +303,10 @@ por conta própria. Que a legenda do libass sai no quadro ainda não foi visto n
    {"said":"state","v":1,"kiosks":[{"window":<W>,"nonce":"<N>","state":"fullscreen","tabs":[…]}],"extensions":[…],"focused_window":<W>}
    ```
 
-Com `"state":"normal"` o rodapé entende um F11 e mostra as barras do Chrome. `modeline.json`, no
-diretório de ajustes, com `{"address_line":true}` mostra a linha de endereço; fechar o host mostra
-a marca de sem conexão.
+Com `"state":"normal"` o rodapé entende um F11 e mostra as barras do Chrome; fechar o host mostra a
+marca de sem conexão. Sem VM, a câmera do rodapé faz o par sozinha: `photograph --door footer --app
+google-chrome --kiosk <arquivo>`, com a mesma linha do host no arquivo, põe a janela em foco como o
+primeiro quiosque dela.
 
 ### O daemon do player sem VM, e sem tocar a sessão
 

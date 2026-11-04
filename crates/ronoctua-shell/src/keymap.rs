@@ -1297,7 +1297,6 @@ mod tests {
             "kiosk-zoom-out",
             "kiosk-zoom-reset",
             "kiosk-chrome-ui",
-            "kiosk-address-line",
             "kiosk-more",
             "kiosk-tabs",
             "kiosk-extensions",
