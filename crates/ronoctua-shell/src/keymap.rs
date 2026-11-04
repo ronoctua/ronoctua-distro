@@ -1306,6 +1306,7 @@ mod tests {
             "kiosk-extension-details",
             "kiosk-release",
             "modeline-adapt-kiosk",
+            "modeline-adapt-terminals",
             "kiosk-list-down",
             "kiosk-list-up",
             "kiosk-list-enter",

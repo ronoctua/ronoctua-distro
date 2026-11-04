@@ -864,6 +864,7 @@ cmd-kiosk-extension-options = Open an extension's options
 cmd-kiosk-extension-details = An extension's details in Chrome
 cmd-kiosk-release = Make the kiosk an ordinary Chrome window again
 cmd-modeline-adapt-kiosk = Adapt the modeline to the kiosk, or not
+cmd-modeline-adapt-terminals = Put a group of terminals' tabs on the modeline, or not
 cmd-footer-hide-push = Hide the modeline and the minibuffer, pushing the windows away when something opens; again, show them
 cmd-footer-hide-cover = Hide the modeline and the minibuffer, laying what opens over the windows; again, show them
 echo-footer-opaque = This screen cannot draw the footer see-through, so the hidden bars leave an opaque strip.
@@ -886,6 +887,7 @@ kiosk-extension-details = details
 ask-kiosk-address = The address, or words to search
 ask-kiosk-new-tab = Address or words for the new tab (empty opens a blank one)
 kiosk-tabs-more = +{ $count }
+terminal-tabs-more = +{ $count }
 kiosk-zoom-percent = { $percent }%
 kiosk-tab-front = { $host }, in front
 kiosk-menu-back = Back
@@ -927,6 +929,16 @@ hint-kiosk-tabs-after = { $count ->
     } — click lists them all
 hint-kiosk-tab = { $title } — click brings it to the front, drag it to move it, the middle button closes it, the right button lists every tab
 hint-kiosk-tab-current = { $title } — the tab in front; click lists every tab, the middle button closes it
+hint-terminal-tabs-before = { $count ->
+        [one] One more terminal to the left
+       *[other] { $count } more terminals to the left
+    } — click brings the previous one to the front
+hint-terminal-tabs-after = { $count ->
+        [one] One more terminal to the right
+       *[other] { $count } more terminals to the right
+    } — click brings the next one to the front
+hint-terminal-tab = { $title } — click brings it to the front, the wheel walks the group, the middle button ends it (asking first)
+hint-terminal-tab-front = { $title } — the terminal in front; the wheel walks the group, the middle button ends it (asking first)
 hint-kiosk-new-tab = A new tab, at an address or a search
 hint-kiosk-ext = { $name } — click opens its page in a new tab, the right button its options
 hint-kiosk-extensions = { $names } — click lists every extension
@@ -1004,6 +1016,8 @@ footer-settings-hours = Hours
 footer-settings-hours-note = The time, at the right of the minibuffer, while nothing else is said on it.
 footer-settings-kiosk = Kiosk
 footer-settings-kiosk-adapt = Adapt the modeline to a kiosk
+footer-settings-terminals = Terminals
+footer-settings-terminals-adapt = A group of terminals' tabs on the modeline
 footer-settings-on = on
 footer-settings-off = off
 cmd-footer-hide-header = Hide the window header, or show it

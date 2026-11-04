@@ -1512,6 +1512,13 @@
     # `faint-opacity` default, a half, so a dim line reads alike in both
     # terminals.
     faintPct = 50;
+    # A GROUP'S TABS ON THE MODELINE (`crate::terminal_tabs`, the footer's), in
+    # cells: a tab beside the one in front shows this much of its terminal's
+    # name, the one in front up to `frontCells` — the kiosk's tabs' measures.
+    tab = {
+      cells = 14;
+      frontCells = 32;
+    };
   };
 
   # THE RESIZER'S READY SIZES (`LEADER / r`, then `p` / `P`, `crate::resizer`):

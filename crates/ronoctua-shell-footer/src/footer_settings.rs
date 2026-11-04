@@ -57,6 +57,10 @@ pub const HOURS_COMMAND: &str = "footer-hours";
 /// kiosk's grid ran before it moved here.
 pub const KIOSK_COMMAND: &str = "modeline-adapt-kiosk";
 
+/// The command that puts a group of terminals' tabs on the modeline while
+/// its window is in focus, or stops (`crate::terminal_tabs`).
+pub const TERMINALS_COMMAND: &str = "modeline-adapt-terminals";
+
 /// The command that hides the windows' header, or shows it — the "no header"
 /// mode, which moves a window's shortcuts to the minibuffer.
 pub const HEADER_COMMAND: &str = "footer-hide-header";
@@ -83,6 +87,8 @@ pub enum Setting {
     Hours,
     /// The modeline adapting to a kiosk.
     Kiosk,
+    /// The modeline adapting to a group of terminals: its tabs.
+    Terminals,
     /// Whether windows wear their header.
     Header,
     /// Whether the minibuffer shows a hidden header's shortcuts.
@@ -90,12 +96,13 @@ pub enum Setting {
 }
 
 impl Setting {
-    /// The five, in the order drawn. `Header` and `Shortcuts` are two rows of
+    /// The six, in the order drawn. `Header` and `Shortcuts` are two rows of
     /// one section (`heading`), so they sit last and together.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Bars,
         Self::Hours,
         Self::Kiosk,
+        Self::Terminals,
         Self::Header,
         Self::Shortcuts,
     ];
@@ -107,6 +114,7 @@ impl Setting {
             Self::Bars => crate::hidden::CYCLE_COMMAND,
             Self::Hours => HOURS_COMMAND,
             Self::Kiosk => KIOSK_COMMAND,
+            Self::Terminals => TERMINALS_COMMAND,
             Self::Header => HEADER_COMMAND,
             Self::Shortcuts => SHORTCUTS_COMMAND,
         }
@@ -124,6 +132,12 @@ impl Setting {
                 let on = prefs.adapts(crate::kiosk::ADAPTER);
                 prefs.adapt.insert(crate::kiosk::ADAPTER.to_owned(), !on);
             }
+            Self::Terminals => {
+                let on = prefs.adapts(crate::terminal_tabs::ADAPTER);
+                prefs
+                    .adapt
+                    .insert(crate::terminal_tabs::ADAPTER.to_owned(), !on);
+            }
             Self::Header => prefs.header = prefs.header.toggle(),
             Self::Shortcuts => prefs.shortcuts = prefs.shortcuts.toggle(),
         }
@@ -135,6 +149,7 @@ impl Setting {
             Self::Bars => key::FOOTER_SETTINGS_BARS,
             Self::Hours => key::FOOTER_SETTINGS_FREE,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK,
+            Self::Terminals => key::FOOTER_SETTINGS_TERMINALS,
             // ONE SECTION, TWO ROWS: the header and the keys it gives up are
             // one concept, so they share a heading (`rows` draws it once).
             Self::Header | Self::Shortcuts => key::FOOTER_SETTINGS_HEADER,
@@ -147,6 +162,7 @@ impl Setting {
             Self::Bars => key::FOOTER_SETTINGS_BARS_MODE,
             Self::Hours => key::FOOTER_SETTINGS_HOURS,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK_ADAPT,
+            Self::Terminals => key::FOOTER_SETTINGS_TERMINALS_ADAPT,
             Self::Header => key::FOOTER_SETTINGS_HEADER_HIDE,
             Self::Shortcuts => key::FOOTER_SETTINGS_SHORTCUTS_HIDE,
         }
@@ -170,6 +186,7 @@ impl Setting {
             },
             Self::Hours => on(prefs.hours),
             Self::Kiosk => on(prefs.adapts(crate::kiosk::ADAPTER)),
+            Self::Terminals => on(prefs.adapts(crate::terminal_tabs::ADAPTER)),
             // THE ROW NAMES THE HIDING: `on` is the hiding active (the distro
             // default), `off` is the header — or the keys — back on screen.
             Self::Header => on(prefs.hide_header()),
@@ -194,7 +211,7 @@ impl Setting {
                 )],
             )),
             Self::Hours => Some(texts.t(key::FOOTER_SETTINGS_HOURS_NOTE)),
-            Self::Kiosk => None,
+            Self::Kiosk | Self::Terminals => None,
             Self::Header => Some(texts.t(key::FOOTER_SETTINGS_HEADER_NOTE)),
             Self::Shortcuts => Some(texts.t(key::FOOTER_SETTINGS_SHORTCUTS_NOTE)),
         }
@@ -586,6 +603,7 @@ mod tests {
                 crate::hidden::CYCLE_COMMAND,
                 HOURS_COMMAND,
                 KIOSK_COMMAND,
+                TERMINALS_COMMAND,
                 HEADER_COMMAND,
                 SHORTCUTS_COMMAND
             ]

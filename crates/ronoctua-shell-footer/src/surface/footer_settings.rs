@@ -148,6 +148,9 @@ impl Footer {
             "footer-hours" => self.flip_the_hours(),
             "footer-hide-header" => self.flip_the_header(),
             "footer-hide-shortcuts" => self.flip_the_shortcuts(),
+            crate::footer_settings::TERMINALS_COMMAND => {
+                self.write_the_modeline(|p| crate::footer_settings::Setting::Terminals.change(p));
+            }
             _ => return false,
         }
         true

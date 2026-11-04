@@ -99,6 +99,9 @@ mod modeline;
 mod osk;
 mod sound;
 pub mod surface;
+// A GROUP OF TERMINALS' TABS ON THE MODELINE, while its window is in focus —
+// the modeline's second adapter, beside the kiosk's.
+mod terminal_tabs;
 mod theme_chooser;
 // THE COMPOSITOR'S SELECTION, as far as this footer can know it.
 mod selection;

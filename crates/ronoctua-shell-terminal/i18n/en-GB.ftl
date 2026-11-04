@@ -121,6 +121,8 @@ terminals-ended-code = ended with { $code }
 # one whose program ended already. `$name` is what its row calls it.
 terminals-end-question = End { $name }? Its program is hung up, and what it wrote goes with it.
 terminals-close-question = Close { $name }? What it wrote goes with it.
+terminals-end-title = End a terminal
+terminals-end-gone = That terminal is gone.
 terminals-answer-no = No, keep it
 terminals-answer-yes = Yes, end it
 # What ending one is said as, and why it could not be.

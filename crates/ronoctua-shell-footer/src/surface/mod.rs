@@ -20105,8 +20105,14 @@ impl Footer {
     /// one claims it and its switch in `modeline.json` is on.
     fn adapted(&self) -> Option<crate::adapt::Adapted<'_>> {
         let w = self.windows.focused()?;
-        let kiosk = crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line));
-        (self.modeline.adapts(kiosk.id()) && kiosk.claims(w)).then_some(kiosk)
+        [
+            crate::adapt::Adapted::Kiosk(self.kiosk.adapter(self.modeline.address_line)),
+            crate::adapt::Adapted::Terminals(crate::terminal_tabs::Adapter::new(
+                &self.terminals.census.terminals,
+            )),
+        ]
+        .into_iter()
+        .find(|a| self.modeline.adapts(a.id()) && a.claims(w))
     }
 
     /// `kiosk-address-line`: the kiosk's address line, up or down.

@@ -1460,6 +1460,10 @@ pub const BASE: Contribution = Contribution {
             id: "modeline-adapt-kiosk",
             label: key::CMD_MODELINE_ADAPT_KIOSK,
         },
+        Command {
+            id: "modeline-adapt-terminals",
+            label: key::CMD_MODELINE_ADAPT_TERMINALS,
+        },
         // THE BARS HIDDEN, one way or the other, or shown again — see
         // `crate::hidden`. By name only (`by_name`): the key of the
         // cycle is a tap of `Ctrl` at the leader's root.

@@ -558,6 +558,7 @@ impl Footer {
         });
         let raised = self.terminals.signals.heard(&states);
         let mark = self.terminals.away_mark();
+        let tabs = self.terminal_tabs_now();
         self.terminals.census = Census { terminals: states };
         self.terminals.settle();
         let now = std::time::Instant::now();
@@ -598,9 +599,26 @@ impl Footer {
         if noticed {
             self.after_the_queue_moved();
         }
-        if noticed || mark != self.terminals.away_mark() {
+        // AND THE FOCUSED GROUP'S TABS, whose names, front and tones are
+        // this table's: a title that moved repaints the modeline.
+        if noticed || mark != self.terminals.away_mark() || tabs != self.terminal_tabs_now() {
             self.draw_and_paint();
         }
+    }
+
+    /// What the focused window's group's tabs are about, as the census says
+    /// them now — empty when it is no group (`crate::terminal_tabs`).
+    fn terminal_tabs_now(&self) -> Vec<crate::adapt::Target> {
+        let Some(w) = self.windows.focused() else {
+            return Vec::new();
+        };
+        crate::adapt::Adapted::Terminals(crate::terminal_tabs::Adapter::new(
+            &self.terminals.census.terminals,
+        ))
+        .segments(w, &self.texts)
+        .into_iter()
+        .map(|(_, t)| t)
+        .collect()
     }
 
     /// A program's notification, in its own words, as the notification it

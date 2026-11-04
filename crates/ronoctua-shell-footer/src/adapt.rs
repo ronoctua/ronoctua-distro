@@ -121,6 +121,8 @@ pub trait ModelineAdapter {
 pub enum Adapted<'a> {
     /// The Chrome kiosk.
     Kiosk(crate::kiosk::Adapter<'a>),
+    /// A group of terminals, its tabs (`crate::terminal_tabs`).
+    Terminals(crate::terminal_tabs::Adapter<'a>),
 }
 
 /// What a segment of any adapter is about.
@@ -128,6 +130,8 @@ pub enum Adapted<'a> {
 pub enum Target {
     /// A kiosk's.
     Kiosk(crate::kiosk::Target),
+    /// A group of terminals'.
+    Terminals(crate::terminal_tabs::Target),
 }
 
 impl Adapted<'_> {
@@ -136,6 +140,7 @@ impl Adapted<'_> {
     pub fn id(&self) -> &'static str {
         match self {
             Self::Kiosk(a) => a.id(),
+            Self::Terminals(a) => a.id(),
         }
     }
 
@@ -144,6 +149,7 @@ impl Adapted<'_> {
     pub fn claims(&self, w: &Window) -> bool {
         match self {
             Self::Kiosk(a) => a.claims(w),
+            Self::Terminals(a) => a.claims(w),
         }
     }
 
@@ -156,6 +162,11 @@ impl Adapted<'_> {
                 .into_iter()
                 .map(|(s, t)| (s, Target::Kiosk(t)))
                 .collect(),
+            Self::Terminals(a) => a
+                .segments(w, texts)
+                .into_iter()
+                .map(|(s, t)| (s, Target::Terminals(t)))
+                .collect(),
         }
     }
 
@@ -164,56 +175,84 @@ impl Adapted<'_> {
     pub fn strip(&self, w: &Window) -> Option<Strip> {
         match self {
             Self::Kiosk(a) => a.strip(w),
+            Self::Terminals(a) => a.strip(w),
         }
     }
+
+    // A TARGET OF ANOTHER ADAPTER'S answers nothing below: the footer keeps
+    // what the adapter in force drew, and a focus that moved between the
+    // drawing and the press leaves a target the new one never made.
 
     /// A segment's colour.
     #[must_use]
     pub fn colour(&self, t: &Target) -> Option<ronoctua_tokens::Color> {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        a.colour(t)
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => a.colour(t),
+            (Self::Terminals(a), Target::Terminals(t)) => a.colour(t),
+            _ => None,
+        }
     }
 
     /// What a press does.
     #[must_use]
     pub fn clicked(&self, t: &Target, b: Button) -> Option<Act> {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        a.clicked(t, b)
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => a.clicked(t, b),
+            (Self::Terminals(a), Target::Terminals(t)) => a.clicked(t, b),
+            _ => None,
+        }
     }
 
     /// What the wheel does.
     #[must_use]
     pub fn wheeled(&self, t: &Target, lines: i64) -> Option<Act> {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        a.wheeled(t, lines)
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => a.wheeled(t, lines),
+            (Self::Terminals(a), Target::Terminals(t)) => a.wheeled(t, lines),
+            _ => None,
+        }
     }
 
     /// Whether it can be dragged.
     #[must_use]
     pub fn draggable(&self, t: &Target) -> bool {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        a.draggable(t)
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => a.draggable(t),
+            (Self::Terminals(a), Target::Terminals(t)) => a.draggable(t),
+            _ => false,
+        }
     }
 
     /// What a drop does.
     #[must_use]
     pub fn dropped(&self, from: &Target, onto: &Target) -> Option<Act> {
-        let (Self::Kiosk(a), Target::Kiosk(from), Target::Kiosk(onto)) = (self, from, onto);
-        a.dropped(from, onto)
+        match (self, from, onto) {
+            (Self::Kiosk(a), Target::Kiosk(from), Target::Kiosk(onto)) => a.dropped(from, onto),
+            (Self::Terminals(a), Target::Terminals(from), Target::Terminals(onto)) => {
+                a.dropped(from, onto)
+            }
+            _ => None,
+        }
     }
 
     /// The hover's sentence.
     #[must_use]
     pub fn hint(&self, t: &Target, texts: &Texts) -> Option<String> {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        a.hint(t, texts)
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => a.hint(t, texts),
+            (Self::Terminals(a), Target::Terminals(t)) => a.hint(t, texts),
+            _ => None,
+        }
     }
 
     /// A counter's target, with its count.
     #[must_use]
     pub fn counted(&self, t: &Target, n: usize) -> Target {
-        let (Self::Kiosk(a), Target::Kiosk(t)) = (self, t);
-        Target::Kiosk(a.counted(t, n))
+        match (self, t) {
+            (Self::Kiosk(a), Target::Kiosk(t)) => Target::Kiosk(a.counted(t, n)),
+            (Self::Terminals(a), Target::Terminals(t)) => Target::Terminals(a.counted(t, n)),
+            (_, other) => other.clone(),
+        }
     }
 
     /// The `,` group.
@@ -221,6 +260,7 @@ impl Adapted<'_> {
     pub fn local_bindings(&self) -> &'static [crate::window_menu::Generated] {
         match self {
             Self::Kiosk(a) => a.local_bindings(),
+            Self::Terminals(a) => a.local_bindings(),
         }
     }
 

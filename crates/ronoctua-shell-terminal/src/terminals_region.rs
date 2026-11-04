@@ -42,10 +42,33 @@ const GESTURES: &[&str] = &[
     "terminals-end",
 ];
 
+/// What ends a terminal, asked first: the view's `d` on its row, or — with a
+/// terminal's id — any held terminal, from a tab's middle button on the
+/// modeline (the footer's `crate::terminal_tabs`).
+const END: &str = "terminals-end";
+
+/// The terminal a `terminals-end` names, when it names one.
+fn named(argument: Option<&str>) -> Option<TerminalId> {
+    argument.and_then(|a| a.trim().parse().ok())
+}
+
 /// What a command does while the view is closed.
-fn closed(command: &str, _: Option<&str>, way: &mut dyn Doorway) -> Closed {
+fn closed(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Closed {
     match command {
         OPEN => Closed::Opens,
+        // A TERMINAL NAMED opens the view on the question about it — said
+        // and refused when the census no longer holds it.
+        END if named(argument).is_some() => {
+            let held = named(argument)
+                .is_some_and(|id| lent_census(&way.lent()).iter().any(|t| t.id == id));
+            if held {
+                Closed::Opens
+            } else {
+                let said = way.texts().t(crate::key::TERMINALS_END_GONE);
+                way.say(said, crate::echo::Echo::Normal);
+                Closed::Taken
+            }
+        }
         WINDOW => {
             way.open_window(vec![BACKGROUND_DOOR.to_owned()]);
             Closed::Taken
@@ -82,8 +105,9 @@ pub fn home() -> Option<PathBuf> {
         .filter(|h| h.is_absolute())
 }
 
-/// Opens the view on the footer's census.
-fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
+/// Opens the view on the footer's census — on the question about a
+/// terminal, when `terminals-end` names one.
+fn open(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
     let home = home();
     let lent = way.lent();
     let r = Reading {
@@ -91,7 +115,10 @@ fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
         now_s: now_s(),
         home: home.as_deref(),
     };
-    let view = View::fresh(&r, way.columns(), way.texts());
+    let mut view = View::fresh(&r, way.columns(), way.texts());
+    if let (END, Some(id)) = (command, named(argument)) {
+        view.ask_to_end(&id, &r, way.columns(), way.texts());
+    }
     let on = view.on(&r, way.columns(), way.texts());
     Box::new(Terminals { view, on, home })
 }
@@ -170,11 +197,28 @@ impl Region for Terminals {
         Taken::Yes
     }
 
-    fn command(&mut self, id: &str, _: Option<&str>, way: &mut dyn Doorway) -> Taken {
+    fn command(&mut self, id: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Taken {
         match id {
             // ALREADY OPEN: left exactly as it is, and the page follows its
             // cursor — a door onto a room you are in does not rearrange it.
             OPEN => way.follow(),
+            // A TERMINAL NAMED, with the view up: the question about it.
+            END if named(argument).is_some() => {
+                let asked = named(argument).is_some_and(|t| {
+                    let lent = way.lent();
+                    let r = Reading {
+                        census: lent_census(&lent),
+                        now_s: now_s(),
+                        home: self.home.as_deref(),
+                    };
+                    self.view.ask_to_end(&t, &r, way.columns(), way.texts())
+                });
+                if !asked {
+                    let said = way.texts().t(crate::key::TERMINALS_END_GONE);
+                    way.say(said, crate::echo::Echo::Normal);
+                }
+                way.repaint();
+            }
             WINDOW => way.open_window(vec![BACKGROUND_DOOR.to_owned()]),
             id if GESTURES.contains(&id) => {
                 if let Some(press) = crate::terminals::press_of(id) {
@@ -250,6 +294,10 @@ pub fn carry_out(errand: Errand, way: &mut dyn Doorway) {
             way.run(SHOW, Some(id.to_string()));
         }
         Errand::End(id, name) => end(&id, &name, way),
+        Errand::EndAndClose(id, name) => {
+            end(&id, &name, way);
+            way.close();
+        }
     }
     way.repaint();
 }

@@ -145,6 +145,8 @@ pub enum Errand {
     /// End this terminal — the person said yes — and the name its row
     /// gave it, for the sentence that says so.
     End(TerminalId, String),
+    /// The same, and shut the view, which was opened for that question.
+    EndAndClose(TerminalId, String),
 }
 
 /// What the rows are drawn from: the table one door follows, the time it is
@@ -167,6 +169,10 @@ struct Question {
     /// Its program ended already: nothing is hung up, only what it wrote
     /// goes — another sentence.
     ended: bool,
+    /// Asked from outside the view — a tab's middle button on the modeline
+    /// (`terminals-end` with the terminal): the view was opened for this
+    /// question alone, and the answer closes it.
+    outside: bool,
 }
 
 /// The view: where the cursor is, and the question, while it is up.
@@ -504,7 +510,8 @@ impl View {
     /// question about a terminal that left the background is let go: gone,
     /// there is nothing left to end; shown in a window meanwhile, it is no
     /// row of this view any more, and a "yes" would end what a window is
-    /// showing.
+    /// showing. One asked from outside ([`View::ask_to_end`]) is about a
+    /// terminal its window shows on purpose, and goes only with it.
     pub fn follow(
         &mut self,
         on: Option<&Target>,
@@ -516,7 +523,7 @@ impl View {
             && !r
                 .census
                 .iter()
-                .any(|t| t.id == q.terminal && t.viewer.is_none())
+                .any(|t| t.id == q.terminal && (q.outside || t.viewer.is_none()))
         {
             self.question = None;
         }
@@ -585,6 +592,7 @@ impl View {
                     terminal: id,
                     name: name_of(t).to_owned(),
                     ended: t.ended.is_some(),
+                    outside: false,
                 });
                 // "NO" FIRST, and the cursor is born on it.
                 let asked = self.rows(r, columns, texts);
@@ -621,6 +629,14 @@ impl View {
         let Some(q) = self.question.take() else {
             return Errand::Nothing;
         };
+        // ASKED FROM OUTSIDE, the answer is the view's last word.
+        if q.outside {
+            return if yes {
+                Errand::EndAndClose(q.terminal, q.name)
+            } else {
+                Errand::Close
+            };
+        }
         // BACK ON THE TERMINAL that was asked about, when it is still there.
         let on = Target::Terminal(q.terminal.clone());
         self.follow(Some(&on), r, columns, texts);
@@ -629,6 +645,36 @@ impl View {
         } else {
             Errand::Nothing
         }
+    }
+
+    /// Asks whether to end `id` — any held terminal, its window's or not —
+    /// as the view's `d` asks of its row: `no` first, the cursor born on it.
+    /// Asked from outside the view (`terminals-end` with the terminal), so
+    /// the answer closes it. `false` when the census holds no such terminal.
+    pub fn ask_to_end(
+        &mut self,
+        id: &TerminalId,
+        r: &Reading<'_>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        let Some(t) = r.census.iter().find(|t| t.id == *id) else {
+            return false;
+        };
+        self.question = Some(Question {
+            terminal: id.clone(),
+            name: name_of(t).to_owned(),
+            ended: t.ended.is_some(),
+            outside: true,
+        });
+        let asked = self.rows(r, columns, texts);
+        if let Some(i) = asked
+            .iter()
+            .position(|row| row.target == Some(Target::Answer(false)))
+        {
+            self.cursor = i;
+        }
+        true
     }
 
     /// Every row, in reading order.
@@ -803,7 +849,13 @@ impl Builder<'_> {
     /// and the cursor is born on it; "yes" in the colour of danger.
     fn question(&mut self, q: &Question) {
         let t = self.texts;
-        self.heading(t.t(crate::key::TERMINALS_TITLE));
+        // A TERMINAL WITH A WINDOW is no terminal without one: asked from
+        // outside, the page is titled by its question.
+        self.heading(t.t(if q.outside {
+            crate::key::TERMINALS_END_TITLE
+        } else {
+            crate::key::TERMINALS_TITLE
+        }));
         let asked = t.t_with(
             if q.ended {
                 crate::key::TERMINALS_CLOSE_QUESTION
@@ -1182,6 +1234,56 @@ mod tests {
         let said = drawn(&v.rows(&r, 120, &t)).join(" ");
         let close = t.t_with(crate::key::TERMINALS_CLOSE_QUESTION, &[("name", "zsh")]);
         assert!(said.contains(&close), "{said}");
+    }
+
+    /// FAILS IF: a terminal a window shows cannot be asked about from outside
+    /// (a tab's middle button on the modeline), the question does not draw
+    /// "no" first with the cursor on it, a new reading lets it go while the
+    /// terminal is held, or the answer — either — leaves the view open,
+    /// which was opened for the question alone.
+    #[test]
+    fn a_question_from_outside_asks_of_a_shown_terminal_and_closes() {
+        let mut all = census();
+        all[1].viewer = Some(4242);
+        let t = texts("en-GB");
+        let r = reading(&all);
+        let id = all[1].id.clone();
+        let mut v = View::fresh(&r, 120, &t);
+        assert!(v.ask_to_end(&id, &r, 120, &t));
+        assert!(v.asks());
+        let rows = v.rows(&r, 120, &t);
+        assert_eq!(
+            rows[v.cursor()].target,
+            Some(Target::Answer(false)),
+            "no first"
+        );
+        assert!(
+            drawn(&rows)
+                .join(" ")
+                .contains(&t.t(crate::key::TERMINALS_END_TITLE))
+        );
+        v.follow(None, &r, 120, &t);
+        assert!(
+            v.asks(),
+            "a reading let the question about a shown terminal go"
+        );
+        assert_eq!(
+            v.key(Press::Enter, &r, 120, &t),
+            Errand::Close,
+            "no keeps the view"
+        );
+        assert!(v.ask_to_end(&id, &r, 120, &t));
+        v.key(Press::Down, &r, 120, &t);
+        assert_eq!(
+            v.key(Press::Enter, &r, 120, &t),
+            Errand::EndAndClose(id.clone(), "fixing the strip".to_owned())
+        );
+        // GONE meanwhile, the question goes with it; never held, never asked.
+        assert!(v.ask_to_end(&id, &r, 120, &t));
+        let gone: Vec<TerminalState> = all.iter().filter(|t| t.id != id).cloned().collect();
+        v.follow(None, &reading(&gone), 120, &t);
+        assert!(!v.asks(), "a question outlived its terminal");
+        assert!(!v.ask_to_end(&id, &reading(&gone), 120, &t));
     }
 
     /// FAILS IF: the cursor stays on an INDEX when a new reading puts a row

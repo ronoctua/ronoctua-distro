@@ -4057,6 +4057,41 @@ let
     if 'pub const EXTENSIONS: [&str; 8] = [' not in kiosk or '"kiosk-ext-8"' not in kiosk or '"kiosk-ext-9"' in kiosk:
         gaps.append("the kiosk's extension pool is not the eight ids this check knows")
 
+    # AND A GROUP OF TERMINALS' TABS (`crate::terminal_tabs`, 2026-11-03).
+    # Its press, wheel and drop run two commands of the registry, named by
+    # constants of the file, and each is a key of the background terminals'
+    # view too: `terminal-show` is what `RET` on its row runs
+    # (`terminals::keys_reached`), and `terminals-end` is its `d` — asked
+    # first in both doors, `no` first.
+    tabs = read("terminal_tabs.rs")
+    def resolved(name):
+        if name.startswith('"'):
+            return name.strip('"')
+        m = re.search(r"const " + name + r':\s*&str\s*=\s*"([a-z0-9-]+)";', tabs)
+        return must(m and m.group(1), "the terminal tabs' `" + name + "`")
+    tab_acts = set()
+    for fn in ("clicked", "wheeled", "dropped"):
+        body = must(body_of(tabs, fn), "the terminal tabs' `" + fn + "`")
+        tab_acts |= {resolved(n) for n in re.findall(r'Act::Run(?:With)?\(\s*("[a-z0-9-]+"|[A-Z_]+)', body)}
+    if tab_acts != {"terminal-show", "terminals-end"}:
+        gaps.append(f"a group of terminals' tabs run {sorted(tab_acts)}, and not `terminal-show` and `terminals-end`")
+    view = without_tests(read(root / "crates/ronoctua-shell-terminal/src/terminals.rs"))
+    reached = must(body_of(view, "keys_reached"), "`terminals::keys_reached`")
+    view_keys = {
+        "terminal-show": ".chain([SHOW])" in reached
+        and 'pub const SHOW: &str = "terminal-show";' in view,
+        "terminals-end": '("d", "terminals-end"' in view,
+    }
+    for act in sorted(tab_acts):
+        if act not in registered:
+            gaps.append(f"a group of terminals' tabs run `{act}`, which is not a command of the registry")
+        if not view_keys.get(act):
+            gaps.append(f"a group of terminals' tabs run `{act}`, and no key of the background terminals' view does")
+    # ITS POOL, by name, for the kiosk's reason: `terminal-tab-1` to
+    # `terminal-tab-16` carry digits, and are answered by what was drawn.
+    if 'pub const TABS: [&str; 16] = [' not in tabs or '"terminal-tab-16"' not in tabs or '"terminal-tab-17"' in tabs:
+        gaps.append("the terminal tabs' pool is not the sixteen ids this check knows")
+
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
     # Two things, and each has a key: the circle marks it read, which is what

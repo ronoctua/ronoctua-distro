@@ -864,6 +864,7 @@ cmd-kiosk-extension-options = Abrir as opções de uma extensão
 cmd-kiosk-extension-details = Os detalhes de uma extensão no Chrome
 cmd-kiosk-release = Fazer do quiosque uma janela comum do Chrome de novo
 cmd-modeline-adapt-kiosk = Adaptar a modeline ao quiosque, ou não
+cmd-modeline-adapt-terminals = Pôr as abas de um grupo de terminais na modeline, ou não
 cmd-footer-hide-push = Esconder a modeline e o minibuffer, empurrando as janelas quando algo abre; de novo, mostrá-los
 cmd-footer-hide-cover = Esconder a modeline e o minibuffer, pondo o que abre por cima das janelas; de novo, mostrá-los
 echo-footer-opaque = Esta tela não desenha o rodapé transparente, então as barras ocultas deixam uma faixa opaca.
@@ -886,6 +887,7 @@ kiosk-extension-details = detalhes
 ask-kiosk-address = O endereço, ou palavras para buscar
 ask-kiosk-new-tab = Endereço ou palavras para a aba nova (vazio abre uma em branco)
 kiosk-tabs-more = +{ $count }
+terminal-tabs-more = +{ $count }
 kiosk-zoom-percent = { $percent }%
 kiosk-tab-front = { $host }, na frente
 kiosk-menu-back = Voltar
@@ -927,6 +929,16 @@ hint-kiosk-tabs-after = { $count ->
     } — o clique lista todas
 hint-kiosk-tab = { $title } — o clique traz para a frente, arrastar muda de lugar, o botão do meio fecha, o direito lista todas as abas
 hint-kiosk-tab-current = { $title } — a aba da frente; o clique lista todas as abas, o botão do meio fecha
+hint-terminal-tabs-before = { $count ->
+        [one] Mais um terminal à esquerda
+       *[other] Mais { $count } terminais à esquerda
+    } — o clique traz o anterior para a frente
+hint-terminal-tabs-after = { $count ->
+        [one] Mais um terminal à direita
+       *[other] Mais { $count } terminais à direita
+    } — o clique traz o próximo para a frente
+hint-terminal-tab = { $title } — o clique traz para a frente, a roda anda pelo grupo, o botão do meio encerra (pergunta antes)
+hint-terminal-tab-front = { $title } — o terminal da frente; a roda anda pelo grupo, o botão do meio encerra (pergunta antes)
 hint-kiosk-new-tab = Uma aba nova, num endereço ou numa busca
 hint-kiosk-ext = { $name } — o clique abre a página dela numa aba nova, o botão direito as opções
 hint-kiosk-extensions = { $names } — o clique lista todas as extensões
@@ -1004,6 +1016,8 @@ footer-settings-hours = Horas
 footer-settings-hours-note = A hora, à direita do minibuffer, enquanto nada mais é dito nele.
 footer-settings-kiosk = Quiosque
 footer-settings-kiosk-adapt = Adaptar a modeline a um quiosque
+footer-settings-terminals = Terminais
+footer-settings-terminals-adapt = Abas de um grupo de terminais na modeline
 footer-settings-on = ligado
 footer-settings-off = desligado
 cmd-footer-hide-header = Esconder o cabeçalho da janela, ou mostrá-lo
