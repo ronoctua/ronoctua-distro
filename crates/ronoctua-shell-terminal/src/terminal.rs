@@ -2672,10 +2672,13 @@ impl Content for TerminalWindow {
     }
 
     /// THE WINDOW'S SHORTCUTS — `LEADER Alt`'s list, the footer's line:
-    /// the group's keys of [`terminal_keys::GROUP`], a new terminal always
-    /// and the walk and the detach from two terminals up (with one there is
-    /// nothing to walk to, and nothing to leave). The rest of the
-    /// terminal's keys are Ghostty's and the program's, taught nowhere.
+    /// the group's commands of [`terminal_keys::GROUP`], a new terminal
+    /// always and the walk and the detach from two terminals up (with one
+    /// there is nothing to walk to, and nothing to leave), each on its ONE key
+    /// after `LEADER Alt` ([`terminal_keys::LEADER_ALT_KEYS`]) — the chords
+    /// are this window's, and the footer hands the command back by its id.
+    /// The rest of the terminal's keys are Ghostty's and the program's,
+    /// taught nowhere.
     fn shortcuts(&self, _: &Ui) -> Vec<ronoctua_protocol::Binding> {
         if self.identity != Identity::Terminal {
             return Vec::new();
@@ -2684,9 +2687,14 @@ impl Content for TerminalWindow {
         terminal_keys::GROUP
             .iter()
             .filter(|(_, _, g)| many || *g == Grouped::New)
-            .map(|(keys, id, _)| ronoctua_protocol::Binding {
-                keys: (*keys).to_owned(),
-                command: (*id).to_owned(),
+            .filter_map(|(keys, id, _)| {
+                let direct = ronoctua_keymap::Key::parse(keys).ok()?;
+                let key =
+                    crate::chrome::leader_alt_key(&direct, &[terminal_keys::LEADER_ALT_KEYS])?;
+                Some(ronoctua_protocol::Binding {
+                    keys: key.notation(),
+                    command: (*id).to_owned(),
+                })
             })
             .collect()
     }
@@ -3767,7 +3775,8 @@ mod tests {
         // FAILS IF `C-TAB`/`C-S-TAB` do not walk the group round its end,
         // every terminal is not told where it is after a walk (its call for
         // attention cleared by the wrong one), the shortcuts list keys that
-        // do nothing with one terminal (or not `C-T`), the monitor takes a
+        // do nothing with one terminal (or not the new one), or on anything
+        // but one key each after `LEADER Alt`, the monitor takes a
         // group's key from its program, or the detach does not open the
         // terminal in front in a window of its own.
         let mut d = laid_out(1, (900, 500));
@@ -3788,6 +3797,12 @@ mod tests {
                 terminal_keys::DETACH
             ]
         );
+        // EACH ON ONE KEY after `LEADER Alt` — the chords are the window's.
+        let keys: Vec<String> = Content::shortcuts(&d2.content, &d2.ui)
+            .into_iter()
+            .map(|b| b.keys)
+            .collect();
+        assert_eq!(keys, ["t", "n", "p", "w"]);
         d2.press(ronoctua_keymap::Key::parse("C-TAB").unwrap());
         assert_eq!(d2.content.group.front_index(), 1);
         d2.press(ronoctua_keymap::Key::parse("C-S-TAB").unwrap());

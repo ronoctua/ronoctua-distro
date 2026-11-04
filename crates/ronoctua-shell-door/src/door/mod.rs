@@ -1705,8 +1705,22 @@ pub trait Content: Sized + 'static {
     /// the same set in the same shape (`chrome::bindings_of_hint`). A window
     /// with no hint teaches no shortcut, and one with keys the hint cannot spell
     /// overrides this.
+    ///
+    /// EACH ONE KEY AFTER `LEADER Alt`, whatever the window's own key is
+    /// (`chrome::leader_alt_key`): a chord, a capital or Shift on a named key
+    /// is given its one key by the rule or by [`Content::leader_alt_keys`].
     fn shortcuts(&self, ui: &Ui) -> Vec<ronoctua_protocol::Binding> {
-        crate::chrome::bindings_of_hint(&self.hint(ui))
+        crate::chrome::bindings_of_hint(&self.hint(ui), self.leader_alt_keys())
+    }
+
+    /// THE KEYS THIS WINDOW GIVES AFTER `LEADER Alt` where the one rule for
+    /// every window does not (`chrome::leader_alt_key`): tables of `(direct
+    /// notation, one key)` — a capital, `C-S-…`, or two keys of the window
+    /// that the rule would land on one —, the first table that names a key
+    /// winning. The window's own keys never change; only what `LEADER Alt`
+    /// lists, and the footer hands the command back by its id.
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[]
     }
 
     /// RUNS ONE OF THIS WINDOW'S SHORTCUTS, by the command id it declared in
@@ -2686,6 +2700,20 @@ impl<C: Content> Door<C> {
         if let Some(shared) = &self.shortcuts_socket {
             let now = self.content.shortcuts(&self.ui);
             if now != self.shortcuts_told {
+                // A KEY THE HEADER TEACHES AND `LEADER Alt` CANNOT is a gap in
+                // the window's exceptions (`Content::leader_alt_keys`): said
+                // once per change of the set, never on every turn.
+                for (direct, id) in crate::chrome::unpublished(
+                    &self.content.hint(&self.ui),
+                    self.content.leader_alt_keys(),
+                ) {
+                    tracing::warn!(
+                        app = self.content.app_id(),
+                        key = %direct,
+                        command = id,
+                        "a shortcut with no one key after LEADER Alt"
+                    );
+                }
                 let answer = now
                     .iter()
                     .map(|b| format!("{} {}", b.keys, b.command))

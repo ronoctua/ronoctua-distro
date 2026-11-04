@@ -63,6 +63,11 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("S-<left>", "clipboard-less"),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`): clearing the whole history is `x`, where its
+/// own key is a capital.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[("D", "x")];
+
 /// Which text a mark's value is.
 ///
 /// A `match` AND NOT A FORMATTED STEM: `format!("clipboard-mark-{}", m.id())`

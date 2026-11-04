@@ -222,6 +222,18 @@ pub const GROUP: &[(&str, &str, Grouped)] = &[
     ("C-S-RET", DETACH, Grouped::Detach),
 ];
 
+/// THE GROUP'S KEYS AFTER `LEADER Alt` — one key each
+/// (`chrome::leader_alt_key`), where the window's own are chords because every
+/// bare key belongs to the program: `t` a new terminal, `n` and `p` the next
+/// and the previous, `w` the one in front in a window of its own. The chords
+/// of [`GROUP`] stay what the window answers to.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
+    ("C-T", "t"),
+    ("C-TAB", "n"),
+    ("C-S-TAB", "p"),
+    ("C-S-RET", "w"),
+];
+
 /// `terminal-new`: a new terminal in this window's group.
 pub const NEW: &str = "terminal-new";
 /// `terminal-next`: the next terminal of the group, in front.

@@ -181,6 +181,33 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("e", "player-ranking-more", Where::OnARanked),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`) — the capitals, and the chords that would land on
+/// a letter this table already has:
+///
+/// - carrying an entry earlier and later is `;` and `'`, as a kiosk's tab is
+///   carried; the globe's nearer and further `]` and `[`;
+/// - play now is `g` (go); every screen `x`; the order `q`; the lyrics'
+///   translation `h`; the listing's full view `f`, its layout `.`, its source
+///   `,` and its letter `` ` ``;
+/// - saving the queue again — and keeping a text being edited, the same
+///   chord — is `\`, where `s` stops.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
+    ("C-<up>", ";"),
+    ("C-<down>", "'"),
+    ("C-k", "]"),
+    ("C-j", "["),
+    ("P", "g"),
+    ("M", "x"),
+    ("O", "q"),
+    ("T", "h"),
+    ("F", "f"),
+    ("L", "."),
+    ("S", ","),
+    ("C-l", "`"),
+    ("C-s", "\\"),
+];
+
 /// Where a key applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Where {

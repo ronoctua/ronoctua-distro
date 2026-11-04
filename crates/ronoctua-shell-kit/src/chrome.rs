@@ -1242,34 +1242,247 @@ pub fn hint_of_marked(
     out
 }
 
-/// THE WINDOW'S SHORTCUTS, read straight off the keys its header teaches.
+/// The punctuation the `us` layout (`nix/keyboard-xkb.nix`) types WITHOUT
+/// Shift — what a key after `LEADER Alt` may be besides a letter, a digit and
+/// a named key ([`is_one_key`]).
+const UNSHIFTED: &str = "`-=[]\\;',./";
+
+/// Whether `key` is ONE KEY, as `LEADER Alt` promises every shortcut of every
+/// window is (the owner's rule, 2026-11-04): no modifier, no sequence, and no
+/// character the layout only types with Shift — a lowercase letter, a digit,
+/// `UNSHIFTED` punctuation, or a named key. Never `ESC`: after `LEADER Alt`
+/// it is the way out of the leader, as at every level of it.
+#[must_use]
+pub fn is_one_key(key: &ronoctua_keymap::Key) -> bool {
+    use ronoctua_keymap::Sym;
+    if key.mods != ronoctua_keymap::Mods::default() {
+        return false;
+    }
+    match key.sym {
+        Sym::Char(c) => c.is_ascii_lowercase() || c.is_ascii_digit() || UNSHIFTED.contains(c),
+        Sym::Esc => false,
+        _ => true,
+    }
+}
+
+/// THE KEY `LEADER Alt` GIVES a shortcut whose key in its window is `direct`.
+///
+/// The window's own key never changes — the footer hands the window the
+/// COMMAND back, and the door presses the direct key for it
+/// (`Door::run_or_replay_shortcut`) — so the key after `LEADER Alt` is free to
+/// be one key ([`is_one_key`]) even where the window's own needs a chord: the
+/// terminal and every type-to-search window, where a bare letter is text.
+///
+/// One rule, the same for every window, in this order:
+///
+/// 1. The window's `exceptions` (direct notation → the one key, in tables; the
+///    first that names this key wins) — for what the rule below cannot spell,
+///    or where two of its keys would land on one.
+/// 2. A key that already is one key is itself: `d`, `RET`, `<down>`.
+/// 3. `C-x` is `x` — the mirror of a buffer's `, x`, which its host turns back
+///    into `C-x` (`ronoctua_protocol::local_binding`). `C-SPC` is `SPC`.
+/// 4. A modifier on a named key, alike in every window: `C-RET` is `\` (the
+///    key above `RET` — the second enter, beside the first in every window
+///    that has both), `S-TAB` is `` ` `` (the key above `TAB`),
+///    `S-<left>`/`S-<right>` are `[`/`]`, and `S-<up>`/`S-<down>` are
+///    `<prior>`/`<next>`.
+/// 5. Anything else — `ESC`, a capital, `C-S-…`, `C-{` — has no key here, and
+///    the shortcut is not offered.
+#[must_use]
+pub fn leader_alt_key(
+    direct: &ronoctua_keymap::Key,
+    exceptions: &[&[(&str, &str)]],
+) -> Option<ronoctua_keymap::Key> {
+    use ronoctua_keymap::{Key, Mods, Sym};
+    if let Some((_, to)) = exceptions
+        .iter()
+        .flat_map(|t| t.iter())
+        .find(|(from, _)| Key::parse(from).is_ok_and(|k| k == *direct))
+    {
+        return Key::parse(to).ok().filter(is_one_key);
+    }
+    if is_one_key(direct) {
+        return Some(*direct);
+    }
+    let only = |m: Mods| direct.mods == m;
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    if only(ctrl) {
+        let sym = match direct.sym {
+            Sym::Enter => Sym::Char('\\'),
+            other => other,
+        };
+        return Some(Key::simple(sym)).filter(is_one_key);
+    }
+    if only(shift) {
+        let sym = match direct.sym {
+            Sym::Tab => Sym::Char('`'),
+            Sym::Left => Sym::Char('['),
+            Sym::Right => Sym::Char(']'),
+            Sym::Up => Sym::PageUp,
+            Sym::Down => Sym::PageDown,
+            _ => return None,
+        };
+        return Some(Key::simple(sym));
+    }
+    None
+}
+
+/// THE WINDOW'S SHORTCUTS, read straight off the keys its header teaches —
+/// each given its key after `LEADER Alt` ([`leader_alt_key`]).
 ///
 /// The bridge that lets every window which draws a hint ([`Content::hint`],
 /// built by [`hint_of_marked`]) answer `Content::shortcuts` for nothing: each
-/// key piece already carries the notation as its `text` and the command's id as
-/// its `id`, so the pair is a `Binding { keys, command }`. The footer lists and
-/// runs them the same for a plain window as for a buffer — `LEADER Alt` over
-/// anything — and the door, given the id back, finds the same key and presses
-/// it ([`Act::Key`]).
+/// key piece carries the key a click presses ([`Act::Key`]) and the command's
+/// id as its `id`, so the pair is a `Binding { keys, command }`. The footer
+/// lists and runs them the same for a plain window as for a buffer —
+/// `LEADER Alt` over anything — and the door, given the id back, finds the
+/// same piece and presses its key.
 ///
-/// Only a KEY piece that a click can reach (an `id` and a `press`) is a
+/// The key is read from the PRESS and never from the text: the text is what
+/// is drawn, and an arrow is drawn as a glyph (`key_text`), which no key the
+/// person types ever spells.
+///
+/// Only a KEY piece that presses a key (an `id` and an [`Act::Key`]) is a
 /// shortcut; the words beside it carry the same id and are skipped, and so is a
 /// separator or a line of prose. Each id appears once, in the order the hint
-/// drew it.
+/// drew it, and so does each key: of two ids that land on one key the first
+/// keeps it — [`unpublished`] names the other, and the window's `exceptions`
+/// are where it is given one of its own.
 #[must_use]
-pub fn bindings_of_hint(pieces: &[Piece]) -> Vec<ronoctua_protocol::Binding> {
+pub fn bindings_of_hint(
+    pieces: &[Piece],
+    exceptions: &[&[(&str, &str)]],
+) -> Vec<ronoctua_protocol::Binding> {
+    published(pieces, exceptions).0
+}
+
+/// The shortcuts of a hint that `LEADER Alt` cannot offer — `(direct
+/// notation, id)` each: a key with no one-key form ([`leader_alt_key`]), or one
+/// whose key an earlier shortcut of the same hint already took. `ESC` is not
+/// among them: never offering it is the rule, not a gap.
+#[must_use]
+pub fn unpublished(
+    pieces: &[Piece],
+    exceptions: &[&[(&str, &str)]],
+) -> Vec<(String, &'static str)> {
+    published(pieces, exceptions).1
+}
+
+/// [`bindings_of_hint`] and [`unpublished`], in one walk.
+fn published(
+    pieces: &[Piece],
+    exceptions: &[&[(&str, &str)]],
+) -> (Vec<ronoctua_protocol::Binding>, Vec<(String, &'static str)>) {
     let mut out: Vec<ronoctua_protocol::Binding> = Vec::new();
+    let mut left: Vec<(String, &'static str)> = Vec::new();
     for p in pieces {
         let Some(id) = p.id else { continue };
-        if !p.is_a_key() || p.press.is_none() || out.iter().any(|b| b.command == id) {
+        let Some(Act::Key(direct)) = p.press else {
+            continue;
+        };
+        if !p.is_a_key() || out.iter().any(|b| b.command == id) {
             continue;
         }
-        out.push(ronoctua_protocol::Binding {
-            keys: p.text.clone(),
-            command: id.to_owned(),
-        });
+        let key = leader_alt_key(&direct, exceptions).map(|k| k.notation());
+        match key {
+            Some(keys) if !out.iter().any(|b| b.keys == keys) => {
+                out.push(ronoctua_protocol::Binding {
+                    keys,
+                    command: id.to_owned(),
+                });
+            }
+            None if direct.sym == ronoctua_keymap::Sym::Esc => {}
+            _ => {
+                if !left.iter().any(|(_, said)| *said == id) {
+                    left.push((direct.notation(), id));
+                }
+            }
+        }
     }
-    out
+    (out, left)
+}
+
+/// The keys a WINDOW gives after `LEADER Alt`, worked out from its tables
+/// rather than from a hint on screen — what each window crate's test reads, so
+/// every key any of its modes teaches is proven one key and its own.
+///
+/// `tables` are the window's `(notation, id)` rows, every mode's and the shared
+/// ones it draws beside them (the consent row's, the way back); `exceptions`
+/// its [`leader_alt_key`] exceptions. Rows of one id are one shortcut (the hint
+/// teaches the first that parses), one key under two ids is one key that means
+/// one of them by context, and `ESC` is never offered. A set that REPLACES the
+/// window's hint while it is up — the file picker's, a text being edited — is
+/// a census of its own.
+///
+/// # Errors
+///
+/// A sentence naming each row with no one-key form, each exception that is not
+/// one key or names no row, and each pair of ids that would land on one key.
+#[cfg(any(test, feature = "test-support"))]
+pub fn leader_alt_census(
+    tables: &[&[(&str, &str)]],
+    exceptions: &[&[(&str, &str)]],
+) -> Result<Vec<(String, String)>, String> {
+    let mut wrong: Vec<String> = Vec::new();
+    let mut keys: Vec<(String, String)> = Vec::new();
+    let mut from: Vec<ronoctua_keymap::Key> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for (notation, id) in tables.iter().flat_map(|t| t.iter()) {
+        if seen.contains(id) {
+            continue;
+        }
+        let Ok(direct) = ronoctua_keymap::Key::parse(notation) else {
+            continue;
+        };
+        seen.push(id);
+        if direct.sym == ronoctua_keymap::Sym::Esc && direct.mods == Default::default() {
+            continue;
+        }
+        let Some(key) = leader_alt_key(&direct, exceptions) else {
+            wrong.push(format!(
+                "`{notation}` ({id}) has no one key after LEADER Alt"
+            ));
+            continue;
+        };
+        let key = key.notation();
+        if let Some(at) = keys.iter().position(|(k, _)| *k == key) {
+            if from[at] != direct {
+                wrong.push(format!(
+                    "`{notation}` ({id}) lands on `{key}`, which `{}` already has",
+                    keys[at].1
+                ));
+            }
+            continue;
+        }
+        keys.push((key, (*id).to_owned()));
+        from.push(direct);
+    }
+    for (from, to) in exceptions.iter().flat_map(|t| t.iter()) {
+        if !ronoctua_keymap::Key::parse(to).is_ok_and(|k| is_one_key(&k)) {
+            wrong.push(format!("the exception `{from}` → `{to}` is not one key"));
+        }
+        let from_key = ronoctua_keymap::Key::parse(from).ok();
+        let named = from_key.is_some()
+            && tables
+                .iter()
+                .flat_map(|t| t.iter())
+                .any(|(n, _)| ronoctua_keymap::Key::parse(n).ok() == from_key);
+        if !named {
+            wrong.push(format!("the exception `{from}` names no row"));
+        }
+    }
+    if wrong.is_empty() {
+        Ok(keys)
+    } else {
+        Err(wrong.join("\n"))
+    }
 }
 
 /// A moment, as a date a person reads.
@@ -5665,14 +5878,135 @@ mod tests {
         use super::{Piece, bindings_of_hint, hint_of};
         let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
         let hint = hint_of(&[("r", "network-window"), ("C-w", "power-window")], &t);
-        let bindings = bindings_of_hint(&hint);
+        let bindings = bindings_of_hint(&hint, &[]);
         assert_eq!(bindings.len(), 2, "a binding per key, not per piece");
         assert_eq!(bindings[0].keys, "r", "the key's own notation");
         assert_eq!(bindings[0].command, "network-window");
+        assert_eq!(
+            bindings[1].keys, "w",
+            "a chord is its letter after LEADER Alt"
+        );
         assert_eq!(bindings[1].command, "power-window");
         // A LINE OF PROSE IS NO SHORTCUT — no key, no press, no binding.
-        assert!(bindings_of_hint(&[Piece::prose("just words")]).is_empty());
-        assert!(bindings_of_hint(&[]).is_empty());
+        assert!(bindings_of_hint(&[Piece::prose("just words")], &[]).is_empty());
+        assert!(bindings_of_hint(&[], &[]).is_empty());
+    }
+
+    /// FAILS IF: a shortcut after `LEADER Alt` is anything but ONE key — a
+    /// chord, a capital, a character only Shift types, `ESC` — or the rule
+    /// that gives it stops being the same for every window: the window's
+    /// exception first, a key that already is one key as itself, `C-x` as
+    /// `x`, Shift on a named key as the one harmonised key.
+    #[test]
+    fn a_key_after_leader_alt_is_one_key() {
+        use super::{is_one_key, leader_alt_key};
+        let k = |n: &str| ronoctua_keymap::Key::parse(n).expect("a notation");
+        let alt = |n: &str, e: &[&[(&str, &str)]]| leader_alt_key(&k(n), e).map(|k| k.notation());
+        for one in [
+            "d", "0", "/", "`", "[", "RET", "TAB", "SPC", "DEL", "<down>", "<end>",
+        ] {
+            assert!(is_one_key(&k(one)), "{one} is one key");
+            assert_eq!(alt(one, &[]).as_deref(), Some(one), "{one} is itself");
+        }
+        for not in ["ESC", "D", "?", "{", "<", "C-d", "S-TAB", "M-x", "s-a"] {
+            assert!(!is_one_key(&k(not)), "{not} is not one key");
+        }
+        assert_eq!(alt("C-d", &[]).as_deref(), Some("d"));
+        assert_eq!(alt("C-SPC", &[]).as_deref(), Some("SPC"));
+        assert_eq!(
+            alt("C-RET", &[]).as_deref(),
+            Some("\\"),
+            "never on RET's own"
+        );
+        assert_eq!(alt("S-TAB", &[]).as_deref(), Some("`"));
+        assert_eq!(alt("S-<left>", &[]).as_deref(), Some("["));
+        assert_eq!(alt("S-<right>", &[]).as_deref(), Some("]"));
+        assert_eq!(alt("S-<up>", &[]).as_deref(), Some("<prior>"));
+        assert_eq!(alt("S-<down>", &[]).as_deref(), Some("<next>"));
+        for none in ["ESC", "D", "C-D", "C-S-TAB", "C-{", "C-<", "M-x", "C-ESC"] {
+            assert_eq!(alt(none, &[]), None, "{none} has no key of the rule");
+        }
+        // THE WINDOW'S EXCEPTION WINS, and is only taken when it is one key.
+        assert_eq!(alt("D", &[&[("D", "x")]]).as_deref(), Some("x"));
+        assert_eq!(alt("C-d", &[&[], &[("C-d", "9")]]).as_deref(), Some("9"));
+        assert_eq!(
+            alt("C-d", &[&[("C-d", "8")], &[("C-d", "9")]]).as_deref(),
+            Some("8"),
+            "the window's own table before a shared one"
+        );
+        assert_eq!(alt("D", &[&[("D", "C-x")]]), None);
+    }
+
+    /// FAILS IF: the window's shortcuts are read off the DRAWN text — an arrow
+    /// is drawn as a glyph, and no typed key spells `↓` — or `ESC` is offered
+    /// after `LEADER Alt`, where it leaves the leader, or two ids are offered
+    /// on one key.
+    #[test]
+    fn the_bindings_are_keys_a_person_types() {
+        use super::{bindings_of_hint, hint_of, unpublished};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let hint = hint_of(
+            &[
+                ("ESC", "view-back"),
+                ("<down>", "network-window"),
+                ("d", "power-window"),
+                ("C-d", "audio-window"),
+                ("D", "display-window"),
+            ],
+            &t,
+        );
+        let bindings = bindings_of_hint(&hint, &[]);
+        let keys: Vec<(&str, &str)> = bindings
+            .iter()
+            .map(|b| (b.keys.as_str(), b.command.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [("<down>", "network-window"), ("d", "power-window")],
+            "the arrow by its notation, no ESC, and one id per key"
+        );
+        assert_eq!(
+            unpublished(&hint, &[]),
+            [
+                ("C-d".to_owned(), "audio-window"),
+                ("D".to_owned(), "display-window")
+            ],
+            "what could not be offered is named, ESC is not"
+        );
+        let given = bindings_of_hint(&hint, &[&[("C-d", "x"), ("D", "y")]]);
+        assert!(
+            given
+                .iter()
+                .any(|b| b.keys == "x" && b.command == "audio-window")
+        );
+        assert!(
+            given
+                .iter()
+                .any(|b| b.keys == "y" && b.command == "display-window")
+        );
+    }
+
+    /// FAILS IF: the census a window crate's test reads lets through a row
+    /// with no one key, two ids on one key, or an exception that is not one
+    /// key or names nothing.
+    #[test]
+    fn the_census_refuses_what_leader_alt_cannot_offer() {
+        use super::leader_alt_census;
+        let ok = leader_alt_census(&[&[("ESC", "a"), ("d", "b"), ("C-e", "c")]], &[]);
+        assert_eq!(
+            ok,
+            Ok(vec![
+                ("d".to_owned(), "b".to_owned()),
+                ("e".to_owned(), "c".to_owned())
+            ])
+        );
+        assert!(leader_alt_census(&[&[("D", "a")]], &[]).is_err());
+        assert!(leader_alt_census(&[&[("d", "a")], &[("C-d", "b")]], &[]).is_err());
+        // ONE KEY, TWO IDS BY CONTEXT, is one key: the picker's `DEL`.
+        assert!(leader_alt_census(&[&[("DEL", "a"), ("DEL", "b")]], &[]).is_ok());
+        assert!(leader_alt_census(&[&[("d", "a"), ("C-d", "b")]], &[&[("C-d", "x")]]).is_ok());
+        assert!(leader_alt_census(&[&[("D", "a")]], &[&[("D", "C-x")]]).is_err());
+        assert!(leader_alt_census(&[&[("d", "a")]], &[&[("C-q", "q")]]).is_err());
     }
 
     /// FAILS IF: a header told to sit on line 1 — a column's, under the

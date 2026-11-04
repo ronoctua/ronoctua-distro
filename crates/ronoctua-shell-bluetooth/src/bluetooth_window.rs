@@ -411,6 +411,14 @@ impl Content for BluetoothWindow {
         true
     }
 
+    /// THE KEYS LINE 0 TEACHES — the same pieces [`Content::paint`] hands its
+    /// header — so `LEADER Alt` lists this window's shortcuts and runs them
+    /// back (`Content::shortcuts`, `Door::run_or_replay_shortcut`). Without
+    /// it the header taught keys that `LEADER Alt` never offered.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        self.view.hint(&ui.texts)
+    }
+
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::fields::Field>> {
         self.view_rows(ui).into_iter().map(|r| r.fields).collect()
     }
@@ -437,7 +445,7 @@ impl Content for BluetoothWindow {
     /// of a device's page the pointer is over, as the footer lights it.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         let about = self.about_the_pointer(ui);
-        crate::door::list::header_about(ui, canvas, None, about, |ui| self.view.hint(&ui.texts));
+        crate::door::list::header_about(ui, canvas, None, about, |ui| self.hint(ui));
         let rows = self.rows(ui);
         crate::door::list::body(ui, canvas, &rows, &[], None);
         let pointers: Vec<_> = canvas

@@ -110,10 +110,11 @@ const fn door(key: &'static str, label: &'static str, command: &'static str, to:
 /// THE GRID, and the `,` group, key for key.
 ///
 /// `h l r` are a browser's three, on vi's sideways keys; `[ ]` walk the tabs
-/// and `{ }` carry the tab in front with them (Chrome's own `Ctrl`+`Shift`
-/// pair, one key further). The zoom is `= - 0`, Chrome's own. `k` is the
-/// bars, `a` the address line, and the capital changes what the kiosk IS:
-/// `R`, back to an ordinary window. The modeline's adaptation was `M` here
+/// and `; '`, the two keys under them, carry the tab in front with them. The
+/// zoom is `= - 0`, Chrome's own. `k` is the bars, `a` the address line, and
+/// `o` changes what the kiosk IS: back to an ORDINARY window. Every key is ONE
+/// key with no Shift, because this group is what `LEADER Alt` lists over a
+/// kiosk (`chrome::is_one_key`) — it was `{ }` and `R`. The modeline's adaptation was `M` here
 /// until it moved to the footer's own settings (`LEADER s r`,
 /// `crate::footer_settings`, 2026-09-30): it is a setting of the footer, and
 /// this grid is where a person acts on the page.
@@ -131,8 +132,8 @@ pub const ROOT: &[Cell] = &[
         true,
     ),
     run("]", key::KIOSK_MENU_TAB_NEXT, "kiosk-tab-next", true),
-    run("{", key::KIOSK_MENU_TAB_LEFT, "kiosk-tab-left", true),
-    run("}", key::KIOSK_MENU_TAB_RIGHT, "kiosk-tab-right", true),
+    run(";", key::KIOSK_MENU_TAB_LEFT, "kiosk-tab-left", true),
+    run("'", key::KIOSK_MENU_TAB_RIGHT, "kiosk-tab-right", true),
     run("w", key::KIOSK_MENU_TAB_CLOSE, "kiosk-tab-close", true),
     door(
         "x",
@@ -156,7 +157,7 @@ pub const ROOT: &[Cell] = &[
         key::KIOSK_MENU_ADDRESS_HIDE,
         "kiosk-address-line",
     ),
-    run("R", key::KIOSK_MENU_RELEASE, "kiosk-release", false),
+    run("o", key::KIOSK_MENU_RELEASE, "kiosk-release", false),
 ];
 
 /// The zoom's steps — the grid's three, on their own.
@@ -167,14 +168,14 @@ const ZOOM: &[Cell] = &[
 ];
 
 /// The tabs' keys. The hint line is GENERATED from it (`chrome::hint_of`).
-/// `K` and `J` carry the tab under the cursor earlier and later — the window
-/// menu's `H L K J`, on the list's axis.
+/// `;` and `'` carry the tab under the cursor earlier and later — the same two
+/// that carry the tab in front on the grid ([`ROOT`]).
 pub const OF_THE_TABS: &[(&str, &str)] = &[
     ("<down>", "kiosk-list-down"),
     ("<up>", "kiosk-list-up"),
     ("RET", "kiosk-list-enter"),
-    ("K", "kiosk-tab-earlier"),
-    ("J", "kiosk-tab-later"),
+    (";", "kiosk-tab-earlier"),
+    ("'", "kiosk-tab-later"),
     ("d", "kiosk-tab-close"),
     ("n", "kiosk-new-tab"),
 ];
@@ -949,7 +950,18 @@ mod tests {
                     *k,
                     "`{k}` reads back as another notation"
                 );
+                assert!(
+                    crate::chrome::is_one_key(&parsed),
+                    "`{k}` is not one key, and LEADER Alt lists this grid"
+                );
             }
+        }
+        for (k, id) in OF_THE_TABS.iter().chain(OF_THE_EXTENSIONS) {
+            let parsed = ronoctua_keymap::Key::parse(k).expect("the notation parses");
+            assert!(
+                crate::chrome::is_one_key(&parsed),
+                "`{k}` ({id}) is not one key"
+            );
         }
     }
 
@@ -995,10 +1007,10 @@ mod tests {
         assert_eq!(v.argument_for("kiosk-tab-close", r).as_deref(), Some("1"));
     }
 
-    /// FAILS IF: `K` and `J` do not move the tab under the cursor, or the
+    /// FAILS IF: `;` and `'` do not move the tab under the cursor, or the
     /// list's `RET` does not bring it to the front.
     #[test]
-    fn k_and_j_move_the_tab_under_the_cursor() {
+    fn the_carry_keys_move_the_tab_under_the_cursor() {
         let t = texts();
         let k = kiosk(vec![tab(1, 0, true), tab(2, 1, false), tab(3, 2, false)]);
         let r = Reading {
@@ -1010,7 +1022,7 @@ mod tests {
         v.go(Level::Tabs, Some(2));
         let rows = v.rows(r, 80, &t);
         let key = |s: &str| ronoctua_keymap::Key::parse(s).expect("parses");
-        let earlier = press_of_key(Level::Tabs, key("K")).expect("K is a key here");
+        let earlier = press_of_key(Level::Tabs, key(";")).expect("; is a key here");
         assert_eq!(
             v.press(earlier, r, &rows),
             Errand::Run {
@@ -1019,7 +1031,7 @@ mod tests {
                 stays: true
             }
         );
-        let later = press_of_key(Level::Tabs, key("J")).expect("J is a key here");
+        let later = press_of_key(Level::Tabs, key("'")).expect("' is a key here");
         assert_eq!(
             v.press(later, r, &rows),
             Errand::Run {

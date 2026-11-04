@@ -1809,8 +1809,8 @@ então abrir a lista redimensiona o que está atrás. Cobrir o conteúdo esconde
 se estava lendo — e num sistema sem popup (invariante 14), a superfície do rodapé é a única coisa
 capaz de cobrir algo. O custo é o reflow: os buffers recebem `configure` a cada expansão.
 
-Com as barras ocultas isso deixa de valer, por pedido do dono: com `LEADER Alt LEADER` tudo cobre, e
-com `LEADER LEADER` cobrem o minibuffer e a lista da leader enquanto nada empurra (ver "Os modos
+Com as barras ocultas isso deixa de valer, por pedido do dono: no modo que cobre tudo cobre, e no que
+empurra cobrem o minibuffer e a lista da leader enquanto nada empurra (ver "Os modos
 ocultos"). O argumento acima continua verdadeiro lá, e é o preço aceito.
 
 **O teclado sai na hora, num commit só dele; a altura espera o quadro** (`commit_now` e
@@ -1830,8 +1830,8 @@ não há contador de notificações, e o sino só existe com não lida (o dono p
 abre, o nome do buffer aparece. Um rótulo de ausência inventado ocuparia coluna afirmando algo falso,
 e quem o lê procura um buffer que não existe.
 
-A sequência pendente aparece como `LEADER g-` — e `LEADER ALT g-` ou `LEADER CTRL s n-` fora do
-conjunto padrão (ver "Três conjuntos da leader"). O `-` no fim custa duas colunas a menos que ` …`
+A sequência pendente aparece como `LEADER g-` — e `LEADER LEADER g-` ou `LEADER LEADER LEADER s n-`
+fora do conjunto padrão (ver "Três conjuntos da leader"). O `-` no fim custa duas colunas a menos que ` …`
 dizendo a mesma coisa, e num rodapé onde tudo elide, espaço é o recurso.
 
 **O rótulo da leader vem do ambiente**, posto por quem define o bind, e são **dois**:
@@ -2509,7 +2509,7 @@ uma regra da distro sobre nível baixo rodava depois e a devolvia ao discreto.
 contador que não dá para zerar. Mas ela é REGISTRADA, e a coluna da direita do gerenciador é onde
 ela aparece — um filtro que ninguém consegue auditar é um filtro em que ninguém confia.
 
-**Duas portas, uma `notifications::View`.** `LEADER n` abre no rodapé, `LEADER Alt n` numa janela
+**Duas portas, uma `notifications::View`.** `LEADER n` abre no rodapé, `LEADER LEADER n` numa janela
 (`n n` e `n w` na árvore completa); duas colunas
 quando cabe, uma quando não. O corte sai de um token, e vale para as duas portas — que é o que faz
 "uma implementação, duas portas" ser verdade também do layout.
@@ -3386,10 +3386,11 @@ silencioso com outra roupa.
 ### Três conjuntos da leader — o que vem logo depois dela
 
 Desde 2026-09-30 o conjunto é escolhido pela LEADER repetida (`LEADER LEADER` as janelas,
-`LEADER LEADER LEADER` a árvore inteira), não por um toque de `Alt` ou `Ctrl`; o `Ctrl` tocado gira
-os modos das barras e o `Alt` não escolhe nada (ver *Atalhos, rodapé e modeline — a leva de
-2026-09-30*). O que esta seção diz sobre a dobra, as três árvores e o toque como gesto continua
-valendo; onde ela diz `Alt` e `Ctrl` como conjunto, leia a LEADER de novo.
+`LEADER LEADER LEADER` a árvore inteira), não por um toque de `Alt` ou `Ctrl` (ver *Atalhos, rodapé
+e modeline — a leva de 2026-09-30*): o `Ctrl` tocado gira os modos das barras, e o `Alt` tocado abre
+os atalhos da janela em foco, cada um uma tecla (`AGENTS.md`). O que esta seção diz sobre a dobra, as
+três árvores e o toque como gesto continua valendo; onde ela diz `Alt` e `Ctrl` como conjunto, leia a
+LEADER de novo.
 
 O dono pediu que a tecla que abria o SUBMENU de um app abrisse o app: `LEADER s n` é a rede no
 rodapé, onde era `LEADER s n n`. Um toque de `Alt` logo depois da leader faz a mesma tecla abrir a
@@ -3468,7 +3469,7 @@ continuam sendo da árvore completa, que é quem as lê.
 
 **As sequências citadas neste documento são as da árvore completa**, a que um toque de `Ctrl`
 alcança. No conjunto padrão, um grupo de duas portas é a própria tecla do grupo: `LEADER t t` é
-`LEADER t`, e `s n w` é `LEADER Alt s n`.
+`LEADER t`, e `s n w` é `LEADER LEADER s n`.
 
 ---
 
@@ -4723,8 +4724,8 @@ O registro recusa as duas coisas na mesma sequência — um prefixo que também 
 toque rodar algo enquanto a pessoa ainda está digitando —, e é a mesma regra que fez `s b b`, `s n n`
 e `t t` dobrarem a letra. A segunda porta ganhou casa sem inventar um segundo grupo, e o preço era um
 toque a mais — que deixou de ser pago: no conjunto padrão da leader o grupo de duas portas é a
-própria tecla, `LEADER .` abre o gerenciador no rodapé e `LEADER Alt .` a janela, e a árvore com
-`. .` e `. w` continua inteira a um toque de `Ctrl` (ver "Três conjuntos da leader"). A regra
+própria tecla, `LEADER .` abre o gerenciador no rodapé e `LEADER LEADER .` a janela, e a árvore com
+`. .` e `. w` continua inteira em `LEADER LEADER LEADER` (ver "Três conjuntos da leader"). A regra
 continua valendo nessa árvore, e é ela que dá à convenção os dois nomes que a dobra lê.
 
 O grupo tem DUAS teclas e nada mais: `. .` abre o gerenciador no rodapé e **`. w` o abre em janela**,

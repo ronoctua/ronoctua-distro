@@ -89,6 +89,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("C-k", "incus-copy-image", Where::OnAnOffered),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`): the consent row's `C-a` would land on `a`,
+/// which launches here, so allowing the host is `y` — yes.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[("C-a", "y")];
+
 /// The consent row's key, every app's (`consent_rows`): taught while the row
 /// is drawn, and only then — a key that does nothing is not taught.
 pub const OF_THE_CONSENT: &[(&str, &str)] = crate::consent_rows::OF_THE_CONSENT;

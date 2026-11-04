@@ -870,6 +870,10 @@ impl Content for CameraWindow {
     /// minibuffer (`Content::shortcuts` derives from this; the footer only
     /// shows them while the header is gone). Without it a hidden header took
     /// the shortcuts off the screen entirely.
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[camera::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         camera::hint(&ui.texts)
     }

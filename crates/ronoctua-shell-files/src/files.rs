@@ -5402,6 +5402,31 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("C-t", "files-measure", Where::Anywhere),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`) — this table's capitals and shifted symbols:
+///
+/// - first and last are `<home>` and `<end>`;
+/// - the reversed sort is `o`, for order; unmarking all is `x`; the wide facts
+///   `f`; the grid's size `z`; the columns' header `c`;
+/// - the playlist's previous and next are `p` and `n`, and the preview's left
+///   and right `9` and `0`, where `C-[`/`C-]` would land on the `[`/`]` of
+///   `S-<left>`/`S-<right>`. In each of these places the strong arrows take
+///   the same command (`strong_meaning`) and come first, so
+///   these keys are only listed where the arrows do not stand in.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
+    ("C-<", "<home>"),
+    ("C->", "<end>"),
+    ("C-S", "o"),
+    ("C-A", "x"),
+    ("C-W", "f"),
+    ("C-G", "z"),
+    ("C-D", "c"),
+    ("C-{", "p"),
+    ("C-}", "n"),
+    ("C-[", "9"),
+    ("C-]", "0"),
+];
+
 /// The hint line: every key this view answers to, in the order of its table.
 ///
 /// # Why it is GENERATED and not written

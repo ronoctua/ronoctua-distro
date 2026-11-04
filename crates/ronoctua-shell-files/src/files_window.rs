@@ -1872,6 +1872,10 @@ impl Content for Files {
     /// derives `Content::shortcuts` from this, and the footer shows them only
     /// while the header is gone). Without it a hidden header left the file
     /// manager the one window whose shortcuts the minibuffer never carried.
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[crate::files::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.manager.view.hint(&ui.texts)
     }

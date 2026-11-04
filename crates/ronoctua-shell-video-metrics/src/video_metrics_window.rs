@@ -421,6 +421,10 @@ impl Content for VideoMetricsWindow {
         self.view.editing()
     }
 
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[crate::video_metrics::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         let rows = self.view_rows(ui);
         // THE WAY BACK FIRST, and clickable — while a text is edited its own
@@ -800,5 +804,24 @@ mod tests {
             assert!(unheld.is_empty(), "{what}: {unheld:?}");
         }
         assert!(shelves > 0, "the grid drew no shelf");
+    }
+
+    /// FAILS IF: a key the window teaches has no one key after `LEADER Alt`,
+    /// or lands on one another of its commands already has. Here, and not in
+    /// the binary's list of every window (`leader_alt.rs`), because this
+    /// view's name is its brain module's, which the binary may not say
+    /// (`brain-modules-are-sealed`).
+    #[test]
+    fn every_shortcut_is_one_key_after_leader_alt() {
+        let view: Vec<(&str, &str)> = crate::video_metrics::OF_THE_VIEW
+            .iter()
+            .map(|r| (r.0, r.1))
+            .collect();
+        if let Err(wrong) = crate::chrome::leader_alt_census(
+            &[crate::chrome::OF_THE_WAY_BACK, &view],
+            &[crate::video_metrics::LEADER_ALT_KEYS],
+        ) {
+            panic!("the window offers what is not one key after LEADER Alt:\n{wrong}");
+        }
     }
 }

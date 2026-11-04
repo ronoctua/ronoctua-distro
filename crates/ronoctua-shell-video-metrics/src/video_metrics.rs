@@ -87,6 +87,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("d", "video-metrics-delete", Where::OnAVideo),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`) — the capitals: the layout is `y`, as the
+/// player's is; the kiosk `k`; the download `g`, for get.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[("L", "y"), ("K", "k"), ("D", "g")];
+
 /// Where a key of [`OF_THE_VIEW`] means something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Where {

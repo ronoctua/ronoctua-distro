@@ -3160,6 +3160,10 @@ impl Content for Player {
     /// (`View::hint`) — so a hidden header moves them to the footer's minibuffer
     /// (`Content::shortcuts` derives from this; the footer only shows them while
     /// the header is gone). Without it a hidden header took them off the screen.
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[crate::player::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.view.hint(self.player.as_ref(), ui.columns, &ui.texts)
     }

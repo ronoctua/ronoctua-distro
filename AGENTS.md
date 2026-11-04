@@ -657,8 +657,15 @@ OSC 7501, que o guardião lê.
   buffer, `, r` é o acorde `C-r`; letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles (`LEADER`/`LEADER LEADER`/`LEADER
   LEADER LEADER` → padrão, janelas, árvore; `bindings::Set::next`). Um toque de `Ctrl`
-  (`leader::Tap`) gira os modos das barras; `Alt` não escolhe, e botão/roda/dedo no meio fazem
-  acorde. A frase que ensina uma sequência sai de `bindings::taught`.
+  (`leader::Tap`) gira os modos das barras, um de `Alt` abre os atalhos da janela em foco, e
+  botão/roda/dedo no meio fazem acorde. A frase que ensina uma sequência sai de `bindings::taught`.
+- **Todo atalho de janela é `LEADER Alt` + UMA tecla** (regra do dono, 2026-11-04): sem modificador,
+  sem sequência e sem Shift no `us` (`chrome::is_one_key`; nunca `ESC`). A tecla direta da janela
+  não muda: o rodapé devolve o id, e a do `LEADER Alt` sai de `chrome::leader_alt_key` — a regra
+  (`C-x` → `x`, `C-RET` → `\`, `S-TAB` → `` ` ``, `S-←/→` → `[`/`]`) e, onde ela não dá, as
+  exceções da janela (`Content::leader_alt_keys`). Cobra `every_window_shortcut_is_one_key`
+  (`crates/ronoctua-shell/src/leader_alt.rs`), que lista cada janela; a que tem nome de módulo do
+  brain se prova no próprio crate (`brain-modules-are-sealed`).
 - Comando de uma vista usa `C-`, nunca `M-` (família dos acordes do compositor, não chega à janela).
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`); o xkb cai no `us` sem avisar, quem
   recusa layout inexistente é o `keyboard-layout-exists`.

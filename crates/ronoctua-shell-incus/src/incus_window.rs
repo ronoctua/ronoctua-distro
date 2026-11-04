@@ -478,6 +478,10 @@ impl Content for IncusWindow {
         self.open.view.let_go();
     }
 
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[crate::incus::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.open
             .view

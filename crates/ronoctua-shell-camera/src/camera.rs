@@ -67,6 +67,19 @@ pub const OF_THE_VIEW: &[(&str, &str, Option<&str>)] = &[
     ("C-s", "camera-menu-scene", None),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`): a previous is the key UNDER its next (`d` under
+/// `e`, `x` under `s`), and the four menus, whose chords would land on their
+/// rings' letters, are `1`–`4` in the order of [`OF_THE_VIEW`].
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
+    ("E", "d"),
+    ("S", "x"),
+    ("C-e", "1"),
+    ("C-b", "2"),
+    ("C-c", "3"),
+    ("C-s", "4"),
+];
+
 /// The keys that are the WINDOW's own: they change how this window draws
 /// and mean nothing anywhere else, so they are not commands of the registry
 /// and their sentences are `about-<id>`, not `cmd-<id>`.

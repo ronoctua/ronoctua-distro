@@ -274,6 +274,10 @@ impl Content for ClipboardWindow {
         self.clip.unanswered(ui);
     }
 
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[crate::clipboard_view::LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.clip.view.hint(&ui.texts)
     }

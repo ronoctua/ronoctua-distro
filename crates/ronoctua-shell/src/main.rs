@@ -916,6 +916,9 @@ mod tests {
 }
 
 #[cfg(test)]
+mod leader_alt;
+
+#[cfg(test)]
 mod player_pages {
     //! THE WHOLE PLAYER, ITS PAGES PLUGGED IN — what no crate of it can ask
     //! alone: the player's view reaches channels by theme and the ranking

@@ -9653,6 +9653,15 @@ impl Footer {
     fn buffer_key(&mut self, key: ronoctua_keymap::Key) -> bool {
         let typed = ronoctua_keymap::notation(&[key]);
 
+        // `ESC` LEAVES the window's shortcuts at every depth — the flat list
+        // of `LEADER Alt` included, where nothing is pending yet and a window
+        // that published `ESC` would otherwise have it run instead.
+        if esc_leaves(&typed, self.shortcuts_flat, self.buffer_pending.is_empty()) {
+            self.buffer_pending.clear();
+            self.close_leader();
+            return true;
+        }
+
         if self.buffer_pending.is_empty() {
             // FLAT MODE: `LEADER Alt` opened the window's shortcuts at depth
             // zero (`open_window_shortcuts`), so the first key IS a binding key
@@ -9669,10 +9678,6 @@ impl Footer {
             {
                 return false;
             }
-        } else if typed == "ESC" {
-            self.buffer_pending.clear();
-            self.close_leader();
-            return true;
         }
 
         self.buffer_pending.push(typed);
@@ -10854,10 +10859,10 @@ impl Footer {
         // A BUFFER UNDER THE LOCAL PREFIX opens its `,` submenu as it always
         // has — the prefix typed for the person. A window whose keys are FLAT
         // (every native door, now that `Content::shortcuts` derives from the
-        // hint) lists them at depth zero, with no prefix to type.
-        let prefixed = self.buffer_bindings.iter().any(|(sequence, _)| {
-            sequence.split_whitespace().next() == Some(ronoctua_protocol::LOCAL_PREFIX)
-        });
+        // hint) lists them at depth zero, with no prefix to type — and a lone
+        // `,` among them is one of those keys, not the prefix: the camera's
+        // settings are `,`, and taking it for the prefix opened nothing.
+        let prefixed = under_the_prefix(&self.buffer_bindings);
         self.buffer_pending.clear();
         if prefixed {
             self.buffer_pending
@@ -10890,6 +10895,7 @@ impl Footer {
             if !out.is_empty() {
                 out.push(crate::chrome::Piece::separator());
             }
+            let keys = key_on_the_line(keys);
             // A CLICK ON THE LINE OPENS THE REGION, where each shortcut is run
             // by its own key or click — the direct run of ONE line shortcut
             // wants a runtime command on the piece, and `chrome::Act::Run` holds
@@ -10897,7 +10903,7 @@ impl Footer {
             // can give (`window-shortcuts`, `Footer::open_window_shortcuts`),
             // and the region behind it is where a shortcut is actually pressed.
             out.push(
-                crate::chrome::Piece::key_in(keys.clone(), crate::chrome::Register::Key)
+                crate::chrome::Piece::key_in(keys, crate::chrome::Register::Key)
                     .running(crate::leader::WINDOW_SHORTCUTS_COMMAND),
             );
             out.push(
@@ -14377,7 +14383,14 @@ impl Footer {
         self.inputs
             .iter()
             .map(|e| ExpansionRow {
-                key: e.key.clone(),
+                // A ROW WHOSE KEY IS ITS SYMBOL is drawn as a header draws that
+                // key — an arrow as its glyph (`chrome::key_text`); the tap
+                // rows' `ALT` and `CTRL` stand for a gesture and stay words.
+                key: if e.key == e.sym.notation() {
+                    crate::chrome::key_text(&e.sym)
+                } else {
+                    e.key.clone()
+                },
                 // THE ITEM IS THE COMMAND, as in Doom.
                 //
                 // It used to be the translated label, and it answered the
@@ -21475,6 +21488,44 @@ fn forward_of(
     }
 }
 
+/// Whether `ESC` leaves the window's shortcuts here: at every depth of them —
+/// the flat list of `LEADER Alt` included, where nothing is pending yet. Out
+/// of them (`flat` false, nothing pending) the key is the tree's, which leaves
+/// too.
+fn esc_leaves(typed: &str, flat: bool, nothing_pending: bool) -> bool {
+    typed == "ESC" && (flat || !nothing_pending)
+}
+
+/// Whether the focused window's shortcuts live under the local prefix — a
+/// buffer's `, x`. A lone `,` is one of a flat window's keys (the camera's
+/// settings), never the prefix.
+fn under_the_prefix(bindings: &[(String, String)]) -> bool {
+    bindings.iter().any(|(sequence, _)| {
+        let mut keys = sequence.split_whitespace();
+        keys.next() == Some(ronoctua_protocol::LOCAL_PREFIX) && keys.next().is_some()
+    })
+}
+
+/// A shortcut as the minibuffer's line draws it: the key typed AFTER
+/// `LEADER Alt` — a buffer's `, x` is `x`, the `,` being typed for the
+/// person — drawn as a header draws it, an arrow as its glyph.
+fn key_on_the_line(sequence: &str) -> String {
+    let typed = local_key(sequence).unwrap_or(sequence);
+    ronoctua_keymap::Key::parse(typed)
+        .map_or_else(|_| typed.to_owned(), |k| crate::chrome::key_text(&k))
+}
+
+/// The one key of a buffer's `, x` — what is typed after `LEADER Alt`, which
+/// types the `,` for the person. `None` for anything else: a flat window's
+/// key, a lone `,` among them, a longer sequence.
+fn local_key(sequence: &str) -> Option<&str> {
+    let mut keys = sequence.split_whitespace();
+    match (keys.next(), keys.next(), keys.next()) {
+        (Some(ronoctua_protocol::LOCAL_PREFIX), Some(key), None) => Some(key),
+        _ => None,
+    }
+}
+
 /// One which-key row per DISTINCT next key of a buffer's keymap.
 ///
 /// # Why this is not `ronoctua_keymap::Tree`
@@ -23443,6 +23494,54 @@ mod tests {
                 "{sym:?} should do nothing with CtrlRight held"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod leader_alt_tests {
+    use super::{esc_leaves, key_on_the_line, under_the_prefix};
+
+    fn bound(keys: &[&str]) -> Vec<(String, String)> {
+        keys.iter()
+            .map(|k| ((*k).to_owned(), "a-command".to_owned()))
+            .collect()
+    }
+
+    /// FAILS IF: `ESC` in the flat list of `LEADER Alt` runs what a window
+    /// published on it instead of leaving, or stops leaving a buffer's `,`
+    /// group, or takes the tree's own `ESC` when no shortcuts are open.
+    #[test]
+    fn esc_leaves_the_window_shortcuts() {
+        assert!(
+            esc_leaves("ESC", true, true),
+            "the flat list, nothing typed"
+        );
+        assert!(esc_leaves("ESC", false, false), "inside a buffer's `,`");
+        assert!(!esc_leaves("ESC", false, true), "not ours: the tree's");
+        assert!(!esc_leaves("d", true, true));
+    }
+
+    /// FAILS IF: a lone `,` among a window's keys is taken for the local
+    /// prefix — `LEADER Alt` then types `,` for the person, finds nothing
+    /// under it and closes — or a buffer's `, x` stops opening its group.
+    #[test]
+    fn a_lone_comma_is_a_key_and_not_the_prefix() {
+        assert!(!under_the_prefix(&bound(&["r", ",", "C-e"])));
+        assert!(under_the_prefix(&bound(&[", r", ", e"])));
+        assert!(!under_the_prefix(&bound(&[])));
+    }
+
+    /// FAILS IF: the minibuffer's line teaches a buffer's shortcut with the
+    /// `,` that `LEADER Alt` types for the person, or an arrow by its
+    /// notation where the header draws its glyph.
+    #[test]
+    fn the_line_says_the_key_typed_after_leader_alt() {
+        assert_eq!(key_on_the_line(", r"), "r");
+        assert_eq!(key_on_the_line("d"), "d");
+        assert_eq!(key_on_the_line(","), ",");
+        let down = ronoctua_keymap::Key::parse("<down>").expect("a key");
+        assert_eq!(key_on_the_line("<down>"), crate::chrome::key_text(&down));
+        assert_ne!(key_on_the_line("<down>"), "<down>");
     }
 }
 

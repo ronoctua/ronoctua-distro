@@ -1026,6 +1026,11 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("d", crate::parts::OPEN),
 ];
 
+/// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
+/// (`chrome::leader_alt_key`): the end of the output is `<end>`, where its own
+/// key is vi's capital.
+pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[("G", "<end>")];
+
 /// The keys the binary cache's page teaches, in both doors — every one a
 /// click, pressed by its notation through [`press_of_key`]: the rows, the
 /// change, and `c` back to the steps (the way back, `Esc`, too).
@@ -4615,6 +4620,10 @@ impl Content for UpdateWindow {
 
     /// THE KEYS THE FOOTER TEACHES, on this window's header — every one a
     /// click, `u`, `a` and `p` included.
+    fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
+        &[LEADER_ALT_KEYS]
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.open.view.hint(&ui.texts)
     }

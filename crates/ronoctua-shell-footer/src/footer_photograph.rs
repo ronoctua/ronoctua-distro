@@ -330,8 +330,10 @@ fn parse(words: &[String]) -> Result<Asked> {
             }
             "--local" => {
                 let raw = value()?;
+                // AT THE LAST `=`: an id never holds one, and a key may — the
+                // camera's `=` and a kiosk's are keys after `LEADER Alt`.
                 let (keys, id) = raw
-                    .split_once('=')
+                    .rsplit_once('=')
                     .with_context(|| format!("`--local` wants `<keys>=<id>`, not `{raw}`"))?;
                 me.local.push((keys.to_owned(), id.to_owned()));
             }
@@ -974,6 +976,8 @@ mod tests {
             "browse:b,permission:p",
             "--local",
             "f s=save",
+            "--local",
+            "==camera-param-more",
             "--leader",
             "--key",
             "w",
@@ -987,7 +991,13 @@ mod tests {
             a.states,
             vec![("browse".to_owned(), 'b'), ("permission".to_owned(), 'p')]
         );
-        assert_eq!(a.local, vec![("f s".to_owned(), "save".to_owned())]);
+        assert_eq!(
+            a.local,
+            vec![
+                ("f s".to_owned(), "save".to_owned()),
+                ("=".to_owned(), "camera-param-more".to_owned())
+            ]
+        );
         assert_eq!(a.steps.len(), 3);
         assert_eq!(a.steps[0], Step::Leader);
         assert_eq!(a.steps[2], Step::Command("clipboard-open".to_owned()));
