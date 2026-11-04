@@ -496,6 +496,12 @@ fn at_the_reader(user: &str, send: &channel::Sender<Heard>) -> AtTheReader {
 impl Content for Lock {
     type Hand = ();
 
+    /// THE LOCK IS NO APP: what is typed is the password, and `LEADER Alt`
+    /// has nothing to reach here.
+    fn gates_keys(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         APP_ID
     }

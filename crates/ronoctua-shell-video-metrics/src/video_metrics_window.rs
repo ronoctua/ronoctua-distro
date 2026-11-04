@@ -425,6 +425,16 @@ impl Content for VideoMetricsWindow {
         &[crate::video_metrics::LEADER_ALT_KEYS]
     }
 
+    /// THE WHOLE TABLE, kept from the keyboard: the view reads a key on every
+    /// row while the line teaches it only where it does something. Not while
+    /// the second description is edited — every letter is its text.
+    fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
+        if self.view.editing() {
+            return crate::chrome::shortcut_keys(&self.hint(ui), self.leader_alt_keys());
+        }
+        crate::chrome::table_keys(crate::video_metrics::OF_THE_VIEW.iter().map(|r| r.0))
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         let rows = self.view_rows(ui);
         // THE WAY BACK FIRST, and clickable — while a text is edited its own

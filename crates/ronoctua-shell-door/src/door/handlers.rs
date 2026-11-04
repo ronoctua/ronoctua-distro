@@ -364,7 +364,10 @@ impl<C: Content> KeyboardHandler for Door<C> {
         // the modifier event cannot say which of them came up.
         self.header_took(event.keysym, false);
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
-        self.content.released(&mut self.ui, &event);
+        // A KEY THE GATE KEPT FROM THE WINDOW is kept from it coming up too.
+        if !self.ui.let_go_of_a_barred(event.raw_code) {
+            self.content.released(&mut self.ui, &event);
+        }
         // A KEY UP CHANGES THE LOOK TOO: `Ctrl` let go puts the link's hand
         // away under a pointer that did not move.
         self.look_again();

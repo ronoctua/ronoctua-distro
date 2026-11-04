@@ -569,5 +569,42 @@ rec {
         and two compositors on one machine cannot be confused for each other.
         """
         return f"/run/user/0/scroll-ipc.0.{unit}.sock"
+
+
+    def shortcut(pid, command, timeout=30):
+        """A window's shortcut, run the way `LEADER Alt` runs it.
+
+        No key typed in a window runs a shortcut (`chrome::barred`): the
+        footer sends `command <id>` on the window's own socket and the door
+        presses the key for it. This is that line, without the footer. The
+        window answers `?` for a command it has not published yet (it
+        publishes once it has settled), so a `?` is asked again; `ok` means
+        it ran.
+        """
+        import shlex
+        import time
+
+        path = f"/run/user/0/ronoctua-buffer-{pid}.sock"
+        program = (
+            "import socket, sys\n"
+            "s = socket.socket(socket.AF_UNIX)\n"
+            "s.connect(sys.argv[1])\n"
+            "s.sendall(('command ' + sys.argv[2] + chr(10)).encode())\n"
+            "print(s.makefile().readline().strip())\n"
+        )
+        line = (
+            "${pkgs.python3}/bin/python3 -c "
+            + shlex.quote(program)
+            + f" {shlex.quote(path)} {shlex.quote(command)}"
+        )
+        until = time.time() + timeout
+        said = None
+        while time.time() < until:
+            code, out = machine.execute(line)
+            said = out.strip()
+            if code == 0 and said == "ok":
+                return
+            time.sleep(1)
+        raise AssertionError(f"the window {pid} never took {command!r}: it said {said!r}")
   '';
 }

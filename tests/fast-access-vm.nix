@@ -320,8 +320,9 @@ pkgs.testers.runNixOSTest {
         )
         said = wait_for_words(lambda: read_window(sock, TILED), ["harvest", "report"], "search")
         print(f"OCR: {said!r}")
-        # AND WHAT A FILE SAYS: a word that is in no name.
-        key("ctrl+u")
+        # AND WHAT A FILE SAYS: a word that is in no name. The line is cleared
+        # by its shortcut, as `LEADER Alt` runs it (`C-u` typed runs nothing).
+        shortcut(open_now[TILED]["pid"], "fast-access-clear")
         type_words("lighthouse")
         wait_for_words(lambda: read_window(sock, TILED), ["notes"], "search")
 

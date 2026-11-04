@@ -1284,6 +1284,11 @@ impl Curtain {
 impl Content for Curtain {
     type Hand = PerPointer;
 
+    /// THE RESIZER'S CURTAIN IS NO APP: its keys are the resizer's.
+    fn gates_keys(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         APP_ID
     }

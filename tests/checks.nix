@@ -4092,6 +4092,22 @@ let
     if 'pub const TABS: [&str; 16] = [' not in tabs or '"terminal-tab-16"' not in tabs or '"terminal-tab-17"' in tabs:
         gaps.append("the terminal tabs' pool is not the sixteen ids this check knows")
 
+    # AND THE PLACES OF A WINDOW'S SHORTCUTS on the free minibuffer line
+    # (`leader::WINDOW_SHORTCUT_PLACES`, 2026-11-04). A click on one runs the
+    # window's command at that place, by the one door `LEADER Alt` and its key
+    # run it through too (`Footer::run_window_command`, which `buffer_key`
+    # calls) — so the mouse reaches nothing the keyboard does not. By name, for
+    # the kiosk's reason: the ids carry digits.
+    leader = read("leader.rs")
+    if ('pub const WINDOW_SHORTCUT_PLACES: [&str; 32] = [' not in leader
+            or '"window-shortcut-32"' not in leader or '"window-shortcut-33"' in leader):
+        gaps.append("the window shortcuts' places are not the thirty-two ids this check knows")
+    placed = must(body_of(surface, "run_window_shortcut"), "`Footer::run_window_shortcut`")
+    if "buffer_bindings" not in placed or "run_window_command" not in placed:
+        gaps.append("a place of the free line runs something other than the window's shortcut there")
+    if "run_window_command" not in must(body_of(surface, "buffer_key"), "`Footer::buffer_key`"):
+        gaps.append("`LEADER Alt` and a click on the free line no longer run a window's shortcut by one door")
+
     # 2) WHAT A CLICK ON THE NOTIFICATION BAND CAN DO.
     #
     # Two things, and each has a key: the circle marks it read, which is what

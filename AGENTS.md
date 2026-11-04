@@ -654,18 +654,24 @@ OSC 7501, que o guardião lê.
   coisa, inv. 4), `m` miscelânea (`m i` ícones), `c` clipboard, `d` acesso rápido
   (`LEADER SPC` flutuando), `=` calculadora, `v` video-metrics, `/` desenvolvimento (`/ r`
   redimensiona, `/ c` clona o repo, `/ a` contas LLM), `,` o buffer em foco, `g` o relance (`world-glance`). Em
-  buffer, `, r` é o acorde `C-r`; letra sozinha é texto.
+  buffer, `, r` é `LEADER Alt r`; acorde não roda comando e letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles (`LEADER`/`LEADER LEADER`/`LEADER
   LEADER LEADER` → padrão, janelas, árvore; `bindings::Set::next`). Um toque de `Ctrl`
   (`leader::Tap`) gira os modos das barras, um de `Alt` abre os atalhos da janela em foco, e
   botão/roda/dedo no meio fazem acorde. A frase que ensina uma sequência sai de `bindings::taught`.
-- **Todo atalho de janela é `LEADER Alt` + UMA tecla** (regra do dono, 2026-11-04): sem modificador,
-  sem sequência e sem Shift no `us` (`chrome::is_one_key`; nunca `ESC`). A tecla direta da janela
-  não muda: o rodapé devolve o id, e a do `LEADER Alt` sai de `chrome::leader_alt_key` — a regra
-  (`C-x` → `x`, `C-RET` → `\`, `S-TAB` → `` ` ``, `S-←/→` → `[`/`]`) e, onde ela não dá, as
-  exceções da janela (`Content::leader_alt_keys`). Cobra `every_window_shortcut_is_one_key`
-  (`crates/ronoctua-shell/src/leader_alt.rs`), que lista cada janela; a que tem nome de módulo do
-  brain se prova no próprio crate (`brain-modules-are-sealed`).
+- **Todo atalho de janela é `LEADER Alt` + UMA tecla, e só isso** (regra do dono, 2026-11-04): sem
+  modificador, sem sequência, sem Shift no `us` (`chrome::is_one_key`; nunca `ESC`). Nenhuma tecla
+  física na janela roda atalho, para um app que digita nunca colidir: a porta barra a que a janela
+  publica e todo acorde (`chrome::barred`; quem despacha mais do que a dica ensina barra a tabela,
+  `Content::barred_keys`). Fica direto, e não é listado, o que move, escolhe, volta e edita
+  (`chrome::stays_direct`). A direta é o nome da ação: o rodapé devolve o id e a porta a repete; a
+  do `LEADER Alt` sai de `chrome::leader_alt_key` e das exceções (`Content::leader_alt_keys`).
+  Linha e cabeçalho desenham `⌥` + a tecla, e o `⌥` sob o ponteiro vira `SUPER ALT`
+  (`chrome::leader_alt_text`). Terminal, hospedeiro de buffer (que barra os próprios acordes),
+  coluna, bloqueio, captura e redimensionador ficam fora (`Content::gates_keys`). Cobram
+  `every_window_shortcut_is_one_key` (`crates/ronoctua-shell/src/leader_alt.rs`, que lista cada
+  janela; a que tem nome de módulo do brain se prova no próprio crate) e
+  `a_shortcut_is_reached_by_leader_alt_and_never_by_the_keyboard`.
 - Comando de uma vista usa `C-`, nunca `M-` (família dos acordes do compositor, não chega à janela).
 - O layout de teclado mora num lugar só (`nix/keyboard-xkb.nix`); o xkb cai no `us` sem avisar, quem
   recusa layout inexistente é o `keyboard-layout-exists`.

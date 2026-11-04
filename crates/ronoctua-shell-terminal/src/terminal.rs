@@ -20,9 +20,9 @@
 //! # A window holds a group
 //!
 //! One terminal or several, one of them in front (`crate::terminal_group`):
-//! `C-T` starts a new one right after the one in front, `C-TAB` and
-//! `C-S-TAB` walk them, `C-S-RET` sends the one in front to a window of its
-//! own, and from two up a thin line each across the top tells them apart
+//! `LEADER Alt t` starts a new one right after the one in front, `LEADER Alt
+//! n` and `p` walk them, `LEADER Alt w` sends the one in front to a window of
+//! its own — never a chord, which is the program's — and from two up a thin line each across the top tells them apart
 //! (`crate::terminal_strip`, the owner's exception to invariant 4). Every
 //! terminal of the group keeps its mirror fed — a terminal brought to the
 //! front is shown at once, its history, selection and place in it as they
@@ -1659,19 +1659,10 @@ impl TerminalWindow {
         }
     }
 
-    /// Whether this window keeps `kept` from the program: the group's keys
-    /// are a terminal's window's — the monitor and the rescue console hold
-    /// one program, and every key is its.
-    fn keeps(&self, kept: Kept) -> bool {
-        !matches!(kept, Kept::Group(_)) || self.identity == Identity::Terminal
-    }
-
     /// One of the terminal's own keys.
     fn keep(&mut self, ui: &mut Ui, kept: Kept) {
-        match kept {
-            Kept::Group(grouped) => return self.grouped(ui, grouped),
-            Kept::Search => return self.open_search(ui),
-            _ => {}
+        if kept == Kept::Search {
+            return self.open_search(ui);
         }
         let Some(front) = self.group.front() else {
             return;
@@ -1723,7 +1714,7 @@ impl TerminalWindow {
                 };
                 self.lay_out(ui);
             }
-            Kept::Group(_) | Kept::Search => {}
+            Kept::Search => {}
         }
         // THE HISTORY PAGED THROUGH shows where in it the view is.
         if matches!(kept, Kept::Leaf(_) | Kept::Prompt(_)) {
@@ -1742,7 +1733,7 @@ impl TerminalWindow {
         }
     }
 
-    /// `C-T`: a new terminal, RIGHT AFTER THE ONE IN FRONT, in its folder
+    /// `LEADER Alt t`: a new terminal, RIGHT AFTER THE ONE IN FRONT, in its folder
     /// (the shell's own report of it, OSC 7, else where it started) — held
     /// as it is: a window of the window's own process makes another of its
     /// own process.
@@ -1785,7 +1776,7 @@ impl TerminalWindow {
         }
     }
 
-    /// `C-S-RET`: the terminal in front, in a WINDOW OF ITS OWN — another
+    /// `LEADER Alt w`: the terminal in front, in a WINDOW OF ITS OWN — another
     /// viewer of the shell's, opened on it alone. Its attach takes the
     /// terminal from this window (the newest attach wins), and the holder
     /// telling this one so is what moves the front to a neighbour: a window
@@ -2432,6 +2423,13 @@ impl Drop for TerminalWindow {
 impl Content for TerminalWindow {
     type Hand = Pointing;
 
+    /// EVERY KEY IS THE PROGRAM'S, chords included: the group's own keys are
+    /// reached by `LEADER Alt` alone (`Content::run_shortcut`), so nothing
+    /// pressed here is kept from what runs inside.
+    fn gates_keys(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         self.identity.app_id()
     }
@@ -2474,7 +2472,7 @@ impl Content for TerminalWindow {
             self.searched(ui, step);
             return;
         }
-        if let Some(kept) = terminal_keys::kept(event.keysym, mods).filter(|k| self.keeps(*k)) {
+        if let Some(kept) = terminal_keys::kept(event.keysym, mods) {
             self.keep(ui, kept);
             return;
         }
@@ -3772,7 +3770,9 @@ mod tests {
 
     #[test]
     fn the_group_keys_walk_detach_and_are_listed_from_two() {
-        // FAILS IF `C-TAB`/`C-S-TAB` do not walk the group round its end,
+        // FAILS IF the next and the previous do not walk the group round its
+        // end, a chord on the keyboard walks it (the chords are the
+        // program's: the group is `LEADER Alt` alone),
         // every terminal is not told where it is after a walk (its call for
         // attention cleared by the wrong one), the shortcuts list keys that
         // do nothing with one terminal (or not the new one), or on anything
@@ -3797,16 +3797,22 @@ mod tests {
                 terminal_keys::DETACH
             ]
         );
-        // EACH ON ONE KEY after `LEADER Alt` — the chords are the window's.
+        // EACH ON ONE KEY after `LEADER Alt`, the only way they are reached.
         let keys: Vec<String> = Content::shortcuts(&d2.content, &d2.ui)
             .into_iter()
             .map(|b| b.keys)
             .collect();
         assert_eq!(keys, ["t", "n", "p", "w"]);
-        d2.press(ronoctua_keymap::Key::parse("C-TAB").unwrap());
+        // THE CHORD ON A KEYBOARD IS THE PROGRAM'S, and walks nothing.
+        d2.press_on_the_keyboard(ronoctua_keymap::Key::parse("C-TAB").unwrap());
+        assert_eq!(d2.content.group.front_index(), 0);
+        let run = |d: &mut crate::door::Detached<TerminalWindow>, id: &str| {
+            assert!(Content::run_shortcut(&mut d.content, &mut d.ui, id), "{id}");
+        };
+        run(&mut d2, terminal_keys::NEXT);
         assert_eq!(d2.content.group.front_index(), 1);
-        d2.press(ronoctua_keymap::Key::parse("C-S-TAB").unwrap());
-        d2.press(ronoctua_keymap::Key::parse("C-S-TAB").unwrap());
+        run(&mut d2, terminal_keys::PREVIOUS);
+        run(&mut d2, terminal_keys::PREVIOUS);
         assert_eq!(d2.content.group.front_index(), 2, "round the end");
         let told: Vec<bool> = d2
             .content
@@ -3831,7 +3837,8 @@ mod tests {
         assert_eq!(d2.content.terminals(), 2);
         assert!(!d2.ui.quit);
         // ONE TERMINAL has nowhere to walk or to leave.
-        d.press(ronoctua_keymap::Key::parse("C-TAB").unwrap());
+        run(&mut d, terminal_keys::NEXT);
+        assert_eq!(d.content.group.front_index(), 0);
         assert!(!Content::run_shortcut(
             &mut d.content,
             &mut d.ui,
@@ -3840,8 +3847,6 @@ mod tests {
         // A MONITOR'S PROGRAM has all its keys.
         let monitor = TerminalWindow::new(Identity::Monitor).unwrap();
         assert!(Content::shortcuts(&monitor, &d.ui).is_empty());
-        assert!(!monitor.keeps(Kept::Group(Grouped::New)));
-        assert!(monitor.keeps(Kept::Copy));
     }
 
     #[test]
@@ -4348,9 +4353,10 @@ mod tests {
                 ToHolder::Key(k) if k.code == 29 && k.action == wire::KeyAction::Press)),
             "the press did not reach the front"
         );
-        // `C-TAB`: the next terminal comes to the front, with `Ctrl` down.
-        Content::typed(&mut w, &mut ui, &key_event(15, Keysym::Tab, None), held);
-        assert_eq!(w.group.front_index(), 1, "C-TAB fronted nothing");
+        // THE NEXT TERMINAL comes to the front (`LEADER Alt n`), with `Ctrl`
+        // still down.
+        assert!(Content::run_shortcut(&mut w, &mut ui, terminal_keys::NEXT));
+        assert_eq!(w.group.front_index(), 1, "the next fronted nothing");
         let released: Vec<wire::KeyEvent> = sent(&first_heard)
             .into_iter()
             .filter_map(|f| match f {

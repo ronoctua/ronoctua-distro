@@ -486,6 +486,11 @@ struct Footer {
     /// depth zero — no prefix to press — and `buffer_key` resolves the keys from
     /// an empty pending. Cleared whenever the leader closes or the focus moves.
     shortcuts_flat: bool,
+    /// Whether `LEADER Alt` opened the window's shortcuts — flat, or a
+    /// buffer's `,` typed for the person — so the pending line says
+    /// `SUPER ALT-`, how they are reached, and not the `,` nobody typed.
+    /// Cleared with [`Footer::shortcuts_flat`].
+    shortcuts_tapped: bool,
 
     // --- notifications (section 4.2) ---
     /// One at a time, the rest waiting. It lives in the daemon, like the
@@ -630,6 +635,10 @@ struct Footer {
     /// The shortcut of the hint line under the pointer, LIT when the line is
     /// drawn — the rule of every header of the system (`chrome::lit`).
     hint_lit: Option<&'static str>,
+    /// The window shortcut of the free line whose `LEADER Alt` GLYPH the
+    /// pointer rests on — its place (`leader::WINDOW_SHORTCUT_PLACES`), spelt
+    /// out while it does (`chrome::leader_alt_text`).
+    glyph_lit: Option<&'static str>,
     /// Whether the pointer rests on the minibuffer's chevron, which lights.
     fold_lit: bool,
     /// Whether the minibuffer's line is OPEN, and how far it is scrolled.
@@ -2848,6 +2857,7 @@ fn assemble(
         buffer_pending: Vec::new(),
         local_runs_here: None,
         shortcuts_flat: false,
+        shortcuts_tapped: false,
         notifications: ronoctua_notify::Queue::with_history(notes.history()),
         kills: ronoctua_notify::oom::Kills::fresh_one(),
         book: {
@@ -2887,6 +2897,7 @@ fn assemble(
         hint_placed: Vec::new(),
         hint_said: None,
         hint_lit: None,
+        glyph_lit: None,
         fold_lit: false,
         fold: crate::fold::Fold::default(),
         fold_control: None,
@@ -3189,6 +3200,10 @@ pub(crate) fn photographed(
             .windows
             .apply_to(&ronoctua_compositor::Event::Windows(vec![w]));
         state.states_arrived();
+        // AND ITS SHORTCUTS, as the focus moving onto it reads them on a screen
+        // (`FocusChanged`): the free line at rest is drawn from them, and the
+        // camera's window arrives already in focus, with no such event.
+        state.refresh_buffer_keymap();
     }
     if let Some(s) = scene.screens {
         state.display_event(ronoctua_display::Event::Snapshot(Box::new(s)));
@@ -5188,6 +5203,36 @@ impl Footer {
             .and_then(|m| m.press)
     }
 
+    /// The window shortcut of the free line whose `LEADER Alt` glyph is at
+    /// that point — the first cells of its key, the glyph's own or, spelt out,
+    /// its words' (`chrome::leader_alt_prefix_cells`): never the key after it
+    /// or the shortcut's words.
+    fn glyph_at(&self, x: f64, y: f64) -> Option<&'static str> {
+        let line_height = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell_px = f64::from(crate::chrome::cell_width());
+        if !self.shape.draws_minibuffer()
+            || line_height <= 0.0
+            || cell_px <= 0.0
+            || x < 0.0
+            || y < 0.0
+        {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (line, cell) = ((y / line_height) as u16, (x / cell_px) as u16);
+        let m = self.hint_placed.iter().find(|m| m.covers(line, cell))?;
+        if !crate::leader::WINDOW_SHORTCUT_PLACES.contains(&m.id) {
+            return None;
+        }
+        let key = self
+            .hint_placed
+            .iter()
+            .find(|k| k.id == m.id && k.line == m.line)?;
+        let spelt = self.glyph_lit == Some(m.id);
+        (key.at == m.at && cell < m.at + crate::chrome::leader_alt_prefix_cells(spelt))
+            .then_some(m.id)
+    }
+
     /// A shortcut of the hint line was clicked.
     ///
     /// A KEY is pressed through the SAME path the keyboard takes — `typed`,
@@ -5203,7 +5248,13 @@ impl Footer {
                 self.typed(event);
                 self.mods = real;
             }
-            crate::chrome::Act::Run(id) => self.run_command(id),
+            // A WINDOW'S SHORTCUT, by its place on the free line, runs in the
+            // window; every other id is a command of the registry.
+            crate::chrome::Act::Run(id) => {
+                if !self.run_window_shortcut(id) {
+                    self.run_command(id);
+                }
+            }
             // A NOTIFICATION'S BUTTON, with no notification on the line to
             // run it for: the click that took it off came first.
             crate::chrome::Act::Offered(n) => {
@@ -7291,6 +7342,9 @@ impl Footer {
             self.hint_said.clone(),
             // AND THE SHORTCUT THAT IS LIT, for the same reason.
             self.hint_lit,
+            // AND THE `LEADER Alt` GLYPH SPELT OUT, which changes within one
+            // shortcut: from its glyph to its key.
+            self.glyph_lit,
             self.fold_lit,
             // THROUGH `current_offset`, because with the manager open the
             // number is the view's — see `Footer::scroll_offset_to`. Reading
@@ -7442,6 +7496,7 @@ impl Footer {
                     self.hint_lit = self
                         .hint_act_under(e.position.0, e.position.1)
                         .and_then(|_| self.hint_under(e.position.0, e.position.1));
+                    self.glyph_lit = self.glyph_at(e.position.0, e.position.1);
                     self.fold_lit = self.fold_at(e.position.0, e.position.1);
                     self.shortcuts_lit = self.shortcuts_control_at(e.position.0, e.position.1);
                     // AND THE POINTER RESTING ON THE BAND STOPS ITS CLOCK.
@@ -7531,6 +7586,7 @@ impl Footer {
                     // is pointing at would stay on screen for ever.
                     self.hint_said = None;
                     self.hint_lit = None;
+                    self.glyph_lit = None;
                     self.fold_lit = false;
                     self.shortcuts_lit = false;
                     // AND A LINGERING HINT GOES WITH THE HAND that left.
@@ -8151,6 +8207,7 @@ impl Footer {
                     self.here.cell_under_pointer,
                     self.hint_said.clone(),
                     self.hint_lit,
+                    self.glyph_lit,
                     self.fold_lit,
                     self.current_offset(),
                 )
@@ -9513,6 +9570,7 @@ impl Footer {
         self.state_menu.clear();
         self.local_runs_here = None;
         self.shortcuts_flat = false;
+        self.shortcuts_tapped = false;
 
         // A KIOSK'S `,` GROUP IS THIS FOOTER'S OWN: Chrome publishes no
         // keymap, and what the group runs is the kiosk's commands, generated
@@ -9689,20 +9747,9 @@ impl Footer {
         });
         if let Some((_, id)) = done {
             let id = id.clone();
-            let pid = self.buffer_pid;
             self.buffer_pending.clear();
             self.close_leader();
-            // A KIOSK'S GROUP RUNS HERE, by the registry's door.
-            if self.local_runs_here.is_some() {
-                tracing::info!(command = %id, "a command of the kiosk's `,` group");
-                self.run_with(&id, None);
-                return true;
-            }
-            match pid.map(|p| crate::ipc::buffer_command(p, &id)) {
-                Some(Ok(())) => tracing::info!(command = %id, "command of the focused buffer"),
-                Some(Err(e)) => tracing::warn!(error = %e, command = %id, "the buffer refused"),
-                None => tracing::warn!(command = %id, "no buffer to take the command"),
-            }
+            self.run_window_command(&id);
             return true;
         }
 
@@ -10863,6 +10910,7 @@ impl Footer {
         // settings are `,`, and taking it for the prefix opened nothing.
         let prefixed = under_the_prefix(&self.buffer_bindings);
         self.buffer_pending.clear();
+        self.shortcuts_tapped = true;
         if prefixed {
             self.buffer_pending
                 .push(ronoctua_protocol::LOCAL_PREFIX.to_owned());
@@ -10879,9 +10927,12 @@ impl Footer {
     /// are not, and the window in front published some: then the header's line
     /// is the footer's to lend, and this is what it lends.
     ///
-    /// Read-only runs, each its keys and the command's own words — a click on
-    /// the line opens the region (`open_window_shortcuts`), where every one is
-    /// pressed or clicked and run.
+    /// Each one as it is reached — the `LEADER Alt` glyph and the one key, the
+    /// glyph spelt out while the pointer rests on it (`chrome::leader_alt_text`)
+    /// — and the command's own words ([`command_words`]). Each is a control of
+    /// its own, by its PLACE on the line (`leader::WINDOW_SHORTCUT_PLACES`): the
+    /// pointer lights one, and a click runs that one in the window
+    /// ([`Footer::run_window_shortcut`]).
     fn minibuffer_rest_pieces(&self) -> Vec<crate::chrome::Piece> {
         if !(self.modeline.hide_header()
             && !self.modeline.hide_shortcuts()
@@ -10889,34 +10940,52 @@ impl Footer {
         {
             return Vec::new();
         }
-        let mut out = Vec::with_capacity(self.buffer_bindings.len() * 3);
-        for (keys, command) in &self.buffer_bindings {
-            if !out.is_empty() {
-                out.push(crate::chrome::Piece::separator());
-            }
-            let keys = key_on_the_line(keys);
-            // A CLICK ON THE LINE OPENS THE REGION, where each shortcut is run
-            // by its own key or click — the direct run of ONE line shortcut
-            // wants a runtime command on the piece, and `chrome::Act::Run` holds
-            // a `&'static str`. So both halves carry the one gesture the line
-            // can give (`window-shortcuts`, `Footer::open_window_shortcuts`),
-            // and the region behind it is where a shortcut is actually pressed.
-            out.push(
-                crate::chrome::Piece::key_in(keys, crate::chrome::Register::Key)
-                    .running(crate::leader::WINDOW_SHORTCUTS_COMMAND),
-            );
-            out.push(
-                crate::chrome::Piece::prose(format!(" {}", self.texts.t(command)))
-                    .running(crate::leader::WINDOW_SHORTCUTS_COMMAND),
-            );
+        window_shortcut_pieces(&self.buffer_bindings, &self.texts, self.glyph_lit)
+    }
+
+    /// RUNS THE WINDOW'S SHORTCUT AT `place` on the free line — the one a click
+    /// took there — in the window, by its command, as `LEADER Alt` and its key
+    /// would ([`Footer::run_window_command`]). `false` for a name that is no
+    /// place of the line, which is then nobody's here.
+    fn run_window_shortcut(&mut self, place: &str) -> bool {
+        let Some(at) = crate::leader::WINDOW_SHORTCUT_PLACES
+            .iter()
+            .position(|p| *p == place)
+        else {
+            return false;
+        };
+        if let Some((_, command)) = self.buffer_bindings.get(at).cloned() {
+            self.run_window_command(&command);
         }
-        out
+        true
+    }
+
+    /// Runs `command` of the focused window, in its own process — or, for a
+    /// kiosk, here, by the registry's door: Chrome publishes no keymap, and
+    /// its group's commands are this footer's.
+    fn run_window_command(&mut self, command: &str) {
+        if self.local_runs_here.is_some() {
+            tracing::info!(command, "a command of the kiosk's `,` group");
+            self.run_with(command, None);
+            return;
+        }
+        match self
+            .buffer_pid
+            .map(|p| crate::ipc::buffer_command(p, command))
+        {
+            Some(Ok(())) => tracing::info!(command, "command of the focused buffer"),
+            Some(Err(e)) => tracing::warn!(error = %e, command, "the buffer refused"),
+            None => tracing::warn!(command, "no buffer to take the command"),
+        }
     }
 
     /// Whether a tap of `Ctrl` means the cycle here: the leader is the view,
-    /// at its root, with no `,` pending.
+    /// at its root, with no `,` pending and no window's shortcuts listed.
     fn a_tap_counts(&self) -> bool {
-        self.view() == ViewState::Leader && self.leader.at_root() && self.buffer_pending.is_empty()
+        self.view() == ViewState::Leader
+            && self.leader.at_root()
+            && self.buffer_pending.is_empty()
+            && !self.shortcuts_tapped
     }
 
     /// Switches the open leader to `set` and shows that set's root.
@@ -11612,6 +11681,7 @@ impl Footer {
         self.hint_lit = self
             .hint_act_under(x, y)
             .and_then(|_| self.hint_under(x, y));
+        self.glyph_lit = self.glyph_at(x, y);
         self.fold_lit = self.fold_at(x, y);
         self.shortcuts_lit = self.shortcuts_control_at(x, y);
         let hit = self.segment_hit(x, y);
@@ -12052,6 +12122,7 @@ impl Footer {
     fn forget_the_line_under_the_pointer(&mut self) {
         self.hint_said = None;
         self.hint_lit = None;
+        self.glyph_lit = None;
     }
 
     /// The minibuffer's line for an event: its summary, and at the end the
@@ -12135,8 +12206,17 @@ impl Footer {
                     .t_with(crate::key::HINT_NOTIF_ACTION, &[("action", &label)]),
             );
         }
-        self.hint_under(x, y)
-            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts))
+        let id = self.hint_under(x, y)?;
+        // A WINDOW'S SHORTCUT is explained by its command's sentence — the
+        // place it sits in is no name of ours to explain.
+        if let Some(at) = crate::leader::WINDOW_SHORTCUT_PLACES
+            .iter()
+            .position(|p| *p == id)
+        {
+            let (_, command) = self.buffer_bindings.get(at)?;
+            return crate::chrome::hint_sentence(command, &self.texts);
+        }
+        crate::chrome::hint_sentence(id, &self.texts)
     }
 
     /// Whether a point is on the minibuffer's line or its opened drawer.
@@ -12157,6 +12237,7 @@ impl Footer {
         self.leader.finish();
         self.inputs.clear();
         self.shortcuts_flat = false;
+        self.shortcuts_tapped = false;
         // AND A LIST THAT WAS WAITING IS NOT ANY MORE: its timer, when it
         // fires, finds nothing to show.
         self.list_patience = crate::leader::Patience::Shown;
@@ -14402,7 +14483,15 @@ impl Footer {
                     Some(id) => id.clone(),
                     None => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
                 },
-                description: Some(self.texts.t(&e.label)),
+                // THE SENTENCE, `cmd-` or `about-`: a window's command may have
+                // only the second (`chrome::hint_sentence`), and the label's
+                // `cmd-` alone showed it as `[cmd-files-preview]`.
+                description: Some(
+                    e.command
+                        .as_deref()
+                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts))
+                        .unwrap_or_else(|| self.texts.t(&e.label)),
+                ),
                 // THE TWO TAP ROWS run their gesture, not a key of the tree —
                 // the bars' cycle (`Click::Bars`) and the window's shortcuts
                 // (`Click::Shortcuts`); every other row presses its key.
@@ -15824,9 +15913,17 @@ impl Footer {
         // outside the tree (their rows are what the focused window published),
         // so the leader's own sequence stops a level short — the line said
         // `LEADER w-` with the list of states on screen (`pending_line`).
+        //
+        // AND `LEADER Alt` SAYS ITSELF: what opened the window's shortcuts is
+        // the tap, so the line reads `SUPER ALT-` and never the `,` a buffer's
+        // keys sit under, which the tap typed for the person.
         let pending = self.leader.active_one().then(|| {
+            let prefix = self.leader.raw_prefix(&self.leader_label);
+            if self.shortcuts_tapped {
+                return pending_after_the_tap(&prefix, &self.buffer_pending);
+            }
             pending_line(
-                &self.leader.raw_prefix(&self.leader_label),
+                &prefix,
                 self.state_pending.then_some(crate::leader::STATE_KEY),
                 &self.buffer_pending,
             )
@@ -15987,8 +16084,11 @@ impl Footer {
         // switches to — as a click, since the pointer cannot press the leader
         // (invariant 19). Past the root there is no set to choose, and the
         // line is the sequence alone.
-        let leader_set = (self.leader.at_root() && self.buffer_pending.is_empty())
-            .then(|| self.leader.set_now());
+        // NOT IN `LEADER Alt`'s LIST, which is at the root with nothing pending
+        // too: the window's shortcuts are no set of the leader's to walk on to.
+        let leader_set =
+            (self.leader.at_root() && self.buffer_pending.is_empty() && !self.shortcuts_tapped)
+                .then(|| self.leader.set_now());
         let leader_label = self.leader_label.as_str();
         // "HIDE SHORTCUTS" takes the leader's HEADER line off the minibuffer the
         // way it takes a program's (`view_hint`'s `Region`/`Kiosk`), while the
@@ -21436,6 +21536,69 @@ fn under_the_prefix(bindings: &[(String, String)]) -> bool {
     })
 }
 
+/// The window's shortcuts on the free line, each by its PLACE
+/// (`leader::WINDOW_SHORTCUT_PLACES`): the `LEADER Alt` glyph and the one key —
+/// the glyph of the place under the pointer (`spelt`) spelt out — and the
+/// command's words ([`command_words`]).
+fn window_shortcut_pieces(
+    bindings: &[(String, String)],
+    texts: &ronoctua_i18n::Texts,
+    spelt: Option<&str>,
+) -> Vec<crate::chrome::Piece> {
+    let mut out = Vec::with_capacity(bindings.len() * 3);
+    for ((keys, command), place) in bindings.iter().zip(crate::leader::WINDOW_SHORTCUT_PLACES) {
+        if !out.is_empty() {
+            out.push(crate::chrome::Piece::separator());
+        }
+        let key = crate::chrome::leader_alt_text(&key_on_the_line(keys), spelt == Some(place));
+        out.push(
+            crate::chrome::Piece::key_in(key, crate::chrome::Register::Key)
+                .about(place)
+                .running(place),
+        );
+        out.push(
+            crate::chrome::Piece::prose(format!(" {}", command_words(texts, command)))
+                .about(place)
+                .running(place),
+        );
+    }
+    out
+}
+
+/// The pending line while `LEADER Alt`'s list is open: the tap, and what was
+/// typed after it — never the `,` a buffer's keys sit under, which the tap
+/// typed for the person.
+fn pending_after_the_tap(prefix: &str, pending: &[String]) -> String {
+    let typed: Vec<String> = pending
+        .iter()
+        .skip(usize::from(
+            pending.first().map(String::as_str) == Some(ronoctua_protocol::LOCAL_PREFIX),
+        ))
+        .cloned()
+        .collect();
+    pending_line(
+        &format!("{prefix} {}", crate::leader::SHORTCUTS_TAP_KEY),
+        None,
+        &typed,
+    )
+}
+
+/// The WORDS of a window's command, for the line that teaches it: its short
+/// word (`<id>`, what a native window's hint says), else its sentence
+/// (`cmd-<id>`, which is all a buffer's command has), else the id itself —
+/// its own vocabulary, and readable. Never the `[…]` of a key that is
+/// missing, which is a note for a screenshot and not a word.
+fn command_words(texts: &ronoctua_i18n::Texts, id: &str) -> String {
+    if texts.has(id) {
+        return texts.t(id);
+    }
+    let sentence = format!("cmd-{id}");
+    if texts.has(&sentence) {
+        return texts.t(&sentence);
+    }
+    id.to_owned()
+}
+
 /// A shortcut as the minibuffer's line draws it: the key typed AFTER
 /// `LEADER Alt` — a buffer's `, x` is `x`, the `,` being typed for the
 /// person — drawn as a header draws it, an arrow as its glyph.
@@ -23425,7 +23588,90 @@ mod tests {
 
 #[cfg(test)]
 mod leader_alt_tests {
-    use super::{esc_leaves, key_on_the_line, under_the_prefix};
+    use super::{
+        command_words, esc_leaves, key_on_the_line, pending_after_the_tap, under_the_prefix,
+        window_shortcut_pieces,
+    };
+
+    /// FAILS IF: a window's command shows as `[brain-run]` on the line — a
+    /// buffer's has only its sentence (`cmd-<id>`) — or a native window's short
+    /// word stops being preferred to its sentence, or an id with neither is
+    /// drawn as anything but itself.
+    #[test]
+    fn a_window_command_says_its_words_and_never_a_missing_key() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        assert_eq!(command_words(&t, "brain-run"), t.t("cmd-brain-run"));
+        assert!(!command_words(&t, "brain-run").starts_with('['));
+        assert_eq!(command_words(&t, "files-preview"), t.t("files-preview"));
+        assert_eq!(command_words(&t, "no-such-command"), "no-such-command");
+    }
+
+    /// FAILS IF: a shortcut on the free line is not taught as `LEADER Alt` and
+    /// its one key — the glyph, a buffer's `,` gone — or two of them share a
+    /// place (the pointer would light both, a click run either), or the glyph
+    /// is spelt out anywhere but the place under the pointer.
+    #[test]
+    fn each_window_shortcut_is_its_own_place_and_glyph() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let bindings: Vec<(String, String)> = [(", r", "brain-run"), (", e", "brain-rehearse")]
+            .iter()
+            .map(|(k, c)| ((*k).to_owned(), (*c).to_owned()))
+            .collect();
+        let first = crate::leader::WINDOW_SHORTCUT_PLACES[0];
+        let second = crate::leader::WINDOW_SHORTCUT_PLACES[1];
+        let keys = |spelt| -> Vec<(Option<&'static str>, String)> {
+            window_shortcut_pieces(&bindings, &t, spelt)
+                .into_iter()
+                .filter(crate::chrome::Piece::is_a_key)
+                .map(|p| (p.id, p.text))
+                .collect()
+        };
+        let glyph = ronoctua_tokens::icon::LEADER_ALT;
+        assert_eq!(
+            keys(None),
+            [
+                (Some(first), format!("{glyph}r")),
+                (Some(second), format!("{glyph}e"))
+            ]
+        );
+        let label = crate::bindings::leader_alt_label();
+        assert_eq!(
+            keys(Some(second)),
+            [
+                (Some(first), format!("{glyph}r")),
+                (Some(second), format!("{label} e"))
+            ]
+        );
+        // A CLICK RUNS THE PLACE, which the footer turns into its command.
+        assert!(
+            window_shortcut_pieces(&bindings, &t, None)
+                .iter()
+                .filter(|p| p.id == Some(first))
+                .all(|p| p.press == Some(crate::chrome::Act::Run(first)))
+        );
+        // AND THE PLACES ARE THIRTY-TWO NAMES, each its own.
+        let places = crate::leader::WINDOW_SHORTCUT_PLACES;
+        for (n, p) in places.iter().enumerate() {
+            assert_eq!(*p, format!("window-shortcut-{}", n + 1));
+        }
+    }
+
+    /// FAILS IF: the pending line of `LEADER Alt`'s list says `SUPER-` or
+    /// `SUPER ,-` — the `,` the tap typed for the person — instead of the tap
+    /// that opened it.
+    #[test]
+    fn the_pending_line_says_leader_alt() {
+        let pending = |keys: &[&str]| keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        let tap = crate::leader::SHORTCUTS_TAP_KEY;
+        assert_eq!(
+            pending_after_the_tap("SUPER", &pending(&[])),
+            format!("SUPER {tap}-")
+        );
+        assert_eq!(
+            pending_after_the_tap("SUPER", &pending(&[","])),
+            format!("SUPER {tap}-")
+        );
+    }
 
     fn bound(keys: &[&str]) -> Vec<(String, String)> {
         keys.iter()

@@ -58,7 +58,7 @@
 use std::cell::RefCell;
 
 use ronoctua_design::frame::{
-    TRANSFERS_ANSWER, TRANSFERS_KEYS, TransferRow, local_binding, transfers_taught,
+    LOCAL_PREFIX, TRANSFERS_ANSWER, TRANSFERS_KEYS, TransferRow, local_binding, transfers_taught,
 };
 use ronoctua_design::guest::Wit;
 use ronoctua_design::types::{
@@ -151,20 +151,51 @@ mod key {
 }
 
 /// The keys this window answers to — the queue's ONE table, the footer
-/// panel's too (`TRANSFERS_KEYS`). Every chord of it is bound under the local
-/// leader (`, c` is `C-c` in this window); the arrows, `RET`, `TAB` and `SPC`
-/// arrive as the intents the host sends. So a key means the same thing in both
-/// doors — they used to disagree about `RET` and about `C-p`.
+/// panel's too (`TRANSFERS_KEYS`). Every shortcut of it is bound under the
+/// local prefix, which `LEADER Alt` types for the person: a chord's letter
+/// (`, c` for `C-c`) and the space (`, SPC`), since a window shortcut is
+/// `LEADER Alt` and one key, and nothing else (the owner's rule, 2026-11-04).
+/// The arrows, `RET` and `TAB` arrive as the intents the host sends — they
+/// move and choose. So a key means the same thing in both doors, which used
+/// to disagree about `RET` and about `C-p`.
 fn keymap() -> Vec<Binding> {
     TRANSFERS_KEYS
         .iter()
         .filter_map(|(notation, id)| {
-            local_binding(notation).map(|keys| Binding {
-                keys,
-                command: (*id).into(),
-            })
+            local_binding(notation)
+                .or_else(|| (*notation == "SPC").then(|| format!("{LOCAL_PREFIX} SPC")))
+                .map(|keys| Binding {
+                    keys,
+                    command: (*id).into(),
+                })
         })
         .collect()
+}
+
+/// How a key of the table is REACHED in this window: `(true, "c")` for `C-c`
+/// and `(true, "SPC")` for the space — `LEADER Alt` and the one key, drawn as
+/// the glyph ([`Icon::LeaderAlt`]) and the key — and `(false, notation)` for
+/// what moves and chooses (the arrows, `RET`, `TAB`).
+fn taught_here(notation: &str) -> (bool, &str) {
+    if notation == "SPC" {
+        return (true, notation);
+    }
+    match notation.strip_prefix("C-") {
+        Some(letter) if letter.chars().count() == 1 => (true, letter),
+        _ => (false, notation),
+    }
+}
+
+/// The cell the `LEADER Alt` glyph takes in front of its key: ONE, against
+/// the key, as the minibuffer's line draws it — the icon's own two cells would
+/// leave a gap no other line has.
+const GLYPH_CELLS: u16 = 1;
+
+/// How wide a key of the table is drawn — the glyph's cell too
+/// ([`taught_here`]).
+fn taught_cells(notation: &str) -> u16 {
+    let (alt, key) = taught_here(notation);
+    ronoctua_design::wide(key) + if alt { GLYPH_CELLS } else { 0 }
 }
 
 /// The commands the keymap names, each once.
@@ -1028,7 +1059,7 @@ impl State {
             } else {
                 ronoctua_design::wide(&said)
             };
-            let cells = ronoctua_design::wide(keys) + ronoctua_design::GAP + phrase;
+            let cells = taught_cells(keys) + ronoctua_design::GAP + phrase;
             let lead = if out.is_empty() { 0 } else { SEPARATOR_CELLS };
             if column + lead + cells > edge {
                 break;
@@ -1078,12 +1109,24 @@ impl State {
                     at == line && column >= pair.at && column < pair.at + pair.cells
                 })
                 .is_some();
-            let wide = ronoctua_design::wide(pair.keys);
+            let wide = taught_cells(pair.keys);
+            let (alt, key) = taught_here(pair.keys);
+            let role = if lit { Role::KeyLit } else { Role::Key };
+            // THE GLYPH FOR `LEADER Alt`, in the key's own tone, and the key.
+            if alt {
+                screen.put(
+                    line,
+                    Run::glyph(Icon::LeaderAlt)
+                        .playing(role)
+                        .at(pair.at)
+                        .within(GLYPH_CELLS),
+                );
+            }
             screen.put(
                 line,
-                Run::datum(pair.keys)
-                    .playing(if lit { Role::KeyLit } else { Role::Key })
-                    .at(pair.at),
+                Run::datum(key)
+                    .playing(role)
+                    .at(pair.at + if alt { GLYPH_CELLS } else { 0 }),
             );
             screen.put(
                 line,
@@ -1384,7 +1427,6 @@ impl State {
             // `RET` IS THE JOB'S PAGE, the second click's meaning — the
             // table's (`TRANSFERS_KEYS`), in both doors.
             Input::Confirm | Input::Toggle => s.run("transfers-detail"),
-            Input::Character(' ') => s.run("transfers-pause"),
             Input::Cancel => {
                 if s.face == Face::Detail {
                     s.face = Face::List;
@@ -1926,7 +1968,12 @@ mod tests {
         s.receive(Queue {
             jobs: vec![job(3, Stage::Running, 1, 10)],
         });
-        assert!(asks(&s.act(Input::Character(' ')), Request::PauseJob, 3));
+        // `LEADER Alt SPC`, as the footer hands it back.
+        assert!(asks(
+            &s.act(Input::Command("transfers-pause".into())),
+            Request::PauseJob,
+            3
+        ));
         s.receive(Queue {
             jobs: vec![job(3, Stage::Paused, 1, 10)],
         });
@@ -1975,8 +2022,10 @@ mod tests {
     }
 
     /// FAILS IF: the window's keys stop being the footer panel's table — a
-    /// chord of it unbound here — or `RET` stops opening the job's page, or
-    /// the second click stops doing what `RET` does.
+    /// chord of it, or the space, unbound here (`LEADER Alt` reaches a window
+    /// shortcut, and nothing else does) — the space typed in the window still
+    /// pauses, or `RET` stops opening the job's page, or the second click
+    /// stops doing what `RET` does.
     #[test]
     fn the_keys_are_the_panels_and_ret_is_the_page() {
         let bound: Vec<String> = keymap().into_iter().map(|b| b.keys).collect();
@@ -1988,6 +2037,21 @@ mod tests {
                 );
             }
         }
+        assert!(
+            bound.contains(&format!("{LOCAL_PREFIX} SPC")),
+            "the pause has no key"
+        );
+        assert_eq!(taught_here("C-c"), (true, "c"));
+        assert_eq!(taught_here("SPC"), (true, "SPC"));
+        assert_eq!(taught_here("RET"), (false, "RET"));
+        let mut typed = State::fresh();
+        typed.receive(Queue {
+            jobs: vec![job(1, Stage::Running, 1, 10)],
+        });
+        assert!(
+            typed.act(Input::Character(' ')).is_empty(),
+            "the space typed in the window ran the pause"
+        );
         assert!(commands().contains(&"transfers-cancel".to_owned()));
         let mut s = State::fresh();
         s.receive(Queue {

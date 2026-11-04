@@ -391,8 +391,52 @@ pub const BARS_TAP_KEY: &str = "CTRL";
 
 /// The key the shortcuts row stands for — a tap of `Alt` at the leader's root
 /// opens the focused window's shortcuts (`LEADER Alt`, [`Tapped::Shortcuts`]).
-/// A key's name, never text, as [`BARS_TAP_KEY`] is.
-pub const SHORTCUTS_TAP_KEY: &str = "ALT";
+/// A key's name, never text, as [`BARS_TAP_KEY`] is — the kit's, because every
+/// window spells it too (`chrome::leader_alt_text`).
+pub use crate::bindings::SHORTCUTS_TAP_KEY;
+
+/// THE PLACES OF THE WINDOW'S SHORTCUTS on the free minibuffer line, one per
+/// shortcut in the order the window published them — what each one's pieces
+/// carry as their id, so the pointer lights ONE and a click runs that one
+/// (`Footer::run_window_shortcut`). Named by the place and not by the command,
+/// as the kiosk's tabs are (`crate::kiosk::TABS`): a window's command ids come
+/// over its socket at run time, and a piece's id is a name the code holds.
+/// Past the last place a shortcut is still in `LEADER Alt`'s list, only not on
+/// the line, which no screen is wide enough to fit by then.
+pub const WINDOW_SHORTCUT_PLACES: [&str; 32] = [
+    "window-shortcut-1",
+    "window-shortcut-2",
+    "window-shortcut-3",
+    "window-shortcut-4",
+    "window-shortcut-5",
+    "window-shortcut-6",
+    "window-shortcut-7",
+    "window-shortcut-8",
+    "window-shortcut-9",
+    "window-shortcut-10",
+    "window-shortcut-11",
+    "window-shortcut-12",
+    "window-shortcut-13",
+    "window-shortcut-14",
+    "window-shortcut-15",
+    "window-shortcut-16",
+    "window-shortcut-17",
+    "window-shortcut-18",
+    "window-shortcut-19",
+    "window-shortcut-20",
+    "window-shortcut-21",
+    "window-shortcut-22",
+    "window-shortcut-23",
+    "window-shortcut-24",
+    "window-shortcut-25",
+    "window-shortcut-26",
+    "window-shortcut-27",
+    "window-shortcut-28",
+    "window-shortcut-29",
+    "window-shortcut-30",
+    "window-shortcut-31",
+    "window-shortcut-32",
+];
 
 /// The command that opens the focused window's shortcuts in the region and on
 /// the minibuffer's line — what the `Alt` tap, a click on its row, and
@@ -401,17 +445,17 @@ pub const WINDOW_SHORTCUTS_COMMAND: &str = "window-shortcuts";
 
 /// A modifier TAPPED — pressed and released with no other key in between.
 ///
-/// # What a tap means now (2026-09-30)
+/// # What a tap means now
 ///
-/// Only a tap of `Ctrl` means anything: at the leader's root it cycles the
-/// bars' modes, normal → push → cover (`crate::hidden::next_mode`). `Alt`
-/// chose the window set until the owner took it away, and it still ARMS
-/// here — so a `Ctrl` pressed while `Alt` is down is a chord of the two and
-/// no tap — but its own release answers nothing.
+/// At the leader's root a tap of `Ctrl` cycles the bars' modes, normal → push
+/// → cover (`crate::hidden::next_mode`), and a tap of `Alt` opens the focused
+/// window's shortcuts — `LEADER Alt`, the one way a window shortcut is reached
+/// (the owner's rule, 2026-11-04). A `Ctrl` pressed while `Alt` is down is a
+/// chord of the two, and no tap.
 ///
 /// # The three cases it keeps apart
 ///
-/// - A CLEAN TAP of `Ctrl` answers `true`.
+/// - A CLEAN TAP answers what it is ([`Tapped`]).
 /// - A modifier held WITH another key is a chord, and no tap: `Control_R`
 ///   held while the arrows page the list (`Footer::navigate`) or walk the
 ///   minibuffer's drawer must go on doing so, and the key in between disarms

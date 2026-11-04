@@ -231,6 +231,13 @@ impl Content for AudioWindow {
             .hint(self.snapshot.as_ref(), ui.columns, &ui.texts)
     }
 
+    /// THE WHOLE TABLE, kept from the keyboard: the view reads `m` and `d` on
+    /// every row while the line teaches them only on a device's, and nothing
+    /// is typed here.
+    fn barred_keys(&self, _: &Ui) -> Vec<ronoctua_keymap::Key> {
+        crate::chrome::table_keys(crate::audio::OF_THE_VIEW.iter().map(|r| r.0))
+    }
+
     /// THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
     /// draws for these rows.
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::fields::Field>> {

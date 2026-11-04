@@ -291,21 +291,6 @@ struct Host {
     rasterized: std::collections::HashMap<String, ronoctua_render::image::Rgba>,
     /// What the descriptor ASKED FOR. See [`ronoctua_protocol::DisplayList::validate_it`].
     capabilities: Vec<ronoctua_protocol::Capability>,
-    /// The buffer's OWN keymap, straight from the descriptor.
-    ///
-    /// # Why the buffer's host resolves it, and not the footer
-    ///
-    /// A buffer is a window of its own (invariant 4), and while it has the
-    /// focus it is THIS process that holds the keyboard — the footer only gets
-    /// it back when the leader is pressed. A key typed in here never reaches the
-    /// footer, so a keymap resolved over there would never fire.
-    ///
-    /// It stayed declared and unreachable until an editor needed to SAVE, which
-    /// is when "declares and nothing consumes it" stopped being tolerable: the
-    /// buffer would open, edit, and lose the work.
-    keymap: Vec<ronoctua_protocol::Binding>,
-    /// The sequence typed so far, waiting to complete a binding.
-    pending: Vec<char>,
     texts: std::rc::Rc<ronoctua_i18n::Texts>,
     /// The LIVE component.
     ///
@@ -1209,8 +1194,6 @@ pub fn host_it(
             states: d.states.clone(),
             current: std::sync::Arc::clone(&current),
             escape: Escape::default(),
-            keymap: d.keymap.clone(),
-            pending: Vec::new(),
             file: file.map(std::path::Path::to_path_buf),
             queue_words,
             paste_wanted: false,
@@ -1600,10 +1583,13 @@ fn run_format(
 ///
 /// # Why this exists at all
 ///
-/// The buffer's host resolves its own keymap, and it has to: a buffer is a
-/// window of its own (invariant 4), so while it has the focus it is THIS process
-/// that holds the keyboard. The footer only knows the windows the compositor
-/// tells it about — id, title, `app_id` — and none of that is a key binding.
+/// A buffer is a window of its own (invariant 4), and the footer only knows
+/// the windows the compositor tells it about — id, title, `app_id` — none of
+/// which is a key binding. And no key typed into the window runs a command
+/// (the owner's rule, 2026-11-04: a window shortcut is `LEADER Alt` and one
+/// key, and nothing else — `Host::typed` runs none, so a buffer may grow a
+/// field that is typed into without a key of its own in the way): the
+/// buffer's keymap is reached from the footer, by this socket, alone.
 ///
 /// So `SPC m` in the footer had nothing to list. This socket is the answer, and
 /// it carries BOTH directions on purpose: a list of keys with no way to run them
@@ -1780,26 +1766,6 @@ fn publish_keymap(
 }
 
 impl Host {
-    /// Feeds a character to the buffer's local keymap.
-    ///
-    /// Returns `Some(Input::Command)` when a sequence COMPLETES, and `None`
-    /// when the character does not finish one. A partial sequence is swallowed.
-    ///
-    /// It is the CALLER that decides when a sequence may start: the first key
-    /// comes with `Ctrl`, and only then do the plain letters that follow reach
-    /// here. Letting any letter open a sequence is what made the editor eat
-    /// every `m`.
-    fn local_key(&mut self, c: char) -> Option<ronoctua_protocol::Input> {
-        let mut pending = std::mem::take(&mut self.pending);
-        let hit = advance_sequence(&self.keymap, &mut pending, c);
-        self.pending = pending;
-        if let Some(command) = hit {
-            tracing::info!(command, "the buffer's keymap");
-            return Some(ronoctua_protocol::Input::Command(command));
-        }
-        None
-    }
-
     /// Rasterises the list's vector drawings and says where each one fits.
     ///
     /// # Why here, and not on every frame
@@ -3933,68 +3899,19 @@ impl Host {
             // A press never ends a tap; only a release does.
             EscapeAct::Tap => return,
         }
-        // `Ctrl+V` PASTES, and it is the only chord this host handles.
-        //
-        // It comes BEFORE the Ctrl guard below, otherwise it would fall into the `return` and
-        // would do nothing — which is what happened: the search field ignored
-        // `Ctrl+V` silently, and there was no way to tell that from "there was
-        // nothing copied".
-        //
-        // What reads the clipboard is the HOST. The buffer does not read the
-        // clipboard, as it does not read a file (invariant 11): it receives the text
-        // already resolved.
-        //
-        // UNLESS THE BUFFER BINDS `C-v` ITSELF — a local key `, v` is `C-v` in
-        // this window (see below), and the buffer that declared it chose it.
-        //
-        // READ OFF THE LOOP: the program that copied answers when it likes,
-        // and this window waited for it (`ronoctua_shell_door::pasting`).
-        if self.mods.ctrl && event.keysym == Keysym::v && !binds_the_chord(&self.keymap, 'v') {
-            self.paste_wanted = true;
-            return;
-        }
-        // With Ctrl the key is not text: it is a chord, and a chord belongs to the buffer's
-        // keymap, which the HOST dispatches as `Input::Command`. Sending the
-        // character would make `C-c` become a `c` in the search.
-        if self.mods.ctrl || self.mods.logo {
-            // THE BUFFER'S OWN KEYMAP OPENS HERE, and only here.
-            //
-            // The FIRST key of a sequence is a CHORD; the ones after it are
-            // plain letters. It cost the editor to learn why: with the first
-            // key plain, a keymap of `m s` swallowed EVERY `m` typed into the
-            // file — and when the next letter did not continue the sequence,
-            // both were dropped. No word with an `m` could be written.
-            //
-            // A chord is not text and a letter is, and that is the whole line.
-            // `Ctrl` and not `Logo`: the compositor takes `Super` for itself.
-            //
-            // AND THE BUFFER'S GROUP IS NOT TYPED HERE. A buffer declares its
-            // keys under `LOCAL_PREFIX` (`, r`), which is the group behind the
-            // leader from the footer (`LEADER , r`); inside the buffer's own
-            // window `C-r` IS `, r` — the host puts the group in front. It was
-            // `C-,` and then `r`, a comma nobody should have to type, and
-            // plain letters stay text, so a buffer may grow a field that is
-            // typed into without a key of its own being in the way.
-            if opens_sequence(self.mods.ctrl, self.mods.logo, self.pending.is_empty())
-                && let Some(c) = event.keysym.key_char()
-            {
-                self.pending = ronoctua_protocol::LOCAL_PREFIX.chars().collect();
-                if let Some(input) = self.local_key(c) {
-                    self.deliver(&input);
-                }
+        match chorded(self.mods, event.keysym) {
+            // `C-v` AND `C-y` PASTE (`ronoctua_shell_kit::line::pastes`, every
+            // text input's one answer). What reads the clipboard is the HOST:
+            // the buffer does not read the clipboard, as it does not read a
+            // file (invariant 11), and receives the text already resolved —
+            // READ OFF THE LOOP, because the program that copied answers when
+            // it likes (`ronoctua_shell_door::pasting`).
+            Chorded::Paste => {
+                self.paste_wanted = true;
+                return;
             }
-            return;
-        }
-        // A sequence ALREADY under way: from the second key on it is a plain
-        // letter, as in `SPC m s`. `local_key` swallows what continues the
-        // sequence and drops what kills it — see `advance_sequence`.
-        if !self.pending.is_empty()
-            && let Some(c) = event.utf8.as_deref().and_then(|s| s.chars().next())
-        {
-            if let Some(input) = self.local_key(c) {
-                self.deliver(&input);
-            }
-            return;
+            Chorded::Nothing => return,
+            Chorded::Text => {}
         }
         let Some(e) = input_of_key(event.keysym, event.utf8.as_deref()) else {
             return;
@@ -4221,6 +4138,12 @@ impl Host {
 
 impl Content for Host {
     type Hand = PerSeat;
+
+    /// THE HOST KEEPS ITS OWN: a chord never runs a command of the component
+    /// (`Host::typed`), and every other key is the component's to read.
+    fn gates_keys(&self) -> bool {
+        false
+    }
 
     fn app_id(&self) -> &'static str {
         self.app_id
@@ -4517,64 +4440,30 @@ fn said_spans(said: &[String], lines: u16) -> Vec<ronoctua_render::Span> {
         .collect()
 }
 
-/// Whether the buffer binds `C-<c>` — a local key whose first letter after
-/// the group is `c` (`, c`, or `, c x` that it opens).
-fn binds_the_chord(keymap: &[ronoctua_protocol::Binding], c: char) -> bool {
-    let first = c.to_string();
-    keymap
-        .iter()
-        .any(|b| b.keys.split_whitespace().nth(1) == Some(first.as_str()))
+/// What a key held with `mods` is in a buffer's window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Chorded {
+    /// The paste keys: the host pastes.
+    Paste,
+    /// Any other chord — `Ctrl` or `Super` held: no text, and no command
+    /// either. A buffer's commands are `LEADER Alt` and one key, from the
+    /// footer (the owner's rule, 2026-11-04), so `C-c` is no `c` typed into a
+    /// search and no command run behind the person's back.
+    Nothing,
+    /// No chord: the key is the component's to read.
+    Text,
 }
 
-/// May a key OPEN a buffer sequence?
-///
-/// Pulled out so the rule can be tested without a compositor. It is ONE line,
-/// and it is the line that decides whether the person can write the letter `m`
-/// in a buffer whose keymap starts with `m`.
-const fn opens_sequence(ctrl: bool, logo: bool, idle: bool) -> bool {
-    // `logo` excluded and not ignored: `Super` belongs to the compositor, and a
-    // buffer answering to it would steal a binding from the compositor.
-    ctrl && !logo && idle
-}
-
-/// Resolves a character against a buffer's keymap.
-///
-/// Pulled out of [`Host::local_key`] so it can be tested WITHOUT a compositor:
-/// the rest of that method is Wayland state, and this is the whole of the
-/// decision.
-fn advance_sequence(
-    keymap: &[ronoctua_protocol::Binding],
-    pending: &mut Vec<char>,
-    c: char,
-) -> Option<String> {
-    if keymap.is_empty() {
-        return None;
+/// What a key is in a buffer's window — see [`Chorded`]. Pulled out so the
+/// rule can be tested without a compositor.
+fn chorded(mods: Modifiers, sym: Keysym) -> Chorded {
+    if mods.ctrl && !mods.alt && !mods.logo && matches!(sym, Keysym::v | Keysym::y) {
+        return Chorded::Paste;
     }
-    let mut wanted = pending.clone();
-    wanted.push(c);
-    let typed: String = wanted.iter().collect();
-
-    if let Some(b) = keymap
-        .iter()
-        .find(|b| b.keys.split_whitespace().collect::<String>() == typed)
-    {
-        pending.clear();
-        return Some(b.command.clone());
+    if mods.ctrl || mods.logo {
+        return Chorded::Nothing;
     }
-    if keymap.iter().any(|b| {
-        b.keys
-            .split_whitespace()
-            .collect::<String>()
-            .starts_with(&typed)
-    }) {
-        *pending = wanted;
-        return None;
-    }
-    // Neither: the sequence died. What was held back was never text — dropping
-    // it is right, and re-injecting it would type `m` into the file a keystroke
-    // after the person moved on.
-    pending.clear();
-    None
+    Chorded::Text
 }
 
 #[cfg(test)]
@@ -5134,101 +5023,44 @@ mod tests {
         assert_eq!(e.release(Keysym::Right), EscapeAct::NotMine);
     }
 
-    /// The defect this gate exists for: the editor swallowed every `m`.
-    ///
-    /// A plain letter must NEVER open a sequence. When it did, typing `m` was
-    /// held back and, if the next letter did not continue `m s`, both were
-    /// dropped — no word with an `m` could be written into the file.
-    #[test]
-    fn a_plain_letter_does_not_open_a_sequence() {
-        assert!(!super::opens_sequence(false, false, true));
-    }
-
-    #[test]
-    fn a_chord_opens_a_sequence() {
-        assert!(super::opens_sequence(true, false, true));
-    }
-
-    /// `Super` is the compositor's. A buffer answering to it would steal a
-    /// binding from the compositor.
-    #[test]
-    fn super_does_not_open_a_sequence() {
-        assert!(!super::opens_sequence(true, true, true));
-    }
-
-    /// With a sequence under way the gate is CLOSED: from the second key on the
-    /// letters are plain, and it is the caller that routes them.
-    #[test]
-    fn a_sequence_under_way_does_not_open_another() {
-        assert!(!super::opens_sequence(true, false, false));
-    }
-
     use super::*;
 
-    /// The keymap the editor declares.
-    /// A CHORD IN THE BUFFER'S WINDOW IS ITS LOCAL KEY: `C-r` is `, r` — the
-    /// group put in front by the host, and never typed.
+    /// FAILS IF a chord in a buffer's window runs one of its commands again
+    /// (`C-r` was `, r` until the owner's rule of 2026-11-04: a window
+    /// shortcut is `LEADER Alt` and one key, and nothing else), types its
+    /// letter into the buffer, or the paste keys stop pasting.
     #[test]
-    fn a_chord_is_the_local_key_with_its_group_in_front() {
-        let keymap = vec![ronoctua_protocol::Binding {
-            keys: ", r".into(),
-            command: "run".into(),
-        }];
-        let mut pending: Vec<char> = ronoctua_protocol::LOCAL_PREFIX.chars().collect();
+    fn a_chord_runs_nothing_and_the_paste_keys_paste() {
+        let held = |ctrl, logo, alt| Modifiers {
+            ctrl,
+            logo,
+            alt,
+            ..Modifiers::default()
+        };
+        assert_eq!(chorded(held(true, false, false), Keysym::v), Chorded::Paste);
+        assert_eq!(chorded(held(true, false, false), Keysym::y), Chorded::Paste);
         assert_eq!(
-            advance_sequence(&keymap, &mut pending, 'r').as_deref(),
-            Some("run")
+            chorded(held(true, false, false), Keysym::r),
+            Chorded::Nothing
         );
-        assert!(binds_the_chord(&keymap, 'r'));
-        assert!(!binds_the_chord(&keymap, 'v'), "`C-v` still pastes");
-    }
-
-    fn buffer_keymap() -> Vec<ronoctua_protocol::Binding> {
-        vec![ronoctua_protocol::Binding {
-            keys: ", s".into(),
-            command: "memory-refresh".into(),
-        }]
-    }
-
-    #[test]
-    fn the_sequence_only_fires_when_it_completes() {
-        // It is what makes an editor SAVEABLE. The binding had been declared
-        // since section 7.9 and nothing consumed it: the buffer would open,
-        // edit, and lose the work.
-        let km = buffer_keymap();
-        let mut pending = Vec::new();
         assert_eq!(
-            advance_sequence(&km, &mut pending, ','),
-            None,
-            "`,` on its own does not fire"
+            chorded(held(true, false, false), Keysym::c),
+            Chorded::Nothing
         );
-        assert_eq!(pending, vec![','], "the prefix has to stay pending");
         assert_eq!(
-            advance_sequence(&km, &mut pending, 's').as_deref(),
-            Some("memory-refresh")
+            chorded(held(false, true, false), Keysym::v),
+            Chorded::Nothing
         );
-        assert!(pending.is_empty(), "firing has to clear the sequence");
-    }
-
-    #[test]
-    fn a_dead_sequence_does_not_leak_into_the_text() {
-        // `,` then `x`: no binding. Re-injecting the `,` would type it into the
-        // file one keystroke after the person had moved on — the class of bug
-        // that makes an editor untrustworthy.
-        let km = buffer_keymap();
-        let mut pending = Vec::new();
-        advance_sequence(&km, &mut pending, ',');
-        assert_eq!(advance_sequence(&km, &mut pending, 'x'), None);
-        assert!(pending.is_empty(), "a dead sequence has to clear");
-    }
-
-    #[test]
-    fn a_buffer_with_no_keymap_swallows_nothing() {
-        // Every other buffer types text. If an empty keymap held a character
-        // back, the search in the glyph browser would lose its first letter.
-        let mut pending = Vec::new();
-        assert_eq!(advance_sequence(&[], &mut pending, ','), None);
-        assert!(pending.is_empty());
+        assert_eq!(
+            chorded(held(true, false, true), Keysym::v),
+            Chorded::Nothing
+        );
+        // A LETTER IS THE COMPONENT'S, and so is the comma that was the group.
+        assert_eq!(chorded(held(false, false, false), Keysym::r), Chorded::Text);
+        assert_eq!(
+            chorded(held(false, false, false), Keysym::comma),
+            Chorded::Text
+        );
     }
 
     /// An SVG in the form Lucide publishes: `currentColor` and an open stroke.

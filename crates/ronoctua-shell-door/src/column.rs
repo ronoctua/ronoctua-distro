@@ -1740,6 +1740,12 @@ impl<T: Tenant> Column<T> {
 impl<T: Tenant> Content for Column<T> {
     type Hand = T::Hand;
 
+    /// A COLUMN IS NO WINDOW IN FOCUS: `LEADER Alt` never lists it, so its
+    /// keys stay its own.
+    fn gates_keys(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         self.tenant.app_id()
     }

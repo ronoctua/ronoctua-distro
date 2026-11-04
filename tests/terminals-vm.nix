@@ -34,10 +34,11 @@
 # (`ronoctua-llm hook`) with the payloads Claude Code sends it, and reports
 # its state over OSC 7501. No VM can carry Claude Code itself.
 #
-# THE KEYS ARE TYPED where a key is what is proved: `C-T` (Ctrl+Shift+t)
-# starts the second terminal of the group, and `LEADER RET b` then `RET`
-# open the view and the group. `terminal-show` and `agents-show` are
-# commands through the control socket, as the modeline's click runs them.
+# THE KEYS ARE TYPED where a key is what is proved: `LEADER RET b` then
+# `RET` open the view and the group. The second terminal of the group is the
+# window's shortcut (`LEADER Alt t`), sent on its socket as the footer sends
+# it. `terminal-show` and `agents-show` are commands through the control
+# socket, as the modeline's click runs them.
 {
   pkgs,
   lib,
@@ -64,7 +65,7 @@ let
 
   # A PROGRAM A TEST DRIVES FROM OUTSIDE — the same as `terminal-vm`'s,
   # whose comment says what each of its files under `/tmp/held/` is. Here
-  # it is also the session's `SHELL`, so a terminal `C-T` starts runs it.
+  # it is also the session's `SHELL`, so a terminal the group starts runs it.
   # A read that timed out keeps its part (see `terminal-vm`'s).
   held = pkgs.writeShellScript "held-program" ''
     set -u
@@ -525,9 +526,10 @@ pkgs.testers.runNixOSTest {
         )
 
     with subtest("a window holding two terminals draws its strip at its top"):
-        # PROVES the group: `C-T` typed into a terminal's window starts a
-        # second terminal IN THAT WINDOW (one viewer for both, one group),
-        # and from two the window draws a line per terminal across its top —
+        # PROVES the group: the window's "new terminal" shortcut — `LEADER
+        # Alt t`, sent as the footer sends it; `C-T` typed is the program's —
+        # starts a second terminal IN THAT WINDOW (one viewer for both, one
+        # group), and from two the window draws a line per terminal across its top —
         # the one in front in `text.primary`, the other in `text.dim`, each
         # about half the width. Read off the pixels, before and after, so a
         # window that drew a strip for one terminal fails as surely as one
@@ -562,10 +564,9 @@ pkgs.testers.runNixOSTest {
         assert alone[0] < 0.35 and alone[1] < 0.35, f"a window of ONE terminal drew a strip: {alone}"
 
         focus(group)
-        focus_compositor()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+shift+t")
+        shortcut(group, "terminal-new")
         second = started(2)[1]
-        until(lambda: viewer(second) == group, "the terminal C-T started is not in the window it was typed in")
+        until(lambda: viewer(second) == group, "the terminal the shortcut started is not in its window")
         assert state(first)["group"] == state(second)["group"], (state(first), state(second))
 
         def strip_drawn():

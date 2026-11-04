@@ -153,6 +153,10 @@ pub struct Ui {
     pub pointer_on: Option<smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat>,
     /// Whether the key being handled is a REPEAT of a held one.
     pub repeating: bool,
+    /// The keys the gate kept from the window (`chrome::barred`), held down —
+    /// so their RELEASE is kept from it too: a window that acts on the release
+    /// must not hear one whose press it never heard.
+    pub(crate) barred: Vec<u32>,
     /// Whether the compositor has CONFIGURED the surface this door draws to —
     /// the toolkit acks a configure before the door hears it — which is what
     /// lets a buffer be committed to it. See [`Ui::may_draw`].
@@ -535,6 +539,16 @@ impl Ui {
     /// list, until that `Ctrl` went down and up again. While the header is
     /// away the key is still not taken: the window reads it as it always
     /// did.
+    /// A key let go: whether it was one the gate KEPT from the window when it
+    /// went down — and so its release is kept too (see [`Ui::barred`]).
+    pub(crate) fn let_go_of_a_barred(&mut self, raw_code: u32) -> bool {
+        let Some(at) = self.barred.iter().position(|c| *c == raw_code) else {
+            return false;
+        };
+        self.barred.swap_remove(at);
+        true
+    }
+
     fn header_took(&mut self, its: bool, sym: Keysym, down: bool) -> bool {
         if its {
             return self.hinted.took_a_key(sym, down);
@@ -664,6 +678,7 @@ impl Ui {
             pointer_mods: Modifiers::default(),
             pointer_on: None,
             repeating: false,
+            barred: Vec::new(),
             // A DETACHED WINDOW IS ONE ON THE SCREEN, sized and configured.
             configured: true,
             size_owed: false,
@@ -1709,6 +1724,8 @@ pub trait Content: Sized + 'static {
     /// EACH ONE KEY AFTER `LEADER Alt`, whatever the window's own key is
     /// (`chrome::leader_alt_key`): a chord, a capital or Shift on a named key
     /// is given its one key by the rule or by [`Content::leader_alt_keys`].
+    /// What stays direct (`chrome::stays_direct`) is not offered: the keyboard
+    /// still gives it to the window.
     fn shortcuts(&self, ui: &Ui) -> Vec<ronoctua_protocol::Binding> {
         crate::chrome::bindings_of_hint(&self.hint(ui), self.leader_alt_keys())
     }
@@ -1717,10 +1734,45 @@ pub trait Content: Sized + 'static {
     /// every window does not (`chrome::leader_alt_key`): tables of `(direct
     /// notation, one key)` — a capital, `C-S-…`, or two keys of the window
     /// that the rule would land on one —, the first table that names a key
-    /// winning. The window's own keys never change; only what `LEADER Alt`
-    /// lists, and the footer hands the command back by its id.
+    /// winning. The window's own keys stay its NAMES for the actions — no
+    /// keyboard reaches them ([`Content::gates_keys`]); the footer hands the
+    /// command back by its id, and the door presses the direct key for it.
     fn leader_alt_keys(&self) -> &'static [&'static [(&'static str, &'static str)]] {
         &[]
+    }
+
+    /// WHETHER THE KEYBOARD IS KEPT FROM THIS WINDOW'S SHORTCUTS — the owner's
+    /// rule (2026-11-04): a window shortcut is `LEADER Alt` and one key, and no
+    /// key pressed in the window runs one, so a window that types never
+    /// collides with them. What moves, chooses, goes back and edits still
+    /// reaches it, and so does every letter it does not offer as a shortcut
+    /// (`chrome::barred`, `chrome::stays_direct`).
+    ///
+    /// `false` where the keys are somebody else's: the terminal's program, a
+    /// buffer's host (which keeps its own chords from its component), a column
+    /// beside the screen, which is no window in focus.
+    fn gates_keys(&self) -> bool {
+        true
+    }
+
+    /// THE BARE KEYS THE GATE KEEPS from the keyboard, besides every chord
+    /// (`chrome::barred`): by default the shortcuts the hint offers now.
+    ///
+    /// A window whose dispatch reads MORE than its hint teaches — a table that
+    /// runs a key on every row while the line teaches it only where it does
+    /// something — answers its whole table, so a key taught elsewhere is not
+    /// a key that still runs here. Never while a field is being typed in: its
+    /// letters are text then.
+    fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
+        crate::chrome::shortcut_keys(&self.hint(ui), self.leader_alt_keys())
+    }
+
+    /// A key from the keyboard this window takes although the gate would keep
+    /// it ([`Content::gates_keys`]) — a key that is no shortcut, the file
+    /// manager's own drawer. None by default.
+    fn keeps_key(&self, key: &ronoctua_keymap::Key) -> bool {
+        let _ = key;
+        false
     }
 
     /// RUNS ONE OF THIS WINDOW'S SHORTCUTS, by the command id it declared in
@@ -2125,7 +2177,6 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
     let content = make(&wiring)?;
     let surface = compositor.create_surface(&qh);
     let shell = content.open(&wiring, surface)?;
-    let header_line = content.header_line();
     // THE "NO HEADER" MODE, read once at start and watched thereafter
     // (`hang_the_watches`). The distro default is hidden, so a window that
     // never heard of the switch still comes up without a header.
@@ -2179,7 +2230,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             quit: false,
             owed: false,
             offset: 0,
-            hinted: fresh_hinted(header_line),
+            hinted: fresh_hinted(&content),
             room: crate::chrome::Room::default(),
             conn: conn.clone(),
             surface: shell.wl_surface().clone(),
@@ -2189,6 +2240,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             pointer_mods: Modifiers::default(),
             pointer_on: None,
             repeating: false,
+            barred: Vec::new(),
             // NOTHING SAID YET: the surface was just made.
             configured: false,
             size_owed: false,
@@ -2364,9 +2416,17 @@ fn serve_shortcuts(
 /// turned; the watch keeps `header::current` up to date, so this reads it.
 /// ONLY A LINE-0 HEADER HIDES: a column's line 0 is its own control line, never
 /// a header, so it keeps its line whatever the mode.
-fn fresh_hinted(header_line: u16) -> crate::chrome::Hinted {
+///
+/// And a window whose shortcuts `LEADER Alt` alone reaches
+/// ([`Content::gates_keys`]) has its header draw each one as it is reached —
+/// the glyph and the one key (`chrome::leader_alt_pieces`).
+fn fresh_hinted<C: Content>(content: &C) -> crate::chrome::Hinted {
+    let header_line = content.header_line();
     let mut hinted = crate::chrome::Hinted::at(header_line);
     hinted.hide_header(header_line == 0 && crate::header::hide_header());
+    if header_line == 0 && content.gates_keys() {
+        hinted.offers_leader_alt(content.leader_alt_keys());
+    }
     hinted
 }
 
@@ -2698,7 +2758,7 @@ impl<C: Content> Door<C> {
         // window as it is now. Only for a window the base door serves; a
         // buffer answers `keymap` from its own socket.
         if let Some(shared) = &self.shortcuts_socket {
-            let now = self.content.shortcuts(&self.ui);
+            let now = shortcuts_now(&self.content, &self.ui);
             if now != self.shortcuts_told {
                 // A KEY THE HEADER TEACHES AND `LEADER Alt` CANNOT is a gap in
                 // the window's exceptions (`Content::leader_alt_keys`): said
@@ -2915,8 +2975,10 @@ impl<C: Content> Door<C> {
         }
     }
 
-    /// One key, from a press, a REPEAT or a click on the header — and the
-    /// list follows the cursor, on the EVENT and never in the paint.
+    /// One key from a KEYBOARD, a press or a REPEAT — and the list follows the
+    /// cursor, on the EVENT and never in the paint. A click on the header and
+    /// a shortcut the footer hands back come in by [`Door::act`] instead, and
+    /// are never kept from the window ([`Source`]).
     fn typed(&mut self, event: &KeyEvent, mods: Modifiers) {
         self.ui.keyboard_seat = self.keyboards.colour_number_here();
         // COMPOSE FIRST: a key mid-sequence types nothing, a finished sequence
@@ -2939,6 +3001,7 @@ impl<C: Content> Door<C> {
             &self.painted,
             event,
             mods,
+            Source::Keyboard,
         );
         self.look_again();
     }
@@ -2987,6 +3050,12 @@ impl<C: Content> Door<C> {
     /// with no code of its own — the footer listed what [`Content::shortcuts`]
     /// derived from that hint, and this runs the same key back.
     fn run_or_replay_shortcut(&mut self, id: &str) -> bool {
+        // NOT WHILE A QUESTION IS ON THE LINE, which takes every key: the
+        // shortcut's key would be typed into the answer. The window publishes
+        // none meanwhile (`Door::settle`); this is for one sent just before.
+        if self.ui.asking.is_some() {
+            return false;
+        }
         if self.content.run_shortcut(&mut self.ui, id) {
             return true;
         }
@@ -3177,10 +3246,32 @@ impl<C: Content> Door<C> {
     }
 }
 
-/// One key into a window: the sweep's two keys, a question on the line, and
-/// otherwise the window's — and the list follows the cursor, on the EVENT
-/// and never in the paint. What [`Door::typed`] does, less the keyboard's
-/// seat, which a door without a compositor has not got.
+/// The shortcuts a window publishes NOW ([`Content::shortcuts`]) — none while
+/// a question is on the line: it takes every key, so a shortcut handed back
+/// would be typed into the answer.
+fn shortcuts_now<C: Content>(content: &C, ui: &Ui) -> Vec<ronoctua_protocol::Binding> {
+    if ui.asking.is_some() {
+        return Vec::new();
+    }
+    content.shortcuts(ui)
+}
+
+/// Where a key into a window came from — what the gate asks
+/// ([`Content::gates_keys`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// A key pressed on a keyboard, or its repeat.
+    Keyboard,
+    /// A key pressed FOR the window: a click on its header, the Back button,
+    /// or the footer's `LEADER Alt` handing a shortcut back
+    /// ([`Door::run_or_replay_shortcut`]).
+    Replay,
+}
+
+/// One key into a window: the sweep's two keys, a question on the line, the
+/// gate, and otherwise the window's — and the list follows the cursor, on the
+/// EVENT and never in the paint. What [`Door::typed`] does, less the
+/// keyboard's seat, which a door without a compositor has not got.
 fn typed_into<C: Content>(
     content: &mut C,
     ui: &mut Ui,
@@ -3188,6 +3279,7 @@ fn typed_into<C: Content>(
     painted: &[crate::text_select::Painted],
     event: &KeyEvent,
     mods: Modifiers,
+    from: Source,
 ) {
     // EVERY WINDOW READS A KEY THE SAME WAY — see `keys::as_read`.
     let (event, mods) = keys::as_read(event, mods, content.types_capitals());
@@ -3217,6 +3309,24 @@ fn typed_into<C: Content>(
     // `minibuffer_key` intercept, in every window.
     if ui.asking.is_some() {
         line_key_into(content, ui, &event, mods);
+        return;
+    }
+    // A SHORTCUT IS `LEADER Alt` AND ONE KEY, AND NOTHING ELSE (the owner's
+    // rule, 2026-11-04): a key from the KEYBOARD that is one of the window's
+    // shortcuts, or any chord, is kept from it — so a window that types never
+    // collides with what it offers. What stays direct, and every letter the
+    // window does not offer, still reaches it (`chrome::barred`). Asked after
+    // the sweep and the question, which take every key they want first; a
+    // replay is never asked, because a replay IS the shortcut running.
+    if from == Source::Keyboard
+        && content.gates_keys()
+        && let Some(key) = keys::key_of(&event, mods)
+        && !content.keeps_key(&key)
+        && crate::chrome::barred(&key, &content.barred_keys(ui))
+    {
+        if !ui.barred.contains(&event.raw_code) {
+            ui.barred.push(event.raw_code);
+        }
         return;
     }
     content.typed(ui, &event, mods);
@@ -3264,7 +3374,15 @@ fn act_into<C: Content>(
     match act {
         crate::chrome::Act::Key(key) => {
             let (event, mods) = keys::event_of(key);
-            typed_into(content, ui, selection, painted, &event, mods);
+            typed_into(
+                content,
+                ui,
+                selection,
+                painted,
+                &event,
+                mods,
+                Source::Replay,
+            );
             // A CLICK IS A PRESS AND A RELEASE. A window that acts on
             // the release — the buffer host's `Esc`, which is a tap only
             // once it comes up, because held it chooses a state — heard
@@ -3473,7 +3591,7 @@ impl<C: Content> Detached<C> {
     /// The window `content` in `ui`, its header on the line the window says.
     #[must_use]
     pub fn new(mut ui: Ui, content: C) -> Self {
-        ui.hinted = fresh_hinted(content.header_line());
+        ui.hinted = fresh_hinted(&content);
         // THE COLUMNS COUNTED AGAIN with the window's own margin, as a
         // door counts them against every configure.
         ui.margin = content.margin();
@@ -3523,13 +3641,31 @@ impl<C: Content> Detached<C> {
         }
     }
 
-    /// A key pressed and let go, as a keyboard's handler takes it: the
-    /// header's own keys first, then the window's — and the release.
+    /// A key pressed and let go FOR the window — the way a click on its header
+    /// or the footer's `LEADER Alt` presses it, so a shortcut runs (what a
+    /// window's tests and the photographs ask): the header's own keys first,
+    /// then the window's — and the release. What a KEYBOARD gives the window is
+    /// [`Detached::press_on_the_keyboard`].
     pub fn press(&mut self, key: ronoctua_keymap::Key) {
+        self.pressed(key, Source::Replay);
+    }
+
+    /// A key pressed and let go ON A KEYBOARD, as the keyboard's handler takes
+    /// it — a shortcut the window offers is kept from it (`chrome::barred`), and
+    /// so is its release.
+    pub fn press_on_the_keyboard(&mut self, key: ronoctua_keymap::Key) {
+        self.pressed(key, Source::Keyboard);
+    }
+
+    /// [`Detached::press`] and [`Detached::press_on_the_keyboard`].
+    fn pressed(&mut self, key: ronoctua_keymap::Key, from: Source) {
         // THE KEYBOARD COMES IN FIRST, as it does on a screen: a key reaches
         // a window only after its `enter` — which draws a column's focus line.
         self.keyboard_comes_in();
-        let (event, mods) = keys::event_of(key);
+        let (mut event, mods) = keys::event_of(key);
+        // A KEY OF ITS OWN, as a keyboard's is, so its release is told from
+        // another's: the gate remembers what it kept by this.
+        event.raw_code = 1;
         let its = self.content.header_keys();
         if self.ui.header_took(its, event.keysym, true) {
             self.ui.ask_paint();
@@ -3541,6 +3677,7 @@ impl<C: Content> Detached<C> {
                 &self.painted,
                 &event,
                 mods,
+                from,
             );
         }
         // ASKED AGAIN FOR THE RELEASE, as `Door::release_key` asks: the key
@@ -3548,7 +3685,9 @@ impl<C: Content> Detached<C> {
         // turned into its bar, or back.
         let its = self.content.header_keys();
         self.ui.header_took(its, event.keysym, false);
-        self.content.released(&mut self.ui, &event);
+        if !self.ui.let_go_of_a_barred(event.raw_code) {
+            self.content.released(&mut self.ui, &event);
+        }
     }
 
     /// The keyboard comes in, once: before a window's first key, and on a
@@ -4070,6 +4209,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A window with three shortcuts and a field of nothing — what the gate's
+    /// test drives: it writes down every key and release it hears.
+    #[derive(Default)]
+    struct Typist {
+        heard: Vec<String>,
+        released: usize,
+    }
+
+    impl Content for Typist {
+        type Hand = ();
+
+        fn app_id(&self) -> &'static str {
+            "test.typist"
+        }
+
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+
+        fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+            crate::chrome::hint_of(
+                &[
+                    ("d", "power-window"),
+                    ("<down>", "network-window"),
+                    ("C-x", "audio-window"),
+                ],
+                &ui.texts,
+            )
+        }
+
+        fn typed(&mut self, _: &mut Ui, event: &KeyEvent, mods: Modifiers) {
+            if let Some(key) = keys::key_of(event, mods) {
+                self.heard.push(key.notation());
+            }
+        }
+
+        fn released(&mut self, _: &mut Ui, _: &KeyEvent) {
+            self.released += 1;
+        }
+    }
+
+    /// FAILS IF a window shortcut is reached from the keyboard — a bare key the
+    /// window offers, or any chord — or its release reaches the window without
+    /// its press, or what moves and edits, a letter it offers nothing on, or a
+    /// replay (`LEADER Alt`, a click) stops reaching it; or a window publishes
+    /// shortcuts while a question takes every key (the owner's rule,
+    /// 2026-11-04: a window shortcut is `LEADER Alt` and one key, and nothing
+    /// else).
+    #[test]
+    fn a_shortcut_is_reached_by_leader_alt_and_never_by_the_keyboard() {
+        let key = |n: &str| ronoctua_keymap::Key::parse(n).expect(n);
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let mut d = Detached::new(Ui::for_tests(texts), Typist::default());
+        for kept in ["d", "C-x", "C-e", "S-<left>"] {
+            d.press_on_the_keyboard(key(kept));
+        }
+        assert!(d.content.heard.is_empty(), "{:?}", d.content.heard);
+        assert_eq!(d.content.released, 0, "a release without its press");
+        assert!(d.ui.barred.is_empty(), "a kept key was never let go");
+        for direct in ["<down>", "RET", "e", "C-v"] {
+            d.press_on_the_keyboard(key(direct));
+        }
+        assert_eq!(d.content.heard, ["<down>", "RET", "e", "C-v"]);
+        assert_eq!(d.content.released, 4);
+        // THE REPLAY IS THE SHORTCUT RUNNING.
+        d.press(key("d"));
+        d.press(key("C-x"));
+        assert_eq!(d.content.heard[4..], ["d", "C-x"]);
+        let offered: Vec<String> = shortcuts_now(&d.content, &d.ui)
+            .into_iter()
+            .map(|b| format!("{} {}", b.keys, b.command))
+            .collect();
+        assert_eq!(offered, ["d power-window", "x audio-window"]);
+        // A QUESTION TAKES EVERY KEY, and nothing is offered meanwhile.
+        d.ui.ask(crate::line::Line::new("test-question", false, None));
+        assert!(shortcuts_now(&d.content, &d.ui).is_empty());
     }
 
     /// A press of `button` in the middle of a window.

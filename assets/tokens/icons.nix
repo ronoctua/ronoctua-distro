@@ -212,6 +212,14 @@
   # a line, and the owner's rule reserves them for that.
   shortcuts-shown = "md-eye_outline";
   shortcuts-hidden = "md-eye_off";
+  # `LEADER Alt`, IN ONE CELL — in front of every window shortcut's key, on the
+  # minibuffer, a window's header and a buffer's own line (the owner's rule,
+  # 2026-11-04: a window shortcut is `LEADER Alt` and one key, and nothing
+  # else). The OPTION key's own drawing, because `Alt` is what it is called
+  # on every other keyboard; under the pointer it turns into the words
+  # themselves (`chrome::leader_alt_text`), so the glyph never has to be
+  # learnt.
+  leader-alt = "md-apple_keyboard_option";
   # THE DOT BETWEEN ONE SHORTCUT AND THE NEXT, for a BUFFER.
   #
   # The minibuffer already draws one, and it draws it from `mark.separator` —

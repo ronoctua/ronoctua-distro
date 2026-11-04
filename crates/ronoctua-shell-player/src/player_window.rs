@@ -3164,6 +3164,17 @@ impl Content for Player {
         &[crate::player::LEADER_ALT_KEYS]
     }
 
+    /// THE WHOLE TABLE, kept from the keyboard: a key two pages share runs
+    /// the first one's on a page that teaches neither (`pressed_where`), so
+    /// the hint alone would let a page's key run on the next. Not while a text
+    /// is edited or the file picker is up — every letter is what is typed.
+    fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
+        if self.view.editing_text() || self.view.browsing() {
+            return crate::chrome::shortcut_keys(&self.hint(ui), self.leader_alt_keys());
+        }
+        crate::chrome::table_keys(crate::player::OF_THE_VIEW.iter().map(|r| r.0))
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.view.hint(self.player.as_ref(), ui.columns, &ui.texts)
     }

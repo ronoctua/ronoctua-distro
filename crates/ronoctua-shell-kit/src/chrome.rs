@@ -1270,13 +1270,80 @@ pub fn is_one_key(key: &ronoctua_keymap::Key) -> bool {
     }
 }
 
+/// Whether `key` STAYS DIRECT in a window: what a hand moves, chooses, goes
+/// back and edits with — and so the only keys a keyboard still gives a window
+/// that `LEADER Alt` reaches (the owner's rule, 2026-11-04: a window shortcut is
+/// `LEADER Alt` and one key, and nothing else).
+///
+/// The arrows, the page keys, `<home>`/`<end>`, `RET`, `ESC` (and `C-g`, its
+/// twin in this notation), `DEL`, `TAB`/`S-TAB` and the paste keys
+/// ([`crate::line::pastes`]). Inside a field each of these edits the text, so
+/// none of them can collide with typing — which is the whole reason the rest
+/// are gone: a bare letter that is a command is a letter a field can never
+/// type. These are not offered after `LEADER Alt` either ([`bindings_of_hint`]),
+/// so its list and the minibuffer's line carry the shortcuts and nothing else.
+#[must_use]
+pub fn stays_direct(key: &ronoctua_keymap::Key) -> bool {
+    use ronoctua_keymap::{Mods, Sym};
+    if crate::line::pastes(*key) {
+        return true;
+    }
+    let plain = key.mods == Mods::default();
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    match key.sym {
+        Sym::Up
+        | Sym::Down
+        | Sym::Left
+        | Sym::Right
+        | Sym::PageUp
+        | Sym::PageDown
+        | Sym::Home
+        | Sym::End
+        | Sym::Enter
+        | Sym::Esc
+        | Sym::Backspace => plain,
+        Sym::Tab => plain || key.mods == shift,
+        Sym::Char('g') => key.mods == ctrl,
+        Sym::Char(_) | Sym::Space => false,
+    }
+}
+
+/// Whether a key that came from a KEYBOARD is barred from a window whose
+/// shortcuts are `published` (their direct keys, [`shortcut_keys`]).
+///
+/// What [`stays_direct`] is never barred. Every other CHORD is — `Ctrl`,
+/// `Alt`, `Super`, and `Shift` on a named key (a capital arrives as its letter,
+/// not as `S-`) — and so is a bare key the window publishes as a shortcut.
+/// Everything else is text: the letter a search types, the space, the
+/// punctuation the window offers nothing on.
+///
+/// Barred for the KEYBOARD only. The footer's `LEADER Alt`, a click on the
+/// header and the Back button press the same keys for the window by another
+/// path (`Door::act`), which is how a shortcut runs now.
+#[must_use]
+pub fn barred(key: &ronoctua_keymap::Key, published: &[ronoctua_keymap::Key]) -> bool {
+    if stays_direct(key) {
+        return false;
+    }
+    let m = key.mods;
+    m.ctrl || m.alt || m.logo || m.shift || published.contains(key)
+}
+
 /// THE KEY `LEADER Alt` GIVES a shortcut whose key in its window is `direct`.
 ///
-/// The window's own key never changes — the footer hands the window the
-/// COMMAND back, and the door presses the direct key for it
-/// (`Door::run_or_replay_shortcut`) — so the key after `LEADER Alt` is free to
-/// be one key ([`is_one_key`]) even where the window's own needs a chord: the
-/// terminal and every type-to-search window, where a bare letter is text.
+/// The direct key is the window's own name for the action — its tables, its
+/// dispatch and its tests are written in it — but no keyboard reaches it any
+/// more ([`barred`]): the footer hands the window the COMMAND back, and the
+/// door presses the direct key for it (`Door::run_or_replay_shortcut`). So the
+/// key after `LEADER Alt` is free to be one key ([`is_one_key`]) even where
+/// the window's own is a chord.
 ///
 /// One rule, the same for every window, in this order:
 ///
@@ -1356,22 +1423,58 @@ pub fn leader_alt_key(
 ///
 /// Only a KEY piece that presses a key (an `id` and an [`Act::Key`]) is a
 /// shortcut; the words beside it carry the same id and are skipped, and so is a
-/// separator or a line of prose. Each id appears once, in the order the hint
-/// drew it, and so does each key: of two ids that land on one key the first
-/// keeps it — [`unpublished`] names the other, and the window's `exceptions`
-/// are where it is given one of its own.
+/// separator or a line of prose. A key that [`stays_direct`] is no shortcut
+/// either: the keyboard still gives it to the window. Each id appears once, in
+/// the order the hint drew it, and so does each key: of two ids that land on
+/// one key the first keeps it — [`unpublished`] names the other, and the
+/// window's `exceptions` are where it is given one of its own.
 #[must_use]
 pub fn bindings_of_hint(
     pieces: &[Piece],
     exceptions: &[&[(&str, &str)]],
 ) -> Vec<ronoctua_protocol::Binding> {
-    published(pieces, exceptions).0
+    published(pieces, exceptions)
+        .0
+        .into_iter()
+        .map(|s| ronoctua_protocol::Binding {
+            keys: s.key.notation(),
+            command: s.id.to_owned(),
+        })
+        .collect()
+}
+
+/// The DIRECT keys behind a hint's shortcuts — what the door bars from the
+/// keyboard ([`barred`]), so a shortcut runs by `LEADER Alt` and by nothing
+/// else.
+#[must_use]
+pub fn shortcut_keys(
+    pieces: &[Piece],
+    exceptions: &[&[(&str, &str)]],
+) -> Vec<ronoctua_keymap::Key> {
+    published(pieces, exceptions)
+        .0
+        .into_iter()
+        .map(|s| s.direct)
+        .collect()
+}
+
+/// The keys of a window's WHOLE table — every notation it dispatches, what
+/// stays direct left out — for a window whose dispatch reads more than its
+/// hint teaches (`Content::barred_keys`).
+#[must_use]
+pub fn table_keys<'a>(notations: impl IntoIterator<Item = &'a str>) -> Vec<ronoctua_keymap::Key> {
+    notations
+        .into_iter()
+        .filter_map(|n| ronoctua_keymap::Key::parse(n).ok())
+        .filter(|k| !stays_direct(k))
+        .collect()
 }
 
 /// The shortcuts of a hint that `LEADER Alt` cannot offer — `(direct
 /// notation, id)` each: a key with no one-key form ([`leader_alt_key`]), or one
 /// whose key an earlier shortcut of the same hint already took. `ESC` is not
-/// among them: never offering it is the rule, not a gap.
+/// among them, nor anything that [`stays_direct`]: never offering those is the
+/// rule, not a gap.
 #[must_use]
 pub fn unpublished(
     pieces: &[Piece],
@@ -1380,30 +1483,35 @@ pub fn unpublished(
     published(pieces, exceptions).1
 }
 
+/// One shortcut of a hint, as `LEADER Alt` offers it.
+struct Published {
+    /// The command.
+    id: &'static str,
+    /// The window's own key for it — the one a replay presses.
+    direct: ronoctua_keymap::Key,
+    /// The one key after `LEADER Alt`.
+    key: ronoctua_keymap::Key,
+}
+
 /// [`bindings_of_hint`] and [`unpublished`], in one walk.
 fn published(
     pieces: &[Piece],
     exceptions: &[&[(&str, &str)]],
-) -> (Vec<ronoctua_protocol::Binding>, Vec<(String, &'static str)>) {
-    let mut out: Vec<ronoctua_protocol::Binding> = Vec::new();
+) -> (Vec<Published>, Vec<(String, &'static str)>) {
+    let mut out: Vec<Published> = Vec::new();
     let mut left: Vec<(String, &'static str)> = Vec::new();
     for p in pieces {
         let Some(id) = p.id else { continue };
         let Some(Act::Key(direct)) = p.press else {
             continue;
         };
-        if !p.is_a_key() || out.iter().any(|b| b.command == id) {
+        if !p.is_a_key() || stays_direct(&direct) || out.iter().any(|s| s.id == id) {
             continue;
         }
-        let key = leader_alt_key(&direct, exceptions).map(|k| k.notation());
-        match key {
-            Some(keys) if !out.iter().any(|b| b.keys == keys) => {
-                out.push(ronoctua_protocol::Binding {
-                    keys,
-                    command: id.to_owned(),
-                });
+        match leader_alt_key(&direct, exceptions) {
+            Some(key) if !out.iter().any(|s| s.key == key) => {
+                out.push(Published { id, direct, key });
             }
-            None if direct.sym == ronoctua_keymap::Sym::Esc => {}
             _ => {
                 if !left.iter().any(|(_, said)| *said == id) {
                     left.push((direct.notation(), id));
@@ -1414,6 +1522,73 @@ fn published(
     (out, left)
 }
 
+/// A window shortcut's key as it is DRAWN: the `LEADER Alt` glyph and the one
+/// key — `⌥s` — or, while the pointer rests on the glyph (`spelt`), the words
+/// the glyph stands for and the key — `SUPER ALT s`.
+///
+/// One cell for what would be nine on every shortcut of a line (the owner's
+/// answer, 2026-11-04), and the words where the glyph was, under the hand
+/// that asked: the spelt form grows to the RIGHT from the same cell, so the
+/// pointer is still on it and the swap never flickers back.
+#[must_use]
+pub fn leader_alt_text(key: &str, spelt: bool) -> String {
+    if spelt {
+        format!("{} {key}", crate::bindings::leader_alt_label())
+    } else {
+        format!("{}{key}", tokens::icon::LEADER_ALT)
+    }
+}
+
+/// How many cells of a shortcut's key, from its first, are the `LEADER Alt`
+/// glyph — or its spelt words (`spelt`): where the pointer has to rest for
+/// [`leader_alt_text`] to spell it.
+#[must_use]
+pub fn leader_alt_prefix_cells(spelt: bool) -> u16 {
+    if spelt {
+        ronoctua_render::layout::width(&crate::bindings::leader_alt_label()) + 1
+    } else {
+        1
+    }
+}
+
+/// A hint, with every shortcut `LEADER Alt` offers drawn as it is reached:
+/// its key piece is the glyph and the one key ([`leader_alt_text`]), the one
+/// whose glyph is under the pointer (`spelt`) spelt out. What stays direct is
+/// drawn as it was — `ESC` first, the arrows, `RET` — and so is every piece
+/// that is no key. Same ids and same presses, so a click still presses what
+/// it pressed, the way a replay does. And the ids that got the glyph, which
+/// is where the pointer looks for it ([`Hinted::light_at`]).
+#[must_use]
+pub fn leader_alt_pieces(
+    pieces: &[Piece],
+    exceptions: &[&[(&str, &str)]],
+    spelt: Option<&str>,
+) -> (Vec<Piece>, Vec<&'static str>) {
+    let offered = published(pieces, exceptions).0;
+    let mut done: Vec<&'static str> = Vec::new();
+    let line = pieces
+        .iter()
+        .map(|p| {
+            let found = p.id.filter(|_| p.is_a_key()).and_then(|id| {
+                offered
+                    .iter()
+                    .find(|s| s.id == id && p.press == Some(Act::Key(s.direct)))
+            });
+            match found {
+                Some(s) if !done.contains(&s.id) => {
+                    done.push(s.id);
+                    Piece {
+                        text: leader_alt_text(&key_text(&s.key), spelt == Some(s.id)),
+                        ..p.clone()
+                    }
+                }
+                _ => p.clone(),
+            }
+        })
+        .collect();
+    (line, done)
+}
+
 /// The keys a WINDOW gives after `LEADER Alt`, worked out from its tables
 /// rather than from a hint on screen — what each window crate's test reads, so
 /// every key any of its modes teaches is proven one key and its own.
@@ -1422,7 +1597,7 @@ fn published(
 /// ones it draws beside them (the consent row's, the way back); `exceptions`
 /// its [`leader_alt_key`] exceptions. Rows of one id are one shortcut (the hint
 /// teaches the first that parses), one key under two ids is one key that means
-/// one of them by context, and `ESC` is never offered. A set that REPLACES the
+/// one of them by context, and what [`stays_direct`] is never offered. A set that REPLACES the
 /// window's hint while it is up — the file picker's, a text being edited — is
 /// a census of its own.
 ///
@@ -1447,7 +1622,7 @@ pub fn leader_alt_census(
             continue;
         };
         seen.push(id);
-        if direct.sym == ronoctua_keymap::Sym::Esc && direct.mods == Default::default() {
+        if stays_direct(&direct) {
             continue;
         }
         let Some(key) = leader_alt_key(&direct, exceptions) else {
@@ -2186,6 +2361,16 @@ pub struct Hinted {
     /// list reclaims line 0 (`Ui::first_of_list`). Set on every window but the
     /// column, whose line 0 is its own control line, never a header.
     hidden: bool,
+    /// THE WINDOW'S `LEADER Alt` EXCEPTIONS, when its shortcuts are reached by
+    /// `LEADER Alt` alone (`Content::gates_keys`): [`head`](Self::head) then
+    /// draws each offered shortcut as it is reached ([`leader_alt_pieces`]).
+    /// `None` in a column, whose keys are its own.
+    leader_alt: Option<&'static [&'static [(&'static str, &'static str)]]>,
+    /// The shortcuts the last frame drew with the `LEADER Alt` glyph.
+    glyphed: Vec<&'static str>,
+    /// The shortcut whose GLYPH the pointer rests on — spelt out while it does
+    /// ([`leader_alt_text`]).
+    glyph_lit: Option<&'static str>,
 }
 
 impl Default for Hinted {
@@ -2209,6 +2394,9 @@ impl Default for Hinted {
             right_ctrl: false,
             top: 0,
             hidden: false,
+            leader_alt: None,
+            glyphed: Vec::new(),
+            glyph_lit: None,
         }
     }
 }
@@ -2246,6 +2434,35 @@ impl Hinted {
         self.hidden
     }
 
+    /// Says the window's shortcuts are reached by `LEADER Alt` alone, with
+    /// these exceptions — see [`Hinted::leader_alt`].
+    pub const fn offers_leader_alt(
+        &mut self,
+        exceptions: &'static [&'static [(&'static str, &'static str)]],
+    ) {
+        self.leader_alt = Some(exceptions);
+    }
+
+    /// The window's `LEADER Alt` exceptions, when it offers its shortcuts
+    /// there — for a door that draws its line itself.
+    #[must_use]
+    pub const fn leader_alt(&self) -> Option<&'static [&'static [(&'static str, &'static str)]]> {
+        self.leader_alt
+    }
+
+    /// The shortcut whose glyph is spelt out, for a door that draws its line
+    /// itself ([`leader_alt_pieces`]).
+    #[must_use]
+    pub const fn glyph_lit(&self) -> Option<&'static str> {
+        self.glyph_lit
+    }
+
+    /// For a door that draws its line itself: which shortcuts it drew with the
+    /// glyph, so the pointer can find the glyph ([`Hinted::light_at`]).
+    pub fn glyphed(&mut self, ids: Vec<&'static str>) {
+        self.glyphed = ids;
+    }
+
     /// Takes the header OFF the surface: no shortcut, no chevron and no
     /// sentence is left where the pointer could find it, and the drawer
     /// shuts. For a door that stops drawing a header — the column in its bar
@@ -2257,6 +2474,8 @@ impl Hinted {
         self.said = None;
         self.lit = None;
         self.chevron_lit = false;
+        self.glyphed.clear();
+        self.glyph_lit = None;
         self.dragging = false;
         let _ = self.fold.close();
     }
@@ -2340,9 +2559,31 @@ impl Hinted {
                     cell + 1 >= c
                 })
         });
-        let changed = now != self.lit || chevron != self.chevron_lit;
+        // AND THE `LEADER Alt` GLYPH of the shortcut under the pointer, which
+        // is spelt out while the pointer rests on it — on the glyph's own
+        // cells, the first of its key, and never on the key or the words.
+        let glyph = at.and_then(|(x, y)| {
+            if line_height <= 0.0 || cell_px <= 0.0 || x < 0.0 || y < 0.0 {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (line, cell) = ((y / line_height) as u16, (x / cell_px) as u16);
+            let m = self.placed.iter().find(|m| m.covers(line, cell))?;
+            let key = self
+                .placed
+                .iter()
+                .find(|k| k.id == m.id && k.line == m.line)?;
+            let spelt = self.glyph_lit == Some(m.id);
+            (self.glyphed.contains(&m.id)
+                && key.at == m.at
+                && m.press.is_some()
+                && cell < m.at + leader_alt_prefix_cells(spelt))
+            .then_some(m.id)
+        });
+        let changed = now != self.lit || chevron != self.chevron_lit || glyph != self.glyph_lit;
         self.lit = now;
         self.chevron_lit = chevron;
+        self.glyph_lit = glyph;
         changed
     }
 
@@ -2442,6 +2683,16 @@ impl Hinted {
         let size = tokens::text::size();
         // THE SHORTCUT UNDER THE POINTER, LIT — see [`lit`].
         let mut line: Vec<Piece> = lit(pieces, self.lit);
+        // EACH SHORTCUT AS IT IS REACHED, `LEADER Alt` and one key, before
+        // anything is measured — so the marks are the cells drawn.
+        match self.leader_alt.filter(|_| hinting) {
+            Some(exceptions) => {
+                let (drawn, glyphed) = leader_alt_pieces(&line, exceptions, self.glyph_lit);
+                line = drawn;
+                self.glyphed = glyphed;
+            }
+            None => self.glyphed.clear(),
+        }
         // AND THE KEYS THAT OPEN AND WALK IT, open or shut — see
         // `fold::teaching`.
         if hinting {
@@ -5975,8 +6226,8 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            [("<down>", "network-window"), ("d", "power-window")],
-            "the arrow by its notation, no ESC, and one id per key"
+            [("d", "power-window")],
+            "what stays direct (the arrow, ESC) is not offered, and one id per key"
         );
         assert_eq!(
             unpublished(&hint, &[]),
@@ -5984,7 +6235,7 @@ mod tests {
                 ("C-d".to_owned(), "audio-window"),
                 ("D".to_owned(), "display-window")
             ],
-            "what could not be offered is named, ESC is not"
+            "what could not be offered is named, and what stays direct is not"
         );
         let given = bindings_of_hint(&hint, &[&[("C-d", "x"), ("D", "y")]]);
         assert!(
@@ -6020,6 +6271,119 @@ mod tests {
         assert!(leader_alt_census(&[&[("d", "a"), ("C-d", "b")]], &[&[("C-d", "x")]]).is_ok());
         assert!(leader_alt_census(&[&[("D", "a")]], &[&[("D", "C-x")]]).is_err());
         assert!(leader_alt_census(&[&[("d", "a")]], &[&[("C-q", "q")]]).is_err());
+    }
+
+    /// FAILS IF: a key that moves, chooses, goes back or edits stops reaching
+    /// a window from the keyboard, or a shortcut — a published bare key or any
+    /// chord — still does (the owner's rule, 2026-11-04: a window shortcut is
+    /// `LEADER Alt` and one key, and nothing else), or a letter the window
+    /// offers nothing on stops being text.
+    #[test]
+    fn what_stays_direct_is_kept_and_the_rest_is_leader_alt_alone() {
+        use super::{barred, stays_direct};
+        let key = |n: &str| ronoctua_keymap::Key::parse(n).expect(n);
+        for direct in [
+            "<up>", "<down>", "<left>", "<right>", "<prior>", "<next>", "<home>", "<end>", "RET",
+            "ESC", "DEL", "TAB", "S-TAB", "C-g", "C-v", "C-y",
+        ] {
+            assert!(stays_direct(&key(direct)), "{direct} stopped being direct");
+            assert!(!barred(&key(direct), &[key(direct)]), "{direct} was barred");
+        }
+        for shortcut in ["d", "SPC", "C-d", "S-<left>", "C-RET", "C-TAB", "M-x", "/"] {
+            assert!(!stays_direct(&key(shortcut)), "{shortcut} stays direct");
+        }
+        let published = [key("d"), key("SPC")];
+        for kept in ["d", "SPC", "C-e", "S-<left>", "C-RET", "M-x"] {
+            assert!(barred(&key(kept), &published), "{kept} reached the window");
+        }
+        for text in ["e", "P", "/", "1"] {
+            assert!(!barred(&key(text), &published), "{text} is no longer text");
+        }
+    }
+
+    /// FAILS IF: a header teaches a shortcut by the window's own key instead of
+    /// the way it is reached — the `LEADER Alt` glyph and the one key — or puts
+    /// the glyph on what stays direct, or does not spell the glyph out for the
+    /// shortcut the pointer rests on.
+    #[test]
+    fn a_header_draws_each_shortcut_as_leader_alt_reaches_it() {
+        use super::{hint_of, key_text, leader_alt_pieces};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let hint = hint_of(
+            &[
+                ("ESC", "view-back"),
+                ("<down>", "network-window"),
+                ("C-d", "power-window"),
+            ],
+            &t,
+        );
+        let key_of = |pieces: &[Piece], id: &str| -> String {
+            pieces
+                .iter()
+                .find(|p| p.id == Some(id) && p.is_a_key())
+                .map(|p| p.text.clone())
+                .expect(id)
+        };
+        let (drawn, glyphed) = leader_alt_pieces(&hint, &[], None);
+        assert_eq!(glyphed, ["power-window"]);
+        assert_eq!(
+            key_of(&drawn, "power-window"),
+            format!("{}d", tokens::icon::LEADER_ALT)
+        );
+        let down = ronoctua_keymap::Key::parse("<down>").expect("parses");
+        assert_eq!(key_of(&drawn, "network-window"), key_text(&down));
+        assert_eq!(key_of(&drawn, "view-back"), "ESC");
+        let (spelt, _) = leader_alt_pieces(&hint, &[], Some("power-window"));
+        assert_eq!(
+            key_of(&spelt, "power-window"),
+            format!("{} d", crate::bindings::leader_alt_label())
+        );
+        // THE SAME PRESS, so a click presses what it pressed.
+        let press = |pieces: &[Piece]| {
+            pieces
+                .iter()
+                .find(|p| p.id == Some("power-window") && p.is_a_key())
+                .and_then(|p| p.press)
+        };
+        assert_eq!(press(&drawn), press(&hint));
+    }
+
+    /// FAILS IF: the glyph is not spelt out while the pointer rests on it, is
+    /// spelt out on the key or the words, or flickers back while the pointer
+    /// stays where it was — the spelt words grow from the glyph's own cell.
+    #[test]
+    fn the_glyph_is_spelt_while_the_pointer_rests_on_it() {
+        use super::{Hinted, hint_of};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let cell = f64::from(cell_width());
+        let hint = hint_of(&[("d", "power-window")], &t);
+        let mut h = Hinted::at(0);
+        h.offers_leader_alt(&[]);
+        let drawn = |h: &mut Hinted| -> String {
+            h.head(&hint, true, 1, 80, &t)
+                .into_iter()
+                .map(|s| s.text)
+                .collect()
+        };
+        assert!(drawn(&mut h).contains(tokens::icon::LEADER_ALT));
+        // ON THE GLYPH: its cell is the first of the key, after the margin.
+        let glyph = (cell * 1.5, line * 0.5);
+        assert!(h.light_at(Some(glyph)), "the glyph did not light");
+        assert_eq!(h.glyph_lit(), Some("power-window"));
+        let label = crate::bindings::leader_alt_label();
+        assert!(
+            drawn(&mut h).contains(&label),
+            "the glyph was not spelt out"
+        );
+        // STILL THERE, and still spelt: the words grew under the hand.
+        assert!(!h.light_at(Some(glyph)), "it flickered");
+        assert_eq!(h.glyph_lit(), Some("power-window"));
+        // ON THE WORDS, past the spelt key: the glyph comes back.
+        let words = cell * (f64::from(super::leader_alt_prefix_cells(true)) + 3.5);
+        let _ = h.light_at(Some((words, line * 0.5)));
+        assert_eq!(h.glyph_lit(), None);
+        assert!(!drawn(&mut h).contains(&label));
     }
 
     /// FAILS IF: a header told to sit on line 1 — a column's, under the

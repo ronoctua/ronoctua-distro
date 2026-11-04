@@ -607,6 +607,20 @@ pub fn label() -> String {
     std::env::var("RONOCTUA_LEADER").unwrap_or_else(|_| "SPC".to_owned())
 }
 
+/// The key a lone TAP of which, at the leader's root, opens the focused
+/// window's shortcuts — `LEADER Alt`. A key's name, the same in every
+/// language, and never text in a `.ftl` (`keys-are-never-text`), as `SPC` is.
+pub const SHORTCUTS_TAP_KEY: &str = "ALT";
+
+/// `LEADER Alt`, spelt out — `SUPER ALT` in production, `CTRL ALT SPC ALT` in
+/// the nested loop: what every window shortcut is reached by (the owner's
+/// rule, 2026-11-04), and what its glyph turns into under the pointer
+/// (`chrome::leader_alt_text`).
+#[must_use]
+pub fn leader_alt_label() -> String {
+    format!("{} {SHORTCUTS_TAP_KEY}", label())
+}
+
 /// How the CHORD's key appears on screen.
 ///
 /// # Why it is another variable

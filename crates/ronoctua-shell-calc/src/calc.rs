@@ -455,6 +455,7 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("C-DEL", "calc-clear"),
     ("C-c", "calc-copy"),
     ("C-p", "calc-history"),
+    ("C-n", "calc-history-newer"),
 ];
 
 /// The keys of the converter.

@@ -1897,6 +1897,28 @@ impl Content for Files {
         self.key(ui, event, mods);
     }
 
+    /// THE WHOLE TABLE, kept from the keyboard: the view dispatches a key on
+    /// every row while the line teaches it only where it does something
+    /// (`files::of_the_view`), and a key of the table is never the filter's.
+    /// Not while a question's picker is up — every letter is its answer.
+    fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
+        if self.manager.view.is_picking() {
+            return crate::chrome::shortcut_keys(&Content::hint(self, ui), self.leader_alt_keys());
+        }
+        crate::chrome::table_keys(crate::files::OF_THE_VIEW.iter().map(|r| r.0))
+    }
+
+    /// THE DRAWER IS THIS WINDOW'S OWN, opened and walked by the right `Ctrl`
+    /// and the arrows (`Files::key`): no shortcut, and the keyboard keeps it.
+    fn keeps_key(&self, key: &ronoctua_keymap::Key) -> bool {
+        use ronoctua_keymap::Sym;
+        self.right_ctrl
+            && key.mods.ctrl
+            && !key.mods.alt
+            && !key.mods.logo
+            && matches!(key.sym, Sym::Up | Sym::Down)
+    }
+
     /// A SECRET the view asked for, typed on this window's line: the footer's
     /// minibuffer hands the same answer to the same call — an archive's or a
     /// disk's password, the vault's passphrase. Root is never asked here: the
@@ -2420,7 +2442,18 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     };
     // THE SHORTCUT UNDER THE POINTER, LIT — the rule of every header
     // (`chrome::lit`); the door lights it (`Hinted::light_at`).
-    let line_pieces = crate::chrome::lit(&line_pieces, s.hinted.lit());
+    let mut line_pieces = crate::chrome::lit(&line_pieces, s.hinted.lit());
+    // AND EACH AS IT IS REACHED, `LEADER Alt` and one key — what every
+    // header draws (`chrome::leader_alt_pieces`), before anything is measured.
+    match s.hinted.leader_alt().filter(|_| hinting) {
+        Some(exceptions) => {
+            let (drawn, glyphed) =
+                crate::chrome::leader_alt_pieces(&line_pieces, exceptions, s.hinted.glyph_lit());
+            line_pieces = drawn;
+            s.hinted.glyphed(glyphed);
+        }
+        None => s.hinted.glyphed(Vec::new()),
+    }
     // WHERE THE SHORTCUTS OF THIS LINE LAND, collected while they are drawn.
     let mut marks: Vec<crate::chrome::Mark> = Vec::new();
     // THE ROOM IS THE WHOLE OF `columns`: `recount` took BOTH margins off the

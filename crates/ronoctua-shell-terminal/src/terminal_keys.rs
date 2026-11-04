@@ -189,27 +189,31 @@ pub enum Leaf {
     Bottom,
 }
 
-/// What a key of the GROUP does — the terminals one window holds
-/// (`crate::terminal_group`). Ghostty's own keys for its tabs, so a hand that
-/// knows one terminal knows this one.
+/// What a shortcut of the GROUP does — the terminals one window holds
+/// (`crate::terminal_group`), reached by `LEADER Alt` alone ([`LEADER_ALT_KEYS`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Grouped {
-    /// `C-T` (Ctrl+Shift+t): a new terminal, right after the one in front,
-    /// in its folder.
+    /// `LEADER Alt t`: a new terminal, right after the one in front, in its
+    /// folder.
     New,
-    /// `C-TAB`: the next terminal, in front.
+    /// `LEADER Alt n`: the next terminal, in front.
     Next,
-    /// `C-S-TAB`: the previous one.
+    /// `LEADER Alt p`: the previous one.
     Previous,
-    /// `C-S-RET`: the one in front, in a window of its own.
+    /// `LEADER Alt w`: the one in front, in a window of its own.
     Detach,
 }
 
-/// THE GROUP'S KEYS AND COMMANDS, ONE TABLE: the key as the keymap writes it
-/// (`door::keys::key_of` reads a press back into the same notation), the
-/// registry's command (`crate::KEYS`, `cmd-<id>`), and what it does
-/// — what `Content::shortcuts` lists, what `Content::run_shortcut` runs and
-/// what [`kept`] takes, so the three never teach different keys.
+/// THE GROUP'S KEYS AND COMMANDS, ONE TABLE: Ghostty's own chord for each, as
+/// the keymap writes it, the registry's command (`crate::KEYS`, `cmd-<id>`),
+/// and what it does — what `Content::shortcuts` lists (each given its one key
+/// by [`LEADER_ALT_KEYS`]) and what `Content::run_shortcut` runs.
+///
+/// THE CHORDS ARE THE PROGRAM'S NOW (the owner's rule, 2026-11-04: a window
+/// shortcut is `LEADER Alt` and one key, and nothing else). The terminal no
+/// longer takes them ([`kept`]): `C-S-t` reaches what runs inside, and the
+/// group is reached by `LEADER Alt t/n/p/w` alone, by its command — the
+/// notation here is the shortcut's name, never a key a press is matched to.
 ///
 /// `C-T` and not `C-S-t`: xkb has already shifted the letter, and a chord
 /// is written as its letter reads (`C-S` is Ctrl and a capital s). The Tab
@@ -223,10 +227,9 @@ pub const GROUP: &[(&str, &str, Grouped)] = &[
 ];
 
 /// THE GROUP'S KEYS AFTER `LEADER Alt` — one key each
-/// (`chrome::leader_alt_key`), where the window's own are chords because every
-/// bare key belongs to the program: `t` a new terminal, `n` and `p` the next
-/// and the previous, `w` the one in front in a window of its own. The chords
-/// of [`GROUP`] stay what the window answers to.
+/// (`chrome::leader_alt_key`), the only way the group is reached: `t` a new
+/// terminal, `n` and `p` the next and the previous, `w` the one in front in a
+/// window of its own.
 pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
     ("C-T", "t"),
     ("C-TAB", "n"),
@@ -284,11 +287,6 @@ pub enum Kept {
     Zoom(Zoom),
     /// `C-S-f`: the search line (`crate::terminal_search`).
     Search,
-    /// One of the group's keys ([`GROUP`]). Taken ALWAYS, before the
-    /// encoder, as Ghostty takes its tabs' — whether the group has two
-    /// terminals to move between or not: a key that reached the program
-    /// only while the window held one terminal would mean two things.
-    Group(Grouped),
 }
 
 /// The key `sym` held with `mods`, when the terminal keeps it.
@@ -309,12 +307,6 @@ pub fn kept(sym: Keysym, mods: Modifiers) -> Option<Kept> {
             Keysym::V | Keysym::v => Some(Kept::Paste),
             Keysym::A | Keysym::a => Some(Kept::SelectAll),
             Keysym::F | Keysym::f => Some(Kept::Search),
-            Keysym::T | Keysym::t => Some(Kept::Group(Grouped::New)),
-            // SHIFT+TAB ARRIVES AS `ISO_Left_Tab` from xkb (the layout's
-            // shifted Tab), and as `Tab` with Shift held from a layout that
-            // has none: both are the previous terminal.
-            Keysym::ISO_Left_Tab | Keysym::Tab => Some(Kept::Group(Grouped::Previous)),
-            Keysym::Return | Keysym::KP_Enter => Some(Kept::Group(Grouped::Detach)),
             Keysym::Up | Keysym::KP_Up => Some(Kept::Prompt(true)),
             Keysym::Down | Keysym::KP_Down => Some(Kept::Prompt(false)),
             // `C-+` on a layout whose plus is Shift and equals.
@@ -330,15 +322,7 @@ pub fn kept(sym: Keysym, mods: Modifiers) -> Option<Kept> {
             _ => None,
         },
         (true, false) => match sym {
-            Keysym::Tab => Some(Kept::Group(Grouped::Next)),
-            // THE CAPITAL WITH NO SHIFT HELD is the shortcut's own press
-            // (`door::keys::event_of` of `C-T`, a click on it): the keyboard
-            // never sends it — Caps Lock is undone on a chord.
-            Keysym::T => Some(Kept::Group(Grouped::New)),
             Keysym::F => Some(Kept::Search),
-            // A layout whose Shift+Tab is `ISO_Left_Tab` with the Shift
-            // already spent on it.
-            Keysym::ISO_Left_Tab => Some(Kept::Group(Grouped::Previous)),
             Keysym::equal | Keysym::plus | Keysym::KP_Add => Some(Kept::Zoom(Zoom::In)),
             Keysym::minus | Keysym::KP_Subtract => Some(Kept::Zoom(Zoom::Out)),
             Keysym::_0 | Keysym::KP_0 => Some(Kept::Zoom(Zoom::Reset)),
@@ -519,46 +503,29 @@ mod tests {
     }
 
     #[test]
-    fn the_groups_keys_are_kept_and_shift_tab_arrives_as_iso_left_tab() {
-        // FAILS IF a key of the group reaches the program (a `C-S-t` typed
-        // as a capital T), Shift+Tab is only heard as one of its two
-        // spellings, or the table the shortcuts list teaches a key that is
-        // not the one this window takes — read back by the door's own
-        // reader, as a click on the shortcut would press it.
+    fn the_groups_chords_are_the_programs() {
+        // FAILS IF the terminal takes a key of the group from the program
+        // again (`C-S-t`, `C-TAB`, `C-S-TAB`, `C-S-RET` — the group is
+        // `LEADER Alt t/n/p/w` alone, the owner's rule of 2026-11-04), or the
+        // table stops naming the commands `run_shortcut` runs.
         let cs = held(true, true);
-        assert_eq!(kept(Keysym::T, cs), Some(Kept::Group(Grouped::New)));
-        assert_eq!(kept(Keysym::t, cs), Some(Kept::Group(Grouped::New)));
-        assert_eq!(
-            kept(Keysym::ISO_Left_Tab, cs),
-            Some(Kept::Group(Grouped::Previous))
-        );
-        assert_eq!(kept(Keysym::Tab, cs), Some(Kept::Group(Grouped::Previous)));
-        assert_eq!(
-            kept(Keysym::ISO_Left_Tab, held(true, false)),
-            Some(Kept::Group(Grouped::Previous))
-        );
-        assert_eq!(
-            kept(Keysym::Tab, held(true, false)),
-            Some(Kept::Group(Grouped::Next))
-        );
-        assert_eq!(kept(Keysym::Return, cs), Some(Kept::Group(Grouped::Detach)));
+        for sym in [
+            Keysym::T,
+            Keysym::t,
+            Keysym::ISO_Left_Tab,
+            Keysym::Tab,
+            Keysym::Return,
+        ] {
+            assert_eq!(kept(sym, cs), None, "{sym:?} with Ctrl and Shift");
+        }
+        for sym in [Keysym::Tab, Keysym::T, Keysym::ISO_Left_Tab] {
+            assert_eq!(kept(sym, held(true, false)), None, "{sym:?} with Ctrl");
+        }
+        // THE TERMINAL'S OWN KEYS ARE STILL ITS OWN.
         assert_eq!(kept(Keysym::F, cs), Some(Kept::Search));
-        // A PLAIN TAB AND A PLAIN RETURN ARE THE PROGRAM'S.
-        assert_eq!(kept(Keysym::Tab, Modifiers::default()), None);
-        assert_eq!(kept(Keysym::Return, held(true, false)), None);
+        assert_eq!(kept(Keysym::C, cs), Some(Kept::Copy));
         for &(notation, id, wanted) in GROUP {
-            let key = ronoctua_keymap::Key::parse(notation).expect(notation);
-            let (event, mods) = ronoctua_shell_door::door::keys::event_of(key);
-            assert_eq!(
-                kept(event.keysym, mods),
-                Some(Kept::Group(wanted)),
-                "{notation}"
-            );
-            assert_eq!(
-                ronoctua_shell_door::door::keys::key_of(&event, mods).map(|k| k.notation()),
-                Some(notation.to_owned()),
-                "{notation} is not how the door reads its own key"
-            );
+            assert!(ronoctua_keymap::Key::parse(notation).is_ok(), "{notation}");
             assert_eq!(grouped(id), Some(wanted));
             assert!(id.starts_with("terminal-"), "{id}");
         }

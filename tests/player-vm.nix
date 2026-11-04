@@ -1060,14 +1060,15 @@ pkgs.testers.runNixOSTest {
         machine.succeed("mv /etc/pam.d/ronoctua-unlock.away /etc/pam.d/ronoctua-unlock")
         assert code != 0 and said.strip() == "no-service", (code, said)
 
-    # `C-s` PRESSED IN A DOOR. What the socket says of the queue's file
-    # (`queue_file`: never saved, the same, changed since, changed on the
-    # disk) is the engine's subtests'; this one is the doors' part of it: the
-    # key in a window saves the queue again — the mark the Queue's title draws
-    # goes — and over a file changed on the disk the window asks first, with
-    # the cursor born on "no", and writes over it only on a yes. Every
-    # assertion is the player's answer over its socket, from outside.
-    with subtest("C-s in a window saves the queue again, and asks before writing over a changed file"):
+    # "SAVE THE QUEUE AGAIN" IN A DOOR. What the socket says of the queue's
+    # file (`queue_file`: never saved, the same, changed since, changed on
+    # the disk) is the engine's subtests'; this one is the doors' part of it:
+    # the shortcut in a window — sent as `LEADER Alt` sends it, since no key
+    # typed there runs one — saves the queue again, the mark the Queue's
+    # title draws goes, and over a file changed on the disk the window asks
+    # first, with the cursor born on "no", and writes over it only on a yes.
+    # Every assertion is the player's answer over its socket, from outside.
+    with subtest("the save-again shortcut in a window saves the queue, and asks before writing over a changed file"):
 
         def kept():
             return player({"ask": "look"})["queue_file"]["kept"]
@@ -1111,35 +1112,42 @@ pkgs.testers.runNixOSTest {
             "${ronoctua-shell}/bin/ronoctua-shell player"
         )
         await_windows(sock, 1, timeout=60)
+        door = int(machine.succeed("systemctl show -p MainPID --value queue-door").strip())
         # With no WM on Xvfb nobody has input focus, and the key would be lost.
         focus_compositor()
         machine.sleep(duration=timedelta(seconds=2))
 
-        # CHANGED SINCE ITS FILE — the mark appears — and `C-s` in the window
-        # saves it again: the mark goes.
+        # A KEY TYPED IS NOT THE SHORTCUT: `C-s` in the window leaves the mark.
         first = player({"ask": "queue"})["entries"][0]["id"]
         assert player({"ask": "remove", "id": first})["say"] == "done"
         settles("changed", "an entry taken off")
         press("ctrl+s")
-        settles("same", "C-s in the window")
+        stays("changed", "C-s typed in the window ran the shortcut LEADER Alt alone runs")
 
-        # THE FILE CHANGED ON THE DISK: `C-s` asks, "no" first — `RET` at once
-        # answers no, and nothing is written over — then `C-s`, `↓`, `RET`
-        # writes over it.
+        # CHANGED SINCE ITS FILE — the mark is up — and the shortcut saves it
+        # again: the mark goes.
+        shortcut(door, "player-save-queue-again")
+        settles("same", "the save-again shortcut in the window")
+
+        # THE FILE CHANGED ON THE DISK: the shortcut asks, "no" first — `RET`
+        # at once answers no, and nothing is written over — then the
+        # shortcut, `↓`, `RET` writes over it.
         said = player({"ask": "put", "what": ["${media}/tone.flac"], "once": False})
         assert said["say"] == "done", said
         settles("changed", "an entry added")
         machine.succeed("echo >> /root/door.rqueue")
-        press("ctrl+s", "Return")
+        shortcut(door, "player-save-queue-again")
+        press("Return")
         stays("changed", "a file changed on the disk was written over on the first RET")
-        press("ctrl+s", "Down", "Return")
+        shortcut(door, "player-save-queue-again")
+        press("Down", "Return")
         settles("same", "the yes of the window's question")
 
         machine.succeed("systemctl stop queue-door")
         stop_compositor("compositor-queue")
 
     # TWO SCREENS (`docs/PENDING.md`, the columns' "two screens of truth"):
-    # "Show on every screen" (`M` in a door, `player-every-screen`) opens one
+    # "Show on every screen" (`LEADER Alt x` in a door, `player-every-screen`) opens one
     # window per screen something is routed to — the door decides which
     # (`player_stage::everywhere`, from the screens it knows by name and the
     # routes of what plays) and starts `ronoctua-shell player maximized
@@ -1177,9 +1185,9 @@ pkgs.testers.runNixOSTest {
                            "change": {"what": "screens", "screens": screens}})
             assert said["say"] == "done", (clip, said)
 
-        # THE DOOR, and `M` pressed in it. `KillMode=process`: the windows it
-        # starts are its children in its unit, and stopping the door must not
-        # take them with it.
+        # THE DOOR, and its every-screen shortcut run in it.
+        # `KillMode=process`: the windows it starts are its children in its
+        # unit, and stopping the door must not take them with it.
         machine.succeed(
             "systemd-run --unit=every-door -p KillMode=process ${xvfb.env} "
             "--setenv=WAYLAND_DISPLAY=wayland-1 --setenv=XDG_RUNTIME_DIR=/run/user/0 --setenv=HOME=/root "
@@ -1190,8 +1198,8 @@ pkgs.testers.runNixOSTest {
         door = int(machine.succeed("systemctl show -p MainPID --value every-door").strip())
         # The door knows the screens by name once the compositor has told it.
         machine.sleep(duration=timedelta(seconds=3))
-        window = focus_compositor(0)
-        machine.succeed(f"DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key --window {window} shift+m")
+        focus_compositor(0)
+        shortcut(door, "player-every-screen")
         await_windows(sock, 3, timeout=60)
         said = machine.succeed("journalctl -u every-door --no-pager -o cat | tail -n 20")
         print(said)

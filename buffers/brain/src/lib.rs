@@ -1069,7 +1069,7 @@ impl State {
         } else {
             ronoctua_design::wide(&said)
         };
-        ronoctua_design::wide(&in_window(keys)) + ronoctua_design::GAP + phrase
+        taught_cells(keys) + ronoctua_design::GAP + phrase
     }
 
     /// How wide the page's own name comes out, MEASURED.
@@ -1238,8 +1238,9 @@ impl State {
                 );
             }
             row = rung.row;
-            // THE KEY AS IT IS TYPED HERE — see [`in_window`].
-            let wide = ronoctua_design::wide(&in_window(rung.keys));
+            // THE KEY AS IT IS REACHED — see [`taught_here`].
+            let wide = taught_cells(rung.keys);
+            let (alt, key) = taught_here(rung.keys);
             // THE SYSTEM'S OWN THREE TONES. `Role::Key` and `Role::Prose`
             // resolve to `text.subtle.strong` and `text.subtle.default` — the
             // two the minibuffer's hint line is drawn in, a hue family
@@ -1263,11 +1264,21 @@ impl State {
                 (_, false) => Role::Inert,
                 (false, true) => Role::Key,
             };
+            // THE GLYPH FOR `LEADER Alt`, in the key's own tone, and the key.
+            if alt {
+                pen.put(
+                    rung.row,
+                    Run::glyph(Icon::LeaderAlt)
+                        .playing(keys_role)
+                        .at(rung.at)
+                        .within(GLYPH_CELLS),
+                );
+            }
             pen.put(
                 rung.row,
-                Run::datum(&in_window(rung.keys))
+                Run::datum(key)
                     .playing(keys_role)
-                    .at(rung.at),
+                    .at(rung.at + if alt { GLYPH_CELLS } else { 0 }),
             );
             pen.put(
                 rung.row,
@@ -2354,8 +2365,22 @@ fn field_columns(columns: u16) -> Layout {
         .with(Column::fixed("label", 20, 2))
         .with(Column::fixed("value", 24, 1))
         .with(Column::fill("unit", 6))
+        .with(Column::fixed("alt", GLYPH_CELLS, 0))
         .with(Column::fixed("keys", 5, 3))
         .resolve()
+}
+
+/// A field row's key, as it is reached: the `LEADER Alt` glyph in its own
+/// column and the one key after it ([`taught_here`]).
+fn taught_in(row: &mut ronoctua_design::table::Row<'_, Wit>, keys: &str) {
+    let (alt, key) = taught_here(keys);
+    if alt {
+        row.put(
+            "alt",
+            Run::glyph(Icon::LeaderAlt).accent().within(GLYPH_CELLS),
+        );
+    }
+    row.put("keys", Run::datum(key).accent());
 }
 
 /// The columns of one of the module's page actions: what it is, and the key
@@ -2967,18 +2992,30 @@ impl State {
     }
 }
 
-/// The key a pair is typed as INSIDE this window: the chord.
+/// How a pair is REACHED, as this window teaches it: `(true, "r")` for the
+/// buffer's `, r` — `LEADER Alt` and the one key, drawn as the glyph
+/// ([`Icon::LeaderAlt`]) and the key — and `(false, keys)` for a key the page
+/// takes itself (`RET`, `Esc`, `Tab`).
 ///
-/// `, r` is the buffer's group behind the leader (`LEADER , r`, from the
-/// footer). In the buffer's own window the host takes `C-r` as `, r` — it puts
-/// the group in front — so `C-r` is what this header teaches: a comma is not a
-/// key anybody should type, and a bare letter is text, which a page must stay
-/// free to take one day.
-fn in_window(keys: &str) -> std::borrow::Cow<'_, str> {
+/// A window shortcut is `LEADER Alt` and one key, and nothing else (the
+/// owner's rule, 2026-11-04): no chord typed in here runs one — the host runs
+/// none — and a bare letter is text, which a page must stay free to take. The
+/// comma is the group the tap types for the person, never a key to teach.
+fn taught_here(keys: &str) -> (bool, &str) {
     keys.strip_prefix(", ")
-        .map_or(std::borrow::Cow::Borrowed(keys), |rest| {
-            std::borrow::Cow::Owned(format!("C-{rest}"))
-        })
+        .map_or((false, keys), |rest| (true, rest))
+}
+
+/// The cell the `LEADER Alt` glyph takes in front of its key: ONE, against
+/// the key, as the minibuffer's line draws it (`chrome::leader_alt_text`) —
+/// the icon's own two cells would leave a gap no other line has.
+const GLYPH_CELLS: u16 = 1;
+
+/// How wide a pair's notation is drawn — the glyph's cell too, for a pair
+/// `LEADER Alt` reaches ([`taught_here`]).
+fn taught_cells(keys: &str) -> u16 {
+    let (alt, key) = taught_here(keys);
+    ronoctua_design::wide(key) + if alt { GLYPH_CELLS } else { 0 }
 }
 
 /// Whether a click on a rung whose notation is `keys` does anything.
@@ -3111,14 +3148,14 @@ impl State {
                             Run::label(key::OFF).accent()
                         },
                     );
-                    row.put("keys", Run::datum(&in_window(", o")).accent());
+                    taught_in(&mut row, ", o");
                 }
             }
             Spot::Interval => {
                 row.put("label", Run::label(key::EVERY).names(true));
                 let days = task.interval_days.to_string();
                 row.put("value", Run::datum(&days).answers(true));
-                row.put("keys", Run::datum(&in_window(", i")).accent());
+                taught_in(&mut row, ", i");
                 // THE UNIT SITS AGAINST THE NUMBER, which is why its column
                 // is worked out here and drawn below rather than being put in
                 // a column of its own. In its own column it started where the
@@ -3134,12 +3171,13 @@ impl State {
                     let at = f.at
                         + u16::try_from(days.chars().count()).unwrap_or(1)
                         + ronoctua_design::GAP;
-                    // AND IT STOPS BEFORE THE KEY. A run placed by hand
+                    // AND IT STOPS BEFORE THE KEY — its glyph first. A run placed by hand
                     // inherits no budget, and with none it reaches the edge —
                     // straight through the column that says which key changes
                     // this row, and then through the bar beyond it.
                     let until = layout
-                        .field("keys")
+                        .field("alt")
+                        .or_else(|| layout.field("keys"))
                         .map_or_else(|| layout.ends(), |k| k.at)
                         .saturating_sub(ronoctua_design::GAP);
                     (at, until.saturating_sub(at).max(1))
@@ -3152,7 +3190,7 @@ impl State {
                     Run::label(&format!("brain-part-{}", part_word(task.part_of_day)))
                         .answers(true),
                 );
-                row.put("keys", Run::datum(&in_window(", w")).accent());
+                taught_in(&mut row, ", w");
             }
             Spot::Next => {
                 // THE LABEL NAMES WHAT THE VALUE IS, and the value is one of
@@ -3177,11 +3215,11 @@ impl State {
                 if let Some(doing) = self.doing_of(task) {
                     row.put("value", doing);
                 }
-                row.put("keys", Run::datum(&in_window(", r")).accent());
+                taught_in(&mut row, ", r");
             }
             Spot::Rehearse => {
                 row.put("label", Run::label(key::REHEARSE).names(true));
-                row.put("keys", Run::datum(&in_window(", e")).accent());
+                taught_in(&mut row, ", e");
             }
             Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {}
         }
@@ -4928,10 +4966,12 @@ mod tests {
     /// A KEY THE HEADER TEACHES WORKS WHERE IT IS TAUGHT.
     #[test]
     fn a_taught_sequence_works_typed_here() {
-        // THE HEADER TEACHES THE CHORD the host turns into the pair — and a
-        // bare letter is text, which reaches no command.
-        assert_eq!(in_window(", k"), "C-k");
-        assert_eq!(in_window("RET"), "RET");
+        // THE HEADER TEACHES HOW THE PAIR IS REACHED — `LEADER Alt` and the one
+        // key, the comma gone — and a bare letter is text, which reaches no
+        // command.
+        assert_eq!(taught_here(", k"), (true, "k"));
+        assert_eq!(taught_here("RET"), (false, "RET"));
+        assert_eq!(taught_cells(", k"), GLYPH_CELLS + 1);
         let mut plain = a_state();
         assert!(plain.act(Input::Character('k')).is_empty());
         assert!(!plain.keys_open);
@@ -5346,7 +5386,7 @@ mod tests {
             !keys.iter().any(|k| k == key::OFF),
             "it still reads as the person's own off"
         );
-        let switches = |data: &[String]| data.iter().filter(|d| **d == in_window(", o")).count();
+        let switches = |data: &[String]| data.iter().filter(|d| *d == taught_here(", o").1).count();
         assert_eq!(
             switches(&data),
             0,

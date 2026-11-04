@@ -5594,6 +5594,13 @@ impl View {
         Step::Changed
     }
 
+    /// Whether a question's picker is up — an owner, a group, a rename's
+    /// answer — which takes every key, a letter being what is typed into it.
+    #[must_use]
+    pub const fn is_picking(&self) -> bool {
+        self.picking.is_some()
+    }
+
     /// One key.
     ///
     /// The menu, when open, takes the key first: it is modal, and a key that

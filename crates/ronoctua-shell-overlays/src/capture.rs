@@ -486,6 +486,11 @@ fn surface_of(ui: &Ui) -> (f32, f32) {
 impl Content for Capture {
     type Hand = ();
 
+    /// THE CAPTURE IS NO APP: its keys are the ones that end it.
+    fn gates_keys(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         APP_ID
     }

@@ -573,19 +573,20 @@ pkgs.testers.runNixOSTest {
                 f"{what}\n" + machine.execute("journalctl -u calc --no-pager")[1]
             )
 
-        # THE KEYBOARD ON THE CALCULATOR, and its control typed: `C-f`.
+        # THE KEYBOARD ON THE CALCULATOR, and its control run as `LEADER Alt`
+        # runs it (`calc-float`; `C-f` typed there runs nothing).
         machine.succeed(
             f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[app_id=br.ronoctua.calc] focus'"
         )
-        focus_compositor()
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+f")
+        calc = windows_by_app_id(sock)["br.ronoctua.calc"]["pid"]
+        shortcut(calc, "calc-float")
         calc_floats(False, "the header's control did not put the calculator back in the layout")
 
         # AND AGAIN: it floats, at its row's size, in the middle of the room.
         machine.succeed(
             f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg '[app_id=br.ronoctua.calc] focus'"
         )
-        machine.succeed("DISPLAY=:99 ${pkgs.xdotool}/bin/xdotool key ctrl+f")
+        shortcut(calc, "calc-float")
         calc_floats(True, "the header's control did not float the calculator again")
         # AT THE SIZE AND PLACE THE RULE OPENED IT AT: the control and the
         # rule read one row of `floating.rs` and speak one unit. A pixel or
