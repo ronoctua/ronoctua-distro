@@ -147,6 +147,24 @@ in
     # THE KIOSK'S DOOR, in the base, wherever Chrome is wanted (above).
     environment.systemPackages = lib.mkIf config.ronoctua.distroApps.installed.chrome [ kioskEntry ];
 
+    # CHROME OPENS THE WEB WHERE IT IS INSTALLED, for `xdg-open` too. Nyxt
+    # (`nyxt.nix`, every profile) claims the same types, and `xdg-open` —
+    # what a notification, a terminal or any other program runs for a link —
+    # asks the `mimeapps.list` files and then the first `mimeinfo.cache` that
+    # names the type: the system's names Nyxt, and the parts' view, where
+    # Chrome is, has none. So the three types Chrome's own "make default"
+    # writes name it in `/etc/xdg`; where Chrome is not, Nyxt opens them, and
+    # before its part arrived every reader skips the missing entry. A choice
+    # in the person's own `~/.config/mimeapps.list` still wins.
+    xdg.mime = lib.mkIf config.ronoctua.distroApps.installed.chrome {
+      enable = true;
+      defaultApplications = lib.genAttrs [
+        "text/html"
+        "x-scheme-handler/http"
+        "x-scheme-handler/https"
+      ] (_: "google-chrome.desktop");
+    };
+
     # The portal is what a file dialog and a screen share go through on Wayland.
     # `xdg.portal` is already enabled by nix/modules/scroll.nix; this only adds the
     # GTK backend, which is the one Chrome talks to.

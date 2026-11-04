@@ -223,5 +223,12 @@ in
     # before it already held: 0,63 GiB added to either (644 MiB to the reduced
     # one, 642 to the full) — SBCL with its source and manual 374 MiB, CCL 93,
     # qlot 22, ECL 18, the libraries and their sources the rest.
+    #
+    # AND NYXT (2026-11-04), in both with no switch either: the registry's
+    # `base` group (`nix/modules/nyxt.nix`). Its program is an SBCL image of
+    # 2,4 GiB that downloads as 37 MB and stays compressed on the disk's zstd,
+    # so `nix path-info -S` of a full toplevel grows by ~2,5 GiB (measured
+    # against a built one) while the disk grows by far less; the minimal one
+    # also gains WebKitGTK and GStreamer (not measured).
   };
 }

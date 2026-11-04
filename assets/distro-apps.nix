@@ -113,6 +113,7 @@
     "mtr"
     "nix-tools"
     "nmap"
+    "nyxt"
     "onlyoffice"
     "orca-slicer"
     "oxipng"

@@ -1318,6 +1318,8 @@
         ./nix/modules/dev.nix
         ./nix/modules/nixpkgs-config.nix
         ./nix/modules/browser.nix
+        # Nyxt, in every profile (the `base` group of the registry).
+        ./nix/modules/nyxt.nix
         ./nix/modules/emacs.nix
         # VS Code, its telemetry off by policy, and the unit that records the
         # person's extensions into the list their belongings carry — a
