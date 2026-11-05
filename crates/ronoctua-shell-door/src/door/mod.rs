@@ -157,6 +157,15 @@ pub struct Ui {
     /// so their RELEASE is kept from it too: a window that acts on the release
     /// must not hear one whose press it never heard.
     pub(crate) barred: Vec<u32>,
+    /// Whether an `ESC` is being handled — its press, its release, the Back
+    /// button or a click on the header's `ESC` — in a window that confirms
+    /// closing ([`Content::confirms_closing`]), so a close it asks for is
+    /// asked first ([`Ui::closing`]).
+    pub(crate) esc_in_hand: EscInHand,
+    /// Until when a second `ESC` closes the window ([`Ui::closing`]). Its own
+    /// field, and not "the sentence is still on the line": many windows clear
+    /// the message on every key.
+    close_armed: Option<std::time::Instant>,
     /// Whether the compositor has CONFIGURED the surface this door draws to —
     /// the toolkit acks a configure before the door hears it — which is what
     /// lets a buffer be committed to it. See [`Ui::may_draw`].
@@ -446,6 +455,45 @@ impl Ui {
         self.ask_paint();
     }
 
+    /// WHETHER THE WINDOW MAY CLOSE NOW — asked by every close an `ESC` can
+    /// reach, BEFORE it does anything ([`Content::confirms_closing`]).
+    ///
+    /// The owner's rule (2026-11-05): `ESC` closes every window, but never by
+    /// accident. The first `ESC` that would close it says so instead — "`ESC`
+    /// again closes this window", for [`crate::echo::Echo::Confirm`] — and
+    /// answers `false`; a second `ESC` before that time is up answers `true`.
+    /// A close that no `ESC` asked for (the compositor's, a command's, an
+    /// action that finished) is always `true`.
+    ///
+    /// # Why it is asked first, and not undone after
+    ///
+    /// Some windows act before they close — a preview finished, a search let
+    /// go, a buffer's last layer walked back — and a `quit` taken back after
+    /// that would leave a window that already did half of closing.
+    pub fn closing(&mut self) -> bool {
+        match self.esc_in_hand {
+            EscInHand::Away => return true,
+            // A HELD `ESC` NEVER CLOSES: its repeats are not a second press,
+            // and the first one already said what a second one would do.
+            EscInHand::Held => return false,
+            EscInHand::Pressed => {}
+        }
+        let now = std::time::Instant::now();
+        if self.close_armed.take().is_some_and(|until| now < until) {
+            return true;
+        }
+        let class = crate::echo::Echo::Confirm;
+        self.close_armed = Some(now + class.lasts());
+        let esc = ronoctua_keymap::Key::parse("ESC")
+            .map(|k| crate::chrome::key_text(&k))
+            .unwrap_or_default();
+        let said = self
+            .texts
+            .t_with(crate::key::DOOR_ESC_AGAIN, &[("keys", &esc)]);
+        self.say_for(said, class);
+        false
+    }
+
     /// The timer of sentence `mine` fired: it is taken off the line if it is
     /// still the one there — `true` when it was, and a frame is owed.
     pub fn expire(&mut self, mine: u64, text: &str) -> bool {
@@ -679,6 +727,8 @@ impl Ui {
             pointer_on: None,
             repeating: false,
             barred: Vec::new(),
+            esc_in_hand: EscInHand::Away,
+            close_armed: None,
             // A DETACHED WINDOW IS ONE ON THE SCREEN, sized and configured.
             configured: true,
             size_owed: false,
@@ -799,7 +849,9 @@ impl Ui {
         // hidden (its line 0 is its own control line), so there `top()` is 1
         // and the list still starts under it.
         if self.hinted.is_hidden() {
-            self.hinted.top() + self.hinted.rows()
+            // …BUT A SENTENCE OR A QUESTION STILL TAKES IT, while it is there
+            // (`chrome::Carries::speaks`).
+            self.hinted.top() + self.hinted.rows() + u16::from(self.hinted.speaks())
         } else {
             FIRST_OF_LIST + self.hinted.top() + self.hinted.rows()
         }
@@ -967,6 +1019,9 @@ impl crate::region::Doorway for Ui {
             .unwrap_or_else(|| crate::wake::Wake::new(|| {}))
     }
     fn close(&mut self) {
+        if !self.closing() {
+            return;
+        }
         self.quit = true;
         self.ask_paint();
     }
@@ -1775,6 +1830,14 @@ pub trait Content: Sized + 'static {
         false
     }
 
+    /// THE SENTENCE ABOUT THE SHORTCUT `id`, under the pointer on the header
+    /// — `cmd-<id>` for a command of the registry, `about-<id>` for a key of a
+    /// view (`chrome::hint_sentence`). The buffer host answers what its
+    /// component declared, whose `cmd-<id>` is the short word on the line.
+    fn explains(&self, id: &'static str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        crate::chrome::hint_sentence(id, texts)
+    }
+
     /// RUNS ONE OF THIS WINDOW'S SHORTCUTS, by the command id it declared in
     /// [`Content::shortcuts`] — what a key or a click on the shortcut (on the
     /// header, the minibuffer line or the `LEADER Alt` region) asks the window
@@ -1919,6 +1982,15 @@ pub trait Content: Sized + 'static {
     /// reporting the mouse — answers `false`, and the press reaches
     /// [`Content::pointer`] as any other button's does.
     fn back_is_esc(&self) -> bool {
+        true
+    }
+
+    /// Whether a close that an `ESC` asks for is CONFIRMED first — a second
+    /// `ESC` within [`crate::echo::Echo::Confirm`] ([`Ui::closing`]). `true`,
+    /// every window; `false` where `ESC` closes no window: the terminal's is
+    /// the program's, and the lock, the capture, the resizer and the column
+    /// are not windows a hand closes.
+    fn confirms_closing(&self) -> bool {
         true
     }
 
@@ -2241,6 +2313,8 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             pointer_on: None,
             repeating: false,
             barred: Vec::new(),
+            esc_in_hand: EscInHand::Away,
+            close_armed: None,
             // NOTHING SAID YET: the surface was just made.
             configured: false,
             size_owed: false,
@@ -2811,6 +2885,12 @@ impl<C: Content> Door<C> {
             // first line is asked for before the frame and the wrap is only
             // known inside it. It answers once — see `fold::Fold::held`.
             if self.ui.hinted.settled() {
+                // AND LINE 0 CAME OR WENT in a window with no header: the list
+                // moved a line, and a window that lays itself out from its
+                // size is given it again.
+                if self.ui.hinted.line_zero_moved() {
+                    self.take_the_size();
+                }
                 self.paint();
             }
         }
@@ -3232,7 +3312,18 @@ impl<C: Content> Door<C> {
         );
         for act in acts {
             match act {
-                Some(act) => self.act(act),
+                // A SHORTCUT THAT IS ONE OF THE WINDOW'S OWN COMMANDS runs as
+                // one (`Content::run_shortcut`), the order the footer's
+                // replay keeps (`Door::run_or_replay_shortcut`); the key is
+                // pressed only when it is not — a buffer's `⌥r` is its
+                // command, and a replayed `C-r` would reach no component.
+                Some((id, act)) => {
+                    if !id.is_some_and(|id| self.content.run_shortcut(&mut self.ui, id)) {
+                        self.act(act);
+                    } else {
+                        self.ui.ask_paint();
+                    }
+                }
                 None => self.went_back(),
             }
         }
@@ -3329,8 +3420,56 @@ fn typed_into<C: Content>(
         }
         return;
     }
+    ui.esc_in_hand = EscInHand::of(
+        is_esc(&event, mods),
+        ui.repeating,
+        content.confirms_closing(),
+    );
     content.typed(ui, &event, mods);
+    ui.esc_in_hand = EscInHand::Away;
     follow_into(content, ui);
+}
+
+/// Whether this key is the way back: `ESC`, or `C-g`, its twin in this
+/// notation (`chrome::stays_direct`).
+fn is_esc(event: &KeyEvent, mods: Modifiers) -> bool {
+    event.keysym == Keysym::Escape
+        || (mods.ctrl && !mods.alt && !mods.logo && matches!(event.keysym, Keysym::g))
+}
+
+/// A key came up, for the window — with the `ESC` in hand while it is one, so
+/// a window that closes on the release (the buffer host's tap) asks first too
+/// ([`Ui::closing`]).
+pub(crate) fn released_into<C: Content>(content: &mut C, ui: &mut Ui, event: &KeyEvent) {
+    ui.esc_in_hand = EscInHand::of(
+        event.keysym == Keysym::Escape,
+        false,
+        content.confirms_closing(),
+    );
+    content.released(ui, event);
+    ui.esc_in_hand = EscInHand::Away;
+}
+
+/// Whether the key being handled is an `ESC` a close must confirm
+/// ([`Ui::closing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EscInHand {
+    /// Not an `ESC`, or a window that closes on it at once.
+    Away,
+    /// An `ESC` pressed — or its release, the Back button, a click on it.
+    Pressed,
+    /// A REPEAT of a held `ESC`: it closes nothing.
+    Held,
+}
+
+impl EscInHand {
+    const fn of(esc: bool, repeating: bool, confirms: bool) -> Self {
+        match (esc && confirms, repeating) {
+            (false, _) => Self::Away,
+            (true, false) => Self::Pressed,
+            (true, true) => Self::Held,
+        }
+    }
 }
 
 /// A key while the line asks — [`Ui::line_key`], and what the window is
@@ -3388,7 +3527,7 @@ fn act_into<C: Content>(
             // once it comes up, because held it chooses a state — heard
             // the press alone: the Back button did nothing over a buffer
             // window, and left its `Esc` held for the next key.
-            content.released(ui, &event);
+            released_into(content, ui, &event);
         }
         crate::chrome::Act::Run(id) => ui.tell_the_footer(id, None),
         // A NOTIFICATION'S BUTTON is the footer's minibuffer's, by the record
@@ -3439,11 +3578,12 @@ fn pointer_into<C: Content>(
     selection: &mut Option<crate::text_select::Selection>,
     events: &[PointerEvent],
     seat: impl FnOnce(&mut Ui),
-) -> Vec<Option<crate::chrome::Act>> {
+) -> Vec<Option<(Option<&'static str>, crate::chrome::Act)>> {
     use smithay_client_toolkit::seat::pointer::PointerEventKind;
     let mut rest: Vec<PointerEvent> = Vec::with_capacity(events.len());
-    // WHAT THE HEADER'S CONTROLS WERE ASKED — `None` is the Back button.
-    let mut acts: Vec<Option<crate::chrome::Act>> = Vec::new();
+    // WHAT THE HEADER'S CONTROLS WERE ASKED, with the shortcut's id — `None`
+    // is the Back button.
+    let mut acts: Vec<Option<(Option<&'static str>, crate::chrome::Act)>> = Vec::new();
     for e in events {
         // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
         // is the door's (`chrome::Hinted::light_at`).
@@ -3533,7 +3673,7 @@ fn pointer_into<C: Content>(
             && button == LEFT_BUTTON
             && let Some(act) = ui.hinted.press_under(e.position.0, e.position.1)
         {
-            acts.push(Some(act));
+            acts.push(Some((ui.hinted.under(e.position.0, e.position.1), act)));
             continue;
         }
         // THE BACK BUTTON, over any part of the window — see `went_back_into`
@@ -3686,7 +3826,7 @@ impl<C: Content> Detached<C> {
         let its = self.content.header_keys();
         self.ui.header_took(its, event.keysym, false);
         if !self.ui.let_go_of_a_barred(event.raw_code) {
-            self.content.released(&mut self.ui, &event);
+            released_into(&mut self.content, &mut self.ui, &event);
         }
     }
 
@@ -3724,13 +3864,17 @@ impl<C: Content> Detached<C> {
         );
         for act in acts {
             match act {
-                Some(act) => act_into(
-                    &mut self.content,
-                    &mut self.ui,
-                    &mut self.selection,
-                    &self.painted,
-                    act,
-                ),
+                Some((id, act)) => {
+                    if !id.is_some_and(|id| self.content.run_shortcut(&mut self.ui, id)) {
+                        act_into(
+                            &mut self.content,
+                            &mut self.ui,
+                            &mut self.selection,
+                            &self.painted,
+                            act,
+                        );
+                    }
+                }
                 None => went_back_into(
                     &mut self.content,
                     &mut self.ui,
@@ -4209,6 +4353,122 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FAILS IF: with no header the list does not make room for line 0 while
+    /// a sentence is on it, or keeps the room once it is gone.
+    #[test]
+    fn with_no_header_the_list_moves_down_while_a_sentence_is_up() {
+        let t = std::rc::Rc::clone(&ui().texts);
+        let mut ui = ui();
+        ui.hinted.hide_header(true);
+        assert_eq!(ui.first_of_list(), 0);
+        let said = [crate::chrome::Piece::said("it was saved")];
+        let _ = ui
+            .hinted
+            .head(&said, crate::chrome::Carries::Said, 1, 40, &t);
+        assert_eq!(
+            ui.first_of_list(),
+            1,
+            "the sentence took the list's first line"
+        );
+        let _ = ui.hinted.head(&[], crate::chrome::Carries::Keys, 1, 40, &t);
+        assert_eq!(ui.first_of_list(), 0);
+    }
+
+    /// A window that closes on `ESC` as most do (`Errand::Close`, which is
+    /// `Doorway::close`) — what the confirmation's test drives.
+    struct Closer {
+        confirms: bool,
+    }
+
+    impl Content for Closer {
+        type Hand = ();
+
+        fn app_id(&self) -> &'static str {
+            "test.closer"
+        }
+
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+
+        fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
+            if event.keysym == Keysym::Escape {
+                crate::region::Doorway::close(ui);
+            }
+        }
+
+        fn confirms_closing(&self) -> bool {
+            self.confirms
+        }
+
+        fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+            None
+        }
+    }
+
+    /// FAILS IF: one `ESC` closes a window — the owner's rule (2026-11-05) is
+    /// a sentence first, and a second `ESC` within its time — or the second
+    /// does not close it, or one after the time is up does, or the repeats of
+    /// a HELD `ESC` close it, or an `ESC` the question took counts, or the
+    /// Back button skips the sentence, or a window that does not confirm (the
+    /// terminal's kind) asks anyway.
+    #[test]
+    fn esc_closes_a_window_only_when_pressed_twice() {
+        let esc = ronoctua_keymap::Key::parse("ESC").expect("ESC");
+        let mut d = Detached::new(ui(), Closer { confirms: true });
+        d.press_on_the_keyboard(esc);
+        assert!(!d.ui.quit, "one ESC closed the window");
+        let said = d.ui.texts.t_with(
+            crate::key::DOOR_ESC_AGAIN,
+            &[("keys", &crate::chrome::key_text(&esc))],
+        );
+        assert_eq!(d.ui.message.as_deref(), Some(said.as_str()));
+        d.press_on_the_keyboard(esc);
+        assert!(d.ui.quit, "the second ESC did not close it");
+
+        // LATE: the time is up, and the next `ESC` only says it again.
+        let mut d = Detached::new(ui(), Closer { confirms: true });
+        d.press_on_the_keyboard(esc);
+        d.ui.close_armed = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        d.press_on_the_keyboard(esc);
+        assert!(!d.ui.quit, "an ESC after the time was up closed the window");
+        d.press_on_the_keyboard(esc);
+        assert!(d.ui.quit);
+
+        // HELD: its repeats close nothing, and the next press still does.
+        let mut d = Detached::new(ui(), Closer { confirms: true });
+        d.press_on_the_keyboard(esc);
+        d.ui.repeating = true;
+        d.press_on_the_keyboard(esc);
+        d.press_on_the_keyboard(esc);
+        d.ui.repeating = false;
+        assert!(!d.ui.quit, "a held ESC closed the window by its repeats");
+        d.press_on_the_keyboard(esc);
+        assert!(d.ui.quit);
+
+        // THE QUESTION'S `ESC` lets the question go, and arms nothing.
+        let mut d = Detached::new(ui(), Closer { confirms: true });
+        d.ui.ask(crate::line::Line::new("test-question", false, None));
+        d.press_on_the_keyboard(esc);
+        assert!(d.ui.asking.is_none());
+        d.press_on_the_keyboard(esc);
+        assert!(!d.ui.quit, "the question's ESC counted as the first");
+
+        // THE BACK BUTTON IS `ESC`, sentence and all.
+        let standard = ui();
+        let back = press(&standard, BACK_BUTTON);
+        let mut d = Detached::new(standard, Closer { confirms: true });
+        d.pointer(std::slice::from_ref(&back));
+        assert!(!d.ui.quit, "the Back button closed the window at once");
+        d.pointer(std::slice::from_ref(&back));
+        assert!(d.ui.quit, "the Back button twice did not close it");
+
+        // A WINDOW THAT DOES NOT CONFIRM closes at the first.
+        let mut d = Detached::new(ui(), Closer { confirms: false });
+        d.press_on_the_keyboard(esc);
+        assert!(d.ui.quit);
     }
 
     /// A window with three shortcuts and a field of nothing — what the gate's

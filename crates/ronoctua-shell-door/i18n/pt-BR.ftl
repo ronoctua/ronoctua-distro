@@ -83,6 +83,7 @@ brain-proceed = começar agora
 
 # O que as portas dizem quando um daemon recusou, e o que a janela não faz.
 door-no-footer = Não foi possível chegar ao rodapé para rodar isto
+door-esc-again = { $keys } de novo fecha esta janela
 notif-bluetooth-pairing-body = Abra o Bluetooth para responder.
 notif-action-bluetooth-accept = Sim, parear
 notif-action-bluetooth-refuse = Não, recusar

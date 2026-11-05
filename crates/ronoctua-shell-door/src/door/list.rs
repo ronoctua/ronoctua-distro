@@ -46,7 +46,7 @@ pub fn header_about(
     about: Option<String>,
     hint: impl FnOnce(&Ui) -> Vec<crate::chrome::Piece>,
 ) {
-    let (pieces, hinting) = line_zero(ui, about, hint);
+    let (pieces, carries) = line_zero(ui, about, hint);
     let pieces = match title {
         Some(t) => t.before(pieces),
         None => pieces,
@@ -55,33 +55,39 @@ pub fn header_about(
     let texts = ui.texts.clone();
     canvas
         .spans
-        .extend(ui.hinted.head(&pieces, hinting, margin, columns, &texts));
+        .extend(ui.hinted.head(&pieces, carries, margin, columns, &texts));
     // AND THE DRAWER'S OWN BAR, when it is open and the wrap ran past it.
     canvas.over.extend(ui.hinted.bar(ui.frame(0)));
 }
 
-/// What line 0 carries, and whether its pieces are shortcuts: the question
-/// being typed, else the last order's message, else what the row under the
-/// pointer has to add, else the keys.
+/// What line 0 carries, and what kind of thing it is
+/// ([`crate::chrome::Carries`]): the question being typed, else the last
+/// order's message, else what the row under the pointer has to add, else the
+/// keys.
 pub fn line_zero(
     ui: &mut Ui,
     about: Option<String>,
     hint: impl FnOnce(&Ui) -> Vec<crate::chrome::Piece>,
-) -> (Vec<crate::chrome::Piece>, bool) {
+) -> (Vec<crate::chrome::Piece>, crate::chrome::Carries) {
+    use crate::chrome::Carries;
     // ITS `ESC` AND `RET` ARE SHORTCUTS: marked where they land, lit under
     // the pointer, pressed by a click (invariant 19).
     if let Some(pieces) = the_question(ui) {
-        return (pieces, true);
+        return (pieces, Carries::Question);
     }
     // A SENTENCE TAKES THIS LINE, and then there is no shortcut on it to
     // point at. Decided BEFORE the list is measured, because the
     // explanation's row comes out of that measurement.
-    match ui.message.clone().or(about) {
+    if let Some(text) = ui.message.clone() {
+        ui.hinted.say(None);
+        return (vec![crate::chrome::Piece::said(text)], Carries::Said);
+    }
+    match about {
         Some(text) => {
             ui.hinted.say(None);
-            (vec![crate::chrome::Piece::said(text)], false)
+            (vec![crate::chrome::Piece::said(text)], Carries::About)
         }
-        None => (hint(ui), true),
+        None => (hint(ui), Carries::Keys),
     }
 }
 
@@ -288,6 +294,38 @@ pub fn paint<C: Content>(c: &mut C, ui: &mut Ui, canvas: &mut Canvas<'_>) {
     body(ui, canvas, &rows, &takes, controls.as_deref());
 }
 
+/// What ONE pointer event did to the header: the drawer dragged or its
+/// control pressed (`took`), and the sentence about the shortcut under the
+/// pointer, which is the window's to say ([`Content::explains`]) — `said`,
+/// when it changed. The half of [`pointer`] every door shares, the buffer
+/// host's included, which lays its own rows out and calls this first.
+pub fn header_pointer<C: Content>(c: &C, ui: &mut Ui, e: &PointerEvent) -> (bool, bool) {
+    let head = ui.frame(0);
+    let (x, y) = e.position;
+    match e.kind {
+        PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+            if ui.hinted.dragged(head, y) {
+                return (true, false);
+            }
+            let texts = ui.texts.clone();
+            let now = ui.hinted.under(x, y).and_then(|id| c.explains(id, &texts));
+            (false, ui.hinted.say(now))
+        }
+        PointerEventKind::Leave { .. } => {
+            ui.hinted.let_go();
+            (false, ui.hinted.say(None))
+        }
+        PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
+            ui.hinted.let_go();
+            (false, false)
+        }
+        PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
+            (ui.hinted.pressed(head, x, y), false)
+        }
+        _ => (false, false),
+    }
+}
+
 /// What one pointer did to the header, the bar and the list.
 ///
 /// The order is the rule every door of this shape kept: the header's own
@@ -335,18 +373,16 @@ fn pointer_here<C: Content>(
     let mut dragged: Option<usize> = None;
     let mut explained = false;
     for e in events {
+        // THE HEADER'S HALF FIRST — see `header_pointer`.
+        let (took, said) = header_pointer(c, ui, e);
+        explained |= said;
+        if took {
+            header = true;
+            continue;
+        }
         match e.kind {
-            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                if ui.hinted.dragged(head, e.position.1) {
-                    header = true;
-                    continue;
-                }
-                let texts = ui.texts.clone();
-                let now = ui
-                    .hinted
-                    .under(e.position.0, e.position.1)
-                    .and_then(|id| crate::chrome::hint_sentence(id, &texts));
-                explained |= ui.hinted.say(now);
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } =>
+            {
                 #[allow(clippy::cast_possible_truncation)]
                 if hand.dragging {
                     dragged = Some(crate::chrome::list_offset_at(
@@ -364,8 +400,6 @@ fn pointer_here<C: Content>(
                 }
             }
             PointerEventKind::Leave { .. } => {
-                ui.hinted.let_go();
-                explained |= ui.hinted.say(None);
                 // AND THE DRAG ENDS WITH THE POINTER: a `dragging` left true
                 // makes the next ENTER, with no button held, jump the list to
                 // wherever the pointer came in.
@@ -374,14 +408,9 @@ fn pointer_here<C: Content>(
                 hand.x_under_pointer = None;
             }
             PointerEventKind::Release { button, .. } if button == LEFT_BUTTON => {
-                ui.hinted.let_go();
                 hand.dragging = false;
             }
             PointerEventKind::Press { button, .. } if button == LEFT_BUTTON => {
-                if ui.hinted.pressed(head, e.position.0, e.position.1) {
-                    header = true;
-                    continue;
-                }
                 #[allow(clippy::cast_possible_truncation)]
                 if crate::chrome::on_the_list_bar(
                     scroll,

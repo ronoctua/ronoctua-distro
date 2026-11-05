@@ -22,6 +22,15 @@ use std::collections::HashMap;
 /// key and the only place that could disagree about this one's spelling.
 pub const LANGUAGE: &str = "-language";
 
+/// The reserved phrase key that carries how `LEADER Alt` is spelt, for the `⌥`
+/// a component draws in its own rows. The host answers it from the leader's
+/// label; these drivers have no leader, and answer with the production one.
+pub const LEADER_ALT: &str = "-leader-alt";
+
+/// What [`LEADER_ALT`] is answered with here: the label of a production
+/// machine, so a driven frame measures what an installed one shows.
+pub const LEADER_ALT_SPELT: &str = "SUPER ALT";
+
 /// The languages this system ships, and the ones every driver measures in.
 ///
 /// # Why it is read and not written
@@ -99,6 +108,13 @@ pub fn hand_phrases(
             });
             continue;
         }
+        if k == LEADER_ALT {
+            said.push(ronoctua_protocol::Phrase {
+                key: k.clone(),
+                text: LEADER_ALT_SPELT.to_owned(),
+            });
+            continue;
+        }
         let Some(text) = table.get(k) else {
             anyhow::bail!(
                 "`{}` declares the phrase `{k}`, which {language}.ftl does not have.\n\
@@ -147,6 +163,12 @@ pub fn keys_of(list: &ronoctua_protocol::DisplayList) -> Vec<(String, u16)> {
                 max_width,
                 ..
             } => Some((k.clone(), *max_width)),
+            // THE WINDOW'S TITLE, for the header the host draws: named by the
+            // frame, and measured by nobody here — `0` is "to the edge".
+            ronoctua_protocol::Command::Heading {
+                title: ronoctua_protocol::Text::Key(k),
+                ..
+            } => Some((k.clone(), 0)),
             _ => None,
         })
         .collect()

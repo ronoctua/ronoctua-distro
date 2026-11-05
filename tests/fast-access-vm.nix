@@ -307,7 +307,9 @@ pkgs.testers.runNixOSTest {
         said = wait_for_words(lambda: read_window(sock, FLOAT), ["4"], "footer")
         print(f"OCR: {said!r}")
         pid = floated["pid"]
-        key("Escape")
+        # TWICE: the first `ESC` that would close a window says so, and the
+        # second, within its time, closes it (`Ui::closing`).
+        key("Escape", "Escape")
         machine.wait_until_fails(f"kill -0 {pid}", timeout=timedelta(seconds=30))
 
     with subtest("the window opens tiled, and finds a name and what a file says"):
@@ -326,8 +328,14 @@ pkgs.testers.runNixOSTest {
         type_words("lighthouse")
         wait_for_words(lambda: read_window(sock, TILED), ["notes"], "search")
 
-    with subtest("Esc closes the window, and its process with it"):
+    with subtest("Esc twice closes the window, and its process with it"):
+        # PROVES the owner's rule (2026-11-05): the first `ESC` keeps the
+        # window and says, on its line 0 — drawn although the window wears no
+        # header — that a second one closes it; the second does.
         pid = windows_by_app_id(sock)[TILED]["pid"]
+        key("Escape")
+        wait_for_words(lambda: read_window(sock, TILED), ["again"], "search")
+        machine.succeed(f"kill -0 {pid}")
         key("Escape")
         machine.wait_until_fails(f"kill -0 {pid}", timeout=timedelta(seconds=30))
 
@@ -339,7 +347,7 @@ pkgs.testers.runNixOSTest {
         door("search-kept", "harvest")
         wait_for_window(sock, TILED, "search-kept")
         pid = windows_by_app_id(sock)[TILED]["pid"]
-        key("Escape")
+        key("Escape", "Escape")
         # PUT AWAY: out of the tree, alive, and listening.
         machine.wait_until_fails(
             f"SCROLLSOCK={sock} ${scroll}/bin/scrollmsg -t get_tree | grep -F '\"{TILED}\"'",

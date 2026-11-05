@@ -133,7 +133,6 @@ impl From<&wit::Context> for ronoctua_protocol::Context {
                 large: ctx.heights.large,
                 huge: ctx.heights.huge,
             },
-            hide_header: ctx.hide_header,
         }
     }
 }
@@ -176,8 +175,26 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
         let anchor = self
             .foot_from()
             .map(|foot_from| wit::Command::Anchor(wit::AnchorCommand { foot_from }));
+        // AND WHAT THE HOST'S HEADER CARRIES: the window's title and the pairs
+        // taught now (`Screen::heading`, `Screen::teach`).
+        let heading = self.title().map(|(icon, key)| {
+            wit::Command::Heading(wit::HeadingCommand {
+                icon: *icon,
+                title: wit::Text::Key(key.clone()),
+            })
+        });
+        let taught = self.taught().iter().map(|t| {
+            wit::Command::Taught(wit::TaughtCommand {
+                keys: t.keys.clone(),
+                says: t.says.clone(),
+                about: t.about.clone(),
+                control: t.control,
+            })
+        });
         anchor
             .into_iter()
+            .chain(heading)
+            .chain(taught)
             .chain(self.parts().map(|part| match part {
                 Frame::Ran(line, run) => wit::Command::Text(wit::TextCommand {
                     line,

@@ -245,7 +245,6 @@ impl Instance {
         columns: u16,
         lines: u16,
         heights: ronoctua_protocol::Heights,
-        hide_header: bool,
     ) -> Result<ronoctua_protocol::DisplayList> {
         use wasmtime::component::Val;
 
@@ -270,7 +269,6 @@ impl Instance {
                     ("huge".into(), Val::U16(heights.huge)),
                 ]),
             ),
-            ("hide-header".into(), Val::Bool(hide_header)),
         ]);
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[ctx], &mut out)
@@ -310,7 +308,7 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// The component does not export `ronoctua:buffer/view@0.1.0` with the three
+    /// The component does not export `ronoctua:buffer/view@0.2.0` with the three
     /// functions — which is a contract refusal, and not a detail: a buffer with no
     /// `event` would accept keys and never react.
     pub fn open(&self, component: &wasmtime::component::Component) -> Result<Instance> {
@@ -321,8 +319,8 @@ impl Runtime {
             .context("could not instantiate the component")?;
 
         let vision = instance
-            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.1.0")
-            .context("the component does not export `ronoctua:buffer/view@0.1.0`")?;
+            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.2.0")
+            .context("the component does not export `ronoctua:buffer/view@0.2.0`")?;
         let export = |store: &mut wasmtime::Store<State>, name: &str| {
             instance
                 .get_export_index(store, Some(&vision), name)
@@ -368,7 +366,7 @@ impl Runtime {
         lines: u16,
         heights: ronoctua_protocol::Heights,
     ) -> Result<ronoctua_protocol::DisplayList> {
-        self.open(component)?.render(columns, lines, heights, false)
+        self.open(component)?.render(columns, lines, heights)
     }
 
     fn instantiate_with(
@@ -1987,6 +1985,36 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
             "anchor" => list.push(prot::Command::Anchor {
                 foot_from: u16_de(field("foot-from")),
             }),
+            // WHAT THE HOST'S HEADER CARRIES — drawn there, never in the
+            // buffer's rows. See `prot::Command::Heading` and `Taught`.
+            "heading" => {
+                let icon = match field("icon") {
+                    Some(Val::Enum(n)) => n.clone(),
+                    _ => continue,
+                };
+                let title = match field("title") {
+                    Some(Val::Variant(case, inside)) => match (case.as_str(), inside.as_deref()) {
+                        ("key", Some(Val::String(s))) => prot::Text::key(s.clone()),
+                        ("icon", Some(Val::Enum(n))) => prot::Text::icon(n.clone()),
+                        (_, Some(Val::String(s))) => prot::Text::datum(s.clone()),
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+                list.push(prot::Command::Heading { icon, title });
+            }
+            "taught" => {
+                let string = |name: &str| match field(name) {
+                    Some(Val::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                list.push(prot::Command::Taught {
+                    keys: string("keys"),
+                    says: string("says"),
+                    about: string("about"),
+                    control: matches!(field("control"), Some(Val::Bool(true))),
+                });
+            }
             otherwise => {
                 tracing::warn!(
                     command = otherwise,

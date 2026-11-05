@@ -1951,6 +1951,17 @@ pub fn local_binding(notation: &str) -> Option<String> {
         .map(|rest| alloc::format!("{LOCAL_PREFIX} {rest}"))
 }
 
+/// The ONE KEY after the local leader in a buffer's binding — `, c` is `c`,
+/// `, SPC` is `SPC` — which is the key after `LEADER Alt` for that buffer's
+/// window. The one answer for the host that draws its header, the footer that
+/// lists it and every component that marks a row with it. `None` for a
+/// sequence that is not one key under [`LOCAL_PREFIX`].
+#[must_use]
+pub fn local_key(sequence: &str) -> Option<&str> {
+    let rest = sequence.strip_prefix(LOCAL_PREFIX)?.strip_prefix(' ')?;
+    (!rest.is_empty() && !rest.contains(' ')).then_some(rest)
+}
+
 /// The id every buffer's BASE state carries.
 ///
 /// A constant and not a convention: `Esc` returns to it, the modeline draws it
@@ -2400,7 +2411,40 @@ pub enum Command {
         /// The first line that is anchored.
         foot_from: u16,
     },
+    /// THE WINDOW'S TITLE, for the HOST to draw on the header it draws for
+    /// every window (`chrome::Title`), before what the buffer teaches — never
+    /// in the buffer's own rows, which start under that header. At most one
+    /// a frame ([`DisplayList::validate`]).
+    ///
+    /// Like [`Command::Anchor`], a fact about the frame and not a thing in it:
+    /// it claims no row and no column.
+    Heading {
+        /// The glyph, by its token's name.
+        icon: String,
+        /// The title: a text key, or data (a task's own name).
+        title: Text,
+    },
+    /// ONE PAIR THE BUFFER TEACHES NOW, for the host's header — in the order
+    /// sent, with `ESC` put first by the host as on every window. A buffer's
+    /// shortcut line is the system's because the system draws it
+    /// (`the-shortcut-line-is-the-systems`).
+    Taught {
+        /// A local sequence (`, r`, which is `LEADER Alt r`, [`local_key`]) or
+        /// a key that stays direct (`RET`, `ESC`, `TAB`, `<up>`…).
+        keys: String,
+        /// The short word's text key.
+        says: String,
+        /// The sentence under the pointer's text key; empty for none.
+        about: String,
+        /// Whether a click on it does anything now — a pair taught but not a
+        /// control is drawn inert.
+        control: bool,
+    },
 }
+
+/// How many pairs a buffer may teach in one frame: a header is a line and a
+/// drawer, never a page ([`DisplayList::validate`]).
+pub const TAUGHT_MOST: usize = 48;
 
 impl Command {
     /// On which row the command draws. Used by the host for clipping.
@@ -2416,6 +2460,8 @@ impl Command {
             | Self::Paragraph { line, .. } => *line,
             // The line it anchors FROM, which is the only line it knows.
             Self::Anchor { foot_from } => *foot_from,
+            // THE HOST'S HEADER, above every row of the buffer's.
+            Self::Heading { .. } | Self::Taught { .. } => 0,
         }
     }
 
@@ -2455,6 +2501,8 @@ impl Command {
             | Self::Selection { .. }
             | Self::Bar { .. }
             | Self::Anchor { .. }
+            | Self::Heading { .. }
+            | Self::Taught { .. }
             | Self::Paragraph { .. } => None,
         }
     }
@@ -2497,6 +2545,28 @@ impl DisplayList {
     ///
     /// Some command requires a capability the descriptor did not declare.
     pub fn validate(&self, capabilities: &[Capability]) -> Result<(), String> {
+        // A HEADER IS A LINE AND A DRAWER: one title, and a bounded count of
+        // pairs — what the host interns and lays out every frame.
+        let headings = self
+            .commands
+            .iter()
+            .filter(|c| matches!(c, Command::Heading { .. }))
+            .count();
+        let taught = self
+            .commands
+            .iter()
+            .filter(|c| matches!(c, Command::Taught { .. }))
+            .count();
+        if headings > 1 {
+            return Err(format!(
+                "the buffer gave its window {headings} titles in one frame"
+            ));
+        }
+        if taught > TAUGHT_MOST {
+            return Err(format!(
+                "the buffer taught {taught} keys in one frame, past the {TAUGHT_MOST} a header holds"
+            ));
+        }
         for c in &self.commands {
             let Some(required) = c.requires() else {
                 continue;
@@ -2607,6 +2677,9 @@ impl DisplayList {
             // to remember: `nothing_is_covered` skips a span one row tall or
             // less, and `nothing_overlaps` looks only at text.
             Command::Anchor { foot_from } => (*foot_from, 0),
+            // NOR DOES WHAT THE HOST'S HEADER CARRIES: it is drawn above the
+            // buffer's rows, never in them.
+            Command::Heading { .. } | Command::Taught { .. } => (0, 0),
         }
     }
 
@@ -2678,7 +2751,7 @@ impl DisplayList {
                 },
             ),
             Command::Bar { column, .. } => (*column, 1),
-            Command::Anchor { .. } => (0, 0),
+            Command::Anchor { .. } | Command::Heading { .. } | Command::Taught { .. } => (0, 0),
             Command::Paragraph {
                 column,
                 columns: wide,
@@ -2738,6 +2811,8 @@ impl DisplayList {
             Command::Anchor { foot_from } => {
                 format!("the frame anchored to the foot from row {foot_from}")
             }
+            Command::Heading { icon, .. } => format!("the window's title, by `{icon}`"),
+            Command::Taught { keys, says, .. } => format!("`{keys}` taught as `{says}`"),
         }
     }
 
@@ -2770,6 +2845,8 @@ impl DisplayList {
             | Command::Svg { .. }
             | Command::Rule { .. }
             | Command::Anchor { .. }
+            | Command::Heading { .. }
+            | Command::Taught { .. }
             | Command::Bar { .. } => false,
         }
     }
@@ -2912,7 +2989,7 @@ impl DisplayList {
                 // AN ANCHOR HAS NO INK, so it has no colour to check. Named
                 // rather than swept into a `_`: a primitive that DOES paint
                 // may not be added without this list being read.
-                Command::Anchor { .. } => None,
+                Command::Anchor { .. } | Command::Heading { .. } | Command::Taught { .. } => None,
             })
             .collect();
         v.sort_unstable();
@@ -2934,11 +3011,6 @@ pub struct Context {
     pub lines: u16,
     /// How many cells of height each scale occupies.
     pub heights: Heights,
-    /// The "no header" mode is on: a buffer that draws a header of its own
-    /// draws NONE and lays its content from row 0 — its keys move to the
-    /// footer's minibuffer (`ronoctua_shell_kit::header`, `LEADER Alt`). A
-    /// buffer with no header of its own ignores it.
-    pub hide_header: bool,
 }
 
 /// How many **cells** of height each scale occupies.
@@ -3272,6 +3344,12 @@ mod tests {
         }
         assert_eq!(local_binding("C-c").as_deref(), Some(", c"));
         assert_eq!(local_binding("RET"), None);
+        // AND BACK: the one key after `LEADER Alt`, and nothing else.
+        assert_eq!(local_key(", c"), Some("c"));
+        assert_eq!(local_key(", SPC"), Some("SPC"));
+        for not_one in ["RET", ",c", ", ", ", a b", "C-c"] {
+            assert_eq!(local_key(not_one), None, "{not_one:?}");
+        }
         // ONE MEANING A KEY: no notation is listed twice.
         let mut seen: Vec<&str> = TRANSFERS_KEYS.iter().map(|(k, _)| *k).collect();
         seen.sort_unstable();

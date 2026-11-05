@@ -95,9 +95,9 @@ pkgs.testers.runNixOSTest {
         journal = machine.succeed("journalctl -u buffer --no-pager")
         # A FULL FRAME: the note, the list's six items and the form's two
         # fields — the reference app for several keyboards. The title is not
-        # counted: it is the window's header, which the distro ships hidden
-        # (`Screen::heading` draws nothing at row 0 under `hide_header`). A
-        # floor and not a count, because the number is the app's to change;
+        # counted: it is the HOST's header, which the component only declares
+        # (`Screen::heading`) and the distro ships hidden. A floor and not a
+        # count, because the number is the app's to change;
         # what it guards is a `render` that came back EMPTY, with everything
         # below then passing over a blank window.
         import re as _re
@@ -133,9 +133,9 @@ pkgs.testers.runNixOSTest {
     with subtest("the component's key came out TRANSLATED on screen"):
         # The whole chain: component -> DisplayList -> i18n -> tokens -> wgpu ->
         # pixel. The needle is a BODY row, never the title: the title
-        # (`example-title`) is the window's header, which the distro ships
-        # hidden — `Screen::heading` draws nothing at row 0 under
-        # `hide_header` — so a needle there asks for a row that is not drawn.
+        # (`example-title`) is the host's header, which the distro ships
+        # hidden — the component only declares it (`Screen::heading`) — so a
+        # needle there asks for a row that is not drawn.
         # A row of the list is drawn with the header shown or hidden, so the
         # verdict does not hang on that default.
         w, h, x, y = window_box(sock, "br.ronoctua.example")
@@ -385,9 +385,9 @@ pkgs.testers.runNixOSTest {
         # defect that reached the owner's screen last time — a surface that was
         # built, wired and tested, and drew nothing.
         #
-        # THE TITLE IS NOT ASKED FOR. `format-title` is the window's header,
-        # which the distro ships hidden (`Screen::heading` draws nothing at row
-        # 0 under `hide_header`), so it is not on the pixel at all. The
+        # THE TITLE IS NOT ASKED FOR. `format-title` is the host's header,
+        # which the distro ships hidden (the component only declares it,
+        # `Screen::heading`), so it is not on the pixel at all. The
         # translated key is asked of the body instead, on this same reading:
         # the technical line (`format-tech-whole`) further down.
         assert "/dev/" in read_back, (

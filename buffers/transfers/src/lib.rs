@@ -172,32 +172,6 @@ fn keymap() -> Vec<Binding> {
         .collect()
 }
 
-/// How a key of the table is REACHED in this window: `(true, "c")` for `C-c`
-/// and `(true, "SPC")` for the space — `LEADER Alt` and the one key, drawn as
-/// the glyph ([`Icon::LeaderAlt`]) and the key — and `(false, notation)` for
-/// what moves and chooses (the arrows, `RET`, `TAB`).
-fn taught_here(notation: &str) -> (bool, &str) {
-    if notation == "SPC" {
-        return (true, notation);
-    }
-    match notation.strip_prefix("C-") {
-        Some(letter) if letter.chars().count() == 1 => (true, letter),
-        _ => (false, notation),
-    }
-}
-
-/// The cell the `LEADER Alt` glyph takes in front of its key: ONE, against
-/// the key, as the minibuffer's line draws it — the icon's own two cells would
-/// leave a gap no other line has.
-const GLYPH_CELLS: u16 = 1;
-
-/// How wide a key of the table is drawn — the glyph's cell too
-/// ([`taught_here`]).
-fn taught_cells(notation: &str) -> u16 {
-    let (alt, key) = taught_here(notation);
-    ronoctua_design::wide(key) + if alt { GLYPH_CELLS } else { 0 }
-}
-
 /// The commands the keymap names, each once.
 fn commands() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -208,24 +182,6 @@ fn commands() -> Vec<String> {
     }
     out
 }
-
-/// Every phrase the foot may teach, asked of the host so the pairs can be
-/// MEASURED — a phrase reserved blind is a gap the eye reads as a defect.
-fn taught_phrases() -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for (_, id) in TRANSFERS_KEYS.iter().chain(TRANSFERS_ANSWER) {
-        if !out.iter().any(|o| o == id) {
-            out.push((*id).to_owned());
-        }
-    }
-    out
-}
-
-/// How wide a phrase is reserved before the host has said it.
-const TEACH_CELLS: u16 = 13;
-
-/// A separator between two pairs of the foot: the air, and the dot.
-const SEPARATOR_CELLS: u16 = ronoctua_design::GAP + ICON;
 
 /// Which screen is on.
 ///
@@ -251,15 +207,6 @@ struct GiveUp {
     yes: bool,
 }
 
-/// One pair of the foot, as it was DRAWN: where, and what a click on it runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Pair {
-    at: u16,
-    cells: u16,
-    keys: &'static str,
-    id: &'static str,
-}
-
 /// Everything this buffer remembers between calls.
 struct State {
     queue: Queue,
@@ -280,13 +227,8 @@ struct State {
     list_lines: u16,
     /// The line the question's `no` was drawn on; `yes` is the one under it.
     answers_at: Option<u16>,
-    /// The foot's pairs as the last frame drew them, and its line.
-    foot: Vec<Pair>,
-    foot_line: u16,
     /// The cell the pointer is on, if it is on one.
     hover: ronoctua_design::Hovers,
-    /// The words the host resolved for the phrases the foot teaches.
-    phrases: ronoctua_design::Phrases,
 }
 
 impl State {
@@ -300,10 +242,7 @@ impl State {
             list_top: None,
             list_lines: 0,
             answers_at: None,
-            foot: Vec::new(),
-            foot_line: 0,
             hover: ronoctua_design::Hovers::new(),
-            phrases: ronoctua_design::Phrases::empty(),
         }
     }
 }
@@ -825,9 +764,8 @@ impl State {
     /// The jobs, one per row.
     fn list(&mut self, screen: &mut Frame) {
         let mut line = screen.heading(Icon::Transfer, key::TITLE);
-        // The last line belongs to the hint or to the question, and the one
-        // above it is left blank so a row never touches it.
-        let foot = screen.lines().saturating_sub(1);
+        // THE WINDOW'S END: the keys are the host's header now, above it.
+        let foot = screen.lines();
 
         if self.queue.jobs.is_empty() {
             self.list_top = None;
@@ -919,7 +857,7 @@ impl State {
     /// fit, which a row cannot promise.
     fn detail(&mut self, screen: &mut Frame) {
         let mut line = screen.heading(Icon::List, key::DETAIL);
-        let foot = screen.lines().saturating_sub(1);
+        let foot = screen.lines();
         self.list_top = None;
         self.list_lines = 0;
 
@@ -1008,7 +946,7 @@ impl State {
     /// line.
     fn question(&mut self, screen: &mut Frame, q: GiveUp) {
         let mut line = screen.heading(Icon::Transfer, key::TITLE);
-        let foot = screen.lines().saturating_sub(1);
+        let foot = screen.lines();
         self.list_top = None;
         self.list_lines = 0;
         self.answers_at = None;
@@ -1046,35 +984,6 @@ impl State {
         }
     }
 
-    /// The foot's pairs, laid out from the left: every one that fits, WHOLE,
-    /// and where it went — the ONE walk the drawing and the click both read.
-    fn lay_foot(&self, columns: u16) -> Vec<Pair> {
-        let edge = columns.saturating_sub(1);
-        let mut out: Vec<Pair> = Vec::new();
-        let mut column = 0;
-        for (keys, id) in self.taught() {
-            let said = self.phrases.or(id, "");
-            let phrase = if said.is_empty() {
-                TEACH_CELLS
-            } else {
-                ronoctua_design::wide(&said)
-            };
-            let cells = taught_cells(keys) + ronoctua_design::GAP + phrase;
-            let lead = if out.is_empty() { 0 } else { SEPARATOR_CELLS };
-            if column + lead + cells > edge {
-                break;
-            }
-            out.push(Pair {
-                at: column + lead,
-                cells,
-                keys,
-                id,
-            });
-            column += lead + cells;
-        }
-        out
-    }
-
     /// The keys the foot teaches — the question's answer, or what this page
     /// and the row under the cursor allow: `transfers_taught`, the answer the
     /// footer's panel reads too.
@@ -1088,56 +997,21 @@ impl State {
             .collect()
     }
 
-    /// The last line: the keys this page answers to, every one a CONTROL —
-    /// the notation lights under the pointer, and a click does what the key
-    /// does.
-    fn foot(&mut self, screen: &mut Frame) {
-        let line = screen.lines().saturating_sub(1);
-        let pairs = self.lay_foot(screen.columns());
-        for (n, pair) in pairs.iter().enumerate() {
-            if n > 0 {
-                screen.put(
-                    line,
-                    Run::glyph(Icon::Separator)
-                        .playing(Role::Faint)
-                        .at(pair.at - SEPARATOR_CELLS + ronoctua_design::GAP),
-                );
-            }
-            let lit = self
-                .hover
-                .first(|(column, at)| {
-                    at == line && column >= pair.at && column < pair.at + pair.cells
-                })
-                .is_some();
-            let wide = taught_cells(pair.keys);
-            let (alt, key) = taught_here(pair.keys);
-            let role = if lit { Role::KeyLit } else { Role::Key };
-            // THE GLYPH FOR `LEADER Alt`, in the key's own tone, and the key.
-            if alt {
-                screen.put(
-                    line,
-                    Run::glyph(Icon::LeaderAlt)
-                        .playing(role)
-                        .at(pair.at)
-                        .within(GLYPH_CELLS),
-                );
-            }
-            screen.put(
-                line,
-                Run::datum(key)
-                    .playing(role)
-                    .at(pair.at + if alt { GLYPH_CELLS } else { 0 }),
-            );
-            screen.put(
-                line,
-                Run::label(pair.id)
-                    .playing(if lit { Role::ProseLit } else { Role::Prose })
-                    .at(pair.at + wide + ronoctua_design::GAP)
-                    .within(pair.cells.saturating_sub(wide + ronoctua_design::GAP)),
-            );
+    /// WHAT THIS PAGE TEACHES, declared for the header the HOST draws over
+    /// the window (`Screen::teach`): the question's answer, or what the page
+    /// and the row under the cursor allow (`transfers_taught`, the answer the
+    /// footer's panel reads too). A chord of the table is its local sequence
+    /// (`, c` — `LEADER Alt c`), the space `, SPC`, and what moves and chooses
+    /// (`RET`, `TAB`, the arrows) stays the key. The short word is the id, and
+    /// the sentence under the pointer the command's own (`cmd-<id>`), as the
+    /// panel's line says them.
+    fn declare(&self, screen: &mut Frame) {
+        for (notation, id) in self.taught() {
+            let keys = local_binding(notation)
+                .or_else(|| (notation == "SPC").then(|| format!("{LOCAL_PREFIX} SPC")))
+                .unwrap_or_else(|| notation.to_owned());
+            screen.teach(&keys, id, &format!("cmd-{id}"), true);
         }
-        self.foot = pairs;
-        self.foot_line = line;
     }
 
     /// The job under the cursor.
@@ -1331,10 +1205,10 @@ impl Guest for Component {
             // the queue nor forwards a demand, and this buffer is an empty
             // screen with a keymap that does nothing.
             capabilities: vec![Capability::Transfers],
-            // THE PHRASES THE FOOT TEACHES, asked so its pairs can be MEASURED.
-            // Everything else this buffer shows goes out as a key and the host
-            // translates it when it draws.
-            phrases: taught_phrases(),
+            // NO PHRASES: everything this buffer shows goes out as a key and
+            // the host translates it when it draws — its keys included, on the
+            // header the host draws.
+            phrases: Vec::new(),
         }
     }
 
@@ -1346,10 +1220,10 @@ impl Guest for Component {
                 (None, Face::List) => s.list(&mut screen),
                 (None, Face::Detail) => s.detail(&mut screen),
             }
-            // ONE PLACE, and after both faces: the last line says the same
-            // thing whichever of them is up, and a face that forgot to draw it
+            // ONE PLACE, and after both faces: the host's header says the same
+            // thing whichever of them is up, and a face that forgot to teach
             // would be a window with no way out written on it.
-            s.foot(&mut screen);
+            s.declare(&mut screen);
             screen.finish_wit()
         })
     }
@@ -1435,14 +1309,8 @@ impl State {
                     vec![Effect::Close]
                 }
             }
-            // THE WORDS FOR THE KEYS THE FOOT TEACHES, so its pairs can be
-            // measured. They arrive once, before the first frame.
-            Input::Phrases(said) => {
-                s.phrases = ronoctua_design::Phrases::of(
-                    said.into_iter().map(|p| (p.key, p.text)).collect(),
-                );
-                vec![Effect::Redraw]
-            }
+            // NO PHRASE IS ASKED FOR (`describe`), so none is kept.
+            Input::Phrases(_) => Vec::new(),
             // THE POINTER AT REST, and the two gestures that move the window.
             Input::Hover(p) => {
                 // PER CURSOR: `p.seat` says which hand, and each keeps its own cell.
@@ -1488,19 +1356,7 @@ impl State {
     /// A click: a pair of the foot does what its key does; a row, or an
     /// answer, is selected by the FIRST click and taken by the SECOND — its
     /// `RET` (invariant 19), the footer panel's rule too.
-    fn clicked(&mut self, line: u16, column: u16) -> Vec<Effect> {
-        if line == self.foot_line
-            && let Some(pair) = self
-                .foot
-                .iter()
-                .find(|p| column >= p.at && column < p.at + p.cells)
-                .copied()
-        {
-            return match pair.id {
-                "transfers-answer" => self.answer(),
-                id => self.run(id),
-            };
-        }
+    fn clicked(&mut self, line: u16, _column: u16) -> Vec<Effect> {
         if let (Some(q), Some(at)) = (self.asking, self.answers_at) {
             let yes = match line.checked_sub(at) {
                 Some(0) => false,
@@ -1555,7 +1411,6 @@ mod tests {
             columns,
             lines,
             heights: heights(),
-            hide_header: false,
         }
     }
 
@@ -1615,7 +1470,7 @@ mod tests {
             (None, Face::List) => s.list(&mut screen),
             (None, Face::Detail) => s.detail(&mut screen),
         }
-        s.foot(&mut screen);
+        s.declare(&mut screen);
         screen
     }
 
@@ -1753,34 +1608,20 @@ mod tests {
         }
     }
 
-    /// THE HEADING IS A GLYPH AND A TITLE, AND THERE IS NO RULE.
-    ///
-    /// This buffer drew one — a `Command::Rule` at `line + 1` — and it was one
-    /// of the three answers to "what closes a heading" that the design crate
-    /// exists to end. What separates a title from its content is whitespace.
+    /// THE WINDOW'S TITLE IS THE HOST'S: the heading declares the glyph and
+    /// the title for the header the host draws, draws nothing in the window's
+    /// own rows — no glyph, no title, no rule — and keeps no row for it.
     #[test]
-    fn the_heading_is_a_glyph_and_a_title_and_nothing_else() {
+    fn the_title_is_declared_for_the_hosts_header() {
         let mut screen = Frame::of(&context(80, 24));
         let content = screen.heading(Icon::Transfer, key::TITLE);
         let out = screen.finish_wit();
-        assert_eq!(out.len(), 2, "a glyph and a title, and no more");
+        assert_eq!(content, 0, "the rows begin under the host's header");
+        assert_eq!(out.len(), 1, "the title, declared, and nothing drawn");
         assert!(
-            !out.iter().any(|c| matches!(c, Command::Rule(_))),
-            "a rule appeared under a heading"
+            matches!(&out[0], Command::Heading(h) if matches!(&h.title, Text::Key(k) if k == key::TITLE)),
+            "the title was not declared"
         );
-        assert!(
-            out.iter()
-                .any(|c| matches!(c, Command::Text(t) if matches!(t.content, Text::Icon(_)))),
-            "no glyph"
-        );
-        assert!(
-            out.iter()
-                .any(|c| matches!(c, Command::Text(t) if matches!(t.content, Text::Key(_)))),
-            "no title"
-        );
-        // The air is equal on both sides, and the title's box is what `Heights`
-        // says it is — never one row.
-        assert_eq!(content, AIR + heights().normal + AIR);
     }
 
     /// NOTHING LEAKS, at every width there is, in all three tables.
@@ -2041,9 +1882,6 @@ mod tests {
             bound.contains(&format!("{LOCAL_PREFIX} SPC")),
             "the pause has no key"
         );
-        assert_eq!(taught_here("C-c"), (true, "c"));
-        assert_eq!(taught_here("SPC"), (true, "SPC"));
-        assert_eq!(taught_here("RET"), (false, "RET"));
         let mut typed = State::fresh();
         typed.receive(Queue {
             jobs: vec![job(1, Stage::Running, 1, 10)],
@@ -2072,11 +1910,12 @@ mod tests {
         assert_eq!(s.face, Face::Detail);
     }
 
-    /// FAILS IF: a pair of the foot stops being a control — a click on it
-    /// not doing what its key does — or the foot teaches what the row does
-    /// not allow.
+    /// FAILS IF: the header the HOST draws is not taught what the row allows —
+    /// in the panel's order, each chord as its local sequence and the space as
+    /// `, SPC`, so `LEADER Alt` and one key reach it — or the buffer still
+    /// draws a line of keys of its own.
     #[test]
-    fn the_foot_is_the_keys_and_every_pair_is_a_click() {
+    fn the_header_is_taught_what_the_row_allows() {
         let mut s = State::fresh();
         s.receive(Queue {
             jobs: vec![job(1, Stage::Running, 1, 10)],
@@ -2084,8 +1923,13 @@ mod tests {
         let ctx = context(110, 24);
         let mut screen = Frame::of(&ctx);
         s.list(&mut screen);
-        s.foot(&mut screen);
-        let ids: Vec<&str> = s.foot.iter().map(|p| p.id).collect();
+        s.declare(&mut screen);
+        let taught: Vec<(&str, &str)> = screen
+            .taught()
+            .iter()
+            .map(|t| (t.keys.as_str(), t.says.as_str()))
+            .collect();
+        let ids: Vec<&str> = taught.iter().map(|(_, id)| *id).collect();
         assert_eq!(
             ids,
             [
@@ -2095,9 +1939,21 @@ mod tests {
                 "transfers-sweep"
             ]
         );
-        let cancel = s.foot[2];
-        s.clicked(s.foot_line, cancel.at);
-        assert_eq!(s.asking, Some(GiveUp { id: 1, yes: false }));
+        assert!(taught.contains(&(", SPC", "transfers-pause")), "{taught:?}");
+        for (keys, id) in &taught {
+            let bound = keymap().iter().any(|b| b.keys == *keys);
+            assert!(
+                bound || !keys.starts_with(LOCAL_PREFIX),
+                "{keys} ({id}) is taught and not bound"
+            );
+        }
+        assert!(
+            !screen
+                .finish_wit()
+                .iter()
+                .any(|c| matches!(c, Command::Text(t) if matches!(t.content, ronoctua_design::types::Text::Icon(Icon::LeaderAlt)))),
+            "the buffer drew a key of its own"
+        );
     }
 
     /// `Effect` is a WIT variant and `wit-bindgen` gives it `Clone` and a

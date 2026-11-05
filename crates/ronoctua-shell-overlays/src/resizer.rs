@@ -1289,6 +1289,11 @@ impl Content for Curtain {
         false
     }
 
+    /// No confirmation (`Ui::closing`): the resizer's curtains are a mode, not a window.
+    fn confirms_closing(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         APP_ID
     }

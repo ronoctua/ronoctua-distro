@@ -719,8 +719,8 @@ mod tests {
         assert_eq!(w.about_the_pointer(&ui).as_deref(), Some(said.as_str()));
 
         let hint = |ui: &Ui| w.view.hint(&ui.texts);
-        let (pieces, hinting) = crate::door::list::line_zero(&mut ui, Some(said.clone()), hint);
-        assert!(!hinting);
+        let (pieces, carries) = crate::door::list::line_zero(&mut ui, Some(said.clone()), hint);
+        assert!(!carries.presses());
         assert_eq!(pieces.len(), 1);
         assert_eq!(pieces[0].text, said);
 
@@ -730,8 +730,8 @@ mod tests {
 
         ui.message = None;
         ui.ask(Line::new(RENAME, false, None));
-        let (pieces, hinting) = crate::door::list::line_zero(&mut ui, Some(said), hint);
-        assert!(hinting, "the question's ESC and RET are clicks");
+        let (pieces, carries) = crate::door::list::line_zero(&mut ui, Some(said), hint);
+        assert!(carries.presses(), "the question's ESC and RET are clicks");
         assert!(pieces.iter().any(|p| p.id == Some("line-answer")));
     }
 

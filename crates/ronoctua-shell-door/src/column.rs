@@ -1746,6 +1746,11 @@ impl<T: Tenant> Content for Column<T> {
         false
     }
 
+    /// No confirmation (`Ui::closing`): the column is chrome, not a window a hand closes.
+    fn confirms_closing(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         self.tenant.app_id()
     }

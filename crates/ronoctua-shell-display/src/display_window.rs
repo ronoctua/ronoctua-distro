@@ -408,6 +408,11 @@ impl Display {
     /// question is still standing — which is the one case where nothing has
     /// been queued yet.
     fn leave(&mut self, ui: &mut Ui) {
+        // ASKED BEFORE ANYTHING IS PUT BACK: an `ESC` that would close says
+        // so, and the second closes (`Ui::closing`) — a held one never does.
+        if !ui.closing() {
+            return;
+        }
         if let Some(h) = self.screens.take() {
             let standing = self
                 .view

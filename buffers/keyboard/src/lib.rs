@@ -704,6 +704,9 @@ impl State {
                 Level::Unit(_) => key::UNIT,
             };
             let mut line = screen.heading(Icon::Keyboard, heading);
+            // EVERY KEY WORKS ON EVERY SCREEN, so the host's header teaches
+            // them all (`Screen::teach_keymap`).
+            screen.teach_keymap(KEYMAP);
 
             // CLONED, because the drawing asks the state where its window is
             // and that answer is remembered where it is measured — see
@@ -1097,9 +1100,10 @@ impl State {
                     Level::List if s.cursor == 0 => vec![Effect::KeyboardMode(s.other_mode())],
                     Level::List => vec![],
                 },
-                // `Esc` GOES BACK ONE LEVEL and never closes: the key one
-                // presses by reflex to leave anything at all must not destroy
-                // the buffer.
+                // `Esc` GOES BACK ONE LEVEL, and on the list it closes the
+                // window — never at the first press: the key one presses by
+                // reflex to leave anything at all must not destroy the buffer,
+                // so the host asks for a second (`Ui::closing`).
                 Input::Cancel => match &s.level {
                     // AND IT COMES BACK TO THE KEYBOARD IT WAS ON, found by
                     // id: the list may have moved while somebody was inside.
@@ -1122,7 +1126,9 @@ impl State {
                         s.cursor = at.map_or(0, |a| a + 1);
                         vec![Effect::Redraw]
                     }
-                    Level::List => vec![],
+                    // NOWHERE TO GO BACK TO: `Esc` closes the window, as it
+                    // closes every window — and the host asks first.
+                    Level::List => vec![Effect::Close],
                 },
                 Input::Command(id) => match id.as_str() {
                     "keyboard-next" => {
@@ -1191,7 +1197,6 @@ mod tests {
                 large: 2,
                 huge: 2,
             },
-            hide_header: false,
         }
     }
 
@@ -1401,7 +1406,9 @@ mod tests {
     #[test]
     fn the_wheel_moves_the_window_and_not_the_cursor() {
         let mut s = a_state();
-        drawn(&mut s, 10, 80);
+        // SHORT ENOUGH that the list does not fit — the title is the host's
+        // header now, and takes none of these rows.
+        drawn(&mut s, 6, 80);
         let room = usize::from(s.list_lines);
         assert!(room < 9, "the window has to be smaller than the list");
         let before = s.cursor;

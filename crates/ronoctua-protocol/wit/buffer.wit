@@ -4,7 +4,7 @@
 // that every future buffer gets to use, and invariant 11 lives
 // precisely off what is NOT here: there is no Wayland import, no access to
 // tokens by value, no translation.
-package ronoctua:buffer@0.1.0;
+package ronoctua:buffer@0.2.0;
 
 interface types {
     // THE COLOUR ENUM IS GENERATED, and comes from `assets/tokens/colors.nix`.
@@ -298,9 +298,37 @@ interface types {
         foot-from: u16,
     }
 
+    // THE WINDOW'S TITLE, for the header the HOST draws over every window —
+    // glyph and words, before what the buffer teaches. Never drawn in the
+    // buffer's own rows, which begin under that header; at most one a frame.
+    // Like `anchor`, it claims no row and no column.
+    record heading-command {
+        icon: icon,
+        title: text,
+    }
+
+    // ONE PAIR THE BUFFER TEACHES NOW, for that header, in the order sent —
+    // the host puts `ESC` first, as on every window, and draws, lights,
+    // explains and clicks them with the one machinery every window has. A
+    // buffer's shortcut line is the system's because the system draws it.
+    //
+    // `keys` is a local sequence (`, r` — `LEADER Alt r`) or a key that stays
+    // direct (`RET`, `ESC`, `TAB`, `<up>`…); `says` the short word's text key
+    // and `about` the sentence under the pointer's (empty for none), both
+    // declared in the descriptor's `phrases`; `control` is false for a pair
+    // taught but doing nothing now, drawn inert.
+    record taught-command {
+        keys: string,
+        says: string,
+        about: string,
+        control: bool,
+    }
+
     variant command {
         text(text-command),
         anchor(anchor-command),
+        heading(heading-command),
+        taught(taught-command),
         paragraph(paragraph-command),
         rule(band-command),
         selection(band-command),
@@ -1792,17 +1820,13 @@ interface types {
         huge: u16,
     }
 
+    // The window's size in cells, and what each scale costs. NOT whether the
+    // window wears its header: the header is the HOST's (`heading-command`,
+    // `taught-command`), and the buffer's rows begin under it whatever it is.
     record context {
         columns: u16,
         lines: u16,
         heights: heights,
-        // THE "NO HEADER" MODE is on — the person asked for every window to
-        // give up its top line (`ronoctua_shell_kit::header`). A buffer that
-        // draws a header of its own (a glyph, a name, its taught keys) must
-        // then draw NONE and lay its content from row 0: the keys move to the
-        // footer's minibuffer, where `LEADER Alt` surfaces them. A buffer with
-        // no header of its own ignores it.
-        hide-header: bool,
     }
 
     // Where the pointer touched, in CELLS of the buffer's grid — never in pixels.

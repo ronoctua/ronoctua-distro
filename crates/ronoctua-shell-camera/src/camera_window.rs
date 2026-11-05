@@ -263,7 +263,11 @@ impl CameraWindow {
         match errand {
             Errand::Nothing => {}
             Errand::Close => {
-                ui.quit = true;
+                // ASKED FIRST: an `ESC` that would close says so, and the
+                // second closes (`Ui::closing`).
+                if ui.closing() {
+                    ui.quit = true;
+                }
                 return;
             }
             Errand::Run(id) => {
@@ -1009,17 +1013,23 @@ impl Content for CameraWindow {
         // mouse button does to it.
         let texts = ui.texts.clone();
         let question = crate::door::list::the_question(ui);
-        let (pieces, hinting) = match (question, &ui.message, self.button_under) {
+        let (pieces, carries) = match (question, &ui.message, self.button_under) {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
-            (Some(q), _, _) => (q, true),
-            (None, Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
-            (None, None, Some(id)) => (camera::about_button(id, &texts), false),
-            (None, None, None) => (camera::hint(&texts), true),
+            (Some(q), _, _) => (q, crate::chrome::Carries::Question),
+            (None, Some(t), _) => (
+                vec![crate::chrome::Piece::said(t.clone())],
+                crate::chrome::Carries::Said,
+            ),
+            (None, None, Some(id)) => (
+                camera::about_button(id, &texts),
+                crate::chrome::Carries::About,
+            ),
+            (None, None, None) => (camera::hint(&texts), crate::chrome::Carries::Keys),
         };
         let columns = ui.columns;
         canvas
             .spans
-            .extend(ui.hinted.head(&pieces, hinting, margin, columns, &texts));
+            .extend(ui.hinted.head(&pieces, carries, margin, columns, &texts));
 
         // THE STATUS LINE, above the buttons: what is rolling, and what is wrong.
         let status_line = bl.saturating_sub(1);

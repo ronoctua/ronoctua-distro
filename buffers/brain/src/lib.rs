@@ -146,14 +146,12 @@ mod key {
     pub const DO_BACK: &str = "brain-do-back";
     pub const DO_PANE: &str = "brain-do-pane";
     pub const DO_CHANGE: &str = "brain-do-change";
-    pub const DO_KEYS: &str = "brain-do-keys";
 
     // ---- and what each of them does, under the pointer ----------------
     pub const ABOUT_OPEN: &str = "about-brain-do-open";
     pub const ABOUT_PANE: &str = "about-brain-do-pane";
     pub const ABOUT_CHANGE: &str = "about-brain-do-change";
     pub const ABOUT_BACK: &str = "about-brain-do-back";
-    pub const ABOUT_KEYS: &str = "about-brain-keys";
     pub const ABOUT_ACT: &str = "about-brain-act";
     pub const ABOUT_DISMISS: &str = "about-brain-dismiss";
     pub const ABOUT_SNOOZE: &str = "about-brain-snooze";
@@ -186,7 +184,6 @@ const KEYMAP: &[(&str, &str)] = &[
     (", i", "brain-interval"),
     (", w", "brain-window"),
     (", o", "brain-switch"),
-    (", k", "brain-keys"),
     (", n", "brain-act"),
     (", x", "brain-dismiss"),
     (", z", "brain-snooze"),
@@ -196,23 +193,6 @@ const KEYMAP: &[(&str, &str)] = &[
 
 /// One thing the header teaches: a notation, and the key of what it does.
 type Teach = (&'static str, &'static str);
-
-/// WHERE ONE TAUGHT PAIR WAS LAID, in the header's own cells.
-///
-/// The ladder is walked once ([`State::ladder`]) and read three times: the
-/// height counts these, the drawing paints them, and the pointer hits them.
-#[derive(Debug, Clone, Copy)]
-struct Rung {
-    row: u16,
-    /// The first cell of the notation.
-    at: u16,
-    /// The notation, the air and the phrase.
-    cells: u16,
-    /// The keys it teaches, which is also how it is acted on.
-    keys: &'static str,
-    /// The key of the phrase beside them.
-    says: &'static str,
-}
 
 /// What the HOME page answers to, in the order it teaches them.
 ///
@@ -224,33 +204,27 @@ struct Rung {
 /// Opening a task comes first because it is how the page is used.
 const HOME_TEACHES: &[Teach] = &[
     ("RET", key::DO_OPEN),
-    ("Tab", key::DO_PANE),
+    ("TAB", key::DO_PANE),
     (", r", "cmd-brain-run"),
     (", e", "cmd-brain-rehearse"),
     (", l", "cmd-brain-log"),
     (", o", "cmd-brain-switch"),
-    (", k", key::DO_KEYS),
 ];
 
 /// And what the LOG's page answers to: the way back, the key that is also the
 /// way back, and the rest of the keys.
-const LOG_TEACHES: &[Teach] = &[
-    ("Esc", key::DO_BACK),
-    (", l", "cmd-brain-log"),
-    (", k", key::DO_KEYS),
-];
+const LOG_TEACHES: &[Teach] = &[("ESC", key::DO_BACK), (", l", "cmd-brain-log")];
 
 /// And what a TASK's page answers to.
 const TASK_TEACHES: &[Teach] = &[
     ("RET", key::DO_CHANGE),
-    ("Esc", key::DO_BACK),
+    ("ESC", key::DO_BACK),
     (", r", "cmd-brain-run"),
     (", e", "cmd-brain-rehearse"),
     (", o", "cmd-brain-switch"),
     (", i", "cmd-brain-interval"),
     (", w", "cmd-brain-window"),
     (", d", "cmd-brain-reset-steps"),
-    (", k", key::DO_KEYS),
 ];
 
 /// AND THE TWO THAT ANSWER A COUNTDOWN, taught only while one is running.
@@ -291,7 +265,6 @@ fn about_of(says: &str) -> &'static str {
         key::DO_PANE => key::ABOUT_PANE,
         key::DO_CHANGE => key::ABOUT_CHANGE,
         key::DO_BACK => key::ABOUT_BACK,
-        key::DO_KEYS => key::ABOUT_KEYS,
         "cmd-brain-act" => key::ABOUT_ACT,
         "cmd-brain-dismiss" => key::ABOUT_DISMISS,
         "cmd-brain-snooze" => key::ABOUT_SNOOZE,
@@ -305,14 +278,8 @@ fn about_of(says: &str) -> &'static str {
         "cmd-brain-abort" => key::ABOUT_ABORT,
         "cmd-brain-log" => key::ABOUT_LOG,
         "cmd-brain-row-also" => key::ABOUT_ROW_ALSO,
-        _ => key::ABOUT_KEYS,
+        _ => "",
     }
-}
-
-/// How many rows a ladder takes, without the sentence under it: one when the
-/// header is closed, and open as many as the pairs need.
-fn rows_of(ladder: &[Rung]) -> u16 {
-    ladder.last().map_or(1, |r| r.row.saturating_add(1)).max(1)
 }
 
 /// How wide a taught phrase is assumed to be when nobody has said.
@@ -356,22 +323,6 @@ const NOTICE_ROWS: u16 = 3;
 /// The width of the count beside the fold's mark on a row of the log: three
 /// digits — the log folds at most `mind.remembers` records, a hundred.
 const COUNT_CELLS: u16 = 3;
-
-/// What a separator costs between two taught pairs: air, the dot, air.
-///
-/// Three, which is what `" · "` is on the host's own hint line. An icon claims
-/// [`ronoctua_design::ICON`] cells and the air before it is one — the air
-/// after is the next pair's notation starting where this says it does.
-const SEPARATOR_CELLS: u16 = ronoctua_design::GAP + ronoctua_design::ICON;
-
-/// Where the rows after the first one start.
-///
-/// THE BLOCK'S OWN FIRST CELL, flush with the glyph. It was `ICON + GAP` —
-/// indented to line up under the TITLE — and the owner read the result as
-/// *"aquele enorme espaço à esquerda do `m o Switch it off`"*: three cells of
-/// nothing in front of a row that has nothing above it to line up with, since
-/// the row above starts with a glyph and a name and not with a rung.
-const NEXT_ROW_AT: u16 = 0;
 
 /// How wide the name in the header may be.
 ///
@@ -532,8 +483,6 @@ struct State {
     spot: usize,
     /// The first row of a task's page that is drawn.
     body_from: usize,
-    /// Whether the header is showing every key it has.
-    keys_open: bool,
     /// The window, as the last `render` saw it.
     lines: u16,
     columns: u16,
@@ -575,7 +524,6 @@ struct State {
 /// step, and the pointer only ever consulted two of them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Blocks {
-    head: Region,
     warn: Region,
     notices: Region,
     body: Region,
@@ -589,7 +537,6 @@ impl Blocks {
     const fn new() -> Self {
         let none = Region::new(0, 0);
         Self {
-            head: none,
             warn: none,
             notices: none,
             body: none,
@@ -619,7 +566,6 @@ impl State {
             follows: true,
             spot: 0,
             body_from: 0,
-            keys_open: false,
             lines: 24,
             columns: 80,
             phrases: Phrases::empty(),
@@ -894,51 +840,27 @@ fn clock(seconds: u64) -> String {
 /// arrangement inside is fixed too; see [`State::foot`].
 const FOOT_LINES: u16 = 6;
 
-/// The most rows the header may take with every key showing.
-const KEYS_MOST: u16 = 4;
-
-/// Every phrase the header can teach, for the descriptor to ask the host for.
-///
-/// All four tables, because the descriptor is built ONCE at load and the
-/// header's contents depend on the page and on whether a countdown is running.
-/// Asking for the union costs a dozen strings on one message; asking per page
-/// would need a second delivery the wall does not have.
-fn every_taught_phrase() -> Vec<String> {
-    HOME_TEACHES
-        .iter()
-        .chain(TASK_TEACHES)
-        .chain(LOG_TEACHES)
-        .chain(ANSWER_TEACHES)
-        .chain(NOTICE_TEACHES)
-        .chain(ALSO_TEACHES)
-        .map(|(_, says)| (*says).to_owned())
-        // AND THE PAGE'S OWN NAME, which is not a shortcut and is measured for
-        // the same reason one is: the ladder of keys starts after the title,
-        // and a title reserved blind is the gap the owner photographed across
-        // the top of this page. A task's page takes its name from the mind
-        // (`TaskState::name_text`); the home page's is a key of this side's
-        // own, so it is asked for here.
-        .chain([key::TITLE, key::LOG].into_iter().map(str::to_owned))
-        // AND THE FOOTER'S FACT LABELS, measured for the same reason: the
-        // value begins where the label ENDS, and a label reserved blind put
-        // `Last run` eight cells from the date beside it. See
-        // [`facts_columns`].
-        .chain(
-            [
-                key::LAST_RUN,
-                key::NEEDS_ROOT,
-                key::FLAKE_OWNED,
-                key::FIRST,
-                key::TIMES,
-                key::SINCE,
-                // AND THE WORD BEFORE A FOLDED ROW'S DATE, whose column is as
-                // wide as the word comes out in the person's language.
-                key::LAST,
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        )
-        .collect()
+/// Every phrase this buffer MEASURES, for the descriptor to ask the host for:
+/// the footer's fact labels, the word before a folded row's date — and how
+/// `LEADER Alt` is spelt on this machine, which a row's `⌥` turns into under
+/// the pointer ([`ronoctua_design::Phrases::LEADER_ALT`]). What the header
+/// teaches is the host's to draw and measure (`Screen::teach`).
+fn every_phrase() -> Vec<String> {
+    [
+        key::LAST_RUN,
+        key::NEEDS_ROOT,
+        key::FLAKE_OWNED,
+        key::FIRST,
+        key::TIMES,
+        key::SINCE,
+        // AND THE WORD BEFORE A FOLDED ROW'S DATE, whose column is as wide as
+        // the word comes out in the person's language. See [`facts_columns`].
+        key::LAST,
+        ronoctua_design::Phrases::LEADER_ALT,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 impl State {
@@ -1000,7 +922,7 @@ impl State {
         if self.page == Page::Task && self.also_here().is_some() {
             let at = out
                 .iter()
-                .position(|(k, _)| *k == "Esc")
+                .position(|(k, _)| *k == "ESC")
                 .map_or(0, |n| n + 1);
             out.splice(at..at, ALSO_TEACHES.iter().copied());
         }
@@ -1053,154 +975,13 @@ impl State {
         !self.mind.announcement.task.is_empty() && self.mind.announcement.deadline > self.mind.now
     }
 
-    /// How wide one taught pair comes out: notation, air, phrase.
-    ///
-    /// MEASURED, not reserved. The phrase's width is the translated word's,
-    /// which this side holds only because the host handed it over — and a
-    /// header that guessed was a header with thirteen cells of nothing after
-    /// every short word.
-    fn pair_cells(&self, teach: &Teach) -> u16 {
-        let (keys, says) = teach;
-        let said = self.phrases.or(says, "");
-        // EMPTY IS "NOT SAID", not "an empty phrase": `i18n-complete` refuses a
-        // key with no value, so nothing the host sends can be blank.
-        let phrase = if said.is_empty() {
-            TEACH_CELLS
-        } else {
-            ronoctua_design::wide(&said)
-        };
-        taught_cells(keys) + ronoctua_design::GAP + phrase
-    }
-
-    /// How wide the page's own name comes out, MEASURED.
-    ///
-    /// [`NAME_CELLS`] is the fallback now and no longer the answer. Reserved
-    /// blind it was twenty-six cells for a word five cells wide, and the ladder
-    /// of keys began after all twenty-six: the owner photographed the result
-    /// as a header "full of disproportionate and exaggerated spaces".
-    ///
-    /// The home page's name is a key of this side's own, so it is asked for
-    /// through `Input::Phrases`; a task's comes with the mind
-    /// (`TaskState::name_text`), because the set of tasks is not known when the
-    /// descriptor is written. Both are for MEASURING — what is drawn is still
-    /// the key, so a language changed at run time reaches the screen.
-    ///
-    /// Capped at the old reservation: a name longer than that is elided by the
-    /// host, and a ladder that started after a forty-cell name would have no
-    /// line left to climb.
-    fn title_cells(&self) -> u16 {
-        let said = match self.page {
-            Page::Home => self.phrases.or(key::TITLE, ""),
-            Page::Log => self.phrases.or(key::LOG, ""),
-            Page::Task => self.here().map(|t| t.name_text.clone()).unwrap_or_default(),
-        };
-        if said.is_empty() {
-            NAME_CELLS
-        } else {
-            ronoctua_design::wide(&said).min(NAME_CELLS)
-        }
-    }
-
-    /// THE LADDER, laid out: every pair that fits, and where it went.
-    ///
-    /// One walk, and the ONLY one. The height counts these, the drawing paints
-    /// them and the pointer hits them. Written as three walks — which is what
-    /// it was — the three disagree the day any of the numbers moves, and the
-    /// symptom is a control that answers for its neighbour.
-    fn ladder(&self) -> Vec<Rung> {
-        // A CELL IS KEPT FOR THE CHEVRON, which is always drawn: a pair that
-        // took its cell would be a control drawn over.
-        let edge = self.columns.saturating_sub(1);
-        let rows = if self.keys_open { KEYS_MOST } else { 1 };
-        let mut out: Vec<Rung> = Vec::new();
-        let mut row = 0;
-        // THE LADDER STARTS AFTER THE NAME — the name as it MEASURES, never as
-        // it was reserved (see [`Self::title_cells`]) — and the air after it is
-        // the air between two pairs. It was one cell, which made the title the
-        // TIGHTEST gap on a line where every other gap is three, and the owner
-        // read the shortcut as *"demasiadamente próximo do título"*.
-        let mut column =
-            ronoctua_design::ICON + ronoctua_design::GAP + self.title_cells() + SEPARATOR_CELLS;
-        let mut first_of_row = true;
-        for (keys, says) in self.teaches() {
-            let cells = self.pair_cells(&(keys, says));
-            let lead = if first_of_row { 0 } else { SEPARATOR_CELLS };
-            if column + lead + cells > edge {
-                // IT WRAPS, or it stops. A pair that does not fit is dropped
-                // WHOLE — a notation with half a phrase after it teaches
-                // nothing and reads as a defect.
-                if row + 1 >= rows || NEXT_ROW_AT + cells > edge {
-                    break;
-                }
-                row += 1;
-                column = NEXT_ROW_AT;
-                out.push(Rung {
-                    row,
-                    at: column,
-                    cells,
-                    keys,
-                    says,
-                });
-                column += cells;
-                first_of_row = false;
-                continue;
-            }
-            out.push(Rung {
-                row,
-                at: column + lead,
-                cells,
-                keys,
-                says,
-            });
-            column += lead + cells;
-            first_of_row = false;
-        }
-        out
-    }
-
-    /// How many rows the header takes.
-    ///
-    /// One when it is closed. Open, as many as the pairs that did not fit
-    /// actually need — and not the ceiling, which is what it was: four rows of
-    /// ground with two of them empty is a band that looks like a mistake.
-    fn header_rows(&self) -> u16 {
-        let ladder = self.ladder();
-        rows_of(&ladder) + u16::from(self.explained(&ladder).is_some())
-    }
-
-    /// The sentence about the pair under the pointer — only while the header
-    /// is OPEN, the rule of every line of shortcuts in the system: the owner
-    /// asked for the sentence to belong to the opened line, where one goes to
-    /// read the keys in full. Asked of the ladder the caller already walked.
-    fn explained(&self, ladder: &[Rung]) -> Option<&'static str> {
-        if !self.keys_open {
-            return None;
-        }
-        ladder
-            .iter()
-            .find(|r| self.on_rung(r))
-            .map(|r| about_of(r.says))
-    }
-
-    /// THE HEADER: a glyph, the name, and every key this page answers to.
-    ///
-    /// # Why it is generated from a table and not written out
-    ///
-    /// Because the last time it was written out, `m r` and `m o` — run it now,
-    /// switch it off — were missing from the page somebody goes to looking for
-    /// exactly those two. A key that is not on the screen is a key that does
-    /// not exist, and a list written by hand is a list that goes stale the day
-    /// a key moves. `the-brain-header-is-generated` refuses a pair that is not
-    /// in [`KEYMAP`].
-    ///
-    /// # And every rung is a CONTROL
-    ///
-    /// It answers the pointer, because everything in this system does: the
-    /// notation lights under it and a click does what the key does. The
-    /// positions come from [`Self::ladder`] and nowhere else — a second walk
-    /// to decide where a click landed is how a control comes to answer for its
-    /// neighbour.
-    fn header(&self, screen: &mut Screen<Wit>) {
+    /// THE WINDOW'S TITLE AND WHAT THE PAGE TEACHES, declared for the header
+    /// the HOST draws over every window (`Screen::heading`, `Screen::teach`)
+    /// — its glyph, its name and [`State::teaches`], in that order. The host
+    /// draws, lights, explains and clicks the pairs with the one machinery
+    /// every window has: a click on `⌥r` is the command, a click on `RET` is
+    /// the key, and a pair that is not a control is drawn inert.
+    fn declare(&self, screen: &mut Screen<Wit>) {
         let title = match self.page {
             Page::Home => key::TITLE.to_owned(),
             Page::Log => key::LOG.to_owned(),
@@ -1213,132 +994,10 @@ impl State {
             Page::Home | Page::Log => Icon::Brain,
             Page::Task => self.here().map_or(Icon::Brain, |t| kind_glyph(t.kind)),
         };
-        let ladder = self.ladder();
-        let mut pen = screen.region(self.blocks.head);
-        if pen.empty() {
-            return;
+        let _ = screen.heading(glyph, &title);
+        for (keys, says) in self.teaches() {
+            screen.teach(keys, says, about_of(says), is_a_control(keys));
         }
-        // THE SYSTEM'S HEADER, on the page's own ground (`Pen::head`): it
-        // had a ground of its own, and the hint's tones — measured on the
-        // chrome — read out of contrast on it beside every other header.
-        pen.head(glyph, &title, self.title_cells());
-
-        let mut row = u16::MAX;
-        for rung in &ladder {
-            // THE DOT BETWEEN TWO PAIRS, and the air is the dot's on both
-            // sides — the same arrangement `Piece::separator` makes on the
-            // host: spaces carried by the separator and never by its
-            // neighbours, so a pair's own width means one thing.
-            if rung.row == row {
-                pen.put(
-                    rung.row,
-                    Run::glyph(Icon::Separator)
-                        .playing(Role::Faint)
-                        .at(rung.at - SEPARATOR_CELLS + ronoctua_design::GAP),
-                );
-            }
-            row = rung.row;
-            // THE KEY AS IT IS REACHED — see [`taught_here`].
-            let wide = taught_cells(rung.keys);
-            let (alt, key) = taught_here(rung.keys);
-            // THE SYSTEM'S OWN THREE TONES. `Role::Key` and `Role::Prose`
-            // resolve to `text.subtle.strong` and `text.subtle.default` — the
-            // two the minibuffer's hint line is drawn in, a hue family
-            // deliberately off the content ramp. This header used to reach for
-            // `accent` and `dim`, which are CONTENT colours, and the owner read
-            // the two lines side by side and said the brain's was not the
-            // system's.
-            //
-            // AND UNDER THE POINTER THE NOTATION LIGHTS, because a click on it
-            // does what it says: what the eye sees lit is what the click takes.
-            //
-            // AND A PAIR A CLICK CANNOT PRESS SAYS SO, in the tone the host
-            // gives the same thing (`Register::Inert`) — see
-            // [`is_a_control`].
-            let lit = self.on_rung(rung);
-            // LIT IN THE SYSTEM'S LIT TONES — the same small step every
-            // header of the system takes (`text.subtle.lit.*`); it was
-            // `text.once` and the content's grey, other colours altogether.
-            let keys_role = match (lit, is_a_control(rung.keys)) {
-                (true, true) => Role::KeyLit,
-                (_, false) => Role::Inert,
-                (false, true) => Role::Key,
-            };
-            // THE GLYPH FOR `LEADER Alt`, in the key's own tone, and the key.
-            if alt {
-                pen.put(
-                    rung.row,
-                    Run::glyph(Icon::LeaderAlt)
-                        .playing(keys_role)
-                        .at(rung.at)
-                        .within(GLYPH_CELLS),
-                );
-            }
-            pen.put(
-                rung.row,
-                Run::datum(key)
-                    .playing(keys_role)
-                    .at(rung.at + if alt { GLYPH_CELLS } else { 0 }),
-            );
-            pen.put(
-                rung.row,
-                Run::label(rung.says)
-                    .playing(if lit && is_a_control(rung.keys) {
-                        Role::ProseLit
-                    } else {
-                        Role::Prose
-                    })
-                    .at(rung.at + wide + ronoctua_design::GAP)
-                    .within(rung.cells.saturating_sub(wide + ronoctua_design::GAP)),
-            );
-        }
-        // AND THE SENTENCE, on the row under the pairs, while the header is
-        // open and the pointer rests on one of them.
-        if let Some(about) = self.explained(&ladder) {
-            pen.put(
-                rows_of(&ladder),
-                Run::label(about)
-                    .playing(Role::Explain)
-                    .at(0)
-                    .within(pen.columns().saturating_sub(1)),
-            );
-        }
-        // THE CHEVRON, in the last cell, exactly where the minibuffer's is —
-        // and ALWAYS, the owner's rule for every line of shortcuts in the
-        // system. It used to exist only when it did something (keys that did
-        // not fit, or a header open to close), and first only in the first
-        // case, which left an expanded header with no way back.
-        {
-            // It lights under the pointer, which is what every other control
-            // in the system does and what this one could not: the wall carried
-            // no pointer event until now.
-            let mark = if self.keys_open {
-                Icon::Collapse
-            } else {
-                Icon::Expand
-            };
-            let cell = pen.columns().saturating_sub(1);
-            // THE SYSTEM'S CHEVRON TONES — the prose's when shut and the key's
-            // when open, as the minibuffer's and every window's are.
-            let role = if self.hovering(self.blocks.head, 0, cell) {
-                Role::KeyLit
-            } else if self.keys_open {
-                Role::Key
-            } else {
-                Role::Prose
-            };
-            // COUNTED FROM THE BORDER, so the air after it is the host's margin
-            // at every width, as the modeline's marks are.
-            pen.put(0, Run::glyph(mark).playing(role).at(cell).at_the_edge());
-        }
-    }
-
-    /// Whether ANY pointer is resting on this cell of this block — a control
-    /// lights for whichever hand is on it.
-    fn hovering(&self, region: Region, row: u16, column: u16) -> bool {
-        self.hover
-            .first(|(at, line)| region.row_at(line) == Some(row) && at == column)
-            .is_some()
     }
 
     /// Every row of a block a pointer is on, with WHOSE hand it is — one
@@ -1348,17 +1007,6 @@ impl State {
             .cells()
             .filter_map(|(seat, (_, line))| region.row_at(line).map(|row| (row, seat)))
             .collect()
-    }
-
-    /// Whether any pointer is resting on this rung.
-    fn on_rung(&self, rung: &Rung) -> bool {
-        self.hover
-            .first(|(at, line)| {
-                self.blocks.head.row_at(line) == Some(rung.row)
-                    && at >= rung.at
-                    && at < rung.at.saturating_add(rung.cells)
-            })
-            .is_some()
     }
 
     /// THE WARNING: one line, in the one colour that alarms, and ONLY when
@@ -2360,27 +2008,50 @@ fn seat_on(hovered: &[(u16, u16)], row: u16) -> Option<u16> {
 /// window. That is not a preference: it was at the other edge, and the owner
 /// read `every` down the left of the screen and `days` down the right with a
 /// bare `7` between them. A number and its unit are one phrase.
-fn field_columns(columns: u16) -> Layout {
+fn field_columns(columns: u16, keys: u16) -> Layout {
     Table::across(columns.saturating_sub(1))
         .with(Column::fixed("label", 20, 2))
         .with(Column::fixed("value", 24, 1))
         .with(Column::fill("unit", 6))
-        .with(Column::fixed("alt", GLYPH_CELLS, 0))
-        .with(Column::fixed("keys", 5, 3))
+        // THE SHORTCUT: `⌥` against its one key, or — spelt, under the
+        // pointer — `SUPER ALT` and the key, which `unit` gives the room for
+        // (`ronoctua_design::leader_alt`).
+        .with(Column::fixed("keys", keys, 3))
         .resolve()
 }
 
-/// A field row's key, as it is reached: the `LEADER Alt` glyph in its own
-/// column and the one key after it ([`taught_here`]).
-fn taught_in(row: &mut ronoctua_design::table::Row<'_, Wit>, keys: &str) {
-    let (alt, key) = taught_here(keys);
-    if alt {
-        row.put(
-            "alt",
-            Run::glyph(Icon::LeaderAlt).accent().within(GLYPH_CELLS),
-        );
+impl State {
+    /// Whether ANY pointer is resting on this cell of this block.
+    fn hovering(&self, region: Region, row: u16, column: u16) -> bool {
+        self.hover
+            .first(|(at, line)| region.row_at(line) == Some(row) && at == column)
+            .is_some()
     }
-    row.put("keys", Run::datum(key).accent());
+
+    /// A field row's key, as it is reached: `⌥` and the one key the keymap
+    /// gives the command `id`, spelt `label` while the pointer rests on it
+    /// (`Row::put_shortcut`).
+    fn taught_in(
+        &self,
+        row: &mut ronoctua_design::table::Row<'_, Wit>,
+        id: &str,
+        label: &str,
+        spelt: bool,
+    ) {
+        if let Some(key) = key_of_command(id) {
+            let _ = row.put_shortcut("keys", Icon::LeaderAlt, label, key, spelt, Role::Accent);
+        }
+    }
+}
+
+/// The key `LEADER Alt` gives the command `id` in this buffer — the one key of
+/// its sequence in [`KEYMAP`] (`local_key`), so a row says the key that the
+/// keymap binds and no other.
+fn key_of_command(id: &str) -> Option<&'static str> {
+    KEYMAP
+        .iter()
+        .find(|(_, command)| *command == id)
+        .and_then(|(keys, _)| ronoctua_design::frame::local_key(keys))
 }
 
 /// The columns of one of the module's page actions: what it is, and the key
@@ -2817,7 +2488,6 @@ impl State {
         }
         self.body_from = self.body_from.min(last_window(&rows, height));
 
-        let fields = field_columns(columns);
         let steps = step_columns(columns);
         let history = history_columns(columns);
         // EVERY ROW OF THIS PAGE STOPS ONE CELL SHORT, because the bar is
@@ -2951,7 +2621,7 @@ impl State {
                         spot: spot_n,
                         hovered: seat_on(&hovered, line),
                     };
-                    self.field(&mut pen, &task, &at, &fields, *spot);
+                    self.field(&mut pen, &task, &at, columns, *spot);
                     spot_n += 1;
                     line += 1;
                 }
@@ -2992,40 +2662,12 @@ impl State {
     }
 }
 
-/// How a pair is REACHED, as this window teaches it: `(true, "r")` for the
-/// buffer's `, r` — `LEADER Alt` and the one key, drawn as the glyph
-/// ([`Icon::LeaderAlt`]) and the key — and `(false, keys)` for a key the page
-/// takes itself (`RET`, `Esc`, `Tab`).
-///
-/// A window shortcut is `LEADER Alt` and one key, and nothing else (the
-/// owner's rule, 2026-11-04): no chord typed in here runs one — the host runs
-/// none — and a bare letter is text, which a page must stay free to take. The
-/// comma is the group the tap types for the person, never a key to teach.
-fn taught_here(keys: &str) -> (bool, &str) {
-    keys.strip_prefix(", ")
-        .map_or((false, keys), |rest| (true, rest))
-}
-
-/// The cell the `LEADER Alt` glyph takes in front of its key: ONE, against
-/// the key, as the minibuffer's line draws it (`chrome::leader_alt_text`) —
-/// the icon's own two cells would leave a gap no other line has.
-const GLYPH_CELLS: u16 = 1;
-
-/// How wide a pair's notation is drawn — the glyph's cell too, for a pair
-/// `LEADER Alt` reaches ([`taught_here`]).
-fn taught_cells(keys: &str) -> u16 {
-    let (alt, key) = taught_here(keys);
-    ronoctua_design::wide(key) + if alt { GLYPH_CELLS } else { 0 }
-}
-
-/// Whether a click on a rung whose notation is `keys` does anything.
-///
-/// The one question [`State::acts`] answers by doing it: the three keys the
-/// page handles itself, and whatever the keymap binds. A rung that is none of
-/// those is drawn in [`Role::Inert`], so no pair looks like a control and is
-/// not one.
+/// Whether a pair whose notation is `keys` does anything when it is clicked
+/// on the host's header: the three keys the page handles itself, and whatever
+/// the keymap binds. A pair that is none of those is drawn inert, so no pair
+/// looks like a control and is not one.
 fn is_a_control(keys: &str) -> bool {
-    matches!(keys, "RET" | "Esc" | "Tab") || KEYMAP.iter().any(|(k, _)| *k == keys)
+    matches!(keys, "RET" | "ESC" | "TAB") || KEYMAP.iter().any(|(k, _)| *k == keys)
 }
 
 /// The footer's fact slots — a label and a value each.
@@ -3109,14 +2751,7 @@ impl State {
     /// nobody can see is a key nobody has. The header teaches them once; this
     /// says it again beside the thing it changes, which is where somebody
     /// looks.
-    fn field(
-        &self,
-        pen: &mut Pen<'_, Wit>,
-        task: &TaskState,
-        at: &At,
-        layout: &Layout,
-        spot: Spot,
-    ) {
+    fn field(&self, pen: &mut Pen<'_, Wit>, task: &TaskState, at: &At, columns: u16, spot: Spot) {
         let line = at.row;
         let n = at.spot;
         if self.spot == n {
@@ -3124,7 +2759,27 @@ impl State {
         } else if let Some(seat) = at.under_pointer() {
             pen.ground(line, Role::hover_of(seat));
         }
-        let Some(mut row) = pen.row_of(line, layout) else {
+        // THE ROW'S `⌥`, SPELT while a pointer rests on it — asked of where the
+        // glyph is AT REST, so the spelling stays put under the hand that
+        // asked for it — and the column that fills gives the room up.
+        let label = self.phrases.or(Phrases::LEADER_ALT, "");
+        let rest = field_columns(
+            columns,
+            ronoctua_design::leader_alt::cells(&label, "x", false),
+        );
+        let spelt = !label.is_empty()
+            && rest
+                .field("keys")
+                .is_some_and(|keys| self.hovering(self.blocks.body, line, keys.at));
+        let layout = if spelt {
+            field_columns(
+                columns,
+                ronoctua_design::leader_alt::cells(&label, "x", true),
+            )
+        } else {
+            rest
+        };
+        let Some(mut row) = pen.row_of(line, &layout) else {
             return;
         };
         let mut after_unit: Option<(u16, u16)> = None;
@@ -3148,14 +2803,14 @@ impl State {
                             Run::label(key::OFF).accent()
                         },
                     );
-                    taught_in(&mut row, ", o");
+                    self.taught_in(&mut row, "brain-switch", &label, spelt);
                 }
             }
             Spot::Interval => {
                 row.put("label", Run::label(key::EVERY).names(true));
                 let days = task.interval_days.to_string();
                 row.put("value", Run::datum(&days).answers(true));
-                taught_in(&mut row, ", i");
+                self.taught_in(&mut row, "brain-interval", &label, spelt);
                 // THE UNIT SITS AGAINST THE NUMBER, which is why its column
                 // is worked out here and drawn below rather than being put in
                 // a column of its own. In its own column it started where the
@@ -3190,7 +2845,7 @@ impl State {
                     Run::label(&format!("brain-part-{}", part_word(task.part_of_day)))
                         .answers(true),
                 );
-                taught_in(&mut row, ", w");
+                self.taught_in(&mut row, "brain-window", &label, spelt);
             }
             Spot::Next => {
                 // THE LABEL NAMES WHAT THE VALUE IS, and the value is one of
@@ -3215,11 +2870,11 @@ impl State {
                 if let Some(doing) = self.doing_of(task) {
                     row.put("value", doing);
                 }
-                taught_in(&mut row, ", r");
+                self.taught_in(&mut row, "brain-run", &label, spelt);
             }
             Spot::Rehearse => {
                 row.put("label", Run::label(key::REHEARSE).names(true));
-                taught_in(&mut row, ", e");
+                self.taught_in(&mut row, "brain-rehearse", &label, spelt);
             }
             Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {}
         }
@@ -3802,12 +3457,8 @@ impl State {
                 None => Vec::new(),
             },
             "brain-snooze" => self.notice_verb(Request::SnoozeNotice),
-            "brain-keys" => {
-                self.keys_open = !self.keys_open;
-                vec![Effect::Redraw]
-            }
             // THE LOG'S PAGE, and the same key takes it away: a page that is
-            // looked at and left, the way `, k` opens and closes the header.
+            // looked at and left.
             "brain-log" => {
                 self.page = if self.page == Page::Log {
                     Page::Home
@@ -4087,25 +3738,7 @@ impl State {
     }
 
     /// Where a click landed, as an index into whichever list is there.
-    fn clicked(&mut self, column: u16, line: u16) -> Vec<Effect> {
-        // THE CHEVRON FIRST, because it is drawn over the end of the header's
-        // last rung and a click there is about the control.
-        if line == 0 && column + 1 >= self.columns {
-            self.keys_open = !self.keys_open;
-            return vec![Effect::Redraw];
-        }
-        // AND THEN A TAUGHT PAIR, because a shortcut drawn on the screen is a
-        // control: clicking it does what the key does. Where each one landed
-        // is [`Self::ladder`]'s answer and not a second walk — the rule this
-        // buffer's scrollbar had to learn the hard way.
-        if let Some(row) = self.blocks.head.row_at(line)
-            && let Some(rung) = self
-                .ladder()
-                .into_iter()
-                .find(|r| r.row == row && column >= r.at && column < r.at + r.cells)
-        {
-            return self.acts(rung.keys);
-        }
+    fn clicked(&mut self, _column: u16, line: u16) -> Vec<Effect> {
         // AND THEN THE BLOCK THAT OWNS THE LINE.
         //
         // It used to be `line >= tasks_at` and `line >= log_at`, with no floor
@@ -4200,39 +3833,6 @@ impl State {
         // page stay put is the same defect from the other input.
         self.follows = true;
         vec![Effect::Redraw]
-    }
-
-    /// What a notation drawn in the header does when it is clicked.
-    ///
-    /// The keys the header teaches are of two kinds and both are reachable:
-    /// this buffer's own commands, which the [`KEYMAP`] names, and the three
-    /// the HOST sends as inputs — there is no command id for `RET`, so the
-    /// notation is what says which it is.
-    fn acts(&mut self, keys: &str) -> Vec<Effect> {
-        debug_assert!(is_a_control(keys), "a rung acted on that is no control");
-        match keys {
-            "RET" => self.confirm(),
-            "Esc" => {
-                if matches!(self.page, Page::Task | Page::Log) {
-                    self.page = Page::Home;
-                    return vec![Effect::Redraw];
-                }
-                Vec::new()
-            }
-            "Tab" => {
-                if self.page == Page::Home {
-                    self.pane = self.next_pane();
-                }
-                vec![Effect::Redraw]
-            }
-            other => KEYMAP
-                .iter()
-                .find(|(k, _)| *k == other)
-                .map_or_else(Vec::new, |(_, id)| {
-                    let id = (*id).to_owned();
-                    self.command(&id)
-                }),
-        }
     }
 
     /// The wheel, over whatever list it was over.
@@ -4438,7 +4038,7 @@ impl Guest for Component {
             // to be given a fixed column, because a key's length says nothing
             // about the sentence's, and the owner read thirteen-cell columns
             // as shortcuts scattered across the line.
-            phrases: every_taught_phrase(),
+            phrases: every_phrase(),
         }
     }
 
@@ -4494,16 +4094,8 @@ impl State {
             // worth losing, and the body takes what is left.
             let told = s.told();
             let mut left = ctx.lines;
-            // THE "NO HEADER" MODE gives the header's rows to the body: the
-            // glyph, the name and the taught keys go, and the activity reclaims
-            // the top (`ronoctua_shell_kit::header`). The keys are the footer's
-            // minibuffer's now, where `LEADER Alt` surfaces them.
-            let head = if ctx.hide_header {
-                0
-            } else {
-                s.header_rows().min(left)
-            };
-            left -= head;
+            // THE HEADER IS THE HOST'S, drawn above these rows (`declare`):
+            // the window begins with the warning.
             let warn = u16::from(s.warned()).min(left);
             left -= warn;
             // FIXED, and not `told.rows(…)`: the height no longer answers to
@@ -4540,7 +4132,6 @@ impl State {
             left -= log;
 
             let blocks = screen.split(&[
-                Slice::Fixed(head),
                 Slice::Fixed(warn),
                 Slice::Fixed(notices),
                 Slice::Rest,
@@ -4548,18 +4139,15 @@ impl State {
                 Slice::Fixed(foot),
             ]);
             s.blocks = Blocks {
-                head: blocks[0],
-                warn: blocks[1],
-                notices: blocks[2],
-                body: blocks[3],
-                log: blocks[4],
-                foot: blocks[5],
+                warn: blocks[0],
+                notices: blocks[1],
+                body: blocks[2],
+                log: blocks[3],
+                foot: blocks[4],
             };
             let _ = left;
 
-            if !ctx.hide_header {
-                s.header(&mut screen);
-            }
+            s.declare(&mut screen);
             s.warning(&mut screen);
             s.draw_notices(&mut screen);
             match s.page {
@@ -4620,10 +4208,10 @@ impl State {
                     self.page = Page::Home;
                     return vec![Effect::Redraw];
                 }
-                // NOT `Effect::Close`: `Esc` on the home page is the host's to
-                // answer, and a buffer that closed itself would take the
-                // window with it.
-                Vec::new()
+                // NOWHERE TO GO BACK TO: `Esc` closes the window, as it closes
+                // every window — and the host asks first, a second `Esc`
+                // within its time (`Ui::closing`).
+                vec![Effect::Close]
             }
             Input::Click(p) => self.clicked(p.column, p.line),
             Input::Wheel(w) => self.wheeled(w.at.line, w.lines),
@@ -4963,21 +4551,65 @@ mod tests {
         assert_eq!(s.tail_at, from + 2);
     }
 
-    /// A KEY THE HEADER TEACHES WORKS WHERE IT IS TAUGHT.
+    /// FAILS IF: the header the HOST draws is not told the window's title and
+    /// what the page teaches — in the order `teaches` gives them, each with
+    /// its sentence and whether it does anything — or a bare letter typed
+    /// here reaches a command.
     #[test]
-    fn a_taught_sequence_works_typed_here() {
-        // THE HEADER TEACHES HOW THE PAIR IS REACHED — `LEADER Alt` and the one
-        // key, the comma gone — and a bare letter is text, which reaches no
-        // command.
-        assert_eq!(taught_here(", k"), (true, "k"));
-        assert_eq!(taught_here("RET"), (false, "RET"));
-        assert_eq!(taught_cells(", k"), GLYPH_CELLS + 1);
-        let mut plain = a_state();
-        assert!(plain.act(Input::Character('k')).is_empty());
-        assert!(!plain.keys_open);
-        let mut clicked = a_state();
-        let _ = clicked.acts(", k");
-        assert!(clicked.keys_open, "the pair still acts");
+    fn the_header_is_declared_for_the_host() {
+        use ronoctua_design::frame::Command;
+        let mut s = a_state();
+        let screen = drawn(&mut s, 30, 140);
+        let list = screen.as_protocol();
+        assert!(
+            list.commands.iter().any(|c| matches!(
+                c,
+                Command::Heading { title: ronoctua_design::frame::Text::Key(k), .. } if k == key::TITLE
+            )),
+            "the window's title was not declared"
+        );
+        let taught: Vec<(String, String, String, bool)> = list
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::Taught {
+                    keys,
+                    says,
+                    about,
+                    control,
+                } => Some((keys.clone(), says.clone(), about.clone(), *control)),
+                _ => None,
+            })
+            .collect();
+        let wanted: Vec<(String, String, String, bool)> = s
+            .teaches()
+            .into_iter()
+            .map(|(keys, says)| {
+                (
+                    keys.to_owned(),
+                    says.to_owned(),
+                    about_of(says).to_owned(),
+                    is_a_control(keys),
+                )
+            })
+            .collect();
+        assert_eq!(taught, wanted);
+        assert!(
+            taught
+                .iter()
+                .any(|(k, _, a, _)| k == ", r" && a == key::ABOUT_RUN),
+            "{taught:?}"
+        );
+        // NOTHING OF THE HEADER IS DRAWN IN THE BUFFER'S OWN ROWS.
+        assert!(
+            !list.commands.iter().any(|c| matches!(
+                c,
+                Command::Text { text: ronoctua_design::frame::Text::Key(k), .. } if k == "cmd-brain-run"
+            )),
+            "the buffer drew a taught pair itself"
+        );
+        // AND A BARE LETTER IS TEXT, which reaches no command.
+        assert!(s.act(Input::Character('r')).is_empty());
     }
 
     fn a_context(lines: u16, columns: u16) -> Context {
@@ -4991,7 +4623,6 @@ mod tests {
                 large: 2,
                 huge: 3,
             },
-            hide_header: false,
         }
     }
 
@@ -5113,15 +4744,12 @@ mod tests {
         for lines in [6_u16, 10, 14, 24, 40] {
             for columns in [46_u16, 80, 100, 140] {
                 for page in [Page::Home, Page::Task, Page::Log] {
-                    for open in [false, true] {
-                        let mut s = a_state();
-                        s.page = page;
-                        s.keys_open = open;
-                        let screen = drawn(&mut s, lines, columns);
-                        screen.check().unwrap_or_else(|e| {
-                            panic!("{page:?} at {lines}x{columns}, keys {open}: {e}")
-                        });
-                    }
+                    let mut s = a_state();
+                    s.page = page;
+                    let screen = drawn(&mut s, lines, columns);
+                    screen
+                        .check()
+                        .unwrap_or_else(|e| panic!("{page:?} at {lines}x{columns}: {e}"));
                 }
             }
         }
@@ -5386,7 +5014,8 @@ mod tests {
             !keys.iter().any(|k| k == key::OFF),
             "it still reads as the person's own off"
         );
-        let switches = |data: &[String]| data.iter().filter(|d| *d == taught_here(", o").1).count();
+        let switch = key_of_command("brain-switch").expect("the switch has a key");
+        let switches = |data: &[String]| data.iter().filter(|d| *d == switch).count();
         assert_eq!(
             switches(&data),
             0,
@@ -5394,7 +5023,7 @@ mod tests {
         );
 
         // NOTHING THE BRAIN REFUSES IS TAUGHT OR DRAWN: the header keeps the
-        // way back and the keys' list, the page keeps the row that says why
+        // way back, the page keeps the row that says why
         // and the history, and the home row does not call it "waiting".
         const REFUSED: [&str; 7] = ["RET", ", r", ", e", ", o", ", i", ", w", ", d"];
         let taught = s.teaches();
@@ -5402,7 +5031,7 @@ mod tests {
             taught.iter().all(|(k, _)| !REFUSED.contains(k)),
             "the header teaches a key the brain refuses: {taught:?}"
         );
-        assert!(taught.iter().any(|(k, _)| *k == "Esc"), "no way back");
+        assert!(taught.iter().any(|(k, _)| *k == "ESC"), "no way back");
         // ON THE HOME PAGE `RET` STILL OPENS the page that says why.
         s.page = Page::Home;
         let home = s.teaches();
@@ -5423,18 +5052,14 @@ mod tests {
         );
 
         // THE PERSON'S OWN OFF, as before: the word, and the key beside it —
-        // on the row and on the header both.
+        // on the row, and taught for the host's header.
         let task = &mut s.mind.tasks[0];
         task.why_not = OFF_BY_YOU.to_owned();
         task.why_key = "brain-why-off".to_owned();
         assert!(off_not_by_you(&s.mind.tasks[0]).is_none());
         let (keys, data) = drawn_texts(&drawn(&mut s, 30, 120));
         assert!(keys.iter().any(|k| k == key::OFF));
-        assert_eq!(
-            switches(&data),
-            2,
-            "the row and the header offer the switch"
-        );
+        assert_eq!(switches(&data), 1, "the row does not offer the switch");
         assert!(s.teaches().iter().any(|(k, _)| *k == ", o"));
         assert!(
             s.spots().len() > only.len(),
@@ -5442,8 +5067,8 @@ mod tests {
         );
     }
 
-    /// Enter opens the task, Esc comes back, and Esc on the home page is the
-    /// host's to answer.
+    /// Enter opens the task, Esc comes back, and Esc on the home page closes
+    /// the window — which the host confirms first (`Ui::closing`).
     #[test]
     fn enter_opens_and_esc_comes_back() {
         let mut s = a_state();
@@ -5453,8 +5078,8 @@ mod tests {
         s.act(Input::Cancel);
         assert_eq!(s.state_id(), "normal");
         assert!(
-            s.act(Input::Cancel).is_empty(),
-            "the buffer answered Esc on the home page"
+            matches!(s.act(Input::Cancel).as_slice(), [Effect::Close]),
+            "Esc on the home page did not close the window"
         );
     }
 
@@ -5741,42 +5366,6 @@ mod tests {
         assert_eq!(s.foot_scroll, 2);
     }
 
-    /// FAILS IF: an expanded header has no control to collapse it.
-    ///
-    /// The chevron used to appear only when something did NOT fit, so the
-    /// moment everything fitted on the open rows it vanished — and with it the
-    /// only way back. The owner photographed a header expanded with no way to
-    /// close it.
-    #[test]
-    fn an_open_header_can_be_closed_again() {
-        for columns in [60_u16, 100, 140, 200] {
-            let mut s = a_state();
-            s.page = Page::Task;
-            s.keys_open = true;
-            let screen = drawn(&mut s, 26, columns);
-            let rows = s.blocks.head.lines;
-            if rows <= 1 {
-                // Opening it changed nothing, so there is nothing to collapse.
-                continue;
-            }
-            let list = screen.as_protocol();
-            let mark = list.commands.iter().any(|c| {
-                matches!(
-                    c,
-                    ronoctua_design::frame::Command::Text {
-                        line: 0,
-                        text: ronoctua_design::frame::Text::Icon(i),
-                        ..
-                    } if i.contains("Collapse")
-                )
-            });
-            assert!(
-                mark,
-                "at {columns} columns the header opens to {rows} rows with no way to close it"
-            );
-        }
-    }
-
     /// FAILS IF: a place the keyboard can reach cannot be reached with the
     /// pointer, or the second click does not do what `RET` does.
     ///
@@ -5873,80 +5462,6 @@ mod tests {
         assert_eq!(s.task, 1, "the click ignored where the window starts");
     }
 
-    /// FAILS IF: the sentence about a pair shows under a SHUT header, or does
-    /// not show under an open one with the pointer on the pair — the rule of
-    /// every line of shortcuts in the system.
-    #[test]
-    fn the_sentence_belongs_to_the_opened_header() {
-        let explains = |screen: &Screen<Wit>| {
-            screen.as_protocol().commands.iter().any(|c| {
-                matches!(
-                    c,
-                    ronoctua_design::frame::Command::Text {
-                        text: ronoctua_design::frame::Text::Key(k),
-                        ..
-                    } if k.starts_with("about-brain-")
-                )
-            })
-        };
-        let mut s = a_state();
-        let _ = drawn(&mut s, 30, 140);
-        let rung = s.ladder()[0];
-        let line = s.blocks.head.top + rung.row;
-        s.hover.set(0, (rung.at, line));
-        let shut = drawn(&mut s, 30, 140);
-        assert!(
-            !explains(&shut),
-            "a shut header spelt out the pair under the pointer"
-        );
-        s.keys_open = true;
-        let _ = drawn(&mut s, 30, 140);
-        let rung = s.ladder()[0];
-        s.hover.set(0, (rung.at, s.blocks.head.top + rung.row));
-        let open = drawn(&mut s, 30, 140);
-        assert!(
-            explains(&open),
-            "the header is open and the pair under the pointer says nothing"
-        );
-    }
-
-    /// FAILS IF: a shortcut drawn in the header does not answer the pointer,
-    /// or answers for its neighbour.
-    ///
-    /// A key that is drawn is a control, and the positions come from the same
-    /// walk that paints them — see [`State::ladder`].
-    #[test]
-    fn a_taught_key_is_a_control() {
-        let mut s = a_state();
-        s.keys_open = true;
-        let _ = drawn(&mut s, 40, 140);
-        let ladder = s.ladder();
-        floor_of(ladder.len(), 4, "rungs on the header");
-        for rung in &ladder {
-            if rung.keys != "Tab" {
-                continue;
-            }
-            // `Tab` swaps the two halves of the home page, which is the one
-            // rung whose effect is visible without a host.
-            let line = s.blocks.head.top + rung.row;
-            s.pane = Pane::Tasks;
-            s.clicked(rung.at, line);
-            assert_eq!(s.pane, Pane::Log, "a click on `Tab` did nothing");
-            // AND THE CELL BEFORE IT IS NOT IT. The separator belongs to
-            // neither pair, and a rung that claimed it would answer for the
-            // one before.
-            s.pane = Pane::Tasks;
-            s.clicked(rung.at.saturating_sub(1), line);
-            assert_eq!(
-                s.pane,
-                Pane::Tasks,
-                "the air before a rung answered as the rung"
-            );
-            return;
-        }
-        panic!("the home page stopped teaching `Tab`");
-    }
-
     /// OPENING A PAGE ASKS FOR THE PAGE TO BE DRAWN.
     ///
     /// THE DEFECT THIS CATCHES is the one the owner read on the screen: `RET`
@@ -5977,6 +5492,50 @@ mod tests {
     }
 
     /// Every text key a frame draws, and every datum.
+    /// FAILS IF: a row's `⌥` does not spell `LEADER Alt` under the pointer,
+    /// as every `⌥` of the system does — or spells it with nobody on it, or
+    /// grows over what the row says beside it.
+    #[test]
+    fn a_rows_glyph_is_spelt_under_the_pointer() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        s.phrases = Phrases::of(vec![(
+            Phrases::LEADER_ALT.to_owned(),
+            "SUPER ALT".to_owned(),
+        )]);
+        s.page = Page::Task;
+        let screen = drawn(&mut s, 30, 120);
+        let (_, data) = drawn_texts(&screen);
+        assert!(
+            !data.iter().any(|d| d.starts_with("SUPER ALT")),
+            "spelt with nobody on it: {data:?}"
+        );
+        let (line, column) = screen
+            .as_protocol()
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                Command::Text {
+                    text: Text::Icon(i),
+                    line,
+                    column,
+                    ..
+                } if i.contains("LeaderAlt") => Some((*line, *column)),
+                _ => None,
+            })
+            .expect("a row carries a ⌥");
+        let _ = s.hover.set(0, (column, line));
+        let screen = drawn(&mut s, 30, 120);
+        screen
+            .check()
+            .unwrap_or_else(|e| panic!("the spelt row met something: {e}"));
+        let (_, data) = drawn_texts(&screen);
+        assert!(
+            data.iter().any(|d| d.starts_with("SUPER ALT ")),
+            "the ⌥ under the pointer was not spelt: {data:?}"
+        );
+    }
+
     fn drawn_texts(screen: &Screen<Wit>) -> (Vec<String>, Vec<String>) {
         let mut keys = Vec::new();
         let mut data = Vec::new();

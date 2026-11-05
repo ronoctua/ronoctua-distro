@@ -203,22 +203,26 @@ struct Host {
     /// the brain answered to something this window asked of it, a refusal
     /// above all: said in the door that asked.
     to_say: Option<String>,
-    /// The question on this window's line, as it was last DRAWN — under the
-    /// component's lines, where the door's message goes — and where each of
-    /// its two keys landed, for the pointer: a key drawn is a key a click
-    /// presses (`chrome::hint_marks`, the same `laid` the drawing reads).
-    question: Vec<crate::chrome::Piece>,
-    /// Which of the question's two keys the pointer rests on — lit, as every
-    /// shortcut under the pointer is, from the same marks a click reads.
-    question_lit: Option<&'static str>,
-    /// The door's message, wrapped to the window — drawn on the lines under
-    /// the component's, which it is rendered without while there is one.
-    ///
-    /// A buffer draws every line of its window itself, and the door's
-    /// sentences — a footer that is not there, a paste that failed, a text
-    /// swept and copied, a program that could not be started — reached no
-    /// line of it: they were said, and nobody could read them.
-    said: Vec<String>,
+    /// THE BUFFER'S KEYMAP, `(sequence, command)`, from its descriptor: what
+    /// names the command a taught local sequence runs, and every command a
+    /// click or the footer may run here (`Content::run_shortcut`).
+    keymap: Vec<(String, String)>,
+    /// WHAT THE LAST FRAME DECLARED for the header this host draws over the
+    /// component — its title and what it teaches (`chrome::declared`). The
+    /// question and the door's message take that line first, as on every
+    /// window (`door::list::line_zero`).
+    declared: crate::chrome::Declared,
+    /// The ids the header names, kept for the life of the window.
+    interned: crate::chrome::Interned,
+    /// HOW MANY LINES OF THE SURFACE ARE THE HEADER'S, above the component's
+    /// first: `Ui::first_of_list` as the last frame drew it. Every cell the
+    /// component is told and every cell a pointer lands in is counted under
+    /// them (`paint::Rows`).
+    top: u16,
+    /// What the socket answers `keymap` with: the `LEADER Alt` shortcuts the
+    /// component teaches NOW — the footer's line and its `LEADER Alt` list
+    /// carry the window in front as it is, as a native window's do.
+    taught_now: std::sync::Arc<std::sync::Mutex<String>>,
     /// The seat the buffer was last told the keys are from — so
     /// `keyboard-seat` is sent when it CHANGES, and not before every key.
     typing_seat: Option<u16>,
@@ -1106,6 +1110,11 @@ pub fn host_it(
                     // refuses them as keys. See `Phrases::LANGUAGE`.
                     text: if k == ronoctua_design::Phrases::LANGUAGE {
                         texts.language().to_owned()
+                    } else if k == ronoctua_design::Phrases::LEADER_ALT {
+                        // AND THE NAME OF `LEADER Alt`, which a component's
+                        // own `⌥` spells under the pointer — a key's name,
+                        // never a sentence (`Phrases::LEADER_ALT`).
+                        ronoctua_shell_kit::bindings::leader_alt_label()
                     } else {
                         texts.t(k)
                     },
@@ -1121,7 +1130,6 @@ pub fn host_it(
             ronoctua_tokens::space::TERMINAL_COLUMNS,
             ronoctua_tokens::space::TERMINAL_LINES,
             Host::heights(),
-            ronoctua_shell_kit::header::hide_header(),
         )?;
         tracing::info!(
             commands = list.commands.len(),
@@ -1184,6 +1192,14 @@ pub fn host_it(
             .then(Keyboards::fresh);
 
         let current = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // THE WHOLE KEYMAP until the first frame says what is taught now.
+        let taught_now = std::sync::Arc::new(std::sync::Mutex::new(
+            d.keymap
+                .iter()
+                .map(|b| format!("{} {}", b.keys, b.command))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
         let mut host = Host {
             owed: false,
             system,
@@ -1200,9 +1216,15 @@ pub fn host_it(
             to_launch: Vec::new(),
             to_ask: None,
             to_say: None,
-            question: Vec::new(),
-            question_lit: None,
-            said: Vec::new(),
+            keymap: d
+                .keymap
+                .iter()
+                .map(|b| (b.keys.clone(), b.command.clone()))
+                .collect(),
+            declared: crate::chrome::Declared::default(),
+            interned: crate::chrome::Interned::default(),
+            top: 0,
+            taught_now: std::sync::Arc::clone(&taught_now),
             typing_seat: None,
             key_seat: 0,
             title: format!("*{title}*"),
@@ -1232,7 +1254,13 @@ pub fn host_it(
         // and the LOOP acts on it, on the same thread as every other input — which
         // is the arrangement the footer already uses for its control socket.
         let (orders, channel) = calloop_channel::channel::<FromSocket>();
-        *published.borrow_mut() = publish_keymap(d.keymap.clone(), d.states, current, orders);
+        *published.borrow_mut() = publish_keymap(
+            d.keymap.clone(),
+            std::sync::Arc::clone(&taught_now),
+            d.states,
+            current,
+            orders,
+        );
         if w.handle
             .insert_source(channel, |event, (), door: &mut Door<Host>| {
                 if let calloop_channel::Event::Msg(order) = event {
@@ -1630,6 +1658,7 @@ enum FromSocket {
 
 fn publish_keymap(
     keymap: Vec<ronoctua_protocol::Binding>,
+    taught_now: std::sync::Arc<std::sync::Mutex<String>>,
     states: Vec<ronoctua_protocol::BufferState>,
     current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     orders: calloop_channel::Sender<FromSocket>,
@@ -1654,11 +1683,6 @@ fn publish_keymap(
     };
     tracing::info!(path = %path.display(), bindings = keymap.len(), "keymap published");
 
-    let answer = keymap
-        .iter()
-        .map(|b| format!("{} {}", b.keys, b.command))
-        .collect::<Vec<_>>()
-        .join("\n");
     let known: std::collections::HashSet<String> = keymap.into_iter().map(|b| b.command).collect();
     // The LIST does not change after `init`, so the thread owns a copy of it and
     // reads only the index from the shared cell. Sharing the list too would be a
@@ -1690,7 +1714,12 @@ fn publish_keymap(
                     continue;
                 }
                 let reply = match line.trim().split_once(' ') {
-                    None if line.trim() == "keymap" => answer.clone(),
+                    // WHAT IS TAUGHT NOW, which the host writes after every
+                    // frame (`Host::taught_now`); every declared command is
+                    // still taken below, the one `LEADER :` names included.
+                    None if line.trim() == "keymap" => {
+                        taught_now.lock().map(|a| a.clone()).unwrap_or_default()
+                    }
                     // THE CURRENT STATE FIRST, then the list. The footer asks
                     // this on every change of focus, because a buffer that
                     // changed state while it was NOT focused has nothing to push
@@ -1794,7 +1823,7 @@ impl Host {
         // in another, with the error growing with the distance from the origin.
         let (cell_px, line_height) = cell();
         #[allow(clippy::cast_possible_truncation)]
-        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32);
+        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32, self.top);
         let mut out = Vec::new();
         for c in &self.list.commands {
             let Command::Svg {
@@ -1871,14 +1900,6 @@ impl Host {
     fn draw(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         self.width = ui.width;
         self.height = ui.height;
-        // A QUESTION ON THE LINE TAKES THE MESSAGE'S PLACE: it is what the
-        // keyboard is typing into, and the door routes every key to it.
-        self.question = self.question_of(ui);
-        self.said = if self.question.is_empty() {
-            self.said_of(ui.message.as_deref())
-        } else {
-            Vec::new()
-        };
         // A THEME CHOSEN SINCE drops the old theme's CPU copies. The key
         // already tells the two apart (`svg_key`), so this is memory and not
         // correctness.
@@ -1887,30 +1908,26 @@ impl Host {
             self.theme_seen = theme;
             self.rasterized.clear();
         }
+        // THE HEADER IS THE HOST'S, as over every window: what the frame
+        // declared — its title and what it teaches — drawn, lit, explained
+        // and clicked by the one machinery every window has, and the
+        // component's rows under it. The frame is asked for at the height the
+        // last header left it; a header that came out taller or shorter
+        // (a drawer opened, a sentence put up) is the frame asked again.
         self.re_render();
-        let (columns, lines) = self.context_of();
-        // WHILE THE DOOR SAYS SOMETHING, the block the component keeps at its
-        // foot is drawn where the component put it — above the message — and
-        // not counted back from the window's bottom edge, which is where the
-        // message is. Dropped from the list itself, so the drawing, the click
-        // and the bar all read the one layout (`paint::Rows`).
-        if !self.said.is_empty() {
-            self.list
-                .commands
-                .retain(|c| !matches!(c, ronoctua_protocol::Command::Anchor { .. }));
+        let mut header = self.header(ui);
+        let top = ui.first_of_list();
+        if top != self.top {
+            self.top = top;
+            self.re_render();
+            header = self.header(ui);
         }
+        let (columns, lines) = self.context_of();
+        canvas.spans.extend(header);
+        canvas.over.extend(ui.hinted.bar(ui.frame(0)));
         canvas
             .spans
-            .extend(spans_of(&self.list, &self.texts, columns, lines));
-        canvas.spans.extend(said_spans(&self.said, lines));
-        // THE KEY UNDER THE POINTER LIT, from the marks the click reads.
-        canvas.spans.extend(crate::chrome::hint_spans(
-            &crate::chrome::lit(&self.question, self.question_lit),
-            ronoctua_render::Size::Px(tokens::text::size()),
-            tokens::space::CONTENT_INSET,
-            tokens::space::CONTENT_INSETY + lines,
-            columns,
-        ));
+            .extend(spans_of(&self.list, &self.texts, columns, lines, self.top));
         // THE SELECTION FIRST OF ALL: it is a background, and anything drawn
         // after it stays on top. THE DRAWING BELOW THE TEXT, as in the footer:
         // what is written over it has to stay legible. The canvas draws in
@@ -1920,7 +1937,7 @@ impl Host {
         // host drew it in: its column is the bar's (`crate::bars`), and the
         // door then tells the component the pointer on it is on no row.
         #[allow(clippy::cast_precision_loss)]
-        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32);
+        let rows = crate::paint::Rows::of(&self.list.commands, self.height as f32, self.top);
         for c in &self.list.commands {
             #[allow(clippy::cast_precision_loss)]
             if let Some(g) =
@@ -1970,6 +1987,7 @@ impl Host {
             self.height as f32,
             &self.texts,
             columns,
+            self.top,
         );
         // ONE CURSOR KEEPS THE NEUTRAL HOVER. A buffer paints every hover in
         // its cursor's colour (`Role::HoverOf`), because it cannot know how
@@ -2005,8 +2023,8 @@ impl Host {
         // moved it, which is a click landing one row off exactly where the
         // rows are fewest.
         #[allow(clippy::cast_possible_truncation)]
-        let line =
-            crate::paint::Rows::of(&self.list.commands, self.height as f32).line_at(y as f32)?;
+        let line = crate::paint::Rows::of(&self.list.commands, self.height as f32, self.top)
+            .line_at(y as f32)?;
         Some((
             u16::try_from(column.checked_sub(u32::from(tokens::space::CONTENT_INSET))?).ok()?,
             line,
@@ -2033,10 +2051,10 @@ impl Host {
         let (columns, _) = self.context_of();
         crate::paint::bar_grabbed(
             &self.list.commands,
+            &crate::paint::Rows::of(&self.list.commands, self.height as f32, self.top),
             x as f32,
             y as f32,
             self.width as f32,
-            self.height as f32,
             &self.texts,
             columns,
         )
@@ -2074,91 +2092,9 @@ impl Host {
         let lines = ((self.height as f32 / cell_height_px) as u32)
             .saturating_sub(u32::from(tokens::space::CONTENT_INSETY) * 2)
             .clamp(1, u32::from(u16::MAX)) as u16;
-        // THE DOOR'S MESSAGE TAKES ITS LINES FROM THE COMPONENT, which is told
-        // a window that much shorter — nothing it draws is covered. And so
-        // does a question, which is one line.
-        let said = u16::try_from(self.said.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(u16::from(!self.question.is_empty()));
-        (columns, lines.saturating_sub(said).max(1))
-    }
-
-    /// What of the question's line is at `(x, y)`: `None` off the line, and
-    /// on it the key there, if any — the ONE answer the lit key and the click
-    /// both read, off the pieces as they were drawn.
-    fn question_at(&self, x: f64, y: f64) -> Option<Option<crate::chrome::Mark>> {
-        if self.question.is_empty() || x < 0.0 || y < 0.0 {
-            return None;
-        }
-        let (width, height) = cell();
-        let (columns, lines) = self.context_of();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let (column, line) = (
-            (x / f64::from(width)) as u16,
-            (y / f64::from(height)) as u16,
-        );
-        question_mark_at(
-            &self.question,
-            (column, line),
-            tokens::space::CONTENT_INSETY + lines,
-            columns,
-        )
-    }
-
-    /// The question on the door's line as pieces this wide — none when
-    /// nothing is being asked.
-    fn question_of(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
-        let Some(line) = ui.asking.as_ref() else {
-            return Vec::new();
-        };
-        let (cell_width_px, _) = cell();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let columns = ((self.width as f32 / cell_width_px) as u32)
-            .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
-            .clamp(1, u32::from(u16::MAX)) as u16;
-        crate::door::list::question_pieces(line, &ui.texts, columns)
-    }
-
-    /// A press on the question's line: its two keys, as the keyboard presses
-    /// them — `RET` answers with what is typed, `ESC` lets it go. `true` when
-    /// the press was the line's.
-    ///
-    /// Read off the SAME layout the drawing used (`chrome::hint_marks`, over
-    /// the one `laid`), so the key lit is the key the click takes.
-    fn question_pressed(&mut self, ui: &mut Ui, x: f64, y: f64) -> bool {
-        let Some(mark) = self.question_at(x, y) else {
-            return false;
-        };
-        let Some(crate::chrome::Act::Key(key)) = mark.and_then(|m| m.press) else {
-            return true;
-        };
-        let Some(asked) = ui.asking.take() else {
-            return true;
-        };
-        if ronoctua_keymap::Key::parse("RET").is_ok_and(|k| k == key) {
-            self.answered(ui, asked.id, &asked.text);
-        } else {
-            self.unanswered(ui, asked.id);
-        }
-        true
-    }
-
-    /// The door's message, as the lines it is drawn on at this width — at most
-    /// half the window, so the component always keeps the other half.
-    fn said_of(&self, message: Option<&str>) -> Vec<String> {
-        let Some(message) = message.filter(|m| !m.is_empty()) else {
-            return Vec::new();
-        };
-        let (cell_width_px, cell_height_px) = cell();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let columns = ((self.width as f32 / cell_width_px) as u32)
-            .saturating_sub(u32::from(tokens::space::CONTENT_INSET) * 2)
-            .clamp(1, u32::from(u16::MAX)) as u16;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let lines = ((self.height as f32 / cell_height_px) as usize).max(2);
-        let mut out = crate::chrome::note_lines(message, columns);
-        out.truncate(lines / 2);
-        out
+        // THE HEADER TAKES ITS LINES FROM THE COMPONENT, which is told a
+        // window that much shorter — nothing it draws is covered.
+        (columns, lines.saturating_sub(self.top).max(1))
     }
 
     /// Each scale's heights, in cells.
@@ -2181,12 +2117,7 @@ impl Host {
     ///
     fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
-        match self.instance.render(
-            columns,
-            lines,
-            Self::heights(),
-            ronoctua_shell_kit::header::hide_header(),
-        ) {
+        match self.instance.render(columns, lines, Self::heights()) {
             // THE GATE HOLDS ON EVERY FRAME, and not only the first.
             //
             // A component can emit the gated primitive only after
@@ -2196,7 +2127,10 @@ impl Host {
             // command: drawing half of what the buffer asked for is worse than not
             // drawing, because it looks as if it works.
             Ok(l) => match l.validate(&self.capabilities) {
-                Ok(()) => self.list = l,
+                Ok(()) => {
+                    self.list = l;
+                    self.declared();
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "frame refused: a primitive with no capability");
                 }
@@ -2205,6 +2139,48 @@ impl Host {
                 tracing::error!(error = %e, "the component's render failed");
             }
         }
+    }
+
+    /// What the frame just rendered declared for the header — and what the
+    /// socket answers `keymap` with from now on: the `LEADER Alt` shortcuts
+    /// taught now (`Host::taught_now`).
+    fn declared(&mut self) {
+        self.declared =
+            crate::chrome::declared(&self.list, &self.keymap, &mut self.interned, &self.texts);
+        let now = self
+            .declared
+            .teaching
+            .iter()
+            .filter(|t| t.control)
+            .filter_map(|t| t.command.map(|id| format!("{} {id}", t.keys)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let Ok(mut answer) = self.taught_now.lock()
+            && *answer != now
+        {
+            *answer = now;
+        }
+    }
+
+    /// THE HEADER, as every window's is drawn (`chrome::Hinted::head`): the
+    /// question being typed, else the door's message, else the title and
+    /// what the component teaches (`door::list::line_zero`). With the window's
+    /// header hidden it is drawn only while it says or asks something.
+    fn header(&self, ui: &mut Ui) -> Vec<ronoctua_render::Span> {
+        // EACH SHORTCUT AS `LEADER Alt` REACHES IT — `⌥` and its one key, spelt
+        // under the pointer — by the one rule every window's header keeps.
+        ui.hinted.offers_leader_alt(&[]);
+        let texts = std::rc::Rc::clone(&ui.texts);
+        let (pieces, carries) =
+            crate::door::list::line_zero(ui, None, |_| self.declared.pieces(&texts));
+        let (columns, _) = self.context_of();
+        ui.hinted.head(
+            &pieces,
+            carries,
+            tokens::space::CONTENT_INSET,
+            columns,
+            &texts,
+        )
     }
 
     /// Delivers a key to the component and runs what it ASKS for.
@@ -3954,6 +3930,18 @@ impl Host {
     fn pointer_here(&mut self, ui: &mut Ui, hand: &mut Hand<PerSeat>, events: &[PointerEvent]) {
         self.many_pointers = ui.many_pointers;
         for e in events {
+            // THE HEADER'S HALF FIRST, as on every window: its drawer dragged
+            // or its control pressed, and the sentence about the shortcut
+            // under the pointer (`door::list::header_pointer`). A shortcut
+            // pressed never gets here — the door takes it as the key or as
+            // the command (`Content::run_shortcut`).
+            let (took, said) = crate::door::list::header_pointer(self, ui, e);
+            if said || took {
+                ui.ask_paint();
+            }
+            if took {
+                continue;
+            }
             // THE POINTER AT REST. `Leave` puts the highlight out; `Enter` and
             // `Motion` move it, and only across a cell boundary.
             match e.kind {
@@ -3961,9 +3949,6 @@ impl Host {
                     if hand.extra.cell_under_pointer.take().is_some() {
                         let seat = ui.pointer_seat;
                         self.deliver(&ronoctua_protocol::Input::Unhover { seat });
-                    }
-                    if self.question_lit.take().is_some() {
-                        ui.ask_paint();
                     }
                     // AND THE DRAG ENDS WITH THE POINTER. Wayland's implicit
                     // grab usually delivers the release, but a broken grab
@@ -3987,17 +3972,6 @@ impl Host {
                             first,
                         });
                         continue;
-                    }
-                    // THE QUESTION'S KEY UNDER THE POINTER LIGHTS, as every
-                    // shortcut does: what the click would press.
-                    let lit = self
-                        .question_at(e.position.0, e.position.1)
-                        .flatten()
-                        .filter(|m| m.press.is_some())
-                        .map(|m| m.id);
-                    if lit != self.question_lit {
-                        self.question_lit = lit;
-                        ui.ask_paint();
                     }
                     // A POINTER ON A DRAWN BAR NEVER REACHES HERE: the door
                     // hands it over as leaving the rows (`crate::bars`).
@@ -4042,6 +4016,12 @@ impl Host {
                 if lines == 0 {
                     continue;
                 }
+                // A WHEEL OVER THE OPEN DRAWER WALKS THE DRAWER, and not the
+                // component under it: the gesture is what the pointer is on.
+                if ui.hinted.turned(ui.frame(0), e.position.1, lines) {
+                    ui.ask_paint();
+                    continue;
+                }
                 // A SENTENCE THAT IS CUT TAKES THE WHEEL, and the host
                 // answers it: a paragraph's total is the host's, because the
                 // host is what wrapped it. See `paint::sentence_wheeled`.
@@ -4049,9 +4029,9 @@ impl Host {
                 #[allow(clippy::cast_possible_truncation)]
                 if let Some(said) = crate::paint::sentence_wheeled(
                     &self.list.commands,
+                    &crate::paint::Rows::of(&self.list.commands, self.height as f32, self.top),
                     e.position.0 as f32,
                     e.position.1 as f32,
-                    self.height as f32,
                     &self.texts,
                     columns,
                     i16::try_from(lines).unwrap_or(if lines < 0 { i16::MIN } else { i16::MAX }),
@@ -4089,11 +4069,6 @@ impl Host {
                 continue;
             };
             if button != crate::door::LEFT_BUTTON {
-                continue;
-            }
-            // A PRESS ON THE QUESTION'S LINE is the line's: its keys are
-            // controls, and the component's rows end above it.
-            if self.question_pressed(ui, e.position.0, e.position.1) {
                 continue;
             }
             // A PRESS ON A BAR IS A DRAG, and never a click on the row behind
@@ -4160,10 +4135,36 @@ impl Content for Host {
         0
     }
 
-    /// `Esc` and the right `Ctrl` are the BUFFER's — it has no header line of
-    /// the door's, and `Esc` is its key and its modifier (see [`Escape`]).
+    /// THE HEADER'S OWN KEYS ARE THE HEADER'S, as on every window: the right
+    /// `Ctrl` walks its drawer and `Esc` shuts it first — the header is the
+    /// host's now, drawn over the component. An `Esc` with the drawer shut is
+    /// still the buffer's key and its modifier (see [`Escape`]).
     fn header_keys(&self) -> bool {
-        false
+        true
+    }
+
+    /// The header's pieces, from what the last frame declared
+    /// (`chrome::declared`) — what a window's line teaches.
+    fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
+        self.declared.pieces(&ui.texts)
+    }
+
+    /// The sentence under the pointer is what the component declared
+    /// (`about`): its `cmd-<id>` is the short word on the line.
+    fn explains(&self, id: &'static str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        self.declared.explains(id, texts)
+    }
+
+    /// A SHORTCUT OF THE COMPONENT, clicked on the header: its command, as
+    /// the footer's `LEADER Alt` sends it — only one the buffer declared, and
+    /// none while a question takes every key.
+    fn run_shortcut(&mut self, ui: &mut Ui, command: &str) -> bool {
+        if ui.asking.is_some() || !self.keymap.iter().any(|(_, id)| id == command) {
+            return false;
+        }
+        self.deliver(&ronoctua_protocol::Input::Command(command.to_owned()));
+        self.hand_over(ui);
+        true
     }
 
     /// A BUFFER BINDS ITS OWN per-PID socket (`publish_keymap`), answering
@@ -4224,6 +4225,13 @@ impl Content for Host {
             // stays truthful because the walk back reports itself through
             // `effect::state-changed`.
             self.deliver(&ronoctua_protocol::Input::Cancel);
+            // A CANCEL WITH NOWHERE TO GO BACK TO closes the buffer, as `ESC`
+            // closes every window — confirmed first (`Ui::closing`): the
+            // component is at its base and walked nothing back, so keeping
+            // the window undoes nothing.
+            if self.quit && !ui.closing() {
+                self.quit = false;
+            }
         }
         self.hand_over(ui);
     }
@@ -4254,7 +4262,10 @@ impl Content for Host {
         let pressed = events
             .iter()
             .any(|e| matches!(e.kind, PointerEventKind::Press { .. }));
+        // THIS HAND'S HOLD ON THE HEADER'S DRAWER, as every window keeps it.
+        ui.hinted.swap_hand(&mut hand.hint_drag);
         self.pointer_here(ui, hand, events);
+        ui.hinted.swap_hand(&mut hand.hint_drag);
         if pressed && ui.message.take().is_some() {
             ui.ask_paint();
         }
@@ -4374,26 +4385,6 @@ impl Host {
     }
 }
 
-/// What of a question's line drawn on `row` is at the cell `(column, line)`:
-/// `None` off the line, and on it the key there, if any — read off the SAME
-/// marks the drawing lays (`chrome::hint_marks`), so the key the pointer
-/// lights is the key its click presses.
-fn question_mark_at(
-    question: &[crate::chrome::Piece],
-    (column, line): (u16, u16),
-    row: u16,
-    columns: u16,
-) -> Option<Option<crate::chrome::Mark>> {
-    if question.is_empty() || line != row {
-        return None;
-    }
-    Some(
-        crate::chrome::hint_marks(question, tokens::space::CONTENT_INSET, row, columns)
-            .into_iter()
-            .find(|m| column >= m.at && column < m.at + m.cells),
-    )
-}
-
 /// A 1-based index into a list the host sent, as a position: `0` is "none",
 /// and `checked_sub` — not `- 1` — because a zero is an ordinary thing for a
 /// buffer to send.
@@ -4414,30 +4405,6 @@ fn act_ask(
         row,
         answer: answer.map(ToOwned::to_owned),
     }
-}
-
-/// The door's message, one span per line, on the lines under the
-/// component's `lines` — in the register every window's line says a sentence
-/// in (`chrome::Piece::said`).
-fn said_spans(said: &[String], lines: u16) -> Vec<ronoctua_render::Span> {
-    let pieces: Vec<Vec<crate::chrome::Piece>> = said
-        .iter()
-        .map(|l| vec![crate::chrome::Piece::said(l.clone())])
-        .collect();
-    pieces
-        .iter()
-        .zip(0u16..)
-        .flat_map(|(line, n)| {
-            let room = ronoctua_render::layout::width(&line[0].text);
-            crate::chrome::hint_spans(
-                line,
-                ronoctua_render::Size::Px(tokens::text::size()),
-                tokens::space::CONTENT_INSET,
-                tokens::space::CONTENT_INSETY + lines + n,
-                room,
-            )
-        })
-        .collect()
 }
 
 /// What a key held with `mods` is in a buffer's window.
@@ -4549,47 +4516,6 @@ mod tests {
                 answer: Some("tomorrow at nine".to_owned()),
             }
         );
-    }
-
-    /// FAILS IF: the question's key under the pointer is not the one lit, a
-    /// key is lit off the question's line, or a key lit is not the key its
-    /// click presses.
-    #[test]
-    fn the_questions_key_under_the_pointer_is_lit_and_pressed() {
-        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-        let line = crate::line::Line::asking("fixture-when", "line-answer");
-        let pieces = crate::door::list::question_pieces(&line, &texts, 80);
-        let row = 9;
-        let marks = crate::chrome::hint_marks(&pieces, tokens::space::CONTENT_INSET, row, 80);
-        // THE TWO KEYS, each drawn as its notation and its word.
-        let mut ids: Vec<&str> = marks.iter().map(|m| m.id).collect();
-        ids.dedup();
-        assert_eq!(ids.len(), 2, "the question's two keys are not both marked");
-        for m in &marks {
-            let found = super::question_mark_at(&pieces, (m.at, row), row, 80)
-                .flatten()
-                .expect("nothing under the pointer on a key");
-            assert_eq!((found.id, found.press), (m.id, m.press));
-            let lit = crate::chrome::lit(&pieces, Some(found.id));
-            let changed: Vec<_> = pieces
-                .iter()
-                .zip(&lit)
-                .filter(|(was, now)| was.register != now.register)
-                .map(|(_, now)| (now.id, now.register))
-                .collect();
-            assert!(
-                changed.iter().all(|(id, _)| *id == Some(m.id)),
-                "another key was lit: {changed:?}"
-            );
-            assert!(
-                changed
-                    .iter()
-                    .any(|(_, r)| *r == crate::chrome::Register::KeyLit),
-                "the key under the pointer was not lit"
-            );
-        }
-        assert!(super::question_mark_at(&pieces, (marks[0].at, row + 1), row, 80).is_none());
-        assert!(super::question_mark_at(&[], (0, row), row, 80).is_none());
     }
 
     /// A page of the module `fixture` at `generation`, with one row.
@@ -4773,7 +4699,7 @@ mod tests {
         for column in [last, last / 2] {
             let list = a_bar(column);
             let texts = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
-            let quads = quads_of(&list, width, height, &texts, 100);
+            let quads = quads_of(&list, width, height, &texts, 100, 0);
             assert_eq!(quads.len(), 1, "column {column}: one bar is drawn");
             let thumb = quads[0];
             // EVERY PIXEL OF IT, corners included.
@@ -4781,7 +4707,15 @@ mod tests {
             while x < thumb.x + thumb.width {
                 let mut y = thumb.y;
                 while y < thumb.y + thumb.height {
-                    let got = bar_grabbed(&list.commands, x, y, width, height, &texts, 100);
+                    let got = bar_grabbed(
+                        &list.commands,
+                        &crate::paint::Rows::of(&list.commands, height, 0),
+                        x,
+                        y,
+                        width,
+                        &texts,
+                        100,
+                    );
                     assert!(
                         got.is_some_and(|g| g.column == column),
                         "column {column}: the pointer at ({x}, {y}) is on the thumb and grabs nothing"
@@ -4793,8 +4727,16 @@ mod tests {
             // AND THE TRACK AROUND IT, because a one-cell thumb is a target
             // nobody can hit: pressing the track jumps there, as every
             // scrollbar does.
-            let grab = bar_grabbed(&list.commands, thumb.x, thumb.y, width, height, &texts, 100)
-                .expect("the thumb is on the track");
+            let grab = bar_grabbed(
+                &list.commands,
+                &crate::paint::Rows::of(&list.commands, height, 0),
+                thumb.x,
+                thumb.y,
+                width,
+                &texts,
+                100,
+            )
+            .expect("the thumb is on the track");
             assert_eq!(
                 grab.row_at(grab.y),
                 0,
@@ -4812,10 +4754,10 @@ mod tests {
             assert!(
                 bar_grabbed(
                     &list.commands,
+                    &crate::paint::Rows::of(&list.commands, height, 0),
                     grab.x - cell_w,
                     thumb.y,
                     width,
-                    height,
                     &texts,
                     100
                 )
@@ -4826,10 +4768,10 @@ mod tests {
             assert!(
                 bar_grabbed(
                     &list.commands,
+                    &crate::paint::Rows::of(&list.commands, height, 0),
                     thumb.x,
                     grab.y - line_h,
                     width,
-                    height,
                     &texts,
                     100
                 )
@@ -4839,10 +4781,10 @@ mod tests {
             assert!(
                 bar_grabbed(
                     &list.commands,
+                    &crate::paint::Rows::of(&list.commands, height, 0),
                     thumb.x,
                     grab.y + grab.height + 1.0,
                     width,
-                    height,
                     &texts,
                     100
                 )
@@ -4856,10 +4798,10 @@ mod tests {
             assert!(
                 bar_grabbed(
                     &list.commands,
+                    &crate::paint::Rows::of(&list.commands, height, 0),
                     thumb.x,
-                    crate::paint::Rows::of(&list.commands, height).top(2),
+                    crate::paint::Rows::of(&list.commands, height, 0).top(2),
                     width,
-                    height,
                     &texts,
                     100
                 )
@@ -4926,35 +4868,6 @@ mod tests {
         assert_eq!(q.known, [7, 1]);
         assert_eq!(q.opening(7), Some("org.gimp.GIMP.desktop"));
         assert_eq!(q.opening(1), None);
-    }
-
-    /// FAILS IF: the door's message — a footer that is not there, a paste
-    /// that failed, a program that could not start — is drawn nowhere in a
-    /// buffer's window: it goes on the lines under the component's, one per
-    /// wrapped line, in the register a window's line says a sentence in.
-    #[test]
-    fn the_doors_message_is_drawn_under_the_component() {
-        let said = vec![
-            "No footer is listening.".to_owned(),
-            "Try again.".to_owned(),
-        ];
-        let spans = super::said_spans(&said, 20);
-        let lines: Vec<u16> = spans.iter().map(|s| s.line).collect();
-        assert_eq!(
-            lines,
-            [
-                ronoctua_tokens::space::CONTENT_INSETY + 20,
-                ronoctua_tokens::space::CONTENT_INSETY + 21
-            ]
-        );
-        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(text, "No footer is listening.Try again.");
-        assert!(
-            spans
-                .iter()
-                .all(|s| !s.foot && s.column == ronoctua_tokens::space::CONTENT_INSET)
-        );
-        assert!(super::said_spans(&[], 20).is_empty());
     }
 
     /// A TAP of `Esc` is still `Esc`, and it acts when the key comes back up.

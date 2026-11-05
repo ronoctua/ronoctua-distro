@@ -751,6 +751,7 @@ impl Content for Notifications {
         // The note is the same source as the footer's — the reason a switch
         // does nothing — so the two doors say the same sentence in the same
         // place.
+        let message = ui.message.is_some();
         let said = ui
             .message
             .clone()
@@ -773,26 +774,38 @@ impl Content for Notifications {
         if question.is_none() && said.is_some() {
             ui.hinted.say(None);
         }
-        let (pieces, hinting) = question.map(|q| (q, true)).unwrap_or_else(|| {
-            said.map_or_else(
-                || {
-                    // THE KEYS, in two registers, from the SAME table the footer's
-                    // minibuffer reads. AND WHERE IN THE LIST THE CURSOR IS: this
-                    // window draws no rectangle for the cursor, so with a
-                    // fortnight of records there was no sign that anything lay
-                    // below the last drawn row.
-                    let lists = crate::notifications::Lists::of(&self.records, &self.book);
-                    let place = Some((self.view.cursor(), lists.len(self.view.pane())));
-                    (self.view.hint_of(place, &lists, &ui.texts), true)
-                },
-                |text| (vec![crate::chrome::Piece::said(text)], false),
-            )
-        });
+        // WHAT AN ORDER SAID still takes line 0 with no header; the note and
+        // what the pointer rests on do not (`chrome::Carries::speaks`).
+        let words = if message {
+            crate::chrome::Carries::Said
+        } else {
+            crate::chrome::Carries::About
+        };
+        let (pieces, carries) = question
+            .map(|q| (q, crate::chrome::Carries::Question))
+            .unwrap_or_else(|| {
+                said.map_or_else(
+                    || {
+                        // THE KEYS, in two registers, from the SAME table the footer's
+                        // minibuffer reads. AND WHERE IN THE LIST THE CURSOR IS: this
+                        // window draws no rectangle for the cursor, so with a
+                        // fortnight of records there was no sign that anything lay
+                        // below the last drawn row.
+                        let lists = crate::notifications::Lists::of(&self.records, &self.book);
+                        let place = Some((self.view.cursor(), lists.len(self.view.pane())));
+                        (
+                            self.view.hint_of(place, &lists, &ui.texts),
+                            crate::chrome::Carries::Keys,
+                        )
+                    },
+                    |text| (vec![crate::chrome::Piece::said(text)], words),
+                )
+            });
         let (margin, columns) = (ui.margin, ui.columns);
         let texts = ui.texts.clone();
         canvas
             .spans
-            .extend(ui.hinted.head(&pieces, hinting, margin, columns, &texts));
+            .extend(ui.hinted.head(&pieces, carries, margin, columns, &texts));
         canvas.over.extend(ui.hinted.bar(ui.frame(0)));
 
         // THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door

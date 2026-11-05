@@ -842,7 +842,15 @@ impl FastAccess {
     }
 
     /// Closes the window — or puts it away, when the person keeps it ready.
+    ///
+    /// ASKED FIRST, either way: an `ESC` that would close says so, and the
+    /// second closes (`Ui::closing`). A window put away is gone from the
+    /// screen as surely as a closed one, and the search is let go before it.
+    /// The column is not asked: it is chrome, not a window a hand closes.
     fn close(&mut self, ui: &mut Ui) {
+        if !ui.closing() {
+            return;
+        }
         if !self.keeps() {
             ui.quit = true;
             return;

@@ -1247,6 +1247,215 @@ pub fn hint_of_marked(
     out
 }
 
+/// ONE PAIR A BUFFER TEACHES NOW, as its host hands it over — every id
+/// interned once, from what the buffer declared ([`taught_pieces`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Teaching {
+    /// A local sequence (`, r`, which is `LEADER Alt r` —
+    /// `ronoctua_protocol::local_key`) or a key that stays direct (`RET`,
+    /// `ESC`, `TAB`, `<up>`…).
+    pub keys: String,
+    /// The command a local sequence runs — the piece's id, and what a click
+    /// on it runs (`Content::run_shortcut`). `None` for a direct key.
+    pub command: Option<&'static str>,
+    /// The short word's text key — and the id of a direct key's piece.
+    pub says: &'static str,
+    /// Whether it does anything now: a pair taught but not a control is
+    /// drawn inert.
+    pub control: bool,
+}
+
+/// THE STRINGS A BUFFER'S HEADER NAMES, kept for the life of the window —
+/// a piece's id is `&'static str`, and a buffer's arrive as owned text every
+/// frame. Bounded ([`Interned::MOST`]): a buffer that kept inventing new
+/// ones would otherwise grow the host without end, and it is refused instead,
+/// once, in a sentence.
+#[derive(Debug, Default)]
+pub struct Interned {
+    kept: std::collections::HashMap<String, &'static str>,
+    refused: bool,
+}
+
+impl Interned {
+    /// How many distinct strings one window's header may ever name.
+    pub const MOST: usize = 512;
+
+    /// The one `&'static str` for `text`, or `None` past [`Interned::MOST`].
+    pub fn of(&mut self, text: &str) -> Option<&'static str> {
+        if let Some(kept) = self.kept.get(text) {
+            return Some(kept);
+        }
+        if self.kept.len() >= Self::MOST {
+            if !self.refused {
+                self.refused = true;
+                tracing::warn!(
+                    most = Self::MOST,
+                    "a buffer named more strings in its header than a window keeps"
+                );
+            }
+            return None;
+        }
+        let kept: &'static str = Box::leak(text.to_owned().into_boxed_str());
+        self.kept.insert(text.to_owned(), kept);
+        Some(kept)
+    }
+}
+
+/// WHAT A BUFFER'S FRAME DECLARES for the header its host draws
+/// (`Command::Heading`, `Command::Taught`), every id interned.
+#[derive(Debug, Default)]
+pub struct Declared {
+    /// The title's glyph.
+    pub glyph: Option<&'static str>,
+    /// The title, in the reader's language.
+    pub title: Option<String>,
+    /// The pairs, in the order taught.
+    pub teaching: Vec<Teaching>,
+    /// Each pair's sentence under the pointer, by the piece's id — the
+    /// buffer's `about`, because its `cmd-<id>` is the short word.
+    pub abouts: Vec<(&'static str, &'static str)>,
+}
+
+impl Declared {
+    /// The sentence about the piece `id`, when the buffer declared one the
+    /// texts have.
+    #[must_use]
+    pub fn explains(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        self.abouts
+            .iter()
+            .find(|(of, _)| *of == id)
+            .map(|(_, about)| *about)
+            .filter(|about| texts.has(about))
+            .map(|about| texts.t(about))
+    }
+
+    /// The header's pieces: the title, then what is taught with `ESC` first.
+    #[must_use]
+    pub fn pieces(&self, texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+        Title {
+            glyph: self.glyph,
+            label: None,
+            name: self.title.as_deref(),
+        }
+        .before(taught_pieces(&self.teaching, texts))
+    }
+}
+
+/// What `list` declares for its header — `keymap` is the buffer's
+/// `(sequence, command)` table, which names the command a local sequence
+/// runs. A local sequence the keymap does not bind is no shortcut, and is
+/// left out with a sentence.
+pub fn declared(
+    list: &ronoctua_protocol::DisplayList,
+    keymap: &[(String, String)],
+    interned: &mut Interned,
+    texts: &ronoctua_i18n::Texts,
+) -> Declared {
+    use ronoctua_protocol::{Command, Text};
+    let mut out = Declared::default();
+    for c in &list.commands {
+        match c {
+            Command::Heading { icon, title } => {
+                out.glyph =
+                    tokens::icon_by_wit_name(icon).and_then(|g| interned.of(&g.to_string()));
+                out.title = Some(match title {
+                    Text::Key(k) => texts.t(k),
+                    Text::Data(d) => d.clone(),
+                    Text::Icon(i) => tokens::icon_by_wit_name(i)
+                        .map(String::from)
+                        .unwrap_or_default(),
+                });
+            }
+            Command::Taught {
+                keys,
+                says,
+                about,
+                control,
+            } => {
+                let command = if ronoctua_protocol::local_key(keys).is_some() {
+                    let Some((_, id)) = keymap.iter().find(|(k, _)| k == keys) else {
+                        tracing::warn!(keys = %keys, "a buffer taught a sequence its keymap does not bind");
+                        continue;
+                    };
+                    let Some(id) = interned.of(id) else { continue };
+                    Some(id)
+                } else {
+                    None
+                };
+                let Some(says) = interned.of(says) else {
+                    continue;
+                };
+                let id = command.unwrap_or(says);
+                if !about.is_empty()
+                    && let Some(about) = interned.of(about)
+                {
+                    out.abouts.push((id, about));
+                }
+                out.teaching.push(Teaching {
+                    keys: keys.clone(),
+                    command,
+                    says,
+                    control: *control,
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// THE HEADER OF A BUFFER'S WINDOW, from what the buffer teaches now — the
+/// same line a native window's table makes ([`hint_of_marked`]), with `ESC`
+/// first ([`with_the_way_back`]).
+///
+/// A local sequence is drawn as the chord it stands for in this notation
+/// (`, r` is `C-r`, `, SPC` is `SPC`), so its `⌥` and its one key come out of
+/// the one rule every window's do ([`leader_alt_pieces`]). A pair that is not
+/// a control is inert, and its `⌥` is drawn without the spelling — nothing
+/// under the pointer answers there.
+#[must_use]
+pub fn taught_pieces(taught: &[Teaching], texts: &ronoctua_i18n::Texts) -> Vec<Piece> {
+    let mut out = Vec::with_capacity(taught.len() * 3);
+    let mut said: Vec<&str> = Vec::with_capacity(taught.len());
+    for t in taught {
+        let id = t.command.unwrap_or(t.says);
+        if said.contains(&id) {
+            continue;
+        }
+        let local = ronoctua_protocol::local_key(&t.keys);
+        let direct = match local {
+            Some(k) if k.chars().count() == 1 => ronoctua_keymap::Key::parse(&format!("C-{k}")),
+            Some(k) => ronoctua_keymap::Key::parse(k),
+            None => ronoctua_keymap::Key::parse(&t.keys),
+        };
+        let Ok(direct) = direct else {
+            tracing::warn!(keys = %t.keys, id, "a buffer taught a key this notation cannot read");
+            continue;
+        };
+        said.push(id);
+        if !out.is_empty() {
+            out.push(Piece::separator());
+        }
+        let words = Piece::prose(format!(" {}", texts.t(t.says))).about(id);
+        if t.control {
+            out.push(
+                Piece::key_in(key_text(&direct), Register::Key)
+                    .about(id)
+                    .pressing(direct),
+            );
+            out.push(words.pressing(direct));
+        } else {
+            let shown = match local {
+                Some(k) => leader_alt_text(k, false),
+                None => key_text(&direct),
+            };
+            out.push(Piece::key_in(shown, Register::Key).about(id));
+            out.push(words);
+        }
+    }
+    with_the_way_back(out, texts)
+}
+
 /// The punctuation the `us` layout (`nix/keyboard-xkb.nix`) types WITHOUT
 /// Shift — what a key after `LEADER Alt` may be besides a letter, a digit and
 /// a named key ([`is_one_key`]).
@@ -1533,7 +1742,7 @@ fn published(
 #[must_use]
 pub fn leader_alt_text(key: &str, spelt: bool) -> String {
     if spelt {
-        format!("{} {key}", crate::bindings::leader_alt_label())
+        ronoctua_design::leader_alt::spelt(&crate::bindings::leader_alt_label(), key)
     } else {
         format!("{}{key}", tokens::icon::LEADER_ALT)
     }
@@ -1544,11 +1753,7 @@ pub fn leader_alt_text(key: &str, spelt: bool) -> String {
 /// [`leader_alt_text`] to spell it.
 #[must_use]
 pub fn leader_alt_prefix_cells(spelt: bool) -> u16 {
-    if spelt {
-        ronoctua_render::layout::width(&crate::bindings::leader_alt_label()) + 1
-    } else {
-        1
-    }
+    ronoctua_design::leader_alt::prefix_cells(&crate::bindings::leader_alt_label(), spelt)
 }
 
 /// A hint, with every shortcut `LEADER Alt` offers drawn as it is reached:
@@ -2371,6 +2576,46 @@ pub struct Hinted {
     /// The shortcut whose GLYPH the pointer rests on — spelt out while it does
     /// ([`leader_alt_text`]).
     glyph_lit: Option<&'static str>,
+    /// WITH NO HEADER, whether the last frame still drew line 0 — for a
+    /// sentence or a question, which have nowhere else to be
+    /// ([`Carries::speaks`]); the list moves down a line while it does.
+    spoke: bool,
+    /// Whether [`Hinted::spoke`] changed in the last frame — the list moved,
+    /// and the door owes the window its size again
+    /// ([`Hinted::line_zero_moved`]).
+    spoke_moved: bool,
+}
+
+/// WHAT LINE 0 CARRIES this frame — [`Hinted::head`] draws it accordingly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carries {
+    /// The window's shortcuts.
+    Keys,
+    /// What the row or the button under the pointer has to add.
+    About,
+    /// What the last order said ([`Piece::said`]).
+    Said,
+    /// The question being typed, with its `ESC` and `RET`.
+    Question,
+}
+
+impl Carries {
+    /// Whether its runs are things a pointer presses — shortcuts, or the
+    /// question's `ESC` and `RET`.
+    #[must_use]
+    pub const fn presses(self) -> bool {
+        matches!(self, Self::Keys | Self::Question)
+    }
+
+    /// Whether line 0 is drawn for it EVEN WITH NO HEADER (the owner's rule,
+    /// 2026-11-05): a sentence and a question have nowhere else to be, and a
+    /// window that asked something nobody could see took every key for it.
+    /// The keys are the footer's minibuffer's, and what the pointer rests on
+    /// would move the list at every row it crossed.
+    #[must_use]
+    pub const fn speaks(self) -> bool {
+        matches!(self, Self::Said | Self::Question)
+    }
 }
 
 impl Default for Hinted {
@@ -2397,6 +2642,8 @@ impl Default for Hinted {
             leader_alt: None,
             glyphed: Vec::new(),
             glyph_lit: None,
+            spoke: false,
+            spoke_moved: false,
         }
     }
 }
@@ -2667,18 +2914,48 @@ impl Hinted {
     pub fn head(
         &mut self,
         pieces: &[Piece],
-        hinting: bool,
+        carries: Carries,
         margin: u16,
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<ronoctua_render::Span> {
+        let hinting = carries.presses();
         // NO HEADER: the window's list has reclaimed line 0, so this draws
         // nothing and keeps no mark, no chevron and no sentence a pointer could
         // land on; the drawer shuts. The keys it would have shown are the
-        // footer's minibuffer's now (`ronoctua_shell_kit::header`).
-        if self.hidden {
+        // footer's minibuffer's now (`ronoctua_shell_kit::header`). A SENTENCE
+        // OR A QUESTION still takes the line, alone, while it is there
+        // ([`Carries::speaks`]).
+        let speaking = self.hidden && carries.speaks();
+        if self.spoke != speaking {
+            self.spoke = speaking;
+            self.spoke_moved = true;
+        }
+        if self.hidden && !speaking {
             self.withdraw();
             return Vec::new();
+        }
+        if speaking {
+            // THE LINE ALONE: no drawer, no chevron, no sentence under it —
+            // only what is lit under the pointer stays (a question's `RET`).
+            self.placed.clear();
+            self.control = None;
+            self.said = None;
+            self.glyphed.clear();
+            self.glyph_lit = None;
+            let _ = self.fold.close();
+            let line = lit(pieces, self.lit);
+            let spans = hint_spans(
+                &line,
+                ronoctua_render::Size::Px(tokens::text::size()),
+                margin,
+                self.top,
+                columns,
+            );
+            if hinting {
+                self.placed = hint_marks(&line, margin, self.top, columns);
+            }
+            return spans;
         }
         let size = tokens::text::size();
         // THE SHORTCUT UNDER THE POINTER, LIT — see [`lit`].
@@ -2831,7 +3108,24 @@ impl Hinted {
     /// `true` when the height changed and the door owes another frame. It
     /// answers once and then never again — see `fold::settle`.
     pub fn settled(&mut self) -> bool {
-        crate::fold::settle(&mut self.fold, self.wrapped)
+        crate::fold::settle(&mut self.fold, self.wrapped) || self.spoke_moved
+    }
+
+    /// WITH NO HEADER, whether line 0 came or went in the last frame — a
+    /// sentence or a question put up or taken off ([`Carries::speaks`]) — so
+    /// the list moved a line, and a window that keeps its layout from its size
+    /// lays it out again. It answers once.
+    pub const fn line_zero_moved(&mut self) -> bool {
+        let moved = self.spoke_moved;
+        self.spoke_moved = false;
+        moved
+    }
+
+    /// Whether line 0 is drawn although the window wears no header — a
+    /// sentence or a question on it ([`Carries::speaks`]).
+    #[must_use]
+    pub const fn speaks(&self) -> bool {
+        self.spoke
     }
 
     /// Is the pointer on the control that opens the line?
@@ -6305,6 +6599,104 @@ mod tests {
     /// the way it is reached — the `LEADER Alt` glyph and the one key — or puts
     /// the glyph on what stays direct, or does not spell the glyph out for the
     /// shortcut the pointer rests on.
+    /// FAILS IF: what a buffer's frame declares does not become its header —
+    /// the title before the pairs, each local sequence running the command its
+    /// keymap names, the buffer's own sentence under the pointer and not the
+    /// `cmd-<id>` short word — or a sequence its keymap does not bind is
+    /// taught anyway, or the same string is kept twice.
+    #[test]
+    fn what_a_frame_declares_is_its_header() {
+        use super::{Interned, declared};
+        use ronoctua_protocol::{Command, DisplayList, Text};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let mut list = DisplayList::fresh_one();
+        list.push(Command::Heading {
+            icon: "brain".into(),
+            title: Text::Data("the task".into()),
+        });
+        list.push(Command::Taught {
+            keys: ", r".into(),
+            says: "view-back".into(),
+            about: "about-view-back".into(),
+            control: true,
+        });
+        list.push(Command::Taught {
+            keys: ", q".into(),
+            says: "view-back".into(),
+            about: String::new(),
+            control: true,
+        });
+        let keymap = vec![(", r".to_owned(), "power-window".to_owned())];
+        let mut interned = Interned::default();
+        let d = declared(&list, &keymap, &mut interned, &t);
+        assert_eq!(d.title.as_deref(), Some("the task"));
+        assert!(d.glyph.is_some(), "the title's glyph");
+        assert_eq!(d.teaching.len(), 1, "an unbound sequence was taught");
+        assert_eq!(d.teaching[0].command, Some("power-window"));
+        assert_eq!(
+            d.explains("power-window", &t),
+            Some(t.t("about-view-back")),
+            "the sentence is not the one the buffer declared"
+        );
+        let pieces = d.pieces(&t);
+        assert_eq!(pieces.first().map(|p| p.text.as_str()), d.glyph);
+        assert!(pieces.iter().any(|p| p.id == Some("power-window")));
+        // ONE STRING KEPT ONCE, however many frames name it.
+        let again = declared(&list, &keymap, &mut interned, &t);
+        assert!(std::ptr::eq(again.teaching[0].says, d.teaching[0].says));
+    }
+
+    #[test]
+    fn a_buffers_header_is_drawn_from_what_it_teaches() {
+        use super::{Act, Teaching, leader_alt_pieces, taught_pieces};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let teaching =
+            |keys: &str, command: Option<&'static str>, says: &'static str, control| Teaching {
+                keys: keys.to_owned(),
+                command,
+                says,
+                control,
+            };
+        let pieces = taught_pieces(
+            &[
+                teaching("RET", None, "network-window", true),
+                teaching(", r", Some("power-window"), "power-window", true),
+                teaching(", e", Some("audio-window"), "audio-window", false),
+                teaching(", SPC", Some("bluetooth-window"), "bluetooth-window", true),
+                // A KEY THIS NOTATION CANNOT READ is left out, and nothing else.
+                teaching("Tab", None, "files-window", true),
+            ],
+            &t,
+        );
+        let key_of = |pieces: &[Piece], id: &str| -> Piece {
+            pieces
+                .iter()
+                .find(|p| p.id == Some(id) && p.is_a_key())
+                .cloned()
+                .expect(id)
+        };
+        // `ESC` FIRST, as on every window.
+        assert_eq!(pieces.first().and_then(|p| p.id), Some("view-back"));
+        assert!(!pieces.iter().any(|p| p.id == Some("files-window")));
+        let ret = ronoctua_keymap::Key::parse("RET").expect("parses");
+        assert_eq!(key_of(&pieces, "network-window").press, Some(Act::Key(ret)));
+        // EACH LOCAL SEQUENCE IS `⌥` AND ITS ONE KEY, by the one rule.
+        let (drawn, glyphed) = leader_alt_pieces(&pieces, &[], None);
+        assert_eq!(glyphed, ["power-window", "bluetooth-window"]);
+        assert_eq!(
+            key_of(&drawn, "power-window").text,
+            format!("{}r", tokens::icon::LEADER_ALT)
+        );
+        assert_eq!(
+            key_of(&drawn, "bluetooth-window").text,
+            format!("{}SPC", tokens::icon::LEADER_ALT)
+        );
+        // AND ONE THAT IS NOT A CONTROL NOW is the glyph, inert.
+        let inert = key_of(&drawn, "audio-window");
+        assert_eq!(inert.text, format!("{}e", tokens::icon::LEADER_ALT));
+        assert_eq!(inert.press, None);
+    }
+
     #[test]
     fn a_header_draws_each_shortcut_as_leader_alt_reaches_it() {
         use super::{hint_of, key_text, leader_alt_pieces};
@@ -6361,7 +6753,7 @@ mod tests {
         let mut h = Hinted::at(0);
         h.offers_leader_alt(&[]);
         let drawn = |h: &mut Hinted| -> String {
-            h.head(&hint, true, 1, 80, &t)
+            h.head(&hint, super::Carries::Keys, 1, 80, &t)
                 .into_iter()
                 .map(|s| s.text)
                 .collect()
@@ -6388,6 +6780,50 @@ mod tests {
 
     /// FAILS IF: a header told to sit on line 1 — a column's, under the
     /// column's own control line — is drawn there and still answers on line
+    /// FAILS IF: with no header a sentence or a question is drawn nowhere —
+    /// the owner's rule (2026-11-05), after a window's question was found
+    /// taking every key where nobody could see it — or the keys or the
+    /// chevron come back with it, or what the pointer rests on takes the line
+    /// (the list would move at every row it crossed), or the door is not told
+    /// once that the line came and once that it went.
+    #[test]
+    fn with_no_header_line_zero_is_drawn_only_to_say_or_ask() {
+        use super::{Carries, Hinted, OF_THE_WAY_BACK, Piece};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let keys = hint_of(OF_THE_WAY_BACK, &t);
+        let said = vec![Piece::said("it was saved")];
+        let mut h = Hinted::default();
+        h.hide_header(true);
+        assert!(h.head(&keys, Carries::Keys, 1, 40, &t).is_empty());
+        assert!(
+            h.head(&said, Carries::About, 1, 40, &t).is_empty(),
+            "what the pointer rests on took line 0"
+        );
+        assert!(!h.speaks());
+        assert!(!h.line_zero_moved());
+
+        let spans = h.head(&said, Carries::Said, 1, 40, &t);
+        assert!(
+            spans.iter().any(|s| s.text.contains("it was saved")),
+            "{spans:?}"
+        );
+        assert!(spans.iter().all(|s| s.line == 0));
+        assert!(
+            !spans
+                .iter()
+                .any(|s| s.text == tokens::icon::EXPAND.to_string()),
+            "the chevron came back with no header"
+        );
+        assert!(h.speaks());
+        assert!(h.settled(), "the door was not told to lay out again");
+        assert!(h.line_zero_moved());
+        assert!(!h.line_zero_moved(), "it answered twice");
+
+        assert!(h.head(&keys, Carries::Keys, 1, 40, &t).is_empty());
+        assert!(!h.speaks());
+        assert!(h.line_zero_moved(), "the line went and nobody was told");
+    }
+
     /// 0: its shortcuts, its chevron and its sentence all have to be taken
     /// where they were drawn.
     #[test]
@@ -6399,7 +6835,13 @@ mod tests {
         let cell = f64::from(cell_width());
         let columns = 40;
         let mut h = Hinted::at(1);
-        let spans = h.head(&hint_of(OF_THE_WAY_BACK, &t), true, 1, columns, &t);
+        let spans = h.head(
+            &hint_of(OF_THE_WAY_BACK, &t),
+            super::Carries::Keys,
+            1,
+            columns,
+            &t,
+        );
         assert!(!spans.is_empty());
         assert!(
             spans.iter().all(|s| s.line == 1),
@@ -6437,7 +6879,13 @@ mod tests {
         let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let cell = f64::from(cell_width());
         let mut h = Hinted::at(1);
-        let _ = h.head(&hint_of(OF_THE_WAY_BACK, &t), true, 1, 40, &t);
+        let _ = h.head(
+            &hint_of(OF_THE_WAY_BACK, &t),
+            super::Carries::Keys,
+            1,
+            40,
+            &t,
+        );
         assert!(h.press_under(cell * 1.5, line * 1.5).is_some());
         h.withdraw();
         assert_eq!(h.press_under(cell * 1.5, line * 1.5), None);

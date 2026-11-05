@@ -491,6 +491,11 @@ impl Content for Capture {
         false
     }
 
+    /// No confirmation (`Ui::closing`): the capture is a mode over the screen, not a window.
+    fn confirms_closing(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         APP_ID
     }

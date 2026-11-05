@@ -108,20 +108,29 @@ pub fn token_color(name: &str) -> Option<tokens::Color> {
 /// it is the host that resolves colour and translation.
 ///
 /// Without it the first character touches the window's edge and looks like clipping.
-fn with_margin(mut t: ronoctua_render::Span) -> ronoctua_render::Span {
+///
+/// `top` is how many lines of the surface are the host's above the
+/// component's first one — its header (`Ui::first_of_list`): the component
+/// counts from its own zero, and the host puts that zero under them.
+fn with_margin(mut t: ronoctua_render::Span, top: u16) -> ronoctua_render::Span {
     t.column = t.column.saturating_add(tokens::space::CONTENT_INSET);
-    t.line = t.line.saturating_add(tokens::space::CONTENT_INSETY);
+    t.line = t
+        .line
+        .saturating_add(tokens::space::CONTENT_INSETY)
+        .saturating_add(top);
     t
 }
 
 /// The text runs of a component's display list, in the host's language, laid
 /// inside the buffer's margin and cut at its last line — what the renderer
-/// draws for a buffer of `columns` by `lines` cells.
+/// draws for a buffer of `columns` by `lines` cells, `top` lines down
+/// ([`with_margin`]).
 pub fn spans_of(
     list: &ronoctua_protocol::DisplayList,
     texts: &ronoctua_i18n::Texts,
     columns: u16,
     lines: u16,
+    top: u16,
 ) -> Vec<ronoctua_render::Span> {
     // AND NOTHING BELOW THE LAST LINE, SAID OUT LOUD.
     //
@@ -160,7 +169,7 @@ pub fn spans_of(
         .flat_map(|c| spans_from(c, texts, columns))
         .map(|mut s| {
             s.foot = matches!(anchored, Some(first) if s.line >= first);
-            with_margin(s)
+            with_margin(s, top)
         })
         .collect()
 }
@@ -344,6 +353,9 @@ fn spans_from(
         // AND AN ANCHOR IS NOT A THING AT ALL. It says where the frame sits,
         // which `spans_of` above has already read; there is nothing to draw.
         Command::Anchor { .. } => Vec::new(),
+        // WHAT THE HOST'S HEADER CARRIES is drawn there, by the chrome
+        // (`chrome::taught_pieces`), never as a run of the buffer's.
+        Command::Heading { .. } | Command::Taught { .. } => Vec::new(),
     }
 }
 
@@ -428,12 +440,15 @@ pub struct Rows {
     /// The surface's height in pixels: the number the compositor gave, never a
     /// count of anything.
     height: f32,
+    /// How many lines above the component's first are the host's — its header
+    /// ([`with_margin`]).
+    top: u16,
 }
 
 impl Rows {
     /// Read from the frame itself, which is where the anchor travels.
     #[must_use]
-    pub fn of(commands: &[ronoctua_protocol::Command], height_px: f32) -> Self {
+    pub fn of(commands: &[ronoctua_protocol::Command], height_px: f32, top: u16) -> Self {
         let (_, line_height) = cell();
         #[expect(
             clippy::cast_possible_truncation,
@@ -453,6 +468,7 @@ impl Rows {
             foot_from,
             lines,
             height: height_px,
+            top,
         }
     }
 
@@ -470,9 +486,13 @@ impl Rows {
             // COUNTED UP FROM THE BOTTOM, the same sum `Span::foot` makes on
             // the renderer's side of the same number — `lines` is `floor` of
             // the height there too, so the ink and the ground land together.
-            return f32::from(self.lines.saturating_sub(line)).mul_add(-line_height, self.height);
+            return f32::from(self.lines.saturating_sub(line.saturating_add(self.top)))
+                .mul_add(-line_height, self.height);
         }
-        f32::from(line.saturating_add(tokens::space::CONTENT_INSETY)) * line_height
+        f32::from(
+            line.saturating_add(tokens::space::CONTENT_INSETY)
+                .saturating_add(self.top),
+        ) * line_height
     }
 
     /// Where the ground on this line ENDS.
@@ -524,7 +544,12 @@ impl Rows {
                 reason = "bounded by the branch: y is inside the anchored block"
             )]
             let back = ((self.height - y) / line_height).ceil() as u16;
-            return Some(self.lines.saturating_sub(back).max(first));
+            return Some(
+                self.lines
+                    .saturating_sub(back)
+                    .saturating_sub(self.top)
+                    .max(first),
+            );
         }
         #[expect(
             clippy::cast_possible_truncation,
@@ -532,7 +557,8 @@ impl Rows {
             reason = "guarded above; the same floor `cell_at` makes on the other axis"
         )]
         let line = (y / line_height) as u16;
-        line.checked_sub(tokens::space::CONTENT_INSETY)
+        // ABOVE THE COMPONENT — its margin, or the host's header — is no line.
+        line.checked_sub(tokens::space::CONTENT_INSETY.saturating_add(self.top))
     }
 }
 
@@ -846,15 +872,14 @@ pub fn bar_box(
 #[must_use]
 pub fn sentence_wheeled(
     commands: &[ronoctua_protocol::Command],
+    rows: &Rows,
     x: f32,
     y: f32,
-    height_px: f32,
     texts: &ronoctua_i18n::Texts,
     columns: u16,
     lines: i16,
 ) -> Option<Scrolled> {
     let (cell_width_px, _) = cell();
-    let rows = Rows::of(commands, height_px);
     commands.iter().find_map(|c| {
         let ronoctua_protocol::Command::Paragraph {
             line,
@@ -923,17 +948,16 @@ pub struct Scrolled {
 #[must_use]
 pub fn bar_grabbed(
     commands: &[ronoctua_protocol::Command],
+    rows: &Rows,
     x: f32,
     y: f32,
     width_px: f32,
-    height_px: f32,
     texts: &ronoctua_i18n::Texts,
     columns: u16,
 ) -> Option<Grab> {
-    let rows = Rows::of(commands, height_px);
     commands
         .iter()
-        .filter_map(|c| bar_box(c, &rows, width_px, texts, columns))
+        .filter_map(|c| bar_box(c, rows, width_px, texts, columns))
         .find(|g| g.holds(x, y))
 }
 
@@ -973,9 +997,10 @@ pub fn quads_of(
     height_px: f32,
     texts: &ronoctua_i18n::Texts,
     columns: u16,
+    top: u16,
 ) -> Vec<ronoctua_render::quad::Quad> {
     use ronoctua_protocol::Command;
-    let rows = Rows::of(&list.commands, height_px);
+    let rows = Rows::of(&list.commands, height_px, top);
     list.commands
         .iter()
         .filter_map(|c| match c {
@@ -1266,8 +1291,8 @@ mod tests {
         // AND A THUMB IS DRAWN BESIDE IT, in the rectangle's last cell, out of
         // the SAME wrap: a bar that counted the rows a second time would say
         // the text is one length while the rows say another.
-        let quads = quads_of(&d, width, height, &texts, 40);
-        let rows = Rows::of(&d.commands, height);
+        let quads = quads_of(&d, width, height, &texts, 40, 0);
+        let rows = Rows::of(&d.commands, height, 0);
         let grab = bar_box(&d.commands[0], &rows, width, &texts, 40).expect("a thumb");
         assert_eq!(
             grab.column, 38,
@@ -1282,10 +1307,10 @@ mod tests {
         assert!(
             bar_grabbed(
                 &d.commands,
+                &Rows::of(&d.commands, height, 0),
                 grab.x + 1.0,
                 grab.y + 1.0,
                 width,
-                height,
                 &texts,
                 40
             )
@@ -1297,20 +1322,91 @@ mod tests {
         // clamped — a buffer told to "scroll by three" would be counting rows
         // it has never seen.
         let inside = (cell_w * 4.0, rows.top(4) + 1.0);
-        let moved = sentence_wheeled(&d.commands, inside.0, inside.1, height, &texts, 40, 2)
-            .expect("the wheel over a cut sentence");
+        let moved = sentence_wheeled(
+            &d.commands,
+            &Rows::of(&d.commands, height, 0),
+            inside.0,
+            inside.1,
+            &texts,
+            40,
+            2,
+        )
+        .expect("the wheel over a cut sentence");
         assert_eq!((moved.column, moved.line), (38, 4));
         assert_eq!(moved.first, 2);
-        let stop = sentence_wheeled(&d.commands, inside.0, inside.1, height, &texts, 40, 99)
-            .expect("the wheel over a cut sentence");
+        let stop = sentence_wheeled(
+            &d.commands,
+            &Rows::of(&d.commands, height, 0),
+            inside.0,
+            inside.1,
+            &texts,
+            40,
+            99,
+        )
+        .expect("the wheel over a cut sentence");
         assert_eq!(
             usize::try_from(stop.first).unwrap(),
             said.total - said.lines
         );
         // AND A POINT OUTSIDE THE RECTANGLE IS NOT IT.
         assert!(
-            sentence_wheeled(&d.commands, inside.0, rows.top(0), height, &texts, 40, 2).is_none(),
+            sentence_wheeled(
+                &d.commands,
+                &Rows::of(&d.commands, height, 0),
+                inside.0,
+                rows.top(0),
+                &texts,
+                40,
+                2
+            )
+            .is_none(),
             "a wheel above the sentence moved it"
+        );
+    }
+
+    /// FAILS IF: a component under the host's header is not moved down by it
+    /// — its first row drawn on the header, a pointer on the header answering
+    /// a row of the component, a row answering a row it is not — or the block
+    /// it anchored to its foot leaves the foot.
+    #[test]
+    fn a_component_under_the_header_starts_under_it() {
+        let (_, line_h) = cell();
+        let (_, height, lines) = a_window();
+        let header = 2;
+        let list = a_footer(lines - header);
+        let rows = Rows::of(&list.commands, height, header);
+        let texts = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
+        // THE HEADER'S LINES ARE NOBODY'S ROW.
+        for y in 0..header {
+            assert_eq!(rows.line_at(f32::from(y).mul_add(line_h, 1.0)), None);
+        }
+        // EVERY ROW IS WHERE IT IS DRAWN, and the pointer reads it back.
+        let ours = lines - header;
+        for line in 0..ours {
+            assert_eq!(rows.line_at(rows.top(line) + 1.0), Some(line), "row {line}");
+        }
+        assert!(
+            (rows.top(0) - f32::from(header) * line_h).abs() < 0.01,
+            "the first row is not under the header"
+        );
+        // THE FOOT STILL TOUCHES THE FOOT.
+        assert!((rows.top(ours - 1) + line_h - height).abs() < 0.01);
+        let spans = spans_of(&list, &texts, 100, ours, header);
+        assert!(spans.iter().all(|s| s.line >= header));
+        let mut bare = DisplayList::fresh_one();
+        bare.push(Command::Text {
+            line: 0,
+            column: 0,
+            text: Text::datum("first"),
+            color: Color::name("text-primary"),
+            scale: ronoctua_protocol::Scale::Normal,
+            max_width: 0,
+            edge: false,
+        });
+        let first = spans_of(&bare, &texts, 100, ours, header);
+        assert_eq!(
+            first.first().map(|s| s.line),
+            Some(header + ronoctua_tokens::space::CONTENT_INSETY)
         );
     }
 
@@ -1330,7 +1426,7 @@ mod tests {
         let (_, line_h) = cell();
         let (width, height, lines) = a_window();
         let list = a_footer(lines);
-        let rows = Rows::of(&list.commands, height);
+        let rows = Rows::of(&list.commands, height, 0);
 
         // THE LAST ROW ENDS AT THE BOTTOM EDGE, to the pixel.
         let last = lines - 1;
@@ -1352,7 +1448,7 @@ mod tests {
         // THE INK IS PLACED FROM THE FOOT TOO, and the renderer counts back
         // from the same `floor`.
         let texts = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
-        let spans = spans_of(&list, &texts, 100, lines);
+        let spans = spans_of(&list, &texts, 100, lines, 0);
         assert!(!spans.is_empty(), "the footer drew nothing");
         assert!(
             spans.iter().all(|s| s.foot),
@@ -1380,7 +1476,7 @@ mod tests {
         for many in 1..40_u16 {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let built = (f32::from(many) * lh).ceil() as u32;
-            let rows = Rows::of(&[], built as f32);
+            let rows = Rows::of(&[], built as f32, 0);
             assert!(
                 rows.lines >= many,
                 "a surface built for {many} lines holds {}",
@@ -1391,7 +1487,7 @@ mod tests {
         // AND THE GROUND PAINTED FOR THE LAST ROW REACHES THE EDGE — the rule
         // that was already here, asked again now that the row itself has moved.
         let texts = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
-        let quads = quads_of(&list, width, height, &texts, 100);
+        let quads = quads_of(&list, width, height, &texts, 100, 0);
         assert!(
             quads.iter().any(|q| (q.y + q.height - height).abs() < 0.01),
             "no ground reaches the bottom of the surface"
@@ -1418,7 +1514,7 @@ mod tests {
         let (_, height, lines) = a_window();
         let mut d = a_footer(lines);
         d.commands.retain(|c| !matches!(c, Command::Anchor { .. }));
-        let rows = Rows::of(&d.commands, height);
+        let rows = Rows::of(&d.commands, height, 0);
         for line in 0..lines {
             assert!((rows.top(line) - f32::from(line) * line_h).abs() < 0.001);
             assert_eq!(rows.line_at(rows.top(line) + 1.0), Some(line));
@@ -1451,7 +1547,7 @@ mod tests {
             max_width: 0,
             edge: false,
         });
-        let v = spans_of(&d, &t, 80, 24);
+        let v = spans_of(&d, &t, 80, 24, 0);
         // pt-BR: the VALUE of `cmd-mx-open` in pt-BR.ftl, which is what the
         // screen says — the key beside it is the name.
         assert_eq!(v[0].text, "Executar comando…");
@@ -1599,7 +1695,7 @@ mod tests {
                 color: Color::name("rule-default"),
             });
             assert!(
-                spans_of(&d, &t, columns, 24).is_empty(),
+                spans_of(&d, &t, columns, 24, 0).is_empty(),
                 "at {columns} columns the rule became text — it is a quad"
             );
 
@@ -1610,6 +1706,7 @@ mod tests {
                 24.0 * line_h,
                 &ronoctua_i18n::Texts::fresh("pt-BR").unwrap(),
                 80,
+                0,
             );
             assert_eq!(quads.len(), 1, "one rule, one quad");
             let q = &quads[0];
@@ -1666,6 +1763,7 @@ mod tests {
             24.0 * line_h,
             &ronoctua_i18n::Texts::fresh("pt-BR").unwrap(),
             80,
+            0,
         );
         assert_eq!(quads.len(), 2, "two bands on one row, and one came out");
         let (a, b) = (&quads[0], &quads[1]);
@@ -1701,6 +1799,7 @@ mod tests {
             24.0 * line_h,
             &ronoctua_i18n::Texts::fresh("pt-BR").unwrap(),
             80,
+            0,
         );
         assert!(
             (one[0].x - 0.0).abs() < f32::EPSILON,
@@ -1740,6 +1839,7 @@ mod tests {
             24.0 * line_h,
             &ronoctua_i18n::Texts::fresh("pt-BR").unwrap(),
             80,
+            0,
         );
         assert_eq!(quads.len(), 2);
         for q in &quads {

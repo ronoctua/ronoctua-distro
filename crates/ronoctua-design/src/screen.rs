@@ -330,13 +330,27 @@ pub struct Screen<P: Palette> {
     /// A count and not a flag, because the number is what makes a failing test
     /// say how bad it is. [`Screen::check`] refuses any frame with one.
     refused: u32,
-    /// THE "NO HEADER" MODE: the host asked for the window's top title line to
-    /// go, the way `ronoctua_shell_kit::header` reads it off `modeline.json`.
-    /// When set, [`Screen::heading`] at row zero draws nothing and keeps its
-    /// rows for the body — the glyph and title are the footer's minibuffer now,
-    /// where `LEADER Alt` surfaces them. A heading drawn below the top (a
-    /// panel's own section title) is untouched: it was never the window header.
-    hide_header: bool,
+    /// THE WINDOW'S TITLE, declared for the header the HOST draws
+    /// ([`Screen::heading`] at row zero; `Command::Heading`): its glyph and
+    /// its text key.
+    title: Option<(P::Icon, String)>,
+    /// WHAT THE BUFFER TEACHES NOW, in order, for that header
+    /// ([`Screen::teach`]; `Command::Taught`).
+    taught: Vec<Taught>,
+}
+
+/// ONE PAIR A BUFFER TEACHES, as it crosses to the host's header
+/// (`ronoctua_protocol::Command::Taught`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Taught {
+    /// A local sequence (`, r`) or a key that stays direct (`RET`).
+    pub keys: String,
+    /// The short word's text key.
+    pub says: String,
+    /// The sentence under the pointer's text key; empty for none.
+    pub about: String,
+    /// Whether a click on it does anything now.
+    pub control: bool,
 }
 
 impl<P: Palette> Screen<P> {
@@ -353,7 +367,8 @@ impl<P: Palette> Screen<P> {
             foot_from: None,
             mismeasured: 0,
             refused: 0,
-            hide_header: ctx.hide_header,
+            title: None,
+            taught: Vec::new(),
         }
     }
 
@@ -773,11 +788,13 @@ impl<P: Palette> Screen<P> {
     /// exists to end.
     pub fn heading(&mut self, icon: P::Icon, key: &str) -> u16 {
         let start = self.row;
-        // THE WINDOW HEADER IS THE HEADING AT ROW ZERO, and the "no header" mode
-        // gives its rows to the body: the glyph and the title go to the footer's
-        // minibuffer (`Screen::hide_header`). A heading below the top is a
-        // panel's own section title, not the window's header, and stays.
-        if self.hide_header && start == 0 {
+        // THE WINDOW'S TITLE IS THE HEADING AT ROW ZERO, and it is the HOST's
+        // to draw: the header over every window carries it, before what the
+        // buffer teaches ([`Screen::teach`]), and the buffer's rows begin
+        // under that header — so this keeps no row for it. A heading below
+        // the top is a panel's own section title, and draws.
+        if start == 0 {
+            self.title = Some((icon, key.into()));
             return start;
         }
         let cells = self.tall(Scale::Normal);
@@ -794,6 +811,47 @@ impl<P: Palette> Screen<P> {
         );
         self.row = content;
         content
+    }
+
+    /// TEACHES ONE PAIR on the header the host draws over the window — `keys`
+    /// a local sequence (`, r`, which is `LEADER Alt r`) or a key that stays
+    /// direct (`RET`), `says` the short word's text key and `about` the
+    /// sentence under the pointer's (empty for none). `control` is false for
+    /// a pair that does nothing now, drawn inert. In the order taught; the
+    /// host puts `ESC` first.
+    pub fn teach(&mut self, keys: &str, says: &str, about: &str, control: bool) {
+        self.taught.push(Taught {
+            keys: keys.into(),
+            says: says.into(),
+            about: about.into(),
+            control,
+        });
+    }
+
+    /// TEACHES A WHOLE KEYMAP, `(sequence, command)`, for a buffer whose
+    /// every key works on every page: the command's own words (`cmd-<id>`)
+    /// and its sentence (`about-<id>`).
+    pub fn teach_keymap(&mut self, keymap: &[(&str, &str)]) {
+        for (keys, id) in keymap {
+            self.teach(
+                keys,
+                &alloc::format!("cmd-{id}"),
+                &alloc::format!("about-{id}"),
+                true,
+            );
+        }
+    }
+
+    /// What this frame teaches, in order ([`Screen::teach`]).
+    #[must_use]
+    pub fn taught(&self) -> &[Taught] {
+        &self.taught
+    }
+
+    /// The window's title this frame declared, if any ([`Screen::heading`]).
+    #[must_use]
+    pub const fn title(&self) -> Option<&(P::Icon, String)> {
+        self.title.as_ref()
     }
 
     /// A row of a table: the fields go where the [`Layout`] put the columns.
@@ -912,6 +970,21 @@ impl<P: Palette> Screen<P> {
         // reads it before it places anything in it.
         if let Some(foot_from) = self.foot_from {
             list.push(Command::Anchor { foot_from });
+        }
+        // AND WHAT THE HOST'S HEADER CARRIES — the title and the pairs.
+        if let Some((icon, key)) = &self.title {
+            list.push(Command::Heading {
+                icon: P::glyph_name(*icon),
+                title: Text::Key(key.clone()),
+            });
+        }
+        for t in &self.taught {
+            list.push(Command::Taught {
+                keys: t.keys.clone(),
+                says: t.says.clone(),
+                about: t.about.clone(),
+                control: t.control,
+            });
         }
         for part in &self.parts {
             list.push(match part {
@@ -1524,7 +1597,6 @@ mod tests {
             columns,
             lines,
             heights: heights(),
-            hide_header: false,
         }
     }
 
@@ -1570,7 +1642,9 @@ mod tests {
     #[test]
     fn a_heading_draws_no_rule() {
         let mut screen = Screen::<Tokens>::new(&context(80, 24));
-        let content = screen.heading("disk", "cmd-format-disk");
+        // A SECTION'S TITLE, below the top: the one at row zero is the host's.
+        screen.skip(1);
+        let content = screen.heading("disk", "cmd-format-disk") - 1;
         let list = screen.as_protocol();
         assert_eq!(list.commands.len(), 2, "a glyph and a title, and no more");
         assert!(
@@ -1583,26 +1657,35 @@ mod tests {
         assert_eq!(content, AIR * 2 + tall(&heights(), Scale::Normal));
     }
 
-    /// THE "NO HEADER" MODE drops the window's top heading and keeps its rows.
-    ///
-    /// The glyph and the title are the footer's minibuffer now
-    /// ([`Screen::hide_header`], `ronoctua_shell_kit::header`); the body reclaims
-    /// row zero. A heading drawn BELOW the top is a panel's own section title,
-    /// not the window header, so it stays — which is why the gate is `row == 0`
-    /// and not every heading.
+    /// THE WINDOW'S TITLE IS THE HOST'S: the heading at row zero draws
+    /// nothing and keeps no row — it is declared for the header the host draws
+    /// over the window, with what the buffer teaches — and a heading BELOW the
+    /// top is a panel's own section title, which draws.
     #[test]
-    fn the_no_header_mode_drops_the_top_heading_and_keeps_the_rows() {
-        let hidden = Context {
-            hide_header: true,
-            ..context(80, 24)
-        };
-        let mut screen = Screen::<Tokens>::new(&hidden);
+    fn the_top_heading_is_declared_for_the_hosts_header() {
+        let mut screen = Screen::<Tokens>::new(&context(80, 24));
         let content = screen.heading("disk", "cmd-format-disk");
-        assert_eq!(content, 0, "the body reclaims the header's row zero");
+        screen.teach(", r", "cmd-format-run", "about-format-run", true);
         assert_eq!(
-            screen.as_protocol().commands.len(),
-            0,
-            "the header drew neither a glyph nor a title"
+            content, 0,
+            "the body begins at row zero, under the host's header"
+        );
+        let list = screen.as_protocol();
+        assert_eq!(
+            list.commands,
+            [
+                Command::Heading {
+                    icon: "disk".into(),
+                    title: Text::Key("cmd-format-disk".into()),
+                },
+                Command::Taught {
+                    keys: ", r".into(),
+                    says: "cmd-format-run".into(),
+                    about: "about-format-run".into(),
+                    control: true,
+                },
+            ],
+            "the top heading drew a glyph or a title of its own"
         );
 
         // A SECTION TITLE BELOW THE TOP still draws — it was never the header.
@@ -1611,7 +1694,7 @@ mod tests {
         assert!(below > 4, "a heading below the top keeps its air and rows");
         assert_eq!(
             screen.as_protocol().commands.len(),
-            2,
+            4,
             "the section title drew its glyph and title"
         );
     }
@@ -1637,6 +1720,8 @@ mod tests {
         for columns in [12u16, 24, 80, 200] {
             for lines in [4u16, 12, 40] {
                 let mut screen = Screen::<Tokens>::new(&context(columns, lines));
+                // A SECTION'S TITLE: the one at row zero is the host's.
+                screen.skip(1);
                 let content = screen.heading("disk", "cmd-format-disk");
                 if content < lines {
                     screen.put(content, Run::datum("sda1").at(0));

@@ -117,7 +117,28 @@ const WORDS: &[(&str, bool)] = &[
 /// A word not understood, a file that is not what it says, no graphics
 /// adapter, or a picture larger than the GPU takes.
 pub fn run(words: &[String]) -> Result<()> {
-    ronoctua_shell_player::player_photograph::run(words, &OTHER_DOORS)
+    // `--header shown|hidden`, for EVERY door: whether the window wears its
+    // header, as `modeline.json` says on a machine — set before any door is
+    // built, and taken out of the words every camera reads. A photograph
+    // reads nothing of this machine, so absent is the distro default.
+    let mut rest: Vec<String> = Vec::with_capacity(words.len());
+    let mut given = words.iter();
+    while let Some(word) = given.next() {
+        if word == "--header" {
+            let header = match given.next().map(String::as_str) {
+                Some("shown") => ronoctua_shell_kit::header::Header::Shown,
+                Some("hidden") => ronoctua_shell_kit::header::Header::Hidden,
+                other => anyhow::bail!("`--header` takes `shown` or `hidden`, not {other:?}"),
+            };
+            ronoctua_shell_kit::header::set(ronoctua_shell_kit::header::Switches {
+                header,
+                ..ronoctua_shell_kit::header::Switches::default()
+            });
+        } else {
+            rest.push(word.clone());
+        }
+    }
+    ronoctua_shell_player::player_photograph::run(&rest, &OTHER_DOORS)
 }
 
 /// EVERY CRATE'S CAMERAS, by the word `--door` names each with — one table

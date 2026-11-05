@@ -148,6 +148,9 @@ struct Ask {
     /// is on top of it, a row drawn at a line past the window — those are all
     /// one line in the list and a guess in the photograph.
     list: bool,
+    /// Whether the window wears its header — the one the HOST draws over the
+    /// component, from what its frame declared (`chrome::declared`).
+    header: bool,
 }
 
 const USAGE: &str = "\
@@ -162,6 +165,8 @@ usage: ronoctua-render-png <component.wasm> [options]
                       or absolute                (default: chrome)
   --text <percent>    text size, in percent     (default: 100)
   --scale <n>         physical px per logical   (default: 1)
+  --header <shown|hidden>  the header the host draws over the component, from
+                      what its frame declares    (default: shown)
 
   --mind <file>       a brain mind, as JSON, delivered before drawing
   --log <file>        the brain's own log: one `lines` answer of its socket
@@ -242,6 +247,7 @@ fn parse() -> Result<Ask> {
         scale: 1,
         inputs: Vec::new(),
         list: false,
+        header: true,
     };
     while let Some(flag) = args.next() {
         // Each flag consumes its own argument, and a missing one is a mistake
@@ -402,6 +408,13 @@ fn parse() -> Result<Ask> {
                 ));
             }
             "--list" => me.list = true,
+            "--header" => {
+                me.header = match value()?.as_str() {
+                    "shown" => true,
+                    "hidden" => false,
+                    other => bail!("`--header {other}` is neither `shown` nor `hidden`"),
+                };
+            }
             // THE MEMORY PANEL'S LIST, out of a `/proc` laid out in a folder
             // (`<pid>/statm`, `comm`, the `exe` link, `cmdline`) and read by
             // the scan the window's host runs (`ronoctua_memory::scan::ram`),
@@ -573,6 +586,8 @@ fn main() -> Result<()> {
                 // same answer `buffer.rs` gives, and for the same reason.
                 text: if k == ronoctua_design::Phrases::LANGUAGE {
                     texts.language().to_owned()
+                } else if k == ronoctua_design::Phrases::LEADER_ALT {
+                    ronoctua_shell_kit::bindings::leader_alt_label()
                 } else {
                     texts.t(k)
                 },
@@ -583,12 +598,12 @@ fn main() -> Result<()> {
     // A FIRST FRAME BEFORE ANYTHING, because the host draws one too — and a
     // component that only computes its screen lazily would otherwise be
     // photographed from a frame it never drew.
-    inst.render(ask.columns, ask.lines, paint::heights(), false)?;
+    inst.render(ask.columns, ask.lines, paint::heights())?;
     for input in &ask.inputs {
         inst.event(input)?;
-        inst.render(ask.columns, ask.lines, paint::heights(), false)?;
+        inst.render(ask.columns, ask.lines, paint::heights())?;
     }
-    let list = inst.render(ask.columns, ask.lines, paint::heights(), false)?;
+    let list = inst.render(ask.columns, ask.lines, paint::heights())?;
     if let Err(e) = list.validate(&d.capabilities) {
         bail!("the frame was refused by the host's own gate: {e}");
     }
@@ -628,11 +643,37 @@ fn main() -> Result<()> {
     // why. On a real screen the two never disagree, because both read the
     // height the compositor gave; here the tool builds the height, so it is
     // the tool's business to build one that holds what it asked for.
+    // THE HEADER, as the host draws it over the window (`Host::header`): what
+    // the frame declared, through the chrome every window's header goes
+    // through — and the picture one line taller for it, so the component
+    // keeps the lines it was given.
+    let keymap: Vec<(String, String)> = d
+        .keymap
+        .iter()
+        .map(|b| (b.keys.clone(), b.command.clone()))
+        .collect();
+    let mut interned = ronoctua_shell_kit::chrome::Interned::default();
+    let declared = ronoctua_shell_kit::chrome::declared(&list, &keymap, &mut interned, &texts);
+    let mut hinted = ronoctua_shell_kit::chrome::Hinted::default();
+    hinted.offers_leader_alt(&[]);
+    let header = if ask.header {
+        hinted.head(
+            &declared.pieces(&texts),
+            ronoctua_shell_kit::chrome::Carries::Keys,
+            tokens::space::CONTENT_INSET,
+            ask.columns,
+            &texts,
+        )
+    } else {
+        Vec::new()
+    };
+    let top = if ask.header { 1 + hinted.rows() } else { 0 };
     let (cell_w, cell_h) = paint::cell();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let width = (f32::from(ask.columns + tokens::space::CONTENT_INSET * 2) * cell_w).ceil() as u32;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = (f32::from(ask.lines + tokens::space::CONTENT_INSETY * 2) * cell_h).ceil() as u32;
+    let height =
+        (f32::from(ask.lines + top + tokens::space::CONTENT_INSETY * 2) * cell_h).ceil() as u32;
     // AND THE TEXTURE IS PHYSICAL, exactly as a door's buffer is: the picture
     // is the same picture with more pixels in it. A door multiplies the size
     // the compositor configured; here the size comes from the cells asked for,
@@ -677,7 +718,8 @@ fn main() -> Result<()> {
     let mut quads =
         ronoctua_render::quad::Quads::new(&gpu.device, ronoctua_render::offscreen::FORMAT)?;
 
-    let spans = paint::spans_of(&list, &texts, ask.columns, ask.lines);
+    let mut spans = header;
+    spans.extend(paint::spans_of(&list, &texts, ask.columns, ask.lines, top));
     // THE RECTANGLES ARE LOGICAL, like a door's — see the kit's `hidpi`, which
     // carries the whole of why, and the text is given the PHYSICAL viewport.
     //
@@ -695,6 +737,7 @@ fn main() -> Result<()> {
         logical_h as f32,
         &texts,
         ask.columns,
+        top,
     );
     text.prepare(
         &gpu.device,

@@ -84,6 +84,17 @@ impl Phrases {
     /// invariant forbids and which no amount of tagging makes acceptable.
     pub const LANGUAGE: &'static str = "-language";
 
+    /// The reserved key by which the host tells the buffer how `LEADER Alt`
+    /// is SPELT on this machine (`SUPER ALT`; `CTRL ALT SPC ALT` in the
+    /// nested session) — what a `⌥` drawn inside the buffer's own rows turns
+    /// into under the pointer, as every `⌥` of the system does.
+    ///
+    /// A `-` term for [`Phrases::LANGUAGE`]'s reason. And like it, it is no
+    /// translation: it is the name of a key, which the system never writes in
+    /// a `.ftl` (`keys-are-never-text`) and a buffer only ever draws as it
+    /// came.
+    pub const LEADER_ALT: &'static str = "-leader-alt";
+
     /// Which of `spoken` the reader's language is, or `0`.
     ///
     /// `0` and not `None`: the first is the SOURCE language, which every record

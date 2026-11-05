@@ -1329,7 +1329,9 @@ impl Player {
         let to = match self.opened_for {
             Some(home) if to == Stage::Off && self.stage != home => home,
             Some(_) if to == Stage::Off => {
-                ui.quit = true;
+                if ui.closing() {
+                    ui.quit = true;
+                }
                 return;
             }
             _ => to,
@@ -2191,7 +2193,11 @@ impl Player {
             Ok(Some(said)) => ui.say(said),
             Ok(None) => ui.message = None,
             Err(crate::player::Errand::Close) => {
-                ui.quit = true;
+                // ASKED FIRST: an `ESC` that would close says so, and the
+                // second closes (`Ui::closing`).
+                if ui.closing() {
+                    ui.quit = true;
+                }
                 return;
             }
             Err(crate::player::Errand::Show(show)) => self.toggle_stage(ui, show),
@@ -3537,11 +3543,17 @@ impl Player {
         }
         .or_else(|| under_control.and_then(|id| crate::chrome::hint_sentence(id, &ui.texts)));
         let question = crate::door::list::the_question(ui);
-        let (pieces, hinting) = match (question, &ui.message, pointed) {
+        let (pieces, carries) = match (question, &ui.message, pointed) {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
-            (Some(q), _, _) => (q, true),
-            (None, Some(t), _) => (vec![crate::chrome::Piece::said(t.clone())], false),
-            (None, None, Some(said)) => (vec![crate::chrome::Piece::said(said)], false),
+            (Some(q), _, _) => (q, crate::chrome::Carries::Question),
+            (None, Some(t), _) => (
+                vec![crate::chrome::Piece::said(t.clone())],
+                crate::chrome::Carries::Said,
+            ),
+            (None, None, Some(said)) => (
+                vec![crate::chrome::Piece::said(said)],
+                crate::chrome::Carries::About,
+            ),
             // THE WAY BACK FIRST, and clickable: `Esc` leaves a page of the
             // view, and a pointer that could not leave one would go in and
             // stay. AND IN A COLUMN, its own keys after the view's.
@@ -3555,7 +3567,7 @@ impl Player {
                     hint.push(crate::chrome::Piece::separator());
                 }
                 hint.extend(column);
-                (hint, true)
+                (hint, crate::chrome::Carries::Keys)
             }
         };
         // ON STAGE, what is drawn over the picture: the translucent band
@@ -3565,7 +3577,7 @@ impl Player {
         if shown {
             canvas.spans.extend(
                 ui.hinted
-                    .head(&pieces, hinting, MARGIN, ui.columns, &ui.texts),
+                    .head(&pieces, carries, MARGIN, ui.columns, &ui.texts),
             );
         } else {
             // HIDDEN CONTROLS ARE NOT CONTROLS, the header's shortcuts

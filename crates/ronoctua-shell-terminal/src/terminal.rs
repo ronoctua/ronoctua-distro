@@ -2430,6 +2430,11 @@ impl Content for TerminalWindow {
         false
     }
 
+    /// No confirmation (`Ui::closing`): its `ESC` is the program's; it closes when the program ends.
+    fn confirms_closing(&self) -> bool {
+        false
+    }
+
     fn app_id(&self) -> &'static str {
         self.identity.app_id()
     }

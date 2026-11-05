@@ -39,6 +39,11 @@ pub enum Echo {
     /// A refusal that has to be read to the end, and acted on — a
     /// preference that could not be saved.
     Long,
+    /// "`ESC` again closes this window": the first `ESC` that would close a
+    /// window says it, and it stays for as long as a second `ESC` closes —
+    /// the sentence and the deadline are one number
+    /// (`ronoctua_shell_door::door::Ui::closing`).
+    Confirm,
 }
 
 impl Echo {
@@ -49,6 +54,7 @@ impl Echo {
             Self::Brief => tokens::space::ECHO_BRIEFTENTHS,
             Self::Normal => tokens::space::ECHO_NORMALTENTHS,
             Self::Long => tokens::space::ECHO_LONGTENTHS,
+            Self::Confirm => tokens::space::ECHO_CONFIRMTENTHS,
         };
         std::time::Duration::from_millis(u64::from(tenths) * 100)
     }
@@ -86,5 +92,10 @@ mod tests {
         // A GLANCE IS UNDER TWO SECONDS, and a refusal twice a sentence.
         assert!(brief < std::time::Duration::from_secs(2));
         assert!(long >= normal * 2);
+        // A SECOND `ESC` HAS MORE THAN A GLANCE to come, and less than a
+        // refusal's reading: long enough to mean it, short enough that an
+        // `ESC` much later is a new one.
+        let confirm = Echo::Confirm.lasts();
+        assert!(brief < confirm && confirm < long, "{confirm:?}");
     }
 }

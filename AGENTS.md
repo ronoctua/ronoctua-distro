@@ -401,8 +401,15 @@ no PATH, o KVM e o `nix-direnv`.
   cai fora e `Screen::check` reprova o quadro com recusa (cobram `a-buffer-draws-inside-its-regions`,
   `the-host-shows-what-it-draws`).
 - O hospedeiro entrega hover/roda/arrasto de barra (`input::hover`/`wheel`/`scrolled`); a roda rola a
-  janela, não o cursor; mudança de estado repinta (cobra `a-state-change-repaints`), e a linha de
-  atalhos é a do sistema (cobra `the-shortcut-line-is-the-systems`).
+  janela, não o cursor; mudança de estado repinta (cobra `a-state-change-repaints`).
+- **O cabeçalho de um buffer é o do hospedeiro** (decisão do dono, 2026-11-05): o componente só
+  DECLARA, a cada quadro, o título e o que ensina (`Screen::heading` na linha 0, `Screen::teach`;
+  os comandos `heading` e `taught`, que não desenham), e o hospedeiro os desenha com o
+  `chrome::Hinted` de toda janela (`chrome::declared`) — `⌥`, clique, frase, gaveta e modo sem
+  cabeçalho de um lugar só; o contexto não leva mais `hide-header` (cobra
+  `the-shortcut-line-is-the-systems`). Um `⌥` nas linhas do próprio buffer é o par do design
+  (`Row::put_shortcut`), soletrado pela frase reservada `-leader-alt`; a sequência local vira tecla
+  só por `ronoctua_protocol::local_key`.
 - Buffer não tem parser de JSON: nenhum campo leva texto cru para desmontar. Todo buffer é
   fotografável (`render-png --mind <arquivo.json>`, `--list`).
 
@@ -546,7 +553,13 @@ OSC 7501, que o guardião lê.
 - A coluna muda de tamanho com `C-<left>`/`C-<right>` (`column::OF_THE_COLUMN`); no tamanho barra o
   glifo acende e não se explica.
 - Toda vista ensina `Esc` primeiro, clicável (`chrome::with_the_way_back`); o botão Voltar do mouse é
-  o mesmo `Esc`.
+  o mesmo `Esc`. **O `Esc` fecha toda janela, mas nunca no primeiro** (regra do dono, 2026-11-05): o
+  que fecharia diz `door-esc-again` por `echo.confirmTenths`, e só um segundo dentro desse prazo
+  fecha — perguntado ANTES de qualquer efeito (`Ui::closing`), e um `Esc` segurado nunca fecha. Um
+  buffer fecha na primeira página (`Effect::Close`). Ficam fora terminal, bloqueio, captura,
+  redimensionador e coluna (`Content::confirms_closing`).
+- Sem cabeçalho (o padrão da distro), a linha 0 aparece só enquanto há uma frase ou uma pergunta
+  (`chrome::Carries::speaks`), e a lista desce uma linha nesse tempo.
 - Tecla nunca é texto no `.ftl`: sai do código (`bindings::taught`) + `bindings::label()`, num
   `{ $keys }` (cobra `keys-are-never-text`). "LEADER" em produção é `SUPER`, no `.#dev` `CTRL ALT SPC`.
 

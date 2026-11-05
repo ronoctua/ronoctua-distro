@@ -81,9 +81,6 @@ mod key {
     pub const CONSUMERS: &str = "memory-consumers";
     pub const SCANNING: &str = "memory-scanning";
     pub const NOTHING_YET: &str = "memory-nothing-yet";
-    pub const HELP_OVERVIEW: &str = "memory-help-overview";
-    pub const HELP_FULL: &str = "memory-help-full";
-    pub const HELP_GUARD: &str = "memory-help-guard";
 
     pub const GUARD_DESCRIPTION: &str = "memory-guard-description";
     pub const GUARD_DETAIL: &str = "memory-guard-detail";
@@ -126,6 +123,25 @@ const KEYMAP: &[(&str, &str)] = &[
     (", d", "memory-default"),
     (", p", "memory-persist"),
 ];
+
+/// WHAT EACH PANEL TEACHES, for the header the HOST draws over the window
+/// (`Screen::teach`) — in the order the line says them, `ESC` put first by the
+/// host. The keys of [`KEYMAP`] only, so every one taught is bound.
+const OVERVIEW_TEACHES: &[&str] = &[", f", ", o", ", s", ", r"];
+/// And the full list's.
+const FULL_TEACHES: &[&str] = &[", v", ", s", ", k", ", g", ", n", ", j"];
+/// And the protection's.
+const GUARD_TEACHES: &[&str] = &[", t", ", d", ", p"];
+
+/// Declares `keys` for the host's header: each command's own words
+/// (`cmd-<id>`), and its sentence (`about-<id>`).
+fn teach(screen: &mut Screen<Wit>, keys: &[&str]) {
+    for k in keys {
+        if let Some((_, id)) = KEYMAP.iter().find(|(bound, _)| bound == k) {
+            screen.teach(k, &format!("cmd-{id}"), &format!("about-{id}"), true);
+        }
+    }
+}
 
 /// How many of the biggest the small screen shows.
 ///
@@ -552,12 +568,6 @@ fn last_row(screen: &Screen<Wit>) -> u16 {
     screen.lines().saturating_sub(1)
 }
 
-/// The help line, always the last one.
-fn help(screen: &mut Screen<Wit>, which: &str) {
-    let at = last_row(screen);
-    screen.put(at, Run::label(which).small().quiet());
-}
-
 impl State {
     /// The small live one.
     fn overview(&self, screen: &mut Screen<Wit>) {
@@ -635,7 +645,7 @@ impl State {
             }
         }
 
-        help(screen, key::HELP_OVERVIEW);
+        teach(screen, OVERVIEW_TEACHES);
     }
 
     /// The protection's line, on both screens.
@@ -756,7 +766,8 @@ impl State {
             line_of(screen, Run::datum(&percent(s.progress)).small().quiet());
         }
 
-        self.footer(screen, key::HELP_FULL);
+        teach(screen, FULL_TEACHES);
+        self.footer(screen);
         (first, drew)
     }
 
@@ -881,11 +892,12 @@ impl State {
             line_of(screen, Run::label(key::GUARD_SESSION_ONLY).small().accent());
         }
 
-        self.footer(screen, key::HELP_GUARD);
+        teach(screen, GUARD_TEACHES);
+        self.footer(screen);
     }
 
     /// The last line: a pending confirmation wins over the help.
-    fn footer(&self, screen: &mut Screen<Wit>, help_key: &str) {
+    fn footer(&self, screen: &mut Screen<Wit>) {
         let at = last_row(screen);
         match self.pending {
             Some(p) => {
@@ -903,7 +915,8 @@ impl State {
             None if self.asked => {
                 screen.put(at, Run::label(key::ASKED).small().quiet());
             }
-            None => help(screen, help_key),
+            // THE KEYS ARE THE HOST'S HEADER'S: nothing to say, nothing said.
+            None => {}
         }
     }
 
@@ -1257,8 +1270,10 @@ impl State {
                 if s.pending.take().is_some() {
                     return vec![Effect::Redraw];
                 }
+                // NOWHERE TO GO BACK TO: `Esc` closes the window, as it closes
+                // every window — and the host asks first (`Ui::closing`).
                 if s.panel == Panel::Overview {
-                    return vec![];
+                    return vec![Effect::Close];
                 }
                 s.panel = Panel::Overview;
                 vec![Effect::Redraw]
@@ -1355,7 +1370,6 @@ mod tests {
             columns,
             lines,
             heights: heights(),
-            hide_header: false,
         }
     }
 
@@ -1527,47 +1541,24 @@ mod tests {
         }
     }
 
-    /// THE HEADING IS A GLYPH, A TITLE AND NO RULE — which is what this panel
-    /// always drew and what every buffer draws now.
-    ///
-    /// A rule inside a heading is the defect: what separates a title from its
-    /// content is whitespace, and only whitespace.
+    /// THE WINDOW'S TITLE IS THE HOST'S: the heading declares the glyph and
+    /// the title — a KEY, never a sentence — for the header the host draws
+    /// over the window, and draws nothing in the panel's own rows, a rule
+    /// least of all.
     #[test]
-    fn the_heading_draws_no_rule() {
+    fn the_title_is_declared_for_the_hosts_header() {
         let ctx = context(80, 24);
         let mut screen = Screen::<Wit>::of(&ctx);
         let content = screen.heading(Icon::Settings, key::TITLE);
         let drawn = screen.finish_wit();
-        assert_eq!(drawn.len(), 2, "a glyph and a title, and nothing else");
+        assert_eq!(content, 0, "the rows begin under the host's header");
+        assert_eq!(drawn.len(), 1, "the title, declared, and nothing drawn");
         assert!(
-            !drawn.iter().any(|c| matches!(c, Command::Rule(_))),
-            "a rule showed up in a header"
+            matches!(&drawn[0], Command::Heading(h) if matches!(&h.title, Text::Key(k) if k == key::TITLE)),
+            "the title was not declared as its key"
         );
-        // A glyph, and then a title that is a KEY — never a sentence.
-        assert!(matches!(
-            &drawn[0],
-            Command::Text(TextCommand {
-                content: Text::Icon(_),
-                column: 0,
-                ..
-            })
-        ));
-        assert!(matches!(
-            &drawn[1],
-            Command::Text(TextCommand {
-                content: Text::Key(_),
-                ..
-            })
-        ));
-        // The air above and below is one cell each: the content starts on the
-        // fourth row of the block.
-        assert_eq!(content, AIR + 1 + AIR);
     }
 
-    /// THE RULES THAT ARE LEFT SEPARATE BLOCKS, and there are no others.
-    ///
-    /// Two on the overview, one on the full screen and two on the protection —
-    /// the same five call sites, and not one of them inside a heading.
     #[test]
     fn the_only_rules_are_between_blocks() {
         let rules = |s: &State| {

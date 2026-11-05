@@ -143,7 +143,7 @@ impl FooterSettingsWindow {
         ui.message = None;
         match self.view.press(press, &self.prefs, ui.columns, &ui.texts) {
             Errand::Nothing => {}
-            Errand::Close => ui.quit = true,
+            Errand::Close => ui.quit = ui.closing(),
             Errand::Change(setting) => self.change(ui, setting),
         }
         ui.ask_paint();

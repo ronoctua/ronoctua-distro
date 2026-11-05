@@ -1220,11 +1220,14 @@
   # coarse for a glance. `normal` is the three seconds both doors always
   # agreed on (`ECHO_SECONDS`); `brief` is a word that confirms what the hand
   # just did — `Quit`, the bars' new mode — read in one look; `long` is a
-  # refusal to be read to the end and acted on.
+  # refusal to be read to the end and acted on; `confirm` is the "ESC again
+  # closes this window" a window says at the first ESC that would close it —
+  # and the time a second ESC has to close it (`Ui::closing`).
   echo = {
     briefTenths = 12;
     normalTenths = 30;
     longTenths = 60;
+    confirmTenths = 30;
   };
 
   # THE MAXIMUM ALERT BAR (`crate::alert`). The battery's line and the step it

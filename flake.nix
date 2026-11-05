@@ -2859,6 +2859,12 @@
           # AND THE BRAIN'S CATALOGUE, for the same reason: a door draws the
           # modules' marks and teaches their actions from data read at run time.
           export RONOCTUA_BRAIN_CATALOGUE=${rust.keyed.RONOCTUA_BRAIN_CATALOGUE}
+          # AND HOW `LEADER` IS SPELT, which every `⌥` turns into under the
+          # pointer: the session's, or the installed one's
+          # (`nix/modules/scroll.nix`) for a photograph taken outside a session
+          # — never the bare `SPC` a binary falls back to.
+          export RONOCTUA_LEADER="''${RONOCTUA_LEADER:-SUPER}"
+          export RONOCTUA_LEADER_CHORD="''${RONOCTUA_LEADER_CHORD:-SUPER}"
           # A NATIVE DOOR — the player's window, its column at every size —
           # is not a buffer: `render-png` cannot reach it, so `--door`
           # anywhere in the words is the shell's own camera

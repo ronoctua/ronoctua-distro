@@ -5720,7 +5720,9 @@ let
     # pen: it asks for its block and never puts ink on the screen directly.
     brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
     body = brain.split("#[cfg(test)]")[0]
-    drawers = ("header", "warning", "home", "task_page", "draw_log", "foot")
+    # NOT the header: it is the host's, and the page only declares it
+    # (`declare`), which draws nothing.
+    drawers = ("warning", "draw_notices", "home", "task_page", "draw_log", "foot")
     floor(len(drawers), 6, "drawing functions named here")
     for fn in drawers:
         one = must(body_of(body, fn), "the brain's `" + fn + "`")
@@ -6305,20 +6307,18 @@ let
     END
   '';
 
-  # THE SHORTCUT LINE OF A BUFFER IS THE SYSTEM'S SHORTCUT LINE.
+  # THE SHORTCUT LINE OF A BUFFER IS THE SYSTEM'S SHORTCUT LINE — because the
+  # system draws it.
   #
-  # The owner read the brain's header beside the file manager's minibuffer and
-  # said what it is: the same control, not looking like the same control. Two
-  # causes, and both are structural.
-  #
-  # The COLOUR: the minibuffer draws its hints in `text.subtle.*`, a hue family
-  # deliberately off the warm content ramp, and `Palette::color` was a closed
-  # table of ten tokens with none of that family in it — so a buffer teaching
-  # its keys had no choice but the content ramp.
-  #
-  # The SPACING: a phrase is a KEY, and a buffer cannot measure a sentence it
-  # does not hold, so every phrase was given a fixed thirteen-cell column. The
-  # host hands the words over (`Input::Phrases`); the header measures them.
+  # The owner read the brain's header beside the file manager's and said what
+  # it was: the same control, not looking like the same control. It was made
+  # to look the same, and then the system's header gained `⌥` and `SUPER ALT`
+  # under the pointer and the buffer's did not — a copy lags. So the copy went
+  # (the owner's decision, 2026-11-05): a buffer DECLARES its title and what it
+  # teaches (`heading`, `taught`), and the host draws them with the header
+  # every window wears (`chrome::declared`, `Hinted::head`). This proves the
+  # three halves of that: the host draws from what was declared, every buffer
+  # declares, and no buffer draws a line of keys of its own.
   the-shortcut-line-is-the-systems = mkCheck "the-shortcut-line-is-the-systems" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -6327,72 +6327,48 @@ let
     root = pathlib.Path("${self}")
     gaps = []
 
-    # 1) THE THREE TONES EXIST AND ARE THE HINT LINE'S OWN.
-    lib = code_of((root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text())
-    table = must(body_of(lib, "color"), "`Tokens::color`")
-    pairs = (("Key", "text-subtle-strong"), ("Prose", "text-subtle-default"), ("Faint", "text-subtle-faint"))
-    floor(len(pairs), 3, "tones the hint line is made of")
-    for role, token in pairs:
-        # The token survives `code_of` as an empty string, so the ARM is found
-        # by its role and the token is looked for in the un-stripped table.
-        if not re.search(r"Role::" + role + r"\b", table):
-            gaps.append("`Role::" + role + "` went away")
-    raw = (root / "crates" / "ronoctua-design" / "src" / "lib.rs").read_text()
-    for role, token in pairs:
-        if not re.search(r"Role::" + role + r"\s*=>\s*\"" + token + r"\"", raw):
-            gaps.append("`Role::" + role + "` no longer resolves to `" + token + "`")
-    # And the host's own hint line still draws them, which is what makes them
-    # the SAME colour rather than a second family that resembles it.
-    chrome = code_of(shell_file("chrome.rs", root=root).read_text())
-    for token in ("TEXT_SUBTLE_STRONG", "TEXT_SUBTLE_DEFAULT", "TEXT_SUBTLE_FAINT"):
-        if token not in chrome:
-            gaps.append("the minibuffer's hint line no longer draws `" + token + "`")
-
-    # 2) THE BRAIN WEARS THEM, and no longer reaches for the content ramp.
-    brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
-    builder = must(body_of(brain, "header"), "the brain's `header`")
-    # NARROWED TO THE RUNGS, because the question is about them: the page's own
-    # glyph beside the title is `accent` and always was, and a check that read
-    # the whole builder would call that "back on the content ramp".
-    head = must(scope(builder, r"for rung in"), "the loop that paints the ladder")
-    floor(len(head), 400, "characters of the ladder's drawing")
+    # 1) THE HOST DRAWS IT, from what the frame declared, with the chrome
+    #    every window's header goes through.
+    host = without_tests(code_of(shell_file("buffer.rs", root=root).read_text()))
+    header = must(body_of(host, "header"), "the host's `header`")
     for wanted, why in (
-        ("Role::Key", "the notation is not in the hint line's own tone"),
-        ("Role::Prose", "the phrase is not in the hint line's own tone"),
-        ("Icon::Separator", "there is no dot between one pair and the next"),
+        ("line_zero", "the buffer's header no longer gives its line to a question or a message first"),
+        ("hinted.head(", "the buffer's header is not drawn by `Hinted::head`"),
+        ("declared.pieces(", "the buffer's header is not what its frame declared"),
+        ("offers_leader_alt(", "the buffer's shortcuts are not drawn as `LEADER Alt` reaches them"),
     ):
-        if wanted not in head:
+        if wanted not in header:
             gaps.append(why)
-    if ".accent()" in head or ".dim()" in head:
-        gaps.append("the header is back on the content ramp")
-    # AND IT IS DRAWN AT THE SYSTEM'S SIZE. A buffer lays out in CELLS and
-    # `Scale::Small` advances 0,81 of one, so a ladder drawn small opens a gap
-    # that grows with each phrase — which is what the owner read as
-    # *"espaços desproporcionais entre os atalhos"*, with a separator carrying
-    # twice as much air on one side as the other.
-    if ".small()" in head:
-        gaps.append("the ladder is drawn smaller than the cells it is laid out in")
+    declared = must(body_of(host, "declared"), "the host's `declared`")
+    if "chrome::declared(" not in declared:
+        gaps.append("the host reads a frame's header some way of its own")
+    chrome = code_of(shell_file("chrome.rs", root=root).read_text())
+    pieces = must(body_of(chrome, "taught_pieces"), "`chrome::taught_pieces`")
+    if "with_the_way_back(" not in pieces:
+        gaps.append("a buffer's header does not put `ESC` first, as every window's does")
+    if "local_key(" not in pieces:
+        gaps.append("a buffer's header reads a local sequence by a rule of its own")
 
-    # 3) AND THE PHRASES ARE MEASURED. The fixed column is the fallback for a
-    #    host that said nothing, never the layout.
-    #
-    # Found by NAME and not by signature: the first version spelled every
-    # parameter out, so adding one reported "a pair's width no longer comes
-    # from the words the host sent" — a wrong diagnosis, which is the failure
-    # mode this family has already produced once.
-    if "every_taught_phrase()" not in brain:
-        gaps.append("the buffer no longer asks the host for the words it teaches")
-    fit = must(body_of(brain, "ladder"), "the brain's `ladder`")
-    if "pair_cells" not in fit:
-        gaps.append("the header measures its pairs by a fixed column again")
-    pair = must(body_of(brain, "pair_cells"), "the brain's `pair_cells`")
-    if "self.phrases.or(" not in pair:
-        gaps.append("a pair's width no longer comes from the words the host sent")
+    # 2) EVERY BUFFER DECLARES what it teaches.
+    buffers = sorted((root / "buffers").glob("*/src/lib.rs"))
+    floor(len(buffers), 6, "buffers under buffers/")
+    for f in buffers:
+        code = without_tests(code_of(f.read_text()))
+        name = f.parent.parent.name
+        if ".teach(" not in code and "teach_keymap(" not in code:
+            gaps.append(name + " teaches nothing to the host's header")
 
-    # 4) THE DOT IS A TOKEN, never a codepoint: a component may not name one.
-    icons = (root / "assets" / "tokens" / "icons.nix").read_text()
-    if not re.search(r"^\s*separator = ", icons, re.M):
-        gaps.append("`icon.separator` went away, so the dot has no token to come from")
+    # 3) AND NONE DRAWS A LINE OF KEYS OF ITS OWN: the hint line's tones, its
+    #    dot and the `⌥` glyph alone are the host's. A `⌥` inside a buffer's
+    #    rows is the design's pair (`Row::put_shortcut`), which spells it the
+    #    way the host does.
+    for f in buffers:
+        code = without_tests(code_of(f.read_text()))
+        name = f.parent.parent.name
+        for needle in ("Role::Key", "Role::KeyLit", "Role::Prose", "Role::ProseLit",
+                       "Run::glyph(Icon::LeaderAlt", "Run::glyph(Icon::Separator"):
+            if needle in code:
+                gaps.append(name + " draws `" + needle + "` itself: a line of keys of its own")
 
     if gaps:
         print("ERROR: a buffer's shortcut line is not the system's.", file=sys.stderr)
@@ -6400,10 +6376,10 @@ let
         for g in gaps:
             print("       " + g, file=sys.stderr)
         print("", file=sys.stderr)
-        print("       The owner read the two lines side by side. They have to be the", file=sys.stderr)
-        print("       same colours, the same spacing and the same separator.", file=sys.stderr)
+        print("       A buffer declares its title and what it teaches (`Screen::heading`,", file=sys.stderr)
+        print("       `Screen::teach`), and the host draws them as every window's header.", file=sys.stderr)
         raise SystemExit(1)
-    print("OK: a buffer teaches its keys in the minibuffer's colours, measured and spaced like it")
+    print("OK: every buffer's keys are declared, and the system's header draws them")
     END
   '';
 
@@ -12135,12 +12111,15 @@ let
             wrong.append(f"door/: the door {why} (`{what}` is not there)")
 
     # THE MANAGER'S WINDOW KEEPS ITS OWN DRAWER — its control is in the `Tab`
-    # ring — and PROVES it. Two windows have no line of keys at all: the
-    # terminal's and a buffer's, whose header is the component's.
+    # ring — and PROVES it. The terminal's has no line of keys at all. A
+    # buffer's window is the HOST's (`buffer.rs`), whose header draws what the
+    # component declares, and is held to the rule like any window.
     EXCEPT = "files_window.rs"
     NO_HEADER = {"terminal.rs"}
 
-    for f in sorted(list(shell_files("**/*_window.rs")) + [shell_file("terminal.rs")]):
+    for f in sorted(
+        list(shell_files("**/*_window.rs")) + [shell_file("terminal.rs"), shell_file("buffer.rs")]
+    ):
         body = _re.sub(r"\s+", "", code_of(f.read_text()))
         if "implContentfor" not in body:
             continue
@@ -12169,7 +12148,11 @@ let
         ):
             wrong.append(f"{f.name}: paints its own frame without the system's header")
         # AND ANSWERS ITS CONTROLS, if it answers the pointer itself.
-        if "fnpointer(" in body and "list::pointer(" not in body:
+        if (
+            "fnpointer(" in body
+            and "list::pointer(" not in body
+            and "list::header_pointer(" not in body
+        ):
             for what in ("hinted.pressed(", "hinted.dragged("):
                 if what not in body:
                     wrong.append(f"{f.name}: answers the pointer itself and not `{what}`")
@@ -12453,7 +12436,10 @@ let
             # is not there is said (`Ui::tell_the_footer`).
             ("door/mod.rs", door, "act_into", ["keys::event_of(", "tell_the_footer("]),
             ("surface.rs", footer, "hint_clicked", ["keys::event_of(", "run_command("]),
-            ("brain", brain, "header", ["is_a_control(", "Role::Inert"]),
+            # A BUFFER'S HEADER IS THE HOST'S: the component declares whether a
+            # key it teaches is a control, and only a control gets a press.
+            ("chrome.rs", chrome, "taught_pieces", ["t.control", ".pressing("]),
+            ("brain", brain, "declare", ["is_a_control("]),
         ):
             body = body_of(text, name)
             must(body, f"{where}: `{name}`")
@@ -12463,7 +12449,7 @@ let
                     wrong.append(f"{where}: `{name}` does not ask `{n}`")
         if "hint_act_under(" not in (body_of(footer, "pointer_frame_here") or ""):
             wrong.append("surface.rs: a click on the minibuffer's hint does nothing")
-        floor(asked, 9, "places asked")
+        floor(asked, 10, "places asked")
         if wrong:
             print("ERROR: a shortcut that looks clickable and is not, or the other way.", file=sys.stderr)
             for w in wrong:
@@ -16693,17 +16679,18 @@ let
       ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
         ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
         --mind mind.json --columns 100 --lines 30 --language "$language" \
-        --hover 30,5 --out "$PWD/$language-hover.png" | tee -a runs.txt
+        --hover 30,4 --out "$PWD/$language-hover.png" | tee -a runs.txt
     done
 
     # THE HOVER LIGHTS A ROW — the second task's, under the notices and the
-    # list's own title — and a row the CURSOR is not on: the two are
+    # list's own title (the header above them is the host's, and not in the
+    # component's frame) — and a row the CURSOR is not on: the two are
     # different questions and wear different grounds. Asked of the display
     # list, because a tone this close is not a thing to assert from pixels.
     ${rust.bins.ronoctua-render-png}/bin/ronoctua-render-png \
       ${buffers.brain}/lib/ronoctua_buffer_brain.wasm \
       --mind mind.json --columns 100 --lines 30 --language en-GB \
-      --hover 30,5 --list > hovered.txt
+      --hover 30,4 --list > hovered.txt
     # BY THE TWO THINGS THAT MATTER, and not by the whole `Debug` spelling:
     # the row and the ground it wears. Written out in full it broke the day the
     # band gained a column and a width — a change this check has no opinion
@@ -16711,7 +16698,7 @@ let
     # A CURSOR'S OWN HOVER: a buffer paints every hand in its colour, and
     # it is the HOST that turns one lone cursor back into the neutral hover —
     # this list is what the buffer drew, before the host.
-    grep -E 'Selection \{ line: 5,.*cursor-hover-one' hovered.txt > /dev/null \
+    grep -E 'Selection \{ line: 4,.*cursor-hover-one' hovered.txt > /dev/null \
       || { echo "ERROR: the pointer rested on a row and nothing lit under it." >&2; exit 1; }
     grep -q 'surface-selection' hovered.txt \
       || { echo "ERROR: the cursor's own band went away with the hover." >&2; exit 1; }
@@ -16743,7 +16730,7 @@ let
         return wide, tall, zlib.decompress(data)
 
     # HOW MANY RUNS THE FRAME HAD. An empty brain draws about sixteen — the
-    # header's ladder and one sentence. This fixture draws over forty.
+    # host's header and one sentence. This fixture draws over forty.
     FLOOR = 30
 
     seen = {}
@@ -16790,10 +16777,11 @@ let
   #
   # It went unnoticed because the page taught from a hand-written list, so the
   # list and the keymap were two truths. The buffer's own test asserts they
-  # agree; this asserts the SHAPE that makes agreeing possible — the header is
-  # built from tables of pairs and not from runs written out one by one, so a
-  # key added to the keymap and not to a table is a test failure rather than a
-  # silence.
+  # agree; this asserts the SHAPE that makes agreeing possible — what the page
+  # declares for the host's header comes from tables of pairs (`declare` reads
+  # `teaches`), and a key a row shows is the one the keymap binds
+  # (`key_of_command`), so a key added to the keymap and not to a table is a
+  # test failure rather than a silence.
   the-brain-header-is-generated = mkCheck "the-brain-header-is-generated" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -16828,29 +16816,24 @@ let
             + ". A key that is not on the screen is a key nobody has."
         )
 
-    # AND THE HEADER IS DRAWN FROM THE TABLES. A `put` of a literal notation in
-    # the header's own builder is the hand-written list coming back.
-    head = must(body_of(src, "header"), "`State::header`")
-    floor(len(head), 400, "characters of the header's builder")
-    for literal in re.findall(r'Run::datum\("([^"]+)"\)', head):
-        sys.exit("ERROR: the header draws the literal `" + literal + "` instead of a table's pair")
+    # AND WHAT IS DECLARED COMES FROM THE TABLES: `declare` teaches what
+    # `teaches` answers, and writes no notation of its own.
+    declare = must(body_of(src, "declare"), "`State::declare`")
+    if "self.teaches()" not in declare or ".teach(" not in declare:
+        sys.exit("ERROR: the header the page declares is not the tables' pairs")
+    for literal in re.findall(r'\.teach\("([^"]+)"', declare):
+        sys.exit("ERROR: the page declares the literal `" + literal + "` instead of a table's pair")
 
-    # AND IT IS LAID OUT ONCE. The height, the ink and the POINTER all read
-    # `ladder`; three walks of the same table is how a rung comes to answer
-    # for its neighbour — the same class of defect the scrollbar had, where
-    # what paints and what catches were two arithmetics.
-    ladder = must(body_of(src, "ladder"), "`State::ladder`")
-    floor(len(ladder), 400, "characters of `ladder`")
-    for who, why in (
-        ("header", "the header paints a ladder it laid out itself"),
-        ("header_rows", "the height counts a ladder of its own"),
-        ("clicked", "a click on a shortcut is resolved by a second walk"),
-    ):
-        body = must(body_of(src, who), "`State::" + who + "`")
-        if "ladder()" not in body:
-            sys.exit("ERROR: " + why + " — one walk, read three times")
+    # AND A ROW'S KEY IS THE KEYMAP'S: `taught_in` takes a COMMAND and asks
+    # `key_of_command` for its key, so a row cannot show a key nothing binds.
+    rows = must(body_of(src, "taught_in"), "`State::taught_in`")
+    if "key_of_command(" not in rows:
+        sys.exit("ERROR: a row's key is written beside it instead of read off the keymap")
+    for call in re.findall(r'taught_in\(&mut row, "([^"]+)"', src):
+        if call.startswith(","):
+            sys.exit("ERROR: a row names the notation `" + call + "` instead of the command it runs")
 
-    print("OK: every key the brain binds is taught, and the header is one walk read three times")
+    print("OK: every key the brain binds is taught, from its tables, and a row's key is the keymap's")
     END
   '';
 

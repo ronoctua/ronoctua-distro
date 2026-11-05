@@ -382,6 +382,48 @@ impl<'a, P: Palette> Row<'a, P> {
         true
     }
 
+    /// PUTS A SHORTCUT in a column: the `⌥` glyph against its one key, or —
+    /// `spelt`, while the pointer rests on the glyph — `label` and the key
+    /// ([`crate::leader_alt`]). The column has to hold what is drawn: a caller
+    /// that spells gives it [`crate::leader_alt::cells`] spelt, and the column
+    /// that fills gives the room up, so the pair grows into its own row and
+    /// covers nothing.
+    pub fn put_shortcut(
+        &mut self,
+        id: &str,
+        glyph: P::Icon,
+        label: &str,
+        key: &str,
+        spelt: bool,
+        role: crate::Role,
+    ) -> bool {
+        if spelt {
+            return self.put(
+                id,
+                crate::screen::Run::datum(&crate::leader_alt::spelt(label, key)).playing(role),
+            );
+        }
+        let Some(field) = self.layout.field(id) else {
+            return false;
+        };
+        let role = crate::screen::on_ground(role, self.ground);
+        let at = field.at;
+        let glyph = crate::screen::Run::glyph(glyph)
+            .at(at)
+            .within(crate::leader_alt::GLYPH)
+            .in_role(role);
+        let _ = self.screen.put(self.line, glyph);
+        let key = self
+            .screen
+            .measured(crate::screen::Run::datum(key))
+            .at(at.saturating_add(crate::leader_alt::GLYPH))
+            .within(field.width.saturating_sub(crate::leader_alt::GLYPH))
+            .in_role(role);
+        let cells = self.screen.put(self.line, key);
+        self.tall = self.tall.max(cells);
+        true
+    }
+
     /// How many cells of height the row took: the tallest run in it.
     ///
     /// The row after this one starts at `line() + tall()`, never at `line + 1`
@@ -538,7 +580,6 @@ mod tests {
                 columns,
                 lines: 24,
                 heights,
-                hide_header: false,
             };
             let mut screen = Screen::<Tokens>::new(&ctx);
             let mut row = screen.row_of(0, &layout);
@@ -577,7 +618,6 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
-            hide_header: false,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);
@@ -610,7 +650,6 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
-            hide_header: false,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);
@@ -663,5 +702,77 @@ mod tests {
             vec!["a"],
             layout.fields().iter().map(|f| f.id).collect::<Vec<_>>()
         );
+    }
+
+    /// FAILS IF: a shortcut's `⌥` is not against its key, or spelt it does not
+    /// say `LEADER Alt` and the key, or it is drawn past its column.
+    #[test]
+    fn a_shortcut_is_its_glyph_against_its_key_or_spelt() {
+        use crate::leader_alt;
+        let layout = crate::Table::across(40)
+            .with(crate::table::Column::fill("label", 10))
+            .with(crate::table::Column::fixed(
+                "keys",
+                leader_alt::cells("SUPER ALT", "o", true),
+                1,
+            ))
+            .resolve();
+        let ctx = ronoctua_protocol::Context {
+            columns: 40,
+            lines: 4,
+            heights: ronoctua_protocol::Heights::from_sizes(12.0, 14.0, 20.0, 28.0, 40.0, 1.45),
+        };
+        let mut screen = Screen::<Tokens>::new(&ctx);
+        let keys = layout.field("keys").expect("the column fits");
+        let mut row = screen.row_of(0, &layout);
+        assert!(row.put_shortcut(
+            "keys",
+            "leader-alt",
+            "SUPER ALT",
+            "o",
+            false,
+            crate::Role::Accent
+        ));
+        let _ = row.done();
+        let mut row = screen.row_of(1, &layout);
+        assert!(row.put_shortcut(
+            "keys",
+            "leader-alt",
+            "SUPER ALT",
+            "o",
+            true,
+            crate::Role::Accent
+        ));
+        let _ = row.done();
+        let list = screen.as_protocol();
+        let at = |line: u16| -> Vec<(u16, ronoctua_protocol::Text)> {
+            list.commands
+                .iter()
+                .filter_map(|c| match c {
+                    ronoctua_protocol::Command::Text {
+                        line: l,
+                        column,
+                        text,
+                        ..
+                    } if *l == line => Some((*column, text.clone())),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            at(0),
+            [
+                (keys.at, ronoctua_protocol::Text::Icon("leader-alt".into())),
+                (
+                    keys.at + leader_alt::GLYPH,
+                    ronoctua_protocol::Text::Data("o".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            at(1),
+            [(keys.at, ronoctua_protocol::Text::Data("SUPER ALT o".into()))]
+        );
+        screen.check().expect("the pair stays inside its column");
     }
 }

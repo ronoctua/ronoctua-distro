@@ -103,13 +103,13 @@ fn boards() -> Boards {
 
 /// Renders at three widths and refuses anything that collides.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<ronoctua_protocol::DisplayList> {
-    let list = inst.render(COLUMNS, ROWS, heights(), false)?;
+    let list = inst.render(COLUMNS, ROWS, heights())?;
     ronoctua_runtime::driven::note(&list);
     for columns in [46, 80, COLUMNS] {
         let at = if columns == COLUMNS {
             list.clone()
         } else {
-            inst.render(columns, ROWS, heights(), false)?
+            inst.render(columns, ROWS, heights())?
         };
         if let Err(e) = at.nothing_overlaps(heights(), columns) {
             bail!("at {columns} columns, {e}");
@@ -236,7 +236,7 @@ fn main() -> Result<()> {
     if drawing {
         draw(&list, COLUMNS, "the list of keyboards");
         draw(
-            &inst.render(46, ROWS, heights(), false)?,
+            &inst.render(46, ROWS, heights())?,
             46,
             "the same, at 46 columns",
         );

@@ -21530,10 +21530,9 @@ fn esc_leaves(typed: &str, flat: bool, nothing_pending: bool) -> bool {
 /// buffer's `, x`. A lone `,` is one of a flat window's keys (the camera's
 /// settings), never the prefix.
 fn under_the_prefix(bindings: &[(String, String)]) -> bool {
-    bindings.iter().any(|(sequence, _)| {
-        let mut keys = sequence.split_whitespace();
-        keys.next() == Some(ronoctua_protocol::LOCAL_PREFIX) && keys.next().is_some()
-    })
+    bindings
+        .iter()
+        .any(|(sequence, _)| ronoctua_protocol::local_key(sequence).is_some())
 }
 
 /// The window's shortcuts on the free line, each by its PLACE
@@ -21603,20 +21602,9 @@ fn command_words(texts: &ronoctua_i18n::Texts, id: &str) -> String {
 /// `LEADER Alt` — a buffer's `, x` is `x`, the `,` being typed for the
 /// person — drawn as a header draws it, an arrow as its glyph.
 fn key_on_the_line(sequence: &str) -> String {
-    let typed = local_key(sequence).unwrap_or(sequence);
+    let typed = ronoctua_protocol::local_key(sequence).unwrap_or(sequence);
     ronoctua_keymap::Key::parse(typed)
         .map_or_else(|_| typed.to_owned(), |k| crate::chrome::key_text(&k))
-}
-
-/// The one key of a buffer's `, x` — what is typed after `LEADER Alt`, which
-/// types the `,` for the person. `None` for anything else: a flat window's
-/// key, a lone `,` among them, a longer sequence.
-fn local_key(sequence: &str) -> Option<&str> {
-    let mut keys = sequence.split_whitespace();
-    match (keys.next(), keys.next(), keys.next()) {
-        (Some(ronoctua_protocol::LOCAL_PREFIX), Some(key), None) => Some(key),
-        _ => None,
-    }
 }
 
 /// One which-key row per DISTINCT next key of a buffer's keymap.

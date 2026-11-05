@@ -120,6 +120,11 @@ impl Screen {
                     Text::Icon(_) => me.icons += 1,
                 },
                 Command::Selection { .. } => me.selections += 1,
+                // THE WINDOW'S TITLE, declared for the host's header.
+                Command::Heading {
+                    title: Text::Key(k),
+                    ..
+                } => me.keys.push(k.clone()),
                 _ => {}
             }
         }
@@ -151,13 +156,13 @@ impl Screen {
 /// happen to meet, and that width depends on how long a sentence came out in
 /// whichever language is loaded.
 fn look(inst: &mut ronoctua_runtime::Instance) -> Result<Screen> {
-    let list = inst.render(COLUMNS, ROWS, heights(), false)?;
+    let list = inst.render(COLUMNS, ROWS, heights())?;
     ronoctua_runtime::driven::note(&list);
     for columns in [46, 80, COLUMNS] {
         let at = if columns == COLUMNS {
             list.clone()
         } else {
-            inst.render(columns, ROWS, heights(), false)?
+            inst.render(columns, ROWS, heights())?
         };
         if let Err(e) = at.nothing_overlaps(heights(), columns) {
             bail!("at {columns} columns, {e}");

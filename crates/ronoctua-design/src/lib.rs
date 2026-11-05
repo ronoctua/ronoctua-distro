@@ -123,6 +123,43 @@ pub mod bindings {
 
 pub mod budget;
 pub mod carets;
+
+/// THE `⌥` OF A SHORTCUT — `LEADER Alt` and its one key, drawn as a glyph
+/// against the key, and SPELT (`SUPER ALT k`) while the pointer rests on the
+/// glyph. One arithmetic for every place a `⌥` is drawn: the host's headers
+/// and the minibuffer's line (`chrome::leader_alt_text`), and a buffer's own
+/// rows (`table::Row::put_shortcut`), which learn the spelling from the host
+/// ([`Phrases::LEADER_ALT`]).
+pub mod leader_alt {
+    use alloc::string::String;
+
+    /// The glyph's one cell, against its key — the icon's own two would leave
+    /// a gap no line of shortcuts has.
+    pub const GLYPH: u16 = 1;
+
+    /// The spelt form: the label (`SUPER ALT`), a space, the key.
+    #[must_use]
+    pub fn spelt(label: &str, key: &str) -> String {
+        alloc::format!("{label} {key}")
+    }
+
+    /// How many cells, from the pair's first, are the glyph — or its spelt
+    /// words: where the pointer rests to spell it.
+    #[must_use]
+    pub fn prefix_cells(label: &str, spelt: bool) -> u16 {
+        if spelt {
+            crate::wide(label).saturating_add(1)
+        } else {
+            GLYPH
+        }
+    }
+
+    /// What the whole pair takes, at rest or spelt.
+    #[must_use]
+    pub fn cells(label: &str, key: &str, spelt: bool) -> u16 {
+        prefix_cells(label, spelt).saturating_add(crate::wide(key))
+    }
+}
 pub mod grid;
 mod hovers;
 pub mod phrases;
@@ -146,7 +183,7 @@ pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
 pub use region::{Region, Slice, split};
-pub use screen::{Ink, Run, Screen};
+pub use screen::{Ink, Run, Screen, Taught};
 pub use scroll::Scroll;
 pub use sheet::{SHEET_LABEL, Sheet, sheet_split};
 pub use table::{Column, Field, Layout, Row, Table, Width};

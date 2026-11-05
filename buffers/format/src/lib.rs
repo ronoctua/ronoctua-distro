@@ -76,9 +76,12 @@ use ronoctua_design::wide;
 mod key {
     pub const TITLE: &str = "format-title";
     pub const EMPTY: &str = "format-empty";
-    pub const HINT_LIST: &str = "format-hint-list";
-    pub const HINT_CHOOSE: &str = "format-hint-choose";
-    pub const HINT_CONFIRM: &str = "format-hint-confirm";
+    pub const DO_CHOOSE: &str = "format-do-choose";
+    pub const DO_CONTINUE: &str = "format-do-continue";
+    pub const DO_ANSWER: &str = "format-do-answer";
+    pub const ABOUT_CHOOSE: &str = "about-format-do-choose";
+    pub const ABOUT_CONTINUE: &str = "about-format-do-continue";
+    pub const ABOUT_ANSWER: &str = "about-format-do-answer";
 
     /// What a row IS, in the two words that decide everything downstream.
     pub const WHOLE: &str = "format-whole";
@@ -503,30 +506,39 @@ const SENTENCE: u16 = 24;
 
 /// How many rows at the bottom belong to the foot.
 ///
-/// Three: what just happened, what the cursor is on, and what the keys do. The
-/// list stops here — it used to reserve two, and the row it took was the one
-/// that says a disk is being written.
-const FOOT: u16 = 3;
+/// Two: what just happened, and what the cursor is on. The list stops here.
+/// What the keys do is the host's header, over the window (`Screen::teach`).
+const FOOT: u16 = 2;
 
 /// The first row the foot owns — where the content has to stop.
 const fn foot_top(lines: u16) -> u16 {
     lines.saturating_sub(FOOT)
 }
 
-/// The foot's three rows, in order: what happened, what the cursor is on, and
-/// what the keys do.
+/// The foot's two rows, in order: what happened, and what the cursor is on.
 ///
 /// Derived from [`FOOT`] rather than counted back from the last line by hand,
 /// so the rows the foot writes on and the reservation the list makes cannot
 /// drift apart — they are the same number, read twice.
-const fn foot_rows(lines: u16) -> (u16, u16, u16) {
+const fn foot_rows(lines: u16) -> (u16, u16) {
     let last = lines.saturating_sub(1);
-    (
-        last.saturating_sub(FOOT - 1),
-        last.saturating_sub(FOOT - 2),
-        last,
-    )
+    (last.saturating_sub(FOOT - 1), last)
 }
+
+/// WHAT EACH QUESTION TEACHES, for the header the HOST draws over the window
+/// (`Screen::teach`): `(key, short word, sentence)`. `ESC` is the host's,
+/// first on every window — it goes back a question, and closes on the first.
+const LIST_TEACHES: &[(&str, &str, &str)] = &[
+    ("<down>", key::DO_CHOOSE, key::ABOUT_CHOOSE),
+    ("RET", key::DO_CONTINUE, key::ABOUT_CONTINUE),
+];
+/// And when a name is typed and the format chosen.
+const CHOOSE_TEACHES: &[(&str, &str, &str)] = LIST_TEACHES;
+/// And the last question's.
+const CONFIRM_TEACHES: &[(&str, &str, &str)] = &[
+    ("<down>", key::DO_CHOOSE, key::ABOUT_CHOOSE),
+    ("RET", key::DO_ANSWER, key::ABOUT_ANSWER),
+];
 
 /// A run whose colour the design crate's vocabulary has no name for.
 ///
@@ -697,8 +709,8 @@ struct Detail {
 /// The screenshot that found the original defect (`…dos até 2 §1BO88p4 B`)
 /// cannot come back: the number is a column of its own, and two columns of a
 /// table do not meet in any language or at any width.
-fn foot(draw: &mut Draw, hint: &str, said: Option<&Said>, detail: &Detail) {
-    let (message, at, hint_at) = foot_rows(draw.screen.lines());
+fn foot(draw: &mut Draw, teaches: &[(&str, &str, &str)], said: Option<&Said>, detail: &Detail) {
+    let (message, at) = foot_rows(draw.screen.lines());
 
     // THE DETAIL, IN THE DIMMEST COLOUR THERE IS. That is the whole compromise:
     // somebody who does not know what FAT32 is never has to read this line, and
@@ -725,7 +737,9 @@ fn foot(draw: &mut Draw, hint: &str, said: Option<&Said>, detail: &Detail) {
         };
         draw.tint_at(message, run, colour);
     }
-    draw.screen.put(hint_at, Run::label(hint).quiet());
+    for (keys, says, about) in teaches {
+        draw.screen.teach(keys, says, about, true);
+    }
 }
 
 /// A row that is chosen, drawn as chosen — by COLOUR, never by a box or an
@@ -745,7 +759,7 @@ impl State {
             self.list_top = None;
             draw.screen
                 .put(line, Run::label(key::EMPTY).playing(Role::Body));
-            foot(draw, key::HINT_LIST, self.said(), &self.detail());
+            foot(draw, LIST_TEACHES, self.said(), &self.detail());
             return;
         }
 
@@ -848,7 +862,7 @@ impl State {
             }
         }
 
-        foot(draw, key::HINT_LIST, self.said(), &self.detail());
+        foot(draw, LIST_TEACHES, self.said(), &self.detail());
     }
 
     /// Five filesystems and a name. *What for?*
@@ -918,7 +932,7 @@ impl State {
             let _ = row.done();
         }
 
-        foot(draw, key::HINT_CHOOSE, None, &self.detail());
+        foot(draw, CHOOSE_TEACHES, None, &self.detail());
     }
 
     /// Two rows, and `no` is the first. *Encrypted?*
@@ -941,7 +955,7 @@ impl State {
             mark(draw, at, self.encrypt == (n == 1));
             draw.screen.line(Run::label(text).playing(Role::Title));
         }
-        foot(draw, key::HINT_CONFIRM, None, &self.detail());
+        foot(draw, CONFIRM_TEACHES, None, &self.detail());
     }
 
     /// Two rows, and `no` is the first. *Are you sure?*
@@ -997,7 +1011,7 @@ impl State {
             }
         }
 
-        foot(draw, key::HINT_CONFIRM, None, &self.detail());
+        foot(draw, CONFIRM_TEACHES, None, &self.detail());
     }
 
     /// Whichever question is on, drawn into the frame.
@@ -1246,8 +1260,9 @@ impl State {
     fn back(&mut self) -> Vec<Effect> {
         match self.screen {
             // ONE LEVEL, AND THE BUFFER IS WHAT WALKS. `Esc` on the first
-            // screen is the host's to act on, and it closes the window.
-            Question::List => vec![],
+            // screen closes the window, as it closes every window — and the
+            // host asks first (`Ui::closing`).
+            Question::List => vec![Effect::Close],
             Question::Choose => {
                 self.screen = Question::List;
                 self.target = None;
@@ -1540,7 +1555,6 @@ mod tests {
             columns,
             lines,
             heights: heights(),
-            hide_header: false,
         }
     }
 
@@ -1646,14 +1660,11 @@ mod tests {
         }
     }
 
-    /// THE HEADING IS A GLYPH AND A TITLE, AND THERE IS NO RULE.
-    ///
-    /// It used to be three commands and a blank row: an icon, a key, a
-    /// `Command::Rule` on line 1, and content from line 3. What separates a
-    /// title from its content is whitespace now, and this file no longer has an
-    /// opinion about how much.
+    /// THE WINDOW'S TITLE IS THE HOST'S, on every question: declared — a key —
+    /// for the header the host draws, with what the question teaches, and no
+    /// rule anywhere: what separates a title from its content is whitespace.
     #[test]
-    fn the_heading_is_a_glyph_and_a_title_and_no_rule() {
+    fn the_title_and_the_keys_are_declared_for_the_host() {
         for question in [
             Question::List,
             Question::Choose,
@@ -1667,19 +1678,17 @@ mod tests {
                     !out.iter().any(|c| matches!(c, Command::Rule(_))),
                     "{question:?}: a rule came back"
                 );
-                let Command::Text(glyph) = &out[0] else {
-                    panic!("{question:?}: the first command is the heading's glyph");
-                };
-                let Command::Text(title) = &out[1] else {
-                    panic!("{question:?}: the second command is the heading's title");
-                };
-                assert!(matches!(glyph.content, Text::Icon(_)), "{question:?}");
-                assert!(matches!(title.content, Text::Key(_)), "{question:?}");
-                assert_eq!(glyph.line, title.line, "{question:?}: one row");
-                // AT CELL ZERO, which is the whole of `GUTTER`'s death: the
-                // host's margin already moved the buffer in on both sides.
-                assert_eq!(glyph.column, 0, "{question:?}");
-                assert_eq!(title.column, ICON + GAP, "{question:?}");
+                assert!(
+                    out.iter().any(
+                        |c| matches!(c, Command::Heading(h) if matches!(h.title, Text::Key(_)))
+                    ),
+                    "{question:?}: the title was not declared"
+                );
+                assert!(
+                    out.iter()
+                        .any(|c| matches!(c, Command::Taught(t) if t.keys == "RET")),
+                    "{question:?}: RET is not taught"
+                );
             }
         }
     }

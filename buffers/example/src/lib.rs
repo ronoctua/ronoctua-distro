@@ -174,6 +174,8 @@ impl State {
                 line += 1;
             }
         }
+        // ITS ONE KEY, for the host's header (`Screen::teach_keymap`).
+        screen.teach_keymap(KEYMAP);
         screen.finish_wit()
     }
 
@@ -219,6 +221,9 @@ impl State {
                     _ => Vec::new(),
                 }
             }
+            // `ESC` CLOSES THE WINDOW, as it closes every window — and the host
+            // asks first (`Ui::closing`).
+            Input::Cancel => vec![Effect::Close],
             // `RET` walks on, as a form's `Tab` does.
             Input::Confirm => {
                 let r = self.carets.here();
@@ -318,7 +323,6 @@ mod tests {
                 large: 2,
                 huge: 2,
             },
-            hide_header: false,
         }
     }
 
