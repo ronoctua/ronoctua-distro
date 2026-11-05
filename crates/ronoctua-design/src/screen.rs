@@ -9,9 +9,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use ronoctua_protocol::{Color, Command, Context, DisplayList, Heights, Scale, Text};
 
-use crate::budget::{room, tall};
+use crate::budget::tall;
 use crate::table::{Layout, Row};
-use crate::{AIR, CONTENT_FLOOR, GAP, ICON, Palette, Role, Tokens};
+use crate::{ICON, Palette, Role, Tokens};
 
 /// What a run says.
 ///
@@ -334,6 +334,10 @@ pub struct Screen<P: Palette> {
     /// ([`Screen::heading`] at row zero; `Command::Heading`): its glyph and
     /// its text key.
     title: Option<(P::Icon, String)>,
+    /// How many headings were asked for BELOW row zero — a header of the
+    /// buffer's own, which [`Screen::heading`] refuses and [`Screen::check`]
+    /// fails the frame for.
+    headings_below_the_top: u32,
     /// WHAT THE BUFFER TEACHES NOW, in order, for that header
     /// ([`Screen::teach`]; `Command::Taught`).
     taught: Vec<Taught>,
@@ -368,6 +372,7 @@ impl<P: Palette> Screen<P> {
             mismeasured: 0,
             refused: 0,
             title: None,
+            headings_below_the_top: 0,
             taught: Vec::new(),
         }
     }
@@ -718,99 +723,29 @@ impl<P: Palette> Screen<P> {
         self.ground(line, Role::Shelf);
     }
 
-    /// **The** heading: a glyph, a title, and the air around them.
+    /// **The** heading: the WINDOW'S title, a glyph and a text key, declared
+    /// for the header the HOST draws over every window (`Command::Heading`),
+    /// before what the buffer teaches ([`Screen::teach`]). It draws nothing
+    /// and keeps no row: the buffer's rows begin under that header, so this
+    /// returns row zero.
     ///
-    /// Returns the first row of the content, and leaves the cursor there.
+    /// # Only at row zero
     ///
-    /// # The block
-    ///
-    /// ```text
-    /// row+0   air
-    /// row+1   glyph (cell 0, ICON cells) + title key (cell ICON+GAP, to the edge)
-    /// row+2   air
-    /// row+3   the first row of content        <- what this returns
-    /// ```
-    ///
-    /// # THERE IS NO RULE, and that is the whole of the separation
-    ///
-    /// What separates a title from its content is whitespace, and only
-    /// whitespace. Four buffers had four answers and three of them drew a rule;
-    /// the one that did not — the memory panel, where `ARCHITECTURE.md` records
-    /// that "what separates is only the empty cell" — is the one that was
-    /// right, and the owner has standardised on it. This is not the separation
-    /// argument being given up: `colors.nix` opens by saying separation is by
-    /// whitespace and a one-line rule and never by a container, and a heading
-    /// that already has a colour and a glyph in front of it does not need the
-    /// second half.
-    ///
-    /// [`Screen::rule`] stays in the vocabulary — it is still what the memory
-    /// panel puts between two blocks and what the three browsers put above
-    /// their grids, and it is still full bleed. What changed is that a heading
-    /// never emits one. **A rule inside a heading is now the defect.**
-    ///
-    /// # The air, in pixels, because that is the only way to show it is equal
-    ///
-    /// The cell is `font.size.base × font.lineHeight = 18 × 1.45 = 26.1 px`.
-    /// The font's box is `1.25 em = 22.5 px` (ascender 0.965 + descender
-    /// 0.285), so every run already carries `(26.1 − 22.5) / 2 = 1.8 px` of
-    /// slack above its ink and 1.8 below it. Then:
-    ///
-    /// - above the title's ink: one empty cell plus the title's own top slack —
-    ///   `26.1 + 1.8 = 27.9 px`;
-    /// - below it, down to the first content ink: the title's bottom slack plus
-    ///   one empty cell — `1.8 + 26.1 = 27.9 px`.
-    ///
-    /// The numbers were 29.0 and 31.0 while a buffer's body was 20 px; the
-    /// EQUALITY is the point and it does not depend on the size.
-    ///
-    /// Two equal gaps, each exactly one line height plus the line box's own
-    /// slack. That is what the owner asked for, and it is why the air is not
-    /// two cells on one side and none on the other — which is what every buffer
-    /// shipped, each differently.
-    ///
-    /// # Why the title is at the BODY's size
-    ///
-    /// What makes a line a title is not how big it is: it is the accent glyph
-    /// in front of it and the air around it — emphasis by colour, separation by
-    /// whitespace, which is what `colors.nix` prescribes and what a heading
-    /// wants whether or not a rule is available to it. At the body's size it also costs ONE cell
-    /// instead of two, and in a footer with a ceiling that row goes back to the
-    /// content.
-    ///
-    /// # When the window cannot pay
-    ///
-    /// The air is a PREFERENCE, and the two-phase shape this repository uses
-    /// everywhere applies here too: what never gives way is that nothing leaks
-    /// off the screen. Below `2 × AIR + 1 + CONTENT_FLOOR` rows the block gives
-    /// its air up entirely — the title, and the content directly under it —
-    /// rather than taking the last row the content had. It gives it up on BOTH
-    /// sides at once: half the air on one side is the asymmetry this function
-    /// exists to end.
+    /// The header is one, the host's, and the title is the first thing a frame
+    /// says. A heading BELOW the top is a buffer drawing a header of its own —
+    /// a title inside the content, and a host header with none, which is what
+    /// every buffer did before the host drew them (the brain's ladder, the
+    /// transfers' foot). It is refused: drawn nowhere, declared nowhere, and
+    /// counted, so [`Screen::check`] fails the frame. What a panel's own
+    /// section says is a row (`Run::label(…).title()`), never a heading.
     pub fn heading(&mut self, icon: P::Icon, key: &str) -> u16 {
         let start = self.row;
-        // THE WINDOW'S TITLE IS THE HEADING AT ROW ZERO, and it is the HOST's
-        // to draw: the header over every window carries it, before what the
-        // buffer teaches ([`Screen::teach`]), and the buffer's rows begin
-        // under that header — so this keeps no row for it. A heading below
-        // the top is a panel's own section title, and draws.
-        if start == 0 {
-            self.title = Some((icon, key.into()));
+        if start != 0 {
+            self.headings_below_the_top = self.headings_below_the_top.saturating_add(1);
             return start;
         }
-        let cells = self.tall(Scale::Normal);
-        let (title, content) = heading_block(start, cells, self.lines);
-
-        self.put(title, Run::glyph(icon).accent().at(0).within(ICON));
-        let from = ICON.saturating_add(GAP);
-        self.put(
-            title,
-            Run::label(key)
-                .title()
-                .at(from)
-                .within(room(self.columns, from)),
-        );
-        self.row = content;
-        content
+        self.title = Some((icon, key.into()));
+        start
     }
 
     /// TEACHES ONE PAIR on the header the host draws over the window — `keys`
@@ -1117,6 +1052,15 @@ impl<P: Palette> Screen<P> {
                  budget ends and not where the ink did, and the gap grows with the \
                  phrase",
                 self.mismeasured
+            ));
+        }
+        if self.headings_below_the_top > 0 {
+            return Err(alloc::format!(
+                "{} heading(s) below row zero — the window's title is the host's header, \
+                 declared by `Screen::heading` at row zero, and a heading anywhere else is \
+                 a header of the buffer's own: a title inside the content, and a header \
+                 over the window with none",
+                self.headings_below_the_top
             ));
         }
         self.regions_are_whole()?;
@@ -1549,30 +1493,6 @@ pub(crate) enum Frame<'a, I> {
     Barred(u16, u16, u16, crate::Scroll, Role),
 }
 
-/// Where the title and the content go.
-///
-/// Its own function, and not three lines inside [`Screen::heading`], because it
-/// is the arithmetic the tests interrogate: the air has to come out equal on
-/// both sides, and a test that had to read it back out of a `Vec<Command>`
-/// would be proving the reading and not the sum.
-///
-/// See [`Screen::heading`] for the pixels.
-#[must_use]
-pub fn heading_block(start: u16, cells: u16, lines: u16) -> (u16, u16) {
-    // PHASE ONE, the preference: one cell of air above the title's box and one
-    // below it. Nothing between them — there is no rule any more.
-    let title = start.saturating_add(AIR);
-    let content = title.saturating_add(cells).saturating_add(AIR);
-    // PHASE TWO, what does not give way: the block plus a row of content has to
-    // fit in the window. The compositor does not clip.
-    if content.saturating_add(CONTENT_FLOOR) <= lines {
-        return (title, content);
-    }
-    // Tight: no air on either side. A narrower window gets the title and its
-    // content adjacent rather than a heading with air on one side only.
-    (start, start.saturating_add(cells))
-}
-
 /// The colour a role resolves to on the host, for whoever needs the name.
 #[must_use]
 pub fn token_of(role: Role) -> Color {
@@ -1600,67 +1520,9 @@ mod tests {
         }
     }
 
-    /// THE AIR IS EQUAL ON BOTH SIDES, at every scale a title could take.
-    ///
-    /// Measured the way the screen shows it: above the title's box, and between
-    /// that box and the first row of content.
-    #[test]
-    fn the_heading_breathes_the_same_on_both_sides() {
-        for scale in [
-            Scale::Small,
-            Scale::Base,
-            Scale::Normal,
-            Scale::Large,
-            Scale::Huge,
-        ] {
-            let cells = tall(&heights(), scale);
-            // A window big enough that the preference is affordable.
-            let (title, content) = heading_block(0, cells, 64);
-            let above = title;
-            let below = content - (title + cells);
-            assert_eq!(above, AIR, "air above the title, {scale:?}");
-            assert_eq!(below, AIR, "air below the title, {scale:?}");
-        }
-    }
-
-    /// The block costs `2 × AIR` plus the title's own box, and the title's box
-    /// is what `Heights` says — never one row.
-    #[test]
-    fn the_heading_costs_its_air_plus_the_titles_box() {
-        for scale in [Scale::Normal, Scale::Large, Scale::Huge] {
-            let cells = tall(&heights(), scale);
-            let (_, content) = heading_block(0, cells, 64);
-            assert_eq!(content, AIR * 2 + cells, "{scale:?}");
-        }
-    }
-
-    /// THE HEADING EMITS A GLYPH AND A TITLE, AND NOTHING ELSE.
-    ///
-    /// A rule inside a heading is the defect: what separates a title from its
-    /// content is whitespace and only whitespace. Three buffers drew one, the
-    /// memory panel did not, and the memory panel was right.
-    #[test]
-    fn a_heading_draws_no_rule() {
-        let mut screen = Screen::<Tokens>::new(&context(80, 24));
-        // A SECTION'S TITLE, below the top: the one at row zero is the host's.
-        screen.skip(1);
-        let content = screen.heading("disk", "cmd-format-disk") - 1;
-        let list = screen.as_protocol();
-        assert_eq!(list.commands.len(), 2, "a glyph and a title, and no more");
-        assert!(
-            !list
-                .commands
-                .iter()
-                .any(|c| matches!(c, Command::Rule { .. })),
-            "a rule appeared in a heading"
-        );
-        assert_eq!(content, AIR * 2 + tall(&heights(), Scale::Normal));
-    }
-
     /// THE WINDOW'S TITLE IS THE HOST'S: the heading at row zero draws
     /// nothing and keeps no row — it is declared for the header the host draws
-    /// over the window, with what the buffer teaches — and a heading BELOW the
-    /// top is a panel's own section title, which draws.
+    /// over the window, with what the buffer teaches.
     #[test]
     fn the_top_heading_is_declared_for_the_hosts_header() {
         let mut screen = Screen::<Tokens>::new(&context(80, 24));
@@ -1687,50 +1549,26 @@ mod tests {
             ],
             "the top heading drew a glyph or a title of its own"
         );
+        screen.check().expect("a declared title is a whole frame");
+    }
 
-        // A SECTION TITLE BELOW THE TOP still draws — it was never the header.
-        screen.skip(4);
-        let below = screen.heading("key", "cmd-format-disk");
-        assert!(below > 4, "a heading below the top keeps its air and rows");
+    /// FAILS IF: a heading below the top draws a title inside the content, is
+    /// taken for the window's, or passes the frame's own question — the shape
+    /// of a buffer drawing its own header again.
+    #[test]
+    fn a_heading_below_the_top_is_refused() {
+        let mut screen = Screen::<Tokens>::new(&context(80, 24));
+        screen.line(Run::datum("a warning first"));
+        let content = screen.heading("disk", "cmd-format-disk");
+        assert_eq!(content, 1, "a refused heading keeps no row");
+        assert_eq!(screen.title(), None, "a refused heading is not the title");
         assert_eq!(
             screen.as_protocol().commands.len(),
-            4,
-            "the section title drew its glyph and title"
+            1,
+            "a refused heading drew something"
         );
-    }
-
-    /// The air gives way; "nothing leaks" does not.
-    ///
-    /// At every window height, the title and the first content row have to be
-    /// rows the window actually has.
-    #[test]
-    fn a_short_window_gives_the_air_up_rather_than_the_content() {
-        let cells = tall(&heights(), Scale::Normal);
-        for lines in 1..=64u16 {
-            let (title, content) = heading_block(0, cells, lines);
-            assert!(title < lines, "the title leaks at {lines} lines");
-            assert!(content <= lines, "the content leaks at {lines} lines");
-        }
-    }
-
-    /// A `Large` title with a rule one row under it is exactly the frame
-    /// `nothing_is_covered` was written for — and a heading has to PASS now.
-    #[test]
-    fn a_heading_survives_the_hosts_two_questions() {
-        for columns in [12u16, 24, 80, 200] {
-            for lines in [4u16, 12, 40] {
-                let mut screen = Screen::<Tokens>::new(&context(columns, lines));
-                // A SECTION'S TITLE: the one at row zero is the host's.
-                screen.skip(1);
-                let content = screen.heading("disk", "cmd-format-disk");
-                if content < lines {
-                    screen.put(content, Run::datum("sda1").at(0));
-                }
-                screen
-                    .check()
-                    .unwrap_or_else(|e| panic!("{columns}x{lines}: {e}"));
-            }
-        }
+        let trouble = screen.check().expect_err("a heading below row zero");
+        assert!(trouble.contains("below row zero"), "{trouble}");
     }
 
     /// THE TEST THAT PROVES THE TEST BITES.

@@ -205,7 +205,16 @@ mod tests {
     /// request — or one that is here is left out.
     #[test]
     fn a_minter_not_here_yet_gives_no_flags() {
-        let missing = "/nix/var/nix/profiles/ronoctua/parts/pot-provider/v1/server".to_owned();
+        // A FOLDER NO MACHINE HAS, and never the part's real path: on a
+        // machine where the minter HAS arrived, that path is here, and the
+        // test would judge the machine instead of the rule.
+        let missing = std::env::temp_dir()
+            .join(format!(
+                "ronoctua-ytdlp-{}-never-made/pot-provider/server",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(present(Some(missing.clone())), None);
         let here = std::env::temp_dir().to_string_lossy().into_owned();
         assert_eq!(present(Some(here.clone())), Some(here.clone()));

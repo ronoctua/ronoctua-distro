@@ -271,13 +271,6 @@ pub const ICON: u16 = 2;
 /// around them (invariants 14 and 15).
 pub const GAP: u16 = 1;
 
-/// How many rows of content a heading has to leave behind to be worth its air.
-///
-/// One. A heading over nothing is a heading about nothing — and below this the
-/// block gives its air up rather than taking the last row the content had. See
-/// [`Screen::heading`].
-pub const CONTENT_FLOOR: u16 = 1;
-
 // ---------------------------------------------------------------------------
 // The wall between the two sides.
 // ---------------------------------------------------------------------------

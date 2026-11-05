@@ -403,7 +403,7 @@ no PATH, o KVM e o `nix-direnv`.
 - O hospedeiro entrega hover/roda/arrasto de barra (`input::hover`/`wheel`/`scrolled`); a roda rola a
   janela, não o cursor; mudança de estado repinta (cobra `a-state-change-repaints`).
 - **O cabeçalho de um buffer é o do hospedeiro** (decisão do dono, 2026-11-05): o componente só
-  DECLARA, a cada quadro, o título e o que ensina (`Screen::heading` na linha 0, `Screen::teach`;
+  DECLARA, a cada quadro, o título e o que ensina (`Screen::heading`, só na linha 0, `Screen::teach`;
   os comandos `heading` e `taught`, que não desenham), e o hospedeiro os desenha com o
   `chrome::Hinted` de toda janela (`chrome::declared`) — `⌥`, clique, frase, gaveta e modo sem
   cabeçalho de um lugar só; o contexto não leva mais `hide-header` (cobra

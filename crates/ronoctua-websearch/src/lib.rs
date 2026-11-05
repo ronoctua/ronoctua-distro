@@ -398,9 +398,16 @@ pub(crate) mod canned {
     }
 
     /// A pass for `host`, from a consent file of the test's own.
+    ///
+    /// ONE FOLDER PER CALL, never per host: the tests run on threads of one
+    /// process, two of them ask for the same host at once, and a folder named
+    /// by the pid and the host was one folder that each removed under the
+    /// other's write — a verdict that changed with how busy the machine was.
     pub(crate) fn pass_for(host: &str) -> Pass {
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "ronoctua-websearch-pass-{}-{}",
+            "ronoctua-websearch-pass-{}-{call}-{}",
             std::process::id(),
             host.replace('.', "-")
         ));

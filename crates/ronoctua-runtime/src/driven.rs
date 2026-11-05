@@ -254,6 +254,8 @@ thread_local! {
     static SEEN: std::cell::RefCell<Vec<(String, u16)>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+    /// How many of the frames looked at declared no title.
+    static UNTITLED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Remembers this frame's labels, to be measured when the run is over.
@@ -274,9 +276,25 @@ thread_local! {
 /// this from that helper measures all of them for one line; measuring frame by
 /// frame would need the `.ftl` in the signature of everything that renders, and
 /// would say the same thing eight times.
+///
+/// # And whether the frame declared its title
+///
+/// The header over a buffer is the host's, and the window's title in it is
+/// the one thing every frame has to say (`Screen::heading` at row zero, one
+/// `Command::Heading`). A frame without one is a header with no title — or a
+/// buffer drawing a header of its own, whose heading the design refused
+/// below the top. Counted here, for every screen the driver visits, and
+/// refused at the end of the run with the labels.
 pub fn note(list: &ronoctua_protocol::DisplayList) {
     let keys = keys_of(list);
     SEEN.with_borrow_mut(|s| s.extend(keys));
+    let titled = list
+        .commands
+        .iter()
+        .any(|c| matches!(c, ronoctua_protocol::Command::Heading { .. }));
+    if !titled {
+        UNTITLED.set(UNTITLED.get().saturating_add(1));
+    }
 }
 
 /// Everything this run looked at fits, in every language.
@@ -332,6 +350,7 @@ pub fn every_label_fits_in(
 /// words.
 pub fn forget() {
     SEEN.with_borrow_mut(Vec::clear);
+    UNTITLED.set(0);
 }
 
 fn fits_in(
@@ -340,6 +359,13 @@ fn fits_in(
     to_the_edge: u16,
     only: Option<&str>,
 ) -> Result<usize> {
+    let untitled = UNTITLED.get();
+    anyhow::ensure!(
+        untitled == 0,
+        "{untitled} frame(s) declared no title: the window's title is the host's\n\
+         header, declared by `Screen::heading` at row zero, and a heading below\n\
+         the top is a header of the buffer's own, which the design refuses"
+    );
     let seen = SEEN.with_borrow(|s| {
         let mut v = s.clone();
         v.sort_unstable();
@@ -382,4 +408,41 @@ fn fits_in(
         );
     }
     Ok(seen.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(titled: bool) -> ronoctua_protocol::DisplayList {
+        let mut list = ronoctua_protocol::DisplayList::fresh_one();
+        if titled {
+            list.commands.push(ronoctua_protocol::Command::Heading {
+                icon: "disk".into(),
+                title: ronoctua_protocol::Text::Key("cmd-format-disk".into()),
+            });
+        }
+        list
+    }
+
+    /// FAILS IF: a frame that declares no title — a header with none, or a
+    /// buffer drawing a header of its own — reaches the end of a driven run
+    /// unsaid, or a titled one is held for it.
+    #[test]
+    fn a_frame_without_its_title_is_refused_at_the_end_of_the_run() {
+        note(&frame(true));
+        let titled = every_label_fits("/nowhere", &[], 100).unwrap_err();
+        assert!(!titled.to_string().contains("no title"), "{titled}");
+        note(&frame(false));
+        let untitled = every_label_fits("/nowhere", &[], 100).unwrap_err();
+        assert!(
+            untitled
+                .to_string()
+                .contains("1 frame(s) declared no title"),
+            "{untitled}"
+        );
+        forget();
+        let forgotten = every_label_fits("/nowhere", &[], 100).unwrap_err();
+        assert!(!forgotten.to_string().contains("no title"), "{forgotten}");
+    }
 }

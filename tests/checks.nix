@@ -6317,8 +6317,12 @@ let
   # (the owner's decision, 2026-11-05): a buffer DECLARES its title and what it
   # teaches (`heading`, `taught`), and the host draws them with the header
   # every window wears (`chrome::declared`, `Hinted::head`). This proves the
-  # three halves of that: the host draws from what was declared, every buffer
-  # declares, and no buffer draws a line of keys of its own.
+  # four halves of that: the host draws from what was declared, every buffer
+  # declares, no buffer draws a line of keys of its own, and the `⌥` a buffer
+  # draws in its own rows is the design's pair and nothing else. (The title's
+  # half — a heading below row zero is a header of the buffer's own — is
+  # behaviour, and the design's `Screen::check` and every driver's
+  # `driven::note` refuse it on the frame itself.)
   the-shortcut-line-is-the-systems = mkCheck "the-shortcut-line-is-the-systems" [ pkgs.python3 ] ''
     python3 - <<'END'
     import pathlib, re, sys
@@ -6369,6 +6373,37 @@ let
                        "Run::glyph(Icon::LeaderAlt", "Run::glyph(Icon::Separator"):
             if needle in code:
                 gaps.append(name + " draws `" + needle + "` itself: a line of keys of its own")
+
+    # 4) AND THE `⌥` IS ONLY EVER THE DESIGN'S PAIR. `Run::glyph(Icon::LeaderAlt`
+    #    is one spelling of drawing the glyph alone; a glyph kept in a `let`, a
+    #    `Text::Icon` or a `put` of any run are others. So the question is
+    #    asked of the glyph and not of a spelling: every `Icon::LeaderAlt` a
+    #    buffer names is inside a call to `put_shortcut(` — the pair that
+    #    spells it under the pointer the way the host's header does.
+    def calls(code, name):
+        spans = []
+        for m in re.finditer(r"\b" + name + r"\(", code):
+            depth, i = 1, m.end()
+            while i < len(code) and depth:
+                depth += {"(": 1, ")": -1}.get(code[i], 0)
+                i += 1
+            spans.append((m.start(), i))
+        return spans
+    glyphs = 0
+    for f in buffers:
+        code = without_tests(code_of(f.read_text()))
+        name = f.parent.parent.name
+        pairs = calls(code, "put_shortcut")
+        for m in re.finditer(r"\bIcon::LeaderAlt\b", code):
+            glyphs += 1
+            if not any(a <= m.start() < b for a, b in pairs):
+                line = code.count("\n", 0, m.start()) + 1
+                gaps.append(f"{name}: line {line} names `Icon::LeaderAlt` outside `put_shortcut(` — a `⌥` the pointer never spells")
+    floor(glyphs, 1, "`⌥` glyphs a buffer draws in its own rows")
+    table = code_of((root / "crates" / "ronoctua-design" / "src" / "table.rs").read_text())
+    pair = must(body_of(table, "put_shortcut"), "the design's `Row::put_shortcut`")
+    if "leader_alt::" not in pair:
+        gaps.append("`Row::put_shortcut` spells the `⌥` by an arithmetic of its own, not `leader_alt`")
 
     if gaps:
         print("ERROR: a buffer's shortcut line is not the system's.", file=sys.stderr)

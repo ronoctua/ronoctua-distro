@@ -1261,30 +1261,14 @@ carregava — a isenção é de quem gera binding, e agora só um gera.
 **A única coisa que difere entre os dois lados é a cor e o ícone**, e isso é um `trait Palette` com
 duas implementações de vinte linhas. A aritmética é a mesma função, não duas.
 
-#### O cabeçalho são três células, e não há régua nenhuma
+#### O título de um buffer é o cabeçalho do hospedeiro, e não há régua nenhuma
 
-O dono mudou de ideia no meio deste trabalho, e a mudança melhorou o argumento em vez de furá-lo:
-**"não quero que exista linha alguma; zero linha."** O `colors.nix` sempre abriu dizendo que
-separação é por espaço em branco *e* uma régua de uma linha; o painel de memória sempre desenhou o
-cabeçalho **sem régua**, e esta seção já registrava que lá o que separa é a célula vazia. Dos quatro
-formatos, o certo era o que não tinha régua. Agora é o de todos.
-
-```
-linha + 0   AR
-linha + 1   glifo (coluna 0, largura ICON) + título (coluna ICON+GAP, até a borda)
-linha + 2   AR
-linha + 3   primeira linha de conteúdo   <- o que heading() devolve
-```
-
-A célula é 18 × 1,45 = **26,1 px**, e a caixa da fonte é 1,25 em = 22,5 px — então toda run já carrega
-**1,8 px** de folga acima e abaixo da tinta. Ar acima do título: 26,1 + 1,8 = **27,9 px**. Abaixo:
-1,8 + 26,1 = **27,9 px**. Dois vãos iguais, cada um exatamente *uma altura de linha mais a folga da
-própria caixa* — que é, ao pé da letra, o "ar proporcional em cima e em baixo até a altura da linha"
-que foi pedido. E três células em vez das quatro que a versão com régua custaria: uma janela que
-precisa caber uma lista de discos agradece.
-
-`Screen::rule` continua existindo, para separar BLOCOS — é o que o painel de memória usa entre as
-suas quatro partes e os navegadores acima da grade. O que mudou é que `heading()` nunca emite uma.
+O dono pediu **"não quero que exista linha alguma; zero linha"**: o que separa um título do conteúdo é
+espaço em branco. Desde 2026-11-05 o título nem é desenhado pelo buffer: `Screen::heading` só o
+DECLARA, na linha 0, para o cabeçalho que o hospedeiro desenha sobre toda janela. Um `heading` abaixo
+da linha 0 seria um cabeçalho próprio do buffer — título no meio do conteúdo e cabeçalho sem título —,
+e é recusado: o `Screen::check` reprova o quadro, e todo driver (`driven::note`) reprova o quadro sem
+título. `Screen::rule` continua existindo para separar BLOCOS.
 
 #### E os separadores saem de um lugar só — `chrome::rule` e `chrome::divider`
 
