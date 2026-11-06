@@ -214,7 +214,7 @@ pub mod types {
     pub use crate::scroll::Scroll;
     pub use crate::sheet::{SHEET_LABEL, Sheet};
     pub use crate::table::{Column, Field, Layout, Row, Table, Width};
-    pub use crate::{AIR, GAP, Grid, ICON, Palette, Role};
+    pub use crate::{AIR, APART, GAP, Grid, ICON, Palette, Role};
 
     /// The `Guest` trait a component implements.
     #[cfg(feature = "guest")]
@@ -275,6 +275,16 @@ pub const ICON: u16 = 2;
 /// It is also the whole of the separation: no rule between columns, no box
 /// around them (invariants 14 and 15).
 pub const GAP: u16 = 1;
+
+/// The air between two columns of WORDS that have to read as columns:
+/// **two cells**.
+///
+/// One cell is what a glyph and its word, or a figure and its unit, are
+/// kept by. Between a name and the column beside it, the longest name ended
+/// one cell from the next column and the two read as one phrase — the
+/// owner's *"um gap um pouco maior, algo como dois caracteres"*, for the
+/// brain's list of tasks.
+pub const APART: u16 = 2 * GAP;
 
 // ---------------------------------------------------------------------------
 // The wall between the two sides.
@@ -400,14 +410,18 @@ pub enum Role {
     /// mark has read the row — the journal's errors among them, which is
     /// news one has to look at.
     Watching,
-    /// UNDER WAY, AND WELL — a brain task that only listens (its glyph, its
-    /// name, the word in its row) and a module's row toned `working`: the
-    /// teal an agent at work wears on the modeline (`modeline.following`).
+    /// UNDER WAY, AND WELL — a module's row toned `working`: the teal an
+    /// agent at work wears on the modeline (`modeline.following`).
     ///
     /// A watch was [`Role::Watching`]'s pink, and the owner read it on the
     /// brain's list as an alarm: a task that listens, and an agent at work,
     /// in the colour that says something is wrong.
     Following,
+    /// A BRAIN TASK THAT ONLY LISTENS — its glyph, its name and the word in
+    /// its row (`text.listening`): the ordinary row's colour, its hue turned
+    /// a little toward [`Role::Following`]'s teal. The teal itself read too
+    /// loud on a list of names, the owner's word.
+    Listening,
     /// HOW A THING STANDS, OR HOW IT ENDED, said discreetly in the hue of the
     /// news — the brain's last column, and the outcome of each record of a
     /// history (`text.status.*`): it went well.
@@ -606,6 +620,7 @@ impl Palette for Tokens {
             Role::Once => "text-once",
             Role::Watching => "modeline-watching",
             Role::Following => "modeline-following",
+            Role::Listening => "text-listening",
             // HOW A THING STANDS, in the hue of the news.
             Role::StatusGood => "text-status-good",
             Role::StatusIdle => "text-status-idle",

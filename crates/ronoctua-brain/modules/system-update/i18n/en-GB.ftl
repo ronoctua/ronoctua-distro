@@ -2,7 +2,7 @@
 # commands, the name and the sentence of every step of the sequence, the
 # closed words the sequence's table carries, and the view that watches a run.
 brain-task-system-update = Update the system
-brain-task-system-update-does = Gathers what you declared on your other machines, moves the distro and nixpkgs forward, builds the new system and sets it for the next restart — nothing that runs now is stopped or restarted; that restart tries the new system once and comes back to the last good one by itself if it does not start —, updates your own programs and caches, reclaims store space, and publishes what this machine did. When a new system waits, the run ends telling you to restart.
+brain-task-system-update-does = Updates the whole machine: it gathers what you declared on your other machines, moves the distro and nixpkgs forward, and builds the new system for the next restart — nothing running now is stopped or restarted. It also updates your programs and caches, frees space in the store, and publishes what this machine did. On the next restart the new system is tried once; if it does not start, the machine goes back to the last good one by itself. When a new system is waiting, the run ends by asking you to restart.
 brain-task-system-update-brief = Updates the distro, nixpkgs and your programs, and sets the new system for the next restart.
 
 # ITS COMMANDS. The whole sequence now, and the two doors of the view that

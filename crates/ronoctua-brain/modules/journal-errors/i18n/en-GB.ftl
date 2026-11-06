@@ -1,7 +1,7 @@
 # The journal-errors module's own texts: its name and the line under it, its
 # page, the hint of its mark, its actions and the words it refuses with.
 brain-task-journal-errors = Errors in the journal
-brain-task-journal-errors-does = Errors the system and your own programs write in the journal, grouped: the same failure with other numbers is one row, with a count. A mark on the modeline counts the kinds you have not seen yet. A snippet you filter by hides the lines that carry it, off the count.
+brain-task-journal-errors-does = Collects the errors the system and your programs write in the journal, and groups them: the same failure with different numbers becomes one row, with a count. A mark on the modeline counts the kinds you have not seen yet. A piece of text you add as a filter hides the lines that contain it, and takes them off the count.
 brain-task-journal-errors-brief = Groups the errors written in the system's journal and counts the ones you have not seen.
 journal-errors-heading-journal = Following the journal
 journal-errors-heading-unseen = Not seen yet — choose one to mark it seen

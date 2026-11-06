@@ -51,6 +51,7 @@ impl Palette for Wit {
             Role::Once => wit::Color::TextOnce,
             Role::Watching => wit::Color::ModelineWatching,
             Role::Following => wit::Color::ModelineFollowing,
+            Role::Listening => wit::Color::TextListening,
             Role::StatusGood => wit::Color::TextStatusGood,
             Role::StatusIdle => wit::Color::TextStatusIdle,
             Role::StatusBad => wit::Color::TextStatusBad,

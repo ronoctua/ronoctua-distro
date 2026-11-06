@@ -1,7 +1,7 @@
 # The journal-errors module's own texts: its name and the line under it, its
 # page, the hint of its mark, its actions and the words it refuses with.
 brain-task-journal-errors = Erros no journal
-brain-task-journal-errors-does = Erros que o sistema e os seus programas escrevem no journal, agrupados: a mesma falha com outros números é uma linha, com a contagem. Uma marca na modeline conta os tipos que você ainda não viu. Um trecho que você filtra esconde as linhas que o contêm, fora da contagem.
+brain-task-journal-errors-does = Junta os erros que o sistema e os seus programas escrevem no journal e os agrupa: a mesma falha com números diferentes vira uma linha só, com a contagem. Uma marca na modeline conta os tipos que você ainda não viu. Um trecho de texto que você põe como filtro esconde as linhas que o contêm e as tira da contagem.
 brain-task-journal-errors-brief = Agrupa os erros escritos no journal do sistema e conta os que você ainda não viu.
 journal-errors-heading-journal = Acompanhando o journal
 journal-errors-heading-unseen = Ainda não vistos — escolha um para marcá-lo como visto

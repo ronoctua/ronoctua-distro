@@ -1,7 +1,7 @@
 # Os textos do vigia das partes: o nome e a linha abaixo dele, as marcas, as
 # duas palavras no minibuffer e a página.
 brain-task-parts-watch = Partes a caminho
-brain-task-parts-watch-does = Enquanto alguma parte da máquina — o que chega depois da instalação, cada uma por conta própria — está a caminho ou precisa de você, uma marca na modeline diz quantas, e um clique nela abre a página das partes. Ele lê os registros que o realizador das partes escreve, então não roda nada e não custa nada enquanto todas estão aqui.
+brain-task-parts-watch-does = Algumas partes da máquina chegam depois da instalação, cada uma por conta própria. Enquanto alguma delas está a caminho ou precisa de você, uma marca na modeline mostra quantas; um clique nela abre a página das partes. Ele só lê os registros das próprias partes, então não custa nada quando todas já estão aqui.
 brain-task-parts-watch-brief = Mostra na modeline as partes da máquina que estão a caminho ou precisam de você.
 parts-watch-mark-arriving = { $count ->
         [one] Uma parte está a caminho

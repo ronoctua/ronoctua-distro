@@ -919,7 +919,7 @@ def resolve_recipe(theme: Theme, key: str, recipe, where: str) -> Resolved:
         recipe = {"of": recipe}
     if not isinstance(recipe, dict) or "of" not in recipe:
         raise Refusal(f"{where}: the recipe of `{key}` must be \"family.step\" or {{ of = …; }}, got {recipe!r}")
-    unknown = set(recipe) - {"of", "alpha", "chroma", "shift"}
+    unknown = set(recipe) - {"of", "alpha", "chroma", "shift", "toward", "mix"}
     if unknown:
         raise Refusal(f"{where}: the recipe of `{key}` has unknown field(s) {sorted(unknown)}")
     of = recipe["of"]
@@ -936,7 +936,28 @@ def resolve_recipe(theme: Theme, key: str, recipe, where: str) -> Resolved:
     source = of if scale == 1.0 else f"{of} × chroma {scale}"
     if shift != 0.0:
         source = f"{source}, Lc {shift:+g}"
+    # A STEP OF THE WAY TO ANOTHER PRIMITIVE: this theme's own colour of
+    # `of`, its hue and chroma taken `mix` of the way to `toward`'s, at the
+    # lightness of `of` — so the same contrast. One recipe gives every theme
+    # its OWN ink a little turned, where `of = toward` at a low chroma would
+    # give every theme the same tinted grey whatever its text is.
+    if "toward" in recipe or "mix" in recipe:
+        toward = recipe.get("toward")
+        if not isinstance(toward, str) or "." not in toward or "mix" not in recipe:
+            raise Refusal(f"{where}: `{key}` takes `toward` (a primitive, `family.step`) and `mix` together")
+        mix = _number(recipe["mix"], f"{where}: `{key}` mix", 0.0, 1.0)
+        swatch = turned_toward(swatch, theme.primitive(*toward.split(".", 1)), mix)
+        source = f"{source}, {mix:g} of the way to {toward}"
     return Resolved(swatch, int(math.floor(alpha * 255.0 + 0.5)), source)
+
+
+def turned_toward(ink: Swatch, other: Swatch, mix: float) -> Swatch:
+    """`ink` with its OKLab a and b taken `mix` of the way to `other`'s, at
+    `ink`'s own lightness, fitted into sRGB."""
+    l, a, b = ink.lab
+    _, oa, ob = other.lab
+    lch = cs.map_into_gamut(cs.oklab_to_oklch((l, a + (oa - a) * mix, b + (ob - b) * mix)))
+    return Swatch(lch, cs.quantize(cs.oklch_to_rgb(lch)), f"{ink.anchor}, {mix:g} of the way to {other.anchor}", ink.shortfall)
 
 
 def check_key(key: str, where: str) -> None:
@@ -1463,8 +1484,8 @@ CONTRAST_GATES = (
     # grounds the page is framed in.
     ("modeline.watching", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
     # WHAT IS UNDER WAY AND WELL — an agent at work on the modeline (the tone
-    # `working`) and a watch on the brain's page, its glyph, its name and the
-    # word in its row — at the marks' rung, on the same grounds.
+    # `working`) and a module's row toned so on the brain's page — at the
+    # marks' rung, on the same grounds.
     ("modeline.following", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
     # HOW A TASK STANDS AND HOW A RUN ENDED, one discreet rung, on every
     # ground the brain's page draws it on: the list, the history and the
@@ -1476,6 +1497,10 @@ CONTRAST_GATES = (
     ("text.folded", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 24, 27),
     # TODAY'S DAY, louder than the day beside it, on the same grounds.
     ("text.today", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 45, 50),
+    # A WATCH ON THE BRAIN'S LIST reads as the rows around it do: the page,
+    # the cursor's band and the pointer's, and the page's frame. Measured
+    # 44.1 at the lowest (frost's chrome).
+    ("text.listening", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 43),
     # THE TONES A BRAIN MODULE GIVES A MARK, on the modeline's own band, and
     # the levels of its notices on the brain's page — the page, the cursor's
     # band and the pointer's. `text.secondary`, the quiet one, already is.
@@ -1826,6 +1851,13 @@ DISTANCE_GATES = (
     # it, and never the row's own.
     ("text.folded", "text.dim", 0.025, 0.04),
     ("text.folded", "text.secondary", 0.04, 0.05),
+    # A WATCH'S ROW is the ordinary row's colour a little turned, and must
+    # stay both: told from the ordinary row (measured 0.019 at the lowest,
+    # flashbang's light grey), and never the teal it was turned toward, nor
+    # the one-shot task's colour on the same list (0.030 and 0.026).
+    ("text.listening", "text.secondary", 0.015, 0.018),
+    ("text.listening", "modeline.following", 0.025, 0.028),
+    ("text.listening", "text.once", 0.02, 0.024),
     # AND TODAY'S DAY stands out from the day of every other date, and from
     # the amber of a hold, a step quieter on the same hue.
     ("text.today", "text.secondary", 0.05, 0.06),

@@ -2781,8 +2781,10 @@ abrindo o último, como sempre abriu.
 
 **Nenhuma cor é escrita à mão.** `assets/tokens/colors.nix` é uma tabela de RECEITAS — cada token
 nomeia um degrau de uma família (`text.primary = "neutral.text-strong"`,
-`surface.selection = "accent.element"`), e uma receita pode levar `alpha` (a faixa do transporte) ou
-escalar o croma do degrau (`surface.mesh`). Os valores saem de `nix/scripts/gen-theme.py`, que roda
+`surface.selection = "accent.element"`), e uma receita pode levar `alpha` (a faixa do transporte),
+escalar o croma do degrau (`surface.mesh`), mover o contraste (`shift`) ou levar a cor parte do
+caminho até a de outro degrau, na mesma luminosidade (`toward`/`mix`: `text.listening`, o cinza de
+cada tema puxado para o teal). Os valores saem de `nix/scripts/gen-theme.py`, que roda
 UMA vez em `nix/themes.nix` para todos os temas de `assets/themes/themes.nix` — uma LISTA, como a
 dos idiomas, com a ordem (`order`) e o padrão (`default`) em campos separados, e nenhum outro sítio
 nomeia um tema. Um tema é um arquivo de SEMENTES (`assets/themes/<id>.nix`): o modo (`dark` ou

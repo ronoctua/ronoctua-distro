@@ -273,7 +273,34 @@ about-brain-hold-network = Está na hora, e espera a rede.
 about-brain-hold-asleep = Está na hora, e espera a máquina acordar.
 # O CAMINHO DE VOLTA no alto da página de uma tarefa, enquanto a janela está sem cabeçalho.
 brain-back = Voltar
-about-brain-back = Volta à primeira página do Brain, com todas as tarefas.
+about-brain-back = Volta à primeira página do Brain.
+# WHAT EVERYTHING ELSE SAYS UNDER THE POINTER: the page's own name, each
+# title and the figures beside it, the warning line, and the footer — itself,
+# a record's heading, the step it stopped at, a step's command and each figure.
+about-brain-title = O Brain: as tarefas que cuidam sozinhas desta máquina, e o que elas fizeram.
+about-brain-tasks = Todas as tarefas de que o Brain cuida. Selecione uma para ler abaixo o que ela faz; abra-a para ver o agendamento e o histórico.
+about-brain-notices = O que as tarefas querem que você saiba agora. Cada aviso fica até deixar de valer, ou até você dispensá-lo.
+about-brain-activity = O que as tarefas fizeram nos últimos dias, da mais recente para a mais antiga. Registros seguidos que dizem a mesma coisa viram uma linha só.
+about-brain-reach = Até quantos dias atrás esta lista vai, e quantos registros ela tem.
+about-brain-schedule = Quando esta tarefa roda, e se ela roda.
+about-brain-actions = O que o módulo desta tarefa pode fazer por você agora.
+about-brain-steps = O que uma execução desta tarefa faz, uma etapa depois da outra. Uma etapa desligada é pulada.
+about-brain-steps-on = Quantas das etapas estão ligadas, do total.
+about-brain-history = Como foram as últimas execuções desta tarefa, da mais recente para a mais antiga. Selecione uma para ler por que ela terminou assim.
+about-brain-section = Algo que esta tarefa acompanha, do jeito que o módulo dela mostra.
+about-brain-does = O que esta tarefa faz.
+about-brain-held = Uma tarefa está na hora e espera pela máquina. Ela começa sozinha assim que a máquina permitir.
+about-brain-log-page = O registro do próprio Brain, linha a linha, enquanto é escrito.
+about-brain-foot = Tudo sobre o que está selecionado acima, por inteiro.
+about-brain-record = Por que a execução selecionada acima terminou assim.
+about-brain-record-at = A etapa em que a execução estava quando terminou.
+about-brain-command = O comando que esta etapa roda.
+about-brain-last-run = Quando ela rodou pela última vez.
+about-brain-first = Quando aconteceu o primeiro dos registros juntados nesta linha.
+about-brain-times = Quantos registros estão juntados nesta linha.
+about-brain-since = Desde quando este aviso vale.
+about-brain-needs-root = Esta etapa roda como root, o administrador do sistema.
+about-brain-flake-owned = Se esta etapa roda é definido na configuração do sistema, então não dá para desligá-la aqui.
 # AS TAREFAS. `brain-task-<id>` nomeia uma e `<id>-does` diz o que ela faz — a
 # segunda é um parágrafo no rodapé, então tem espaço para ser uma explicação
 # inteira em vez de uma linha.

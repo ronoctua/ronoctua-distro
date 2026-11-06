@@ -195,6 +195,38 @@ mod key {
     /// what it does under the pointer.
     pub const BACK: &str = "brain-back";
     pub const ABOUT_WAY_BACK: &str = "about-brain-back";
+    /// WHAT EVERY OTHER THING DRAWN SAYS UNDER THE POINTER: the page's own
+    /// name and each title — what the rows under it are —
+    pub const ABOUT_TITLE: &str = "about-brain-title";
+    pub const ABOUT_TASKS: &str = "about-brain-tasks";
+    pub const ABOUT_NOTICES: &str = "about-brain-notices";
+    pub const ABOUT_ACTIVITY: &str = "about-brain-activity";
+    pub const ABOUT_SCHEDULE: &str = "about-brain-schedule";
+    pub const ABOUT_ACTIONS: &str = "about-brain-actions";
+    pub const ABOUT_STEPS: &str = "about-brain-steps";
+    pub const ABOUT_HISTORY: &str = "about-brain-history";
+    pub const ABOUT_SECTION: &str = "about-brain-section";
+    /// — the figures beside a title: how far back and how many, and how
+    /// many steps are on —
+    pub const ABOUT_REACH: &str = "about-brain-reach";
+    pub const ABOUT_STEPS_ON: &str = "about-brain-steps-on";
+    /// — a task's description, where it has no line of its own, the
+    /// warning line, and the daemon's log with nothing in it yet —
+    pub const ABOUT_DOES: &str = "about-brain-does";
+    pub const ABOUT_WARNING: &str = "about-brain-held";
+    pub const ABOUT_LOG_PAGE: &str = "about-brain-log-page";
+    /// — and the footer: itself, a record's heading, the step it stopped
+    /// at, a step's command, and each figure on its last row.
+    pub const ABOUT_FOOT: &str = "about-brain-foot";
+    pub const ABOUT_RECORD: &str = "about-brain-record";
+    pub const ABOUT_RECORD_AT: &str = "about-brain-record-at";
+    pub const ABOUT_COMMAND: &str = "about-brain-command";
+    pub const ABOUT_LAST_RUN: &str = "about-brain-last-run";
+    pub const ABOUT_FIRST: &str = "about-brain-first";
+    pub const ABOUT_TIMES: &str = "about-brain-times";
+    pub const ABOUT_SINCE: &str = "about-brain-since";
+    pub const ABOUT_NEEDS_ROOT: &str = "about-brain-needs-root";
+    pub const ABOUT_FLAKE_OWNED: &str = "about-brain-flake-owned";
 
     // ---- what the header teaches --------------------------------------
     pub const DO_OPEN: &str = "brain-do-open";
@@ -593,11 +625,29 @@ struct State {
     /// inside the body's block, and the cell the host answers its bar from —
     /// so a drag or a wheel on it scrolls the paragraph, never the page.
     about_at: Option<(u16, u16)>,
+    /// WHERE THE PAGE'S OWN NAME WAS DRAWN atop the list of tasks in the last
+    /// frame — its first cell — while the window wears no header.
+    title_from: Option<u16>,
+    /// WHAT THE FOOTER DREW in the last frame, piece by piece, with what each
+    /// piece says under the pointer — and whether it drew anything at all,
+    /// for the rest of it.
+    foot_spots: Vec<FootSpot>,
+    foot_drawn: bool,
     /// THE COLUMNS THE LAST FRAME LAID the list of tasks and the activity
     /// log out in — what the pointer is asked against ([`State::pointed`]),
     /// so a glyph is explained where it was drawn.
     task_layout: Layout,
     log_layout: Layout,
+}
+
+/// A piece of the footer as the last frame drew it — its row inside the
+/// footer's block, its cells — and the sentence it says under the pointer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FootSpot {
+    row: u16,
+    from: u16,
+    to: u16,
+    about: String,
 }
 
 /// The footer's click that opens a task's page, as the last frame drew it.
@@ -674,6 +724,9 @@ impl State {
             open_at: None,
             back_at: None,
             about_at: None,
+            title_from: None,
+            foot_spots: Vec::new(),
+            foot_drawn: false,
             task_layout: Layout::default(),
             log_layout: Layout::default(),
         }
@@ -982,15 +1035,17 @@ const fn kind_glyph(k: TaskKind) -> Icon {
 /// The colour a task's own rows are drawn in.
 ///
 /// A routine keeps the ordinary ramp; a one-shot does not, and neither does a
-/// watch — which wears the TEAL of a thing under way and well
-/// ([`Role::Following`]), never the alarm's colour the owner read it in. The
-/// owner asked for both a glyph and a colour, because a glyph two cells wide
-/// is a small thing to hang a distinction on.
+/// watch — which wears the ordinary row's colour turned a little toward the
+/// teal of a thing under way and well ([`Role::Listening`]): never the
+/// alarm's colour the owner first read it in, and no longer the teal itself,
+/// which read too loud among the names. The owner asked for both a glyph and
+/// a colour, because a glyph two cells wide is a small thing to hang a
+/// distinction on.
 const fn kind_role(k: TaskKind) -> Role {
     match k {
         TaskKind::Routine => Role::Body,
         TaskKind::Once => Role::Once,
-        TaskKind::Watch => Role::Following,
+        TaskKind::Watch => Role::Listening,
     }
 }
 
@@ -1330,6 +1385,13 @@ impl State {
 struct Told {
     /// The name of the thing, as a key.
     name: Option<String>,
+    /// What the name says under the pointer, as a key: a task's one line,
+    /// or what a record's heading answers. The footer's own sentence when
+    /// there is none.
+    name_about: Option<String>,
+    /// What the held line says under the pointer, when it is one thing —
+    /// a step's command.
+    said_about: Option<&'static str>,
     /// The step a record stopped at, by its name's key: said on the line
     /// under the name, after its label, where `said` would go.
     at_step: Option<String>,
@@ -1392,6 +1454,8 @@ impl State {
     ///
     /// At the bottom it is a place, and a place can be as tall as it needs.
     fn foot(&mut self, screen: &mut Screen<Wit>, told: &Told) {
+        self.foot_spots.clear();
+        self.foot_drawn = false;
         // THE OFFSET BELONGS TO THE SENTENCE, and this is where it is
         // forgotten: the cursor moving to another row is another sentence, and
         // one left scrolled would open past its own end.
@@ -1451,7 +1515,19 @@ impl State {
 
         if let Some(name) = &told.name {
             pen.put(0, Run::label(name).title());
+            self.foot_spots.push(FootSpot {
+                row: 0,
+                from: 0,
+                to: wide,
+                about: told
+                    .name_about
+                    .clone()
+                    .unwrap_or_else(|| key::ABOUT_FOOT.to_owned()),
+            });
         }
+        // EVERYTHING ELSE IT DRAWS says what the footer is, under the pointer.
+        self.foot_drawn =
+            !told.subject().replace('\u{1f}', "").is_empty() || !told.facts.is_empty();
         // THE LINE THE BUFFER HOLDS, under the name. It is the longest thing
         // on this screen — a step's real command — and it is DATA, so it is
         // the one part of the footer this side can measure and the host does
@@ -1461,6 +1537,14 @@ impl State {
             && from < values_at
         {
             pen.put(from, Run::datum(said).playing(Role::Body));
+            if let Some(about) = told.said_about {
+                self.foot_spots.push(FootSpot {
+                    row: from,
+                    from: 0,
+                    to: wide,
+                    about: about.to_owned(),
+                });
+            }
             from += 1;
         } else if let Some(step) = &told.at_step
             && from < values_at
@@ -1478,6 +1562,12 @@ impl State {
                     .at(step_at)
                     .within(wide.saturating_sub(step_at)),
             );
+            self.foot_spots.push(FootSpot {
+                row: from,
+                from: 0,
+                to: wide,
+                about: key::ABOUT_RECORD_AT.to_owned(),
+            });
             from += 1;
         }
         // THE SENTENCE TAKES EVERYTHING THAT IS LEFT: the error when there is
@@ -1624,6 +1714,15 @@ impl State {
                 row.put(lid, Run::label(label).dim());
             }
             row.put(vid, Run::datum(value).dim());
+            if let Some(v) = layout.field(vid) {
+                let first = layout.field(lid).filter(|_| !label.is_empty()).unwrap_or(v);
+                self.foot_spots.push(FootSpot {
+                    row: values_at,
+                    from: first.at,
+                    to: v.at + v.width,
+                    about: fact_about(label).to_owned(),
+                });
+            }
         }
     }
 
@@ -1633,7 +1732,7 @@ impl State {
     /// 'Open its page', mas separado por um bom espaço"*. Whole pairs, the
     /// first first: a pair that does not fit goes, with every one after it.
     fn facts_against(
-        &self,
+        &mut self,
         pen: &mut Pen<'_, Wit>,
         told: &Told,
         widths: &[u16],
@@ -1671,12 +1770,19 @@ impl State {
             if n > 0 {
                 at += FACT_SPACING;
             }
+            let first = at;
             if *label_cells > 0 {
                 pen.put(row, Run::label(label).dim().at(at).within(*label_cells));
                 at += label_cells + ronoctua_design::GAP;
             }
             pen.put(row, Run::datum(value).dim().at(at).within(*value_cells));
             at += value_cells;
+            self.foot_spots.push(FootSpot {
+                row,
+                from: first,
+                to: at,
+                about: fact_about(label).to_owned(),
+            });
         }
     }
 }
@@ -1685,6 +1791,31 @@ impl State {
 /// um bom espaço"* — four columns' gaps, so the date reads as the click's
 /// neighbour and not as one more word of it.
 const FACT_AIR: u16 = 4 * ronoctua_design::GAP;
+
+/// What a figure of the footer's last row says under the pointer, by its
+/// label.
+fn fact_about(label: &str) -> &'static str {
+    match label {
+        key::LAST_RUN => key::ABOUT_LAST_RUN,
+        key::FIRST => key::ABOUT_FIRST,
+        key::TIMES => key::ABOUT_TIMES,
+        key::SINCE => key::ABOUT_SINCE,
+        key::NEEDS_ROOT => key::ABOUT_NEEDS_ROOT,
+        key::FLAKE_OWNED => key::ABOUT_FLAKE_OWNED,
+        _ => key::ABOUT_FOOT,
+    }
+}
+
+/// What a heading of a task's page says under the pointer: what the rows
+/// under it are.
+fn heading_about(heading: &str) -> &'static str {
+    match heading {
+        key::SCHEDULE => key::ABOUT_SCHEDULE,
+        key::ACTIONS => key::ABOUT_ACTIONS,
+        key::STEPS => key::ABOUT_STEPS,
+        _ => key::ABOUT_HISTORY,
+    }
+}
 
 /// The air between one fact and the next, when they sit against the click:
 /// wider than a label's from its value, so two pairs read as two.
@@ -1725,21 +1856,28 @@ const WHEN_FLOOR: u16 = 16;
 /// their widest entry, measured in the person's language ([`TaskCells`]); the
 /// moment gives up what the row cannot hold, never below a whole date, and
 /// past that the columns give way whole, the status first.
+///
+/// # Two cells between the three columns of words
+///
+/// The name, the moment and the status stand [`APART`](ronoctua_design::APART)
+/// — the owner's *"algo como dois caracteres de distância"*: one cell after
+/// the longest name read as one phrase with the column beside it. The glyph
+/// keeps one to its moment, which it belongs to.
 fn task_columns(columns: u16, cells: TaskCells) -> Layout {
-    use ronoctua_design::{GAP, ICON};
+    use ronoctua_design::{APART, GAP, ICON};
     // A CELL IS KEPT ON THE RIGHT FOR THE BAR, always — the same line
     // `log_columns` carries, and for the same reason: a bar drawn over the
     // last column is the defect the working rules name in those words.
     let usable = columns.saturating_sub(1);
-    let others = cells.name + ICON + cells.note + 3 * GAP;
+    let others = cells.name + APART + ICON + GAP + APART + cells.note;
     let when = cells
         .when
         .min(usable.saturating_sub(others))
         .max(WHEN_FLOOR);
     Table::across(usable)
-        .with(Column::fixed("name", cells.name, 1))
+        .with(Column::fixed("name", cells.name, 1).apart())
         .with(Column::fixed("kind", ICON, 2))
-        .with(Column::fixed("when", when, 1))
+        .with(Column::fixed("when", when, 1).apart())
         .with(Column::fixed("note", cells.note, 3))
         .resolve()
 }
@@ -1937,6 +2075,7 @@ impl State {
     /// line counter through this function, which is how it came to be measured
     /// against a number the footer had already claimed.
     fn home(&mut self, screen: &mut Screen<Wit>) {
+        self.title_from = None;
         let hovered = self.hovered_rows(self.blocks.body);
         let tasks: Vec<TaskState> = self.mind.tasks.clone();
         let cursor = self.task;
@@ -1971,6 +2110,7 @@ impl State {
             let from = pen.columns().saturating_sub(cells);
             pen.put(0, Run::label(key::TITLE).dim().at(from).within(cells));
             title_room = from.saturating_sub(ronoctua_design::GAP);
+            self.title_from = Some(from);
         }
         pen.put(0, Run::label(key::TASKS).title().within(title_room));
         if self.follows {
@@ -2456,7 +2596,7 @@ impl State {
         // the row says that instead of a date it does not have.
         if task.kind == TaskKind::Watch {
             return (
-                Run::label(key::WATCHING).playing(Role::Following),
+                Run::label(key::WATCHING).playing(kind_role(task.kind)),
                 self.cells_of(key::WATCHING, WHEN_CELLS),
             );
         }
@@ -3922,6 +4062,7 @@ impl State {
         // high enough to stop something.
         Told {
             name: key_of(&task.name_key),
+            name_about: key_of(&task.brief_key),
             about: key_of(&task.does_key),
             // GUARDED BY `ran`, like the fact above it: `last` is documented
             // as meaningless without it.
@@ -3981,6 +4122,12 @@ impl State {
             return Told::default();
         };
         let mut told = Self::told_about_record(run, key_of(&run.task_key));
+        told.name_about = self
+            .mind
+            .tasks
+            .iter()
+            .find(|t| t.id == run.task)
+            .and_then(|t| key_of(&t.brief_key));
         told.facts = vec![(key::LAST_RUN.to_owned(), run.when_text.clone())];
         // A RECORD IS OF A TASK, and the click at the end of the last row
         // opens that task's page — on a folded row too, whose `RET` opens the
@@ -4021,6 +4168,7 @@ impl State {
                     // THE REAL COMMAND, ON A LINE OF ITS OWN and not in a
                     // column: it is the longest thing on this screen.
                     said: Some(step.command.clone()),
+                    said_about: Some(key::ABOUT_COMMAND),
                     about: key_of(&step.does_key),
                     trouble: None,
                     facts,
@@ -4034,7 +4182,10 @@ impl State {
                 // NEVER the task's own description, which this page already
                 // opens with three rows up — the same paragraph printed twice
                 // on one screen is what the owner photographed.
-                Self::told_about_record(run, Some(record_heading_key(run.outcome).to_owned()))
+                Told {
+                    name_about: Some(key::ABOUT_RECORD.to_owned()),
+                    ..Self::told_about_record(run, Some(record_heading_key(run.outcome).to_owned()))
+                }
             }
             Some(Spot::Action(n)) => {
                 let Some(action) = task.actions.get(n) else {
@@ -4138,28 +4289,76 @@ impl State {
         {
             return Some(Pointed::Key(key::ABOUT_OPEN_PAGE.into()));
         }
+        // EVERYTHING DRAWN SAYS SOMETHING — the owner's *"todos os elementos
+        // do brain, ao colocar o cursor por cima, mostre algo no
+        // minibuffer"*: each title what the rows under it are, each figure
+        // what it counts. Only a line with nothing on it says nothing.
+        //
+        // THE FOOTER, piece by piece as it was drawn, and otherwise what the
+        // footer is.
+        if let Some(row) = self.blocks.foot.row_at(line) {
+            if let Some(spot) = self
+                .foot_spots
+                .iter()
+                .find(|s| s.row == row && (s.from..s.to).contains(&column))
+            {
+                return Some(Pointed::Key(spot.about.clone()));
+            }
+            return self
+                .foot_drawn
+                .then(|| Pointed::Key(key::ABOUT_FOOT.into()));
+        }
+        // THE WARNING: why nothing has started.
+        if self.blocks.warn.row_at(line).is_some() {
+            return Some(Pointed::Key(key::ABOUT_WARNING.into()));
+        }
         // A NOTICE: its whole sentence, which its row cuts at the width.
         if let Some(row) = self.blocks.notices.row_at(line) {
-            let n = self.notices_from + usize::from(row.checked_sub(1)?);
-            let notice = self.mind.notices.get(n)?;
+            let Some(below) = row.checked_sub(1) else {
+                return Some(Pointed::Key(key::ABOUT_NOTICES.into()));
+            };
+            let notice = self
+                .mind
+                .notices
+                .get(self.notices_from + usize::from(below))?;
             return Some(Pointed::Datum(notice.says_text.clone()));
         }
-        // A LINE OF THE ACTIVITY LOG: what the fold's mark means, under it,
-        // and otherwise what the record says.
+        // A LINE OF THE ACTIVITY LOG: what the fold's mark and its count
+        // mean, under them, and otherwise what the record says.
         if let Some(row) = self.blocks.log.row_at(line) {
-            let n = self.log_from + usize::from(row.checked_sub(1)?);
-            let at = self.activity_lines().get(n).copied()?;
+            let Some(below) = row.checked_sub(1) else {
+                return Some(Pointed::Key(
+                    if column >= COUNT_AT {
+                        key::ABOUT_REACH
+                    } else {
+                        key::ABOUT_ACTIVITY
+                    }
+                    .into(),
+                ));
+            };
+            let activity = Pointed::Key(key::ABOUT_ACTIVITY.into());
+            let Some(at) = self
+                .activity_lines()
+                .get(self.log_from + usize::from(below))
+                .copied()
+            else {
+                return Some(activity);
+            };
             if let Line::Row(g) = at
                 && self
                     .mind
                     .activity_rows
                     .get(g)
                     .is_some_and(|r| r.repeats > 1)
-                && within(&self.log_layout, "fold", column)
+                && (within(&self.log_layout, "fold", column)
+                    || within(&self.log_layout, "count", column))
             {
                 return Some(Pointed::Key(key::ABOUT_FOLD.into()));
             }
-            return self.record_of(at).and_then(|r| self.said_of_record(r));
+            return self
+                .record_of(at)
+                .and_then(|r| self.said_of_record(r))
+                .or(Some(activity));
         }
         let row = self.blocks.body.row_at(line)?;
         // THE WAY BACK atop a task's page, where the window wears no header.
@@ -4177,10 +4376,21 @@ impl State {
             // paragraph run along one line of the minibuffer, and the owner
             // asked for a line that says what the task is about instead.
             Page::Home => {
-                let task = self
-                    .mind
-                    .tasks
-                    .get(self.body_from + usize::from(row.checked_sub(1)?))?;
+                // THE TITLE, and the page's own name at the other end of it.
+                let Some(below) = row.checked_sub(1) else {
+                    let name = self.title_from.is_some_and(|from| column >= from);
+                    return Some(Pointed::Key(
+                        if name {
+                            key::ABOUT_TITLE
+                        } else {
+                            key::ABOUT_TASKS
+                        }
+                        .into(),
+                    ));
+                };
+                let Some(task) = self.mind.tasks.get(self.body_from + usize::from(below)) else {
+                    return Some(Pointed::Key(key::ABOUT_TASKS.into()));
+                };
                 if within(&self.task_layout, "kind", column) {
                     return Some(Pointed::Key(kind_about(task.kind).into()));
                 }
@@ -4215,20 +4425,45 @@ impl State {
                         let cell = rows.get(*k)?;
                         said_of_cell(&cell.note).or_else(|| said_of_cell(&cell.value))
                     }
-                    // THE PAGE'S OWN TITLE says what the task is, in one line.
+                    // THE PAGE'S OWN TITLE says what the task is, in one line,
+                    // and so does its description, which says it at length.
                     Row::Title => key_of(&task.brief_key).map(Pointed::Key),
-                    Row::Blank
-                    | Row::Heading(_)
-                    | Row::Section(_)
-                    | Row::About(_, _)
-                    | Row::Refused(_) => None,
+                    Row::About(_, _) => Some(Pointed::Key(
+                        key_of(&task.brief_key).unwrap_or_else(|| key::ABOUT_DOES.to_owned()),
+                    )),
+                    // A TITLE says what is under it, and the figures beside
+                    // it what they count.
+                    Row::Heading(k) => {
+                        let figures = column >= COUNT_AT;
+                        Some(Pointed::Key(
+                            match *k {
+                                key::STEPS if figures => key::ABOUT_STEPS_ON,
+                                key::HISTORY if figures => key::ABOUT_REACH,
+                                k => heading_about(k),
+                            }
+                            .into(),
+                        ))
+                    }
+                    Row::Section(_) => Some(Pointed::Key(key::ABOUT_SECTION.into())),
+                    // WHY THE MODULE'S PAGE IS NOT HERE, whole.
+                    Row::Refused(_) => self
+                        .screen
+                        .as_ref()
+                        .filter(|sc| sc.module == task.id)
+                        .map(|sc| Pointed::Datum(sc.refused.clone())),
+                    Row::Blank => None,
                 }
             }
-            // A LINE OF THE DAEMON'S LOG: the whole of it, which its row cuts.
-            Page::Log => self
-                .tail
-                .get(self.tail_from + usize::from(row))
-                .map(|l| Pointed::Datum(l.text.clone())),
+            // A LINE OF THE DAEMON'S LOG: the whole of it, which its row cuts;
+            // and before the first one, what the page is.
+            Page::Log => {
+                if self.tail.is_empty() {
+                    return Some(Pointed::Key(key::ABOUT_LOG_PAGE.into()));
+                }
+                self.tail
+                    .get(self.tail_from + usize::from(row))
+                    .map(|l| Pointed::Datum(l.text.clone()))
+            }
         }
     }
 
@@ -6767,7 +7002,7 @@ mod tests {
 
     /// FAILS IF: a status is drawn in one grey again, or a hold in the
     /// alarm's red — the owner's discreet tones, each in the hue of its news —
-    /// or a watch wears the camera's pink instead of what the brain follows.
+    /// or a watch wears anything but its own turned grey (`text.listening`).
     #[test]
     fn a_status_wears_the_hue_of_its_news() {
         let mut s = a_state();
@@ -6783,8 +7018,8 @@ mod tests {
             ("brain-outcome-done", "text-status-good"),
             ("brain-standing-idle", "text-status-idle"),
             ("brain-hold-ram", "text-status-held"),
-            ("brain-watching", "modeline-following"),
-            ("brain-task-fixture-watch", "modeline-following"),
+            ("brain-watching", "text-listening"),
+            ("brain-task-fixture-watch", "text-listening"),
         ] {
             assert_eq!(
                 colour_of(&seen, said).as_deref(),
@@ -6958,13 +7193,14 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a watch is drawn in anything but the teal of a thing under
-    /// way, a module's row toned `watching` loses the alarm's colour it
-    /// shares with the modeline's mark (the journal's errors), or a row toned
-    /// `working` is not the teal. The owner asked for the first and said the
-    /// second had been taken away with it.
+    /// FAILS IF: a watch is drawn in anything but its own turned grey — the
+    /// teal it wore read too loud, the owner's word — a module's row toned
+    /// `watching` loses the alarm's colour it shares with the modeline's mark
+    /// (the journal's errors), or a row toned `working` is not the teal. The
+    /// owner asked for the first and said the second had been taken away
+    /// with it.
     #[test]
-    fn a_watch_is_teal_and_a_watching_row_keeps_its_alarm() {
+    fn a_watch_wears_its_own_grey_and_a_watching_row_keeps_its_alarm() {
         use ronoctua_design::Palette;
         let colour = |role: Role| <Wit as Palette>::color(role);
         assert_eq!(
@@ -6975,7 +7211,9 @@ mod tests {
             colour(tone_role(BrainTone::Working)),
             colour(Role::Following)
         );
-        assert_eq!(colour(kind_role(TaskKind::Watch)), colour(Role::Following));
+        assert_eq!(colour(kind_role(TaskKind::Watch)), colour(Role::Listening));
+        assert_ne!(colour(Role::Listening), colour(Role::Following));
+        assert_ne!(colour(Role::Listening), colour(Role::Body));
         assert_ne!(colour(Role::Watching), colour(Role::Following));
     }
 
@@ -7010,6 +7248,91 @@ mod tests {
         );
         assert!(label.3 < date.3, "the label is not before its date");
         assert!(label.3 > 0, "the figures stayed at the start of the row");
+    }
+
+    /// FAILS IF: something the Brain draws says nothing under the pointer —
+    /// the owner's *"todos os elementos do brain, ao colocar o cursor por
+    /// cima, mostre algo no minibuffer"*: a title, the figures beside one, the
+    /// page's own name, the warning, the footer and every piece of it — on the
+    /// home page, on a task's page on a record and on a step, and on the
+    /// daemon's log, with no header and with one. And the titles say what is
+    /// under them, not the same sentence for all.
+    #[test]
+    fn everything_drawn_says_something_under_the_pointer() {
+        use ronoctua_design::frame::{Command, Text};
+        let said = |screen: &Screen<Wit>| {
+            screen
+                .as_protocol()
+                .commands
+                .into_iter()
+                .find_map(|c| match c {
+                    Command::Pointed { about, .. } => Some(about),
+                    _ => None,
+                })
+        };
+        let every = |s: &mut State, headed: bool, page: &str| {
+            let mut ctx = a_context(30, 120);
+            ctx.headed = headed;
+            let _ = s.hover.set(0, (0, 0));
+            let seen = runs(&s.compose(&ctx));
+            assert!(seen.len() > 8, "{page}: drew too little to judge");
+            let mut told = Vec::new();
+            for (what, _, line, column) in seen {
+                let _ = s.hover.set(0, (column, line));
+                let about = said(&s.compose(&ctx));
+                assert!(
+                    about.is_some(),
+                    "{page}: `{what}` at {column},{line} says nothing under the pointer"
+                );
+                told.push((what, about));
+            }
+            told
+        };
+        let mut s = a_state();
+        // A HOLD PUTS UP THE WARNING LINE.
+        s.mind.tasks[0].hold = HoldKind::Battery;
+        for headed in [false, true] {
+            let told = every(&mut s, headed, "the home page");
+            let of = |k: &str| {
+                told.iter()
+                    .find(|(w, _)| w == k)
+                    .and_then(|(_, a)| a.clone())
+            };
+            assert_eq!(of(key::TASKS), Some(Text::Key(key::ABOUT_TASKS.into())));
+            assert_eq!(
+                of(key::ACTIVITY),
+                Some(Text::Key(key::ABOUT_ACTIVITY.into()))
+            );
+            if !headed {
+                assert_eq!(of(key::TITLE), Some(Text::Key(key::ABOUT_TITLE.into())));
+            }
+        }
+        s.mind.tasks[0].hold = HoldKind::None;
+        s.page = Page::Task;
+        let task = s.task;
+        for spot in [Spot::Ran(0), Spot::Step(0), Spot::Enabled] {
+            s.spot = s
+                .spots()
+                .iter()
+                .position(|it| *it == spot)
+                .expect("the page draws the spot");
+            let told = every(&mut s, false, "a task's page");
+            let of = |k: &str| {
+                told.iter()
+                    .find(|(w, _)| w == k)
+                    .and_then(|(_, a)| a.clone())
+            };
+            for (heading, about) in [
+                (key::SCHEDULE, key::ABOUT_SCHEDULE),
+                (key::STEPS, key::ABOUT_STEPS),
+                (key::HISTORY, key::ABOUT_HISTORY),
+            ] {
+                assert_eq!(of(heading), Some(Text::Key(about.into())), "{heading}");
+            }
+        }
+        assert!(!s.mind.tasks[task].steps.is_empty());
+        s.page = Page::Log;
+        let _ = every(&mut s, false, "the daemon's log");
     }
 
     /// FAILS IF: with no header over the window, the home page does not say
@@ -7257,11 +7580,27 @@ mod tests {
             Some(6),
             "the status is not as wide as the widest"
         );
+        // TWO CELLS BETWEEN THE COLUMNS OF WORDS, the owner's ask, and one
+        // between the glyph and its moment.
+        let field = |s: &State, id: &str| s.task_layout.field(id).copied().expect(id);
+        let after = |s: &State, id: &str| field(s, id).at + field(s, id).width;
+        assert_eq!(
+            field(&s, "kind").at,
+            after(&s, "name") + ronoctua_design::APART
+        );
+        assert_eq!(
+            field(&s, "when").at,
+            after(&s, "kind") + ronoctua_design::GAP
+        );
+        assert_eq!(
+            field(&s, "note").at,
+            after(&s, "when") + ronoctua_design::APART
+        );
         // AND IN A NARROWER WINDOW THE REASON GIVES WAY TO THE ROW — a
-        // hundred and twenty cells hold it, fifty leave it twenty-three —
+        // hundred and twenty cells hold it, fifty leave it twenty-one —
         // and never below a whole date, the status going first.
         let _ = drawn(&mut s, 30, 50);
-        assert_eq!(width(&s, "when"), Some(23));
+        assert_eq!(width(&s, "when"), Some(21));
         let _ = drawn(&mut s, 30, 40);
         assert_eq!(width(&s, "when"), Some(WHEN_FLOOR));
         assert_eq!(width(&s, "note"), None, "the status did not give way first");

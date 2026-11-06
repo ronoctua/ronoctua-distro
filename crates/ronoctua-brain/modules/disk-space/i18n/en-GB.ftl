@@ -2,7 +2,7 @@
 # reason its row gives instead of a date, the hint of its mark, its page, and
 # the two things it tells the footer.
 brain-task-disk-space = Make room on the disk
-brain-task-disk-space-does = When the disk that holds the system or your home runs short of space, it makes room at once, without waiting for the night or for a quiet machine: first the builds of compilers nobody uses and, while every cargo build under your cache weighs more than its share of the disk, the ones built longest ago; then the store's garbage, until the disk is back where it should be. It takes a build only when no cargo is building in it, never follows a link, never removes what Nix counts as a root and never a generation, and after a try that could not make enough room it waits until the disk has filled further before trying again. While the disk is nearly full, a mark on the modeline says so.
+brain-task-disk-space-does = When the disk with the system or your home runs low on space, it frees space right away, without waiting for the night or for a quiet machine. First it removes compiler builds nobody uses and, while cargo's builds in your cache take more than their share of the disk, the oldest of them; then the store's garbage, until the disk is back where it should be. It never touches a build cargo is working in, never follows a link, and never removes what Nix keeps as a root or any generation. If a try could not free enough, it waits for the disk to fill further before trying again. While the disk is nearly full, a mark on the modeline says so.
 brain-task-disk-space-brief = Makes room on the disk as soon as it runs short of space.
 disk-space-why-when-short = When it runs low
 disk-space-mark-full = The disk is nearly full

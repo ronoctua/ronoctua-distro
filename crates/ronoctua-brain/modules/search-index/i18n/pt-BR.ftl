@@ -2,7 +2,7 @@
 # hint of its mark, its page — where the index stands and what it reads — and
 # the questions and refusals of what is changed there.
 brain-task-search-index = Manter o índice de busca
-brain-task-search-index-does = Liga o índice do fast-access — seus arquivos, o que eles dizem, as páginas de manual, os programas que dá para instalar e seus vídeos — quando ele não está rodando, esperando a máquina sossegar, porque a primeira passada por uma pasta pessoal são minutos de disco. Enquanto ele monta o índice do zero, uma marca na modeline diz isso; depois ele acompanha suas mudanças à medida que acontecem.
+brain-task-search-index-does = Mantém rodando o índice de busca do fast-access — seus arquivos e o que eles dizem, as páginas de manual, os programas que dá para instalar e seus vídeos — e o liga quando ele não está rodando. Ele espera a máquina ficar quieta, porque a primeira passada por uma pasta pessoal ocupa o disco por minutos. Enquanto monta o índice do zero, uma marca na modeline avisa; depois, acompanha suas mudanças à medida que acontecem.
 brain-task-search-index-brief = Mantém rodando o índice de busca do fast-access: seus arquivos, manuais, programas e vídeos.
 search-index-why-when-stopped = Quando não está rodando
 search-index-why-not-a-folder = Isso não é uma pasta que existe, escrita a partir da raiz (/home/…).

@@ -1,7 +1,7 @@
 # The security watch's own texts: its name and the line under it, the hint of
 # each of its marks, its notice, and its page.
 brain-task-security-watch = Watch the security centre
-brain-task-security-watch-does = Listens to what the security centre guards and runs nothing: the connections the firewall refuses, what sudo does, whether the firewall is the one you asked for and who may sign your commits. While something is off, one shield stays on the modeline — orange for what you chose; in the danger colour for what nobody did, which wins whenever a danger holds. Resting the pointer on it says everything that is off, and a click opens the centre where it is put back; at rest there is none. Its page keeps the connections refused lately and a week of sudo.
+brain-task-security-watch-does = Watches what the security centre guards, without running anything: the connections the firewall refuses, what sudo does, whether the firewall is the one you asked for, and who may sign your commits. While something is off, a shield stays on the modeline — orange for something you chose, in the danger colour for something nobody chose, and the danger wins when there are both. Resting the pointer on it lists everything that is off, and a click opens the security centre to put it right. When all is well, there is no shield. Its page keeps the connections refused lately and a week of sudo.
 brain-task-security-watch-brief = Watches the firewall, sudo and who may sign your commits, and says when something is off.
 security-watch-mark-firewall-failed = The firewall is not the one you asked for
 security-watch-mark-firewall-off = Your firewall is switched off

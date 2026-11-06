@@ -12,7 +12,9 @@
 # theme's seeds (`assets/themes/<id>.nix`) through one ladder that is the same
 # for every theme — a hue and a relative chroma in, a lightness solved to a
 # contrast or a separation out. A recipe may also carry an `alpha` (the one
-# translucent band) or scale the step's chroma (`{ of = …; chroma = 0.3; }`).
+# translucent band), scale the step's chroma (`{ of = …; chroma = 0.3; }`),
+# or be turned part of the way to another primitive's hue at its own lightness
+# (`{ of = …; toward = …; mix = 0.3; }`).
 # No hex lives here, and `colours-are-computed` refuses one.
 #
 # Every relationship this file used to promise in prose — "measured 17
@@ -890,6 +892,20 @@
     # `shared` is a notification filter, this is a row of the brain.
     once = "alternate.text";
 
+    # A TASK THAT ONLY LISTENS — a watch on the brain's list: its name, its
+    # glyph and the word in its row. The owner's ask: very nearly the colour
+    # of an ordinary task's row (`text.secondary`), its hue turned a little
+    # toward the teal of what the brain follows — the colour a watch wore
+    # before, `modeline.following`, which read too loud on a list of names.
+    # A STEP OF THE WAY from each theme's own text, so a warm theme's watch
+    # is its warm grey a little turned and not the same tinted grey in every
+    # theme.
+    listening = {
+      of = "neutral.text";
+      toward = "follow.text";
+      mix = 0.40;
+    };
+
     # HOW A TASK STANDS, OR HOW A RUN ENDED — the brain's last column, and the
     # outcome of every record in a task's history and in the activity log.
     #
@@ -1532,8 +1548,9 @@
     # which is the RECORDING mark's: looking is not yet keeping.
     watching = "watching.text";
     # WHAT THE BRAIN IS FOLLOWING — every brain mark and row a module tones
-    # `watching` (an agent at work, a container up, the index walking), and
-    # the brain's watches on its page. It was the camera's pink above, and
+    # `watching` (an agent at work, a container up, the index walking) — and
+    # the hue a watch on the brain's page turns toward (`text.listening`).
+    # It was the camera's pink above, and
     # the owner read it as an alarm: *"dá uma conotação negativa"*, *"dá a
     # impressão que há algo errado com o agente"*. A TEAL of its own
     # (`follow`, in every seed), at the marks' rung: something being

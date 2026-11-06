@@ -4,7 +4,7 @@
 # (`reminders-grammar-*`: one line per class of word, the alternatives
 # separated by commas).
 brain-task-reminders = Lembretes e alarmes
-brain-task-reminders-does = Alarmes e lembretes pedidos com as suas palavras: uma vez (“amanhã 9:00 ligar para a mãe”, “daqui a 2 h com som tirar a pizza”), todo dia, em dias da semana, num dia do mês ou numa data de todo ano, como um aniversário. Na hora ele toca na linha do cérebro, na frente de tudo, e fica lá até você dispensar ou adiar; o que venceu com a máquina desligada aparece como perdido. Um lembrete com som toca um sino algumas vezes enquanto está tocando.
+brain-task-reminders-does = Alarmes e lembretes pedidos com as suas palavras: uma vez (“amanhã 9:00 ligar para a mãe”, “daqui a 2 h com som tirar a pizza”), todo dia, em dias da semana escolhidos, num dia do mês ou numa data de todo ano, como um aniversário. Na hora certa ele toca na linha do Brain, na frente de tudo, e fica lá até você dispensar ou adiar. O que venceu com a máquina desligada aparece como perdido. Um lembrete com som toca um sino algumas vezes enquanto está tocando.
 brain-task-reminders-brief = Toca os alarmes e lembretes que você pede com suas próprias palavras.
 reminders-mark-ringing = Um lembrete está tocando
 reminders-says-due = { $more ->

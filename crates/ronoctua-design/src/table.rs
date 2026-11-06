@@ -20,7 +20,7 @@
 use alloc::vec::Vec;
 
 use crate::screen::{Run, Screen};
-use crate::{GAP, Palette};
+use crate::{APART, GAP, Palette};
 
 /// How much a column wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +55,9 @@ pub struct Column {
     /// is this" faster than any word. An order that drifts turns the narrow
     /// case into whatever the last edit happened to leave.
     pub rank: u8,
+    /// The air after it: [`GAP`], or [`APART`] for a column of words beside
+    /// another ([`Self::apart`]).
+    pub air: u16,
 }
 
 impl Column {
@@ -65,6 +68,7 @@ impl Column {
             id,
             width: Width::Fixed(cells),
             rank,
+            air: GAP,
         }
     }
 
@@ -76,7 +80,15 @@ impl Column {
             id,
             width: Width::Fill { floor },
             rank: 0,
+            air: GAP,
         }
+    }
+
+    /// The same column, [`APART`] from the next instead of a [`GAP`].
+    #[must_use]
+    pub const fn apart(mut self) -> Self {
+        self.air = APART;
+        self
     }
 }
 
@@ -271,14 +283,14 @@ impl Table {
             .columns
             .saturating_sub(self.gutter)
             .saturating_sub(self.edge);
-        // What the fixed columns cost, each with the cell of air after it. The
-        // air after the LAST one is never used, and it is charged anyway: that
+        // What the fixed columns cost, each with the air after it. The air
+        // after the LAST one is never used, and it is charged anyway: that
         // is what leaves the fill column exactly the remainder, and it is the
         // same accounting `files::layout_beside` does.
         let cost: u16 = kept
             .iter()
             .filter_map(|i| match self.wanted[*i].width {
-                Width::Fixed(w) => Some(w.saturating_add(GAP)),
+                Width::Fixed(w) => Some(w.saturating_add(self.wanted[*i].air)),
                 Width::Fill { .. } => None,
             })
             .fold(0u16, u16::saturating_add);
@@ -301,7 +313,7 @@ impl Table {
                 at,
                 width,
             });
-            at = at.saturating_add(width).saturating_add(GAP);
+            at = at.saturating_add(width).saturating_add(self.wanted[*i].air);
         }
         let ends = fields
             .last()
@@ -708,6 +720,25 @@ mod tests {
         assert_eq!(
             vec!["a"],
             layout.fields().iter().map(|f| f.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// FAILS IF: a column set apart does not leave [`APART`] after it — the
+    /// one before the next column, and in what the fill column is left — or
+    /// the columns that are not keep anything but a [`GAP`].
+    #[test]
+    fn a_column_set_apart_leaves_two_cells() {
+        let layout = Table::across(30)
+            .with(Column::fixed("name", 6, 1).apart())
+            .with(Column::fixed("glyph", 2, 1))
+            .with(Column::fill("words", 4))
+            .resolve();
+        let at = |id: &str| layout.field(id).map(|f| (f.at, f.width));
+        assert_eq!(at("name"), Some((0, 6)));
+        assert_eq!(at("glyph"), Some((6 + APART, 2)));
+        assert_eq!(
+            at("words"),
+            Some((6 + APART + 2 + GAP, 30 - (6 + APART + 2 + GAP)))
         );
     }
 

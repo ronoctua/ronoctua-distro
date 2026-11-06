@@ -569,6 +569,7 @@ pub fn layout_beside(width: u16, from: u16, to: u16, details: bool) -> Layout {
                 ronoctua_design::table::Width::Fixed(c.width())
             },
             rank,
+            air: ronoctua_design::GAP,
         });
     }
     let columns = table

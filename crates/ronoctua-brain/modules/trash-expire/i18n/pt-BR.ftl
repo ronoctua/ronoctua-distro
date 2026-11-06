@@ -1,4 +1,4 @@
 # The trash-expire module's own texts: its name and the line under it.
 brain-task-trash-expire = Esvaziar a lixeira
-brain-task-trash-expire-does = Apaga de vez o que você jogou fora há quatro dias ou mais. O relógio começa quando você põe na lixeira e não quando o arquivo foi escrito, então algo feito anos atrás e apagado hoje de manhã tem quatro dias. É a única coisa aqui que não dá para desfazer, e é por isso que o número é pequeno.
+brain-task-trash-expire-does = Apaga de vez o que está na lixeira há quatro dias ou mais. Os quatro dias contam a partir de quando você jogou fora, não de quando o arquivo foi criado: algo feito anos atrás e jogado fora hoje de manhã ainda tem quatro dias. Quatro dias bastam para perceber um engano, e são poucos o bastante para a lixeira não virar um segundo disco. É a única tarefa aqui cujo trabalho não dá para desfazer.
 brain-task-trash-expire-brief = Apaga de vez o que está na lixeira há quatro dias ou mais.

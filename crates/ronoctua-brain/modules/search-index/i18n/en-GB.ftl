@@ -2,7 +2,7 @@
 # hint of its mark, its page — where the index stands and what it reads — and
 # the questions and refusals of what is changed there.
 brain-task-search-index = Keep the search index
-brain-task-search-index-does = Starts fast-access's index of your files, what they say, the manual pages, the programs you can install and your videos, when it is not running — waiting for a quiet machine, since its first walk of a home is minutes of disk. While it builds the index from scratch, a mark on the modeline says so; afterwards it follows your changes as they happen.
+brain-task-search-index-does = Keeps fast-access's search index running — your files and what they say, the manual pages, the programs you can install, and your videos — and starts it when it is not. It waits for a quiet machine, because the first pass over a home folder keeps the disk busy for minutes. While it builds the index from scratch, a mark on the modeline says so; after that, it follows your changes as they happen.
 brain-task-search-index-brief = Keeps fast-access's search index of your files, manuals, programs and videos running.
 search-index-why-when-stopped = When it is not running
 search-index-why-not-a-folder = That is not a folder that exists, written from the root (/home/…).

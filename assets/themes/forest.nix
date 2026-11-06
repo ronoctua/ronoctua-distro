@@ -152,8 +152,8 @@
       text-chroma = 0.36;
       text-shift = 0;
     };
-    # WHAT THE BRAIN IS FOLLOWING (`modeline.following`): a watch's rows on
-    # its page, an agent at work, a container up — something being followed,
+    # WHAT THE BRAIN IS FOLLOWING (`modeline.following`): an agent at work,
+    # a container up, the hue a watch's rows turn toward — something followed,
     # and nothing wrong with it. A TEAL, the owner's ask: the camera's pink
     # above said "something is wrong" about all of them. Told from the
     # tunnel's green and the drawer's on the same line, and from the one-shot

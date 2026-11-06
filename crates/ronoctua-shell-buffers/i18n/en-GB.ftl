@@ -275,7 +275,34 @@ about-brain-hold-network = It is due, and waits for the network.
 about-brain-hold-asleep = It is due, and waits for the machine to wake.
 # THE WAY BACK atop a task's page, while the window wears no header.
 brain-back = Back
-about-brain-back = Go back to the Brain's first page, with every task.
+about-brain-back = Go back to the Brain's first page.
+# WHAT EVERYTHING ELSE SAYS UNDER THE POINTER: the page's own name, each
+# title and the figures beside it, the warning line, and the footer — itself,
+# a record's heading, the step it stopped at, a step's command and each figure.
+about-brain-title = The Brain: the tasks that look after this machine on their own, and what they did.
+about-brain-tasks = Every task the Brain looks after. Select one to read below what it does; open it for its schedule and history.
+about-brain-notices = What the tasks want you to know now. Each one stays until it stops being true, or until you put it away.
+about-brain-activity = What the tasks did in the last days, newest first. Records in a row that say the same thing are folded into one.
+about-brain-reach = How many days back this list goes, and how many records it holds.
+about-brain-schedule = When this task runs, and whether it runs at all.
+about-brain-actions = What this task's module can do for you now.
+about-brain-steps = What a run of this task does, one step after another. A step that is switched off is skipped.
+about-brain-steps-on = How many of its steps are switched on, out of all of them.
+about-brain-history = How this task's runs went lately, newest first. Select one to read why it ended the way it did.
+about-brain-section = Something this task keeps track of, as its module shows it.
+about-brain-does = What this task does.
+about-brain-held = A task is due and is waiting for the machine. It starts by itself as soon as the machine allows.
+about-brain-log-page = The Brain's own log, line by line as it is written.
+about-brain-foot = Everything about what is selected above, in full.
+about-brain-record = Why the run selected above ended the way it did.
+about-brain-record-at = The step the run had reached when it ended.
+about-brain-command = The command this step runs.
+about-brain-last-run = When it last ran.
+about-brain-first = When the first of the records folded into this row happened.
+about-brain-times = How many records are folded into this row.
+about-brain-since = Since when this notice has been true.
+about-brain-needs-root = This step runs as root, the system's administrator.
+about-brain-flake-owned = Whether this step runs is set in the system's configuration, so it cannot be switched off here.
 # THE TASKS. `brain-task-<id>` names one and `<id>-does` says what it does —
 # the second is a paragraph in the footer, so it has room to be a whole
 # explanation rather than a line.
