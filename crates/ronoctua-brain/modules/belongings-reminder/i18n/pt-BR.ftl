@@ -2,6 +2,7 @@
 # marcas e a página.
 brain-task-belongings-reminder = Seus pertences
 brain-task-belongings-reminder-does = Lembra de sincronizar seus pertences — sua configuração, guardada cifrada no seu próprio repositório — depois que passa o período que você escolheu desde a última sincronização, com um relógio armado só para esse instante. Enquanto uma sincronização espera suas decisões, depois de uma que falhou e antes da primeira de uma máquina nova, uma marca na modeline diz isso; um clique nela abre os pertences, pedindo a senha. Ele não roda nada sozinho: sincronizar pede a sua senha.
+brain-task-belongings-reminder-brief = Lembra você de sincronizar sua configuração cifrada quando passa o período que você escolheu.
 belongings-reminder-mark-due = É hora de sincronizar seus pertences
 belongings-reminder-mark-conflicts = { $count ->
     [one] Uma sincronização dos seus pertences espera uma decisão

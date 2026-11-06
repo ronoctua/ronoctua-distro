@@ -2,6 +2,7 @@
 # each of its marks, its notice, and its page.
 brain-task-security-watch = Vigiar a central de segurança
 brain-task-security-watch-does = Escuta o que a central de segurança guarda e não roda nada: as conexões que o firewall recusa, o que o sudo faz, se o firewall é o que você pediu e quem pode assinar seus commits. Enquanto algo está fora do esperado, um escudo fica na modeline — laranja para o que você escolheu; na cor de perigo para o que ninguém escolheu, e essa vence sempre que houver um perigo. O ponteiro parado sobre ele diz tudo o que está fora, e o clique abre a central onde isso se resolve; em repouso não há nenhum. A página guarda as conexões recusadas há pouco e uma semana de sudo.
+brain-task-security-watch-brief = Vigia o firewall, o sudo e quem pode assinar seus commits, e avisa quando algo está fora do lugar.
 security-watch-mark-firewall-failed = O firewall não é o que você pediu
 security-watch-mark-firewall-off = Seu firewall está desligado
 security-watch-mark-file-key = Há chave privada num arquivo comum

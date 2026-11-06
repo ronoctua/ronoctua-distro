@@ -2,6 +2,7 @@
 # page, the hint of its mark, its actions and the words it refuses with.
 brain-task-journal-errors = Erros no journal
 brain-task-journal-errors-does = Erros que o sistema e os seus programas escrevem no journal, agrupados: a mesma falha com outros números é uma linha, com a contagem. Uma marca na modeline conta os tipos que você ainda não viu. Um trecho que você filtra esconde as linhas que o contêm, fora da contagem.
+brain-task-journal-errors-brief = Agrupa os erros escritos no journal do sistema e conta os que você ainda não viu.
 journal-errors-heading-journal = Acompanhando o journal
 journal-errors-heading-unseen = Ainda não vistos — escolha um para marcá-lo como visto
 journal-errors-heading-earlier = Ainda não vistos, de uma inicialização anterior — escolha um para marcá-lo como visto

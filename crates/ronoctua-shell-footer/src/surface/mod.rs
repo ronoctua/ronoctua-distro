@@ -3161,7 +3161,14 @@ pub(crate) fn photographed(
         tree,
         registry,
         ronoctua_notify::store::Where::of_env(),
-        Some(crate::adapt::Prefs::default()),
+        Some(crate::adapt::Prefs {
+            shortcuts: if scene.shortcuts {
+                ronoctua_shell_kit::header::Shortcuts::Shown
+            } else {
+                ronoctua_shell_kit::header::Shortcuts::default()
+            },
+            ..crate::adapt::Prefs::default()
+        }),
         None,
         the_regions(composition)?,
     );

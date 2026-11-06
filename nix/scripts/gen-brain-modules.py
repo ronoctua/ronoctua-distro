@@ -143,6 +143,7 @@ def roles(m: dict) -> dict[str, str]:
     out: dict[str, str] = {
         f"brain-task-{ident}": "Its name on screen.",
         f"brain-task-{ident}-does": "The line under the cursor.",
+        f"brain-task-{ident}-brief": "Its one line under the pointer.",
     }
     for a, spec in sorted(m["actions"].items()):
         out.setdefault(f"cmd-{ident}-{a}", f"The label of the action `{a}`.")

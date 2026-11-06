@@ -3,6 +3,7 @@
 # the two things it tells the footer.
 brain-task-disk-space = Abrir espaço no disco
 brain-task-disk-space-does = Quando o disco que guarda o sistema ou a sua pasta pessoal fica sem espaço, abre espaço na hora, sem esperar a noite nem a máquina ficar quieta: primeiro as compilações de compiladores que ninguém usa e, enquanto todas as compilações do cargo no seu cache pesarem mais do que a parte delas no disco, as compiladas há mais tempo; depois o lixo do store, até o disco voltar para onde deveria estar. Só apaga uma compilação quando nenhum cargo está compilando nela, nunca segue um link, nunca remove o que o Nix conta como raiz nem uma geração, e depois de uma tentativa que não abriu espaço suficiente espera o disco encher mais antes de tentar de novo. Enquanto o disco está quase cheio, uma marca na modeline diz isso.
+brain-task-disk-space-brief = Abre espaço no disco assim que ele começa a faltar.
 disk-space-why-when-short = Com pouco espaço
 disk-space-mark-full = O disco está quase cheio
 disk-space-heading-now = O disco agora

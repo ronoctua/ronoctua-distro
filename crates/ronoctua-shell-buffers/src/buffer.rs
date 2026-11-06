@@ -219,6 +219,11 @@ struct Host {
     /// component is told and every cell a pointer lands in is counted under
     /// them (`paint::Rows`).
     top: u16,
+    /// WHETHER THE WINDOW WEARS ITS HEADER — the person's "no header" mode,
+    /// as the door last drew it (`Hinted::is_hidden`), told to the component
+    /// with every frame (`context.headed`) so its content can say what the
+    /// header would have.
+    headed: bool,
     /// What the socket answers `keymap` with: the `LEADER Alt` shortcuts the
     /// component teaches NOW — the footer's line and its `LEADER Alt` list
     /// carry the window in front as it is, as a native window's do.
@@ -1126,10 +1131,11 @@ pub fn host_it(
 
         // The initial columns and rows are a guess; the `configure` brings the actual
         // size and the `render` runs again with it.
-        let list = instance.render(
+        let list = instance.render_headed(
             ronoctua_tokens::space::TERMINAL_COLUMNS,
             ronoctua_tokens::space::TERMINAL_LINES,
             Host::heights(),
+            !ronoctua_shell_kit::header::hide_header(),
         )?;
         tracing::info!(
             commands = list.commands.len(),
@@ -1224,6 +1230,7 @@ pub fn host_it(
             declared: crate::chrome::Declared::default(),
             interned: crate::chrome::Interned::default(),
             top: 0,
+            headed: !ronoctua_shell_kit::header::hide_header(),
             taught_now: std::sync::Arc::clone(&taught_now),
             typing_seat: None,
             key_seat: 0,
@@ -1914,6 +1921,7 @@ impl Host {
         // component's rows under it. The frame is asked for at the height the
         // last header left it; a header that came out taller or shorter
         // (a drawer opened, a sentence put up) is the frame asked again.
+        self.headed = !ui.hinted.is_hidden();
         self.re_render();
         let mut header = self.header(ui);
         let top = ui.first_of_list();
@@ -2117,7 +2125,10 @@ impl Host {
     ///
     fn re_render(&mut self) {
         let (columns, lines) = self.context_of();
-        match self.instance.render(columns, lines, Self::heights()) {
+        match self
+            .instance
+            .render_headed(columns, lines, Self::heights(), self.headed)
+        {
             // THE GATE HOLDS ON EVERY FRAME, and not only the first.
             //
             // A component can emit the gated primitive only after

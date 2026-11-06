@@ -13554,8 +13554,9 @@ let
     else:
         floor(len(walk), 200, "characters of `laid`")
         # `p.register` or the local it was resolved into (an unpressable key
-        # is decided `Inert` just above the match).
-        split = scope(walk, r"let runs: Vec<&str> = match (?:p\.)?register\b")
+        # is decided `Inert` just above the match). Whatever a run is typed as
+        # — a bare `&str`, or one paired with the register it is drawn in.
+        split = scope(walk, r"let runs: Vec<[^=]+> = match (?:p\.)?register\b")
         if split is None:
             bad.append("`laid` no longer splits a key at its modifier")
             drawn = set()
@@ -13571,13 +13572,21 @@ let
                     + ", ".join(sorted(variants - drawn - rest))
                 )
 
-    # AND THE ONES THAT MAKE A GROUP A SHORTCUT.
-    keyed = scope(fold, r"let keyed = group\.iter\(\)\.any\(\|p\|")
+    # AND THE ONES THAT MAKE A GROUP A SHORTCUT. The STATEMENT, up to its
+    # `;` — a braced scope after it is the next closure, which names no
+    # register, and the comparison below then had nothing to compare. When
+    # the group asks `Piece::is_a_key`, the list is that function's.
+    keyed = re.search(r"let keyed = group\.iter\(\)\.any\(\|p\|([^;]*);", fold)
     if keyed is None:
         bad.append("fold.rs no longer decides which groups are shortcuts")
         grouped = set()
     else:
-        grouped = set(re.findall(r"Register::(\w+)", keyed))
+        asked = keyed.group(1)
+        if "is_a_key" in asked:
+            asked = body_of(chrome, "is_a_key") or ""
+        grouped = set(re.findall(r"Register::(\w+)", asked))
+        if not grouped:
+            bad.append("fold.rs decides which groups are shortcuts by something this check cannot read")
 
     if drawn and grouped and drawn != grouped:
         bad.append(
@@ -16754,10 +16763,12 @@ let
       || { echo "ERROR: the pointer rested on a row and nothing lit under it." >&2; exit 1; }
     grep -q 'surface-selection' hovered.txt \
       || { echo "ERROR: the cursor's own band went away with the hover." >&2; exit 1; }
-    # AND THE ROW SAYS WHAT IT IS — its task's own description, declared for
-    # the host (`Screen::point`), which says it on the header's line or, with
-    # the header hidden, on the footer's minibuffer.
-    grep -q 'Pointed { about: Key("about-brain-log") }' hovered.txt \
+    # AND THE ROW SAYS WHAT IT IS — its task's one line, declared for the host
+    # (`Screen::point`), which says it on the header's line or, with the header
+    # hidden, on the footer's minibuffer. This fixture's watch declares no
+    # `-brief` (a person's module may not), so it is its description. By the
+    # key alone: the arguments that follow it are another question.
+    grep -q 'Pointed { about: Key("about-brain-log")' hovered.txt \
       || { echo "ERROR: the pointer rested on a task and nothing said what the task is." >&2; exit 1; }
 
     python3 - <<'END'
@@ -32277,7 +32288,10 @@ let
 
       def owed_keys(m):
           i = m["id"]
-          owed = [f"brain-task-{i}", f"brain-task-{i}-does"]
+          # ITS NAME, ITS LINE AND WHAT IT IS IN ONE LINE — the brief a
+          # module of the distro owes (`gen-brain-catalogue.py`), which the
+          # pointer resting on its row says.
+          owed = [f"brain-task-{i}", f"brain-task-{i}-does", f"brain-task-{i}-brief"]
           owed += [f"cmd-{i}-{a}" for a in m["actions"]]
           owed += [a["asks"] for a in m["actions"].values() if a.get("asks")]
           owed += [k["hint"] for k in m["marks"].values()]

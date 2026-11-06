@@ -19,6 +19,8 @@ pub const ID: &str = "pilot-sample";
 pub mod key {
     /// Its name on screen.
     pub const BRAIN_TASK_PILOT_SAMPLE: &str = "brain-task-pilot-sample";
+    /// Its one line under the pointer.
+    pub const BRAIN_TASK_PILOT_SAMPLE_BRIEF: &str = "brain-task-pilot-sample-brief";
     /// The line under the cursor.
     pub const BRAIN_TASK_PILOT_SAMPLE_DOES: &str = "brain-task-pilot-sample-does";
     /// The label of the action `forget`.
@@ -31,8 +33,9 @@ pub mod key {
     pub const PILOT_SAMPLE_WHY_WHEN_EMPTY: &str = "pilot-sample-why-when-empty";
 
     /// Every key of the module's own texts, in order.
-    pub static ALL: [&str; 6] = [
+    pub static ALL: [&str; 7] = [
         BRAIN_TASK_PILOT_SAMPLE,
+        BRAIN_TASK_PILOT_SAMPLE_BRIEF,
         BRAIN_TASK_PILOT_SAMPLE_DOES,
         CMD_PILOT_SAMPLE_FORGET,
         PILOT_SAMPLE_MARK_FULL,

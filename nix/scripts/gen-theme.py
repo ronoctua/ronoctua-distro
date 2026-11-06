@@ -1387,6 +1387,13 @@ CONTRAST_GATES = (
     # be DISCREET is exactly the tone that could slide into not reading.
     ("text.subtle.explain", ("surface.chrome", "surface.buffer"), 30, 32),
     ("text.subtle.explain", RAISED_GROUNDS, 26, 26),
+    # THE `⌥` OF A WINDOW SHORTCUT, discreet at the owner's word and still a
+    # mark one reads: on the footer's chrome and a window's ground, on a
+    # raised header, and on the rows a buffer draws it in — lit by a pointer
+    # or under the cursor. Measured 2026-11-06: 24 / 20 / 19 at the lowest.
+    ("text.subtle.leader-alt", ("surface.chrome", "surface.buffer"), 21, 23),
+    ("text.subtle.leader-alt", RAISED_GROUNDS, 17, 19),
+    ("text.subtle.leader-alt", ("surface.hover", "surface.selection"), 16, 18),
     # THE ACCENT AND THE ALARM ON THEM TOO. A container is where the brain
     # draws a run that FAILED and a header is where the accent marks the page,
     # so both are drawn on a raised ground on the first screen built out of
@@ -1450,11 +1457,14 @@ CONTRAST_GATES = (
     ("modeline.device", ("modeline.background",), 40, 45),
     # AND THE CAMERA'S, at the same rung.
     ("modeline.watching", ("modeline.background",), 40, 45),
-    # WHAT THE BRAIN FOLLOWS, at the marks' rung on the modeline — and on a
-    # window's grounds, where the brain's page draws a watch in the colour the
-    # modeline marks one with — its rows, a module's row toned `watching` — on
-    # the page, under the cursor's band and the pointer's, and on the two
-    # raised grounds the page is framed in.
+    # AND ON A WINDOW'S GROUNDS, where the brain's page draws a module's row
+    # toned `watching` in the colour the modeline marks one with — on the
+    # page, under the cursor's band and the pointer's, and on the two raised
+    # grounds the page is framed in.
+    ("modeline.watching", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
+    # WHAT IS UNDER WAY AND WELL — an agent at work on the modeline (the tone
+    # `working`) and a watch on the brain's page, its glyph, its name and the
+    # word in its row — at the marks' rung, on the same grounds.
     ("modeline.following", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
     # HOW A TASK STANDS AND HOW A RUN ENDED, one discreet rung, on every
     # ground the brain's page draws it on: the list, the history and the
@@ -1483,6 +1493,7 @@ CONTRAST_GATES = (
     # AND ON THE SETS' GROUNDS, every tone a mark wears there, at the rungs
     # it reads at on the modeline's own band.
     ("text.secondary", MARK_SET_GROUNDS, 43, 45),
+    ("modeline.watching", MARK_SET_GROUNDS, 40, 45),
     ("modeline.following", MARK_SET_GROUNDS, 40, 45),
     ("state.caution", MARK_SET_GROUNDS, 45, 50),
     ("state.error", MARK_SET_GROUNDS, 45, 50),
@@ -1720,6 +1731,17 @@ DISTANCE_GATES = (
     ("text.subtle.contextual", "text.subtle.alternate", 0.03, 0.04),
     # AND THE KEY A CLICK CANNOT PRESS, told from the one it can: slightly,
     # which is what the owner asked for, and not so slightly it is the same.
+    # AND THE `⌥` IN FRONT OF A KEY, told from the key it stands before, the
+    # words after it, the dot between two shortcuts, the sentence under the
+    # line, the key no click presses and the accent a buffer's rows draw their
+    # keys in — a mark of its own, which the owner asked for. Measured
+    # 2026-11-06: 0.095, 0.042, 0.078, 0.059, 0.091, 0.145 at the lowest.
+    ("text.subtle.leader-alt", "text.subtle.strong", 0.06, 0.08),
+    ("text.subtle.leader-alt", "text.subtle.default", 0.03, 0.035),
+    ("text.subtle.leader-alt", "text.subtle.faint", 0.05, 0.06),
+    ("text.subtle.leader-alt", "text.subtle.explain", 0.04, 0.05),
+    ("text.subtle.leader-alt", "text.subtle.inert", 0.06, 0.08),
+    ("text.subtle.leader-alt", "state.accent", 0.10, 0.12),
     ("text.subtle.inert", "text.subtle.strong", 0.03, 0.04),
     ("text.subtle.inert", "text.subtle.default", 0.03, 0.04),
     ("text.subtle.inert", "text.subtle.contextual", 0.03, 0.04),

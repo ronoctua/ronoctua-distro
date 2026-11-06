@@ -406,7 +406,8 @@ no PATH, o KVM e o `nix-direnv`.
   DECLARA, a cada quadro, o título e o que ensina (`Screen::heading`, só na linha 0, `Screen::teach`;
   os comandos `heading` e `taught`, que não desenham), e o hospedeiro os desenha com o
   `chrome::Hinted` de toda janela (`chrome::declared`) — `⌥`, clique, frase, gaveta e modo sem
-  cabeçalho de um lugar só; o contexto não leva mais `hide-header` (cobra
+  cabeçalho de um lugar só; o contexto diz só se o cabeçalho está à vista (`headed`), para o
+  conteúdo dizer o que ele diria — nunca para o buffer desenhar um (cobra
   `the-shortcut-line-is-the-systems`). Um `⌥` nas linhas do próprio buffer é o par do design
   (`Row::put_shortcut`), soletrado pela frase reservada `-leader-alt`; a sequência local vira tecla
   só por `ronoctua_protocol::local_key`.

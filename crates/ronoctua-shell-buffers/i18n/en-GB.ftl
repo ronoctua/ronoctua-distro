@@ -240,6 +240,30 @@ brain-kind-once = Happens once, and is then gone.
 brain-kind-watch = Only watches: it runs nothing on a schedule, it follows something and says what it hears.
 about-brain-fold = Records in a row that say the same thing, folded into this one; opening it shows each of them on a line of its own.
 about-brain-next = When the brain will next consider running this task.
+# WHAT EACH COLUMN OF A TASK'S ROW SAYS UNDER THE POINTER, on the minibuffer:
+# when it runs next, and how it stands or how its last run went — `{ $when }`
+# is the date as the row shows it, and `{ $why }` the reason the row gives
+# instead of a date.
+about-brain-next-at = Its next run is scheduled for { $when }.
+about-brain-next-none = It has no next run on the calendar.
+about-brain-next-why = No date for its next run — { $why }
+about-brain-standing-idle = It has not run yet, and waits for its moment.
+about-brain-standing-queued = It is in the queue, waiting for its turn.
+about-brain-standing-running = It is running now.
+about-brain-last-done = Its last run, on { $when }, worked.
+about-brain-last-failed = Its last run, on { $when }, failed.
+about-brain-last-held = Its last turn, on { $when }, waited for the machine and did not run.
+about-brain-last-skipped = Its last turn, on { $when }, did not run: it was put off.
+about-brain-last-noted = Its last record, on { $when }, noted something it heard.
+about-brain-hold-ram = It is due, and waits for the memory to be less busy.
+about-brain-hold-cpu = It is due, and waits for the processor to be less busy.
+about-brain-hold-battery = It is due, and waits for the machine to be plugged in.
+about-brain-hold-busy = It is due, and waits for the task running now to finish.
+about-brain-hold-network = It is due, and waits for the network.
+about-brain-hold-asleep = It is due, and waits for the machine to wake.
+# THE WAY BACK atop a task's page, while the window wears no header.
+brain-back = Back
+about-brain-back = Go back to the Brain's first page, with every task.
 # THE TASKS. `brain-task-<id>` names one and `<id>-does` says what it does —
 # the second is a paragraph in the footer, so it has room to be a whole
 # explanation rather than a line.

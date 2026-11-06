@@ -5,6 +5,7 @@
 # separated by commas).
 brain-task-reminders = Reminders and alarms
 brain-task-reminders-does = Alarms and reminders you ask for in your own words: once (“tomorrow 9:00 call mum”, “in 2 h with a sound take the pizza out”), every day, on days of the week, on a day of the month, or on a date every year, like a birthday. At its moment it rings on the brain’s line, ahead of everything else, and stays there until you dismiss it or put it off; one that came due while the machine was off shows as missed instead. A reminder with a sound plays a chime a few times while it rings.
+brain-task-reminders-brief = Rings the alarms and reminders you ask for in your own words.
 reminders-mark-ringing = A reminder is ringing
 reminders-says-due = { $more ->
         [0] { $text }

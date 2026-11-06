@@ -628,7 +628,18 @@ pub fn wrapped(
     // THE WHOLE OF IT, because the TOTAL is what a scrollbar is a fraction of.
     // The ceiling is a bound on the work and not on the answer: a sentence
     // longer than this is one nobody reads to the end of either way.
-    let all = ronoctua_render::layout::wrap(&whole, room, SENTENCE_MOST);
+    let mut all = ronoctua_render::layout::wrap(&whole, room, SENTENCE_MOST);
+    // AND A SENTENCE THAT IS CUT GIVES ITS LAST CELL TO THE THUMB. The thumb
+    // is drawn in the paragraph's last column ([`bar_box`]), and the words
+    // wrapped to the whole width ran under it: the owner photographed the
+    // bar over the last letter of every row, in the brain's footer and on a
+    // task's page. So the words are wrapped again one cell short — only when
+    // the thumb is there; a sentence that fits takes the whole width.
+    let mut room = room;
+    if all.len() > lines && room > 1 {
+        room -= 1;
+        all = ronoctua_render::layout::wrap(&whole, room, SENTENCE_MOST);
+    }
     let total = all.len();
     // AND THE OFFSET IS CLAMPED HERE, which is what lets the buffer keep one
     // at all: it has never seen the wrap, so the number it holds is only ever
@@ -1280,13 +1291,37 @@ mod tests {
             "the offset changed nothing on the screen"
         );
         // AND NOTHING SPILLS, whatever the wrap had to do with a word longer
-        // than the line.
+        // than the line — nor reaches the rectangle's last cell, which is the
+        // thumb's: the owner photographed the bar over the last letter of
+        // every row.
         for row in said.rows.iter().chain(&far.rows) {
             assert!(
-                ronoctua_render::layout::width(row) <= 39,
-                "a wrapped row is wider than the rectangle: {row:?}"
+                ronoctua_render::layout::width(row) <= 38,
+                "a wrapped row runs under the thumb: {row:?}"
             );
         }
+        // AND A SENTENCE THAT FITS KEEPS NO LANE: with no thumb, the words
+        // take the rectangle's whole width.
+        let short = "Something something something something else";
+        let mut fits = DisplayList::fresh_one();
+        fits.push(Command::Paragraph {
+            line: 4,
+            column: 0,
+            lines: 3,
+            columns: 39,
+            content: Text::datum(short),
+            color: Color::name("state-error"),
+            scale: ronoctua_protocol::Scale::Normal,
+            first_row: 0,
+        });
+        let whole = wrapped(&fits.commands[0], &texts, 40).expect("a paragraph");
+        assert_eq!(whole.total, 2, "{:?}", whole.rows);
+        assert_eq!(
+            ronoctua_render::layout::width(&whole.rows[0]),
+            39,
+            "a sentence that fits gave a cell to a thumb it has not got: {:?}",
+            whole.rows
+        );
 
         // AND A THUMB IS DRAWN BESIDE IT, in the rectangle's last cell, out of
         // the SAME wrap: a bar that counted the rows a second time would say

@@ -2,6 +2,7 @@
 # the record it writes in the activity and the notification of a kill.
 brain-task-oom-watch = Closed for lack of memory
 brain-task-oom-watch-does = When memory runs out, the kernel or systemd-oomd closes something so the rest can go on. Each one is written in the activity and told once: what was closed, where, how much memory, how stalled the machine was, and when.
+brain-task-oom-watch-brief = Writes down every program closed because memory ran out.
 oom-watch-heading-journal = Following the journal
 oom-watch-heading-recent = Closed lately
 oom-watch-row-none = Nothing has been closed for lack of memory since this began watching

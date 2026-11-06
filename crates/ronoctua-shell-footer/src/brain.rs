@@ -1739,7 +1739,13 @@ mod tests {
         );
         assert_eq!(
             colour("brain:fixture-watch/seen"),
-            Some(tokens::color::MODELINE_FOLLOWING)
+            Some(tokens::color::MODELINE_WATCHING)
+        );
+        // AND WORK UNDER WAY IS ITS OWN TEAL, never the watch's colour —
+        // which stays with what means something is wrong (owner, 2026-11-06).
+        assert_eq!(
+            tone_colour(Tone::Working),
+            tokens::color::MODELINE_FOLLOWING
         );
         assert!(hint_in(&drawn[0], &words()).is_some_and(|h| !h.is_empty()));
         assert_eq!(click_of(&drawn[0]), ("brain-open", "fixture".to_owned()));

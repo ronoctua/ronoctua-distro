@@ -165,6 +165,7 @@ fn named(mind: &mut Mind, words: &std::collections::HashMap<String, String>) {
     let say = |key: &str| words.get(key).cloned().unwrap_or_else(|| key.to_owned());
     for t in &mut mind.tasks {
         t.name_text = say(&t.name_key);
+        t.does_text = say(&t.does_key);
         t.why_text = if t.why_key.is_empty() {
             String::new()
         } else {
@@ -279,6 +280,10 @@ fn task(id: &str, standing: Standing, hold: HoldKind, why_not: &str, ran: bool) 
         calendar: true,
         name_key: format!("brain-task-{id}"),
         does_key: format!("brain-task-{id}-does"),
+        // A MODULE OF THE DISTRO DECLARES ITS LINE (`gen-brain-catalogue.py`).
+        brief_key: format!("brain-task-{id}-brief"),
+        // FILLED BY `named`, as `why_text` below.
+        does_text: String::new(),
         why_key: if why_not.is_empty() {
             String::new()
         } else {

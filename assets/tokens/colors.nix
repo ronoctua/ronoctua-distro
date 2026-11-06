@@ -661,6 +661,20 @@
       contextual = {
         of = "alternate.text-muted";
       };
+      # THE `⌥` IN FRONT OF A WINDOW SHORTCUT'S KEY — `LEADER Alt`, in one
+      # cell (`chrome::leader_alt_text`, the design's `Row::put_shortcut`).
+      #
+      # It wore the key's own ink, and the owner read it as one more letter of
+      # the key: *"a cor seja diferente e bem discreta"*. It is not what the eye
+      # hunts for — every shortcut of a window has it — so it steps back: the
+      # explaining sentence's cool grey, well below it (Lc 24 on a dark chrome,
+      # between the prose and the sentence), told from the key, the prose, the
+      # dot and the sentence by the distance gates. The words it is spelt as
+      # under the pointer (`SUPER ALT`) wear it too: they are the same mark.
+      leader-alt = {
+        of = "explain.text";
+        shift = -14;
+      };
       # THE SENTENCE UNDER AN OPENED LINE OF SHORTCUTS — a COOL GREY, and a
       # family of its own (`explain`, in every seed).
       #

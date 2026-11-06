@@ -38,7 +38,8 @@ refused on the way, because a key's owner has to be readable from the key:
 - a module key that is also a crate's key, or another module's;
 - a module key outside its namespace: `(cmd-|notif-|echo-|about-|ask-)?`
   followed by one of its prefixes (`--prefixes`, its id by default), alone or
-  with more after a `-`, or `brain-task-<id>` and `brain-task-<id>-does`;
+  with more after a `-`, or `brain-task-<id>`, `brain-task-<id>-does` and
+  `brain-task-<id>-brief`;
 - two modules whose prefixes overlap (`made` and `made-up`): two owners of
   one name.
 
@@ -113,7 +114,7 @@ RESERVED = {"cmd", "notif", "echo", "about", "ask", "brain"}
 
 def in_namespace(key: str, ident: str, prefixes: list[str]) -> bool:
     """Whether a key is a module's to declare. See the header."""
-    if key in (f"brain-task-{ident}", f"brain-task-{ident}-does"):
+    if key in (f"brain-task-{ident}", f"brain-task-{ident}-does", f"brain-task-{ident}-brief"):
         return True
     for opener in ("",) + OPENERS:
         if not key.startswith(opener):

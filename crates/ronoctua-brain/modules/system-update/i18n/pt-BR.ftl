@@ -3,6 +3,7 @@
 # closed words the sequence's table carries, and the view that watches a run.
 brain-task-system-update = Atualizar o sistema
 brain-task-system-update-does = Junta o que você declarou nas suas outras máquinas, adianta a distro e o nixpkgs, monta o sistema novo e o deixa para o próximo reinício — nada do que roda agora é parado ou reiniciado; esse reinício experimenta o sistema novo uma vez e volta sozinho para o último bom se ele não subir —, atualiza os seus programas e caches, recupera espaço no store e publica o que esta máquina fez. Quando um sistema novo espera, a execução termina pedindo que você reinicie.
+brain-task-system-update-brief = Atualiza a distro, o nixpkgs e seus programas, e deixa o sistema novo para o próximo reinício.
 
 # ITS COMMANDS. The whole sequence now, and the two doors of the view that
 # watches it — the footer's region and a window.

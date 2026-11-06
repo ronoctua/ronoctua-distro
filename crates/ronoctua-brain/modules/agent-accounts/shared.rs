@@ -450,11 +450,13 @@ impl Doing {
     }
 
     /// Its tone, saying the glyph again: blue is for focus and nothing else,
-    /// so working is the watch's colour, waiting the caution's orange.
+    /// so working is the teal of a thing under way and well — never the
+    /// watch's colour, which the owner read as an agent in trouble — and
+    /// waiting the caution's orange.
     #[must_use]
     pub const fn tone(self) -> Tone {
         match self {
-            Self::Working => Tone::Watching,
+            Self::Working => Tone::Working,
             Self::Waiting => Tone::Warning,
             Self::Done => Tone::Quiet,
             Self::Failed => Tone::Danger,
@@ -770,10 +772,11 @@ impl Places {
 const fn loudness(tone: Tone) -> u8 {
     match tone {
         Tone::Quiet => 0,
-        Tone::Watching => 1,
-        Tone::Accent => 2,
-        Tone::Warning => 3,
-        Tone::Danger => 4,
+        Tone::Working => 1,
+        Tone::Watching => 2,
+        Tone::Accent => 3,
+        Tone::Warning => 4,
+        Tone::Danger => 5,
     }
 }
 
@@ -1011,7 +1014,7 @@ mod tests {
                 .iter()
                 .map(|m| (m.id.name.as_ref(), m.tone))
                 .collect::<Vec<_>>(),
-            [("claude", Tone::Quiet), ("agent-working", Tone::Watching)]
+            [("claude", Tone::Quiet), ("agent-working", Tone::Working)]
         );
         assert_eq!(in_set(&marks, 2).len(), 1, "Codex's set has its lead alone");
         assert!(
@@ -1143,7 +1146,7 @@ mod tests {
         let working = [agent("claude-api-1", 1, Doing::Working)];
         let out = with(std::slice::from_ref(&api), &working);
         assert_eq!(out[0].tone, Tone::Danger, "the agents put out the danger");
-        assert_eq!(out[1].tone, Tone::Watching);
+        assert_eq!(out[1].tone, Tone::Working);
         all_shown(&out);
         assert_eq!(credits_tone(Some(NOON)), Tone::Danger);
         assert_eq!(credits_tone(None), Tone::Quiet);

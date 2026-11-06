@@ -3,6 +3,7 @@
 # recorded it.
 brain-task-video-metrics = Varrer os canais de vídeo
 brain-task-video-metrics-does = A cada seis horas, pergunta ao YouTube o que há de novo nos canais que você acrescentou ao Métricas de vídeo — primeiro os feeds, depois os detalhes e as miniaturas de alguns vídeos de cada vez — e dá a pontuação. Precisa da rede e espera enquanto não há, pula uma rodada enquanto a economia de energia está ligada e para na hora quando o YouTube pergunta se isto é um robô. Enquanto varre, uma marca na modeline diz isso; quando a última varredura falhou em todos os canais, uma marca vermelha fica até uma não falhar.
+brain-task-video-metrics-brief = Pergunta ao YouTube, a cada seis horas, o que há de novo nos seus canais, e dá uma nota.
 video-metrics-brain-mark-scanning = Varrendo seus canais de vídeo
 video-metrics-brain-mark-failed = A última varredura de vídeos falhou em todos os canais
 video-metrics-brain-last = A última varredura

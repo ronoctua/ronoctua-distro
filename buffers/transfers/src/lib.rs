@@ -1411,6 +1411,7 @@ mod tests {
             columns,
             lines,
             heights: heights(),
+            headed: true,
         }
     }
 

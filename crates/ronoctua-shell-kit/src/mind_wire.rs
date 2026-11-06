@@ -226,6 +226,11 @@ fn task_of(
     texts: &ronoctua_i18n::Texts,
 ) -> ronoctua_protocol::TaskState {
     let name_key = name_key_of(&t.id, mind);
+    let does_key = if t.does_key.is_empty() {
+        format!("{name_key}-does")
+    } else {
+        t.does_key.clone()
+    };
     ronoctua_protocol::TaskState {
         id: t.id.clone(),
         // THE NAME, RESOLVED HERE, because the component cannot: a key only
@@ -272,10 +277,24 @@ fn task_of(
             .collect(),
         steps: t.steps.iter().map(step_of).collect(),
         calendar: t.calendar,
-        does_key: if t.does_key.is_empty() {
-            format!("{name_key}-does")
+        does_key: does_key.clone(),
+        // ITS LINE, when its module declared one — every module of the distro
+        // does (`gen-brain-catalogue.py`); a person's may not, and its row
+        // then says its description.
+        brief_key: {
+            let brief = format!("{name_key}-brief");
+            if texts.has(&brief) {
+                brief
+            } else {
+                String::new()
+            }
+        },
+        // AND THE DESCRIPTION IN WORDS, for the page to give it as many rows
+        // as it wraps to — resolved here for the reason the name is.
+        does_text: if texts.has(&does_key) {
+            named(&does_key, texts)
         } else {
-            t.does_key.clone()
+            String::new()
         },
         name_key,
         why_key: why_key_of(&t.why_not, Some(t)),
@@ -592,6 +611,7 @@ pub(crate) const fn tone_of(t: Tone) -> ronoctua_protocol::BrainTone {
         Tone::Warning => ronoctua_protocol::BrainTone::Warning,
         Tone::Danger => ronoctua_protocol::BrainTone::Danger,
         Tone::Accent => ronoctua_protocol::BrainTone::Accent,
+        Tone::Working => ronoctua_protocol::BrainTone::Working,
     }
 }
 
@@ -1094,6 +1114,10 @@ mod tests {
         assert_eq!(over.tasks[0].why_key, "fixture-why-when-short");
         assert_eq!(over.tasks[0].does_key, "fixture-name-does");
         assert_eq!(over.tasks[0].steps[0].name_key, "fixture-step-build");
+        // A MODULE THAT DECLARED NO LINE crosses none, and its row says its
+        // description; one the texts do not have crosses no words to measure.
+        assert_eq!(over.tasks[0].brief_key, "");
+        assert_eq!(over.tasks[0].does_text, "");
     }
 
     /// FAILS IF: what the brain answered a change is not what the door says

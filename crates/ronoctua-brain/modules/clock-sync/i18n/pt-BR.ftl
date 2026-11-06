@@ -3,6 +3,7 @@
 # try says — to the press, and in the activity log.
 brain-task-clock-sync = Vigiar o relógio
 brain-task-clock-sync-does = Confere, algumas vezes por dia, se alguma coisa está mantendo certo o relógio desta máquina pela internet — e liga de volta quando não há nada. Ela não pergunta a hora a ninguém: quem faz isso continuamente é o cliente de horário do sistema, e um segundo seriam dois relógios discordando. Desligue isto para acertar o relógio à mão.
+brain-task-clock-sync-brief = Garante que algo mantém o relógio da máquina certo pela internet.
 clock-sync-says-not-automatic = Nada está mantendo certo o relógio desta máquina. Ele vai se atrasar, e todo carimbo de hora daqui se atrasa junto.
 clock-sync-says-not-synchronised = O relógio está sendo cuidado, mas ainda não conseguiu falar com nenhum servidor de horário.
 cmd-clock-sync-keep = Manter certo

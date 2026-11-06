@@ -17506,7 +17506,10 @@ mod tests {
                 | crate::chrome::Register::Action
                 | crate::chrome::Register::ActionLit
                 | crate::chrome::Register::ActionHere
-                | crate::chrome::Register::Loud => {}
+                | crate::chrome::Register::Loud
+                // AND THE `⌥` IS LAID OFF A KEY (`chrome::laid`), never a
+                // piece of the line on its own.
+                | crate::chrome::Register::LeaderAlt => {}
             }
         }
         // AND NO COMMA IN ANY OF THE SENTENCES: on this line a comma reads as

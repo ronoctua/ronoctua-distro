@@ -323,6 +323,7 @@ mod tests {
                 large: 2,
                 huge: 2,
             },
+            headed: true,
         }
     }
 

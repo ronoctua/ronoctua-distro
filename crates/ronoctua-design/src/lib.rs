@@ -183,6 +183,11 @@ pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
 pub use region::{Region, Slice, split};
+/// THE ONE WRAP, the host's own (`ronoctua_render::layout::wrap` forwards to
+/// it): a component COUNTS the rows a sentence comes out in with the function
+/// the host draws them with — a task's description given as many rows as it
+/// wraps to, never one fewer (a row cut where there was room) nor one more.
+pub use ronoctua_protocol::wrap;
 pub use screen::{Ink, Pointed, Run, Screen, Taught};
 pub use scroll::Scroll;
 pub use sheet::{SHEET_LABEL, Sheet, sheet_split};
@@ -389,16 +394,20 @@ pub enum Role {
     /// cursor is on the window: colour is spent only where it tells two hands
     /// apart, the rule the shell's own windows keep (`ronoctua_shell_kit::seats`).
     HoverOf(u16),
-    /// SOMETHING IS BEING FOLLOWED — a brain module that listens, and the
-    /// rows and marks it tones `watching`: the teal every brain mark toned
-    /// `watching` wears on the modeline too (`modeline.following`), so a
-    /// person who has read the mark has read the row.
-    ///
-    /// It was the camera's pink (`modeline.watching`), and the owner read it
-    /// on the brain's list as an alarm — a watch, and an agent at work, in
-    /// the colour that says something is wrong. The camera keeps its pink:
-    /// a camera looking is a thing to be told about; a watch is not.
+    /// SOMETHING IS BEING FOLLOWED — the rows a brain module tones
+    /// `watching`. The gestures' glyph colour, the one the modeline already
+    /// marks a watch with (`modeline.watching`), so a person who has read the
+    /// mark has read the row — the journal's errors among them, which is
+    /// news one has to look at.
     Watching,
+    /// UNDER WAY, AND WELL — a brain task that only listens (its glyph, its
+    /// name, the word in its row) and a module's row toned `working`: the
+    /// teal an agent at work wears on the modeline (`modeline.following`).
+    ///
+    /// A watch was [`Role::Watching`]'s pink, and the owner read it on the
+    /// brain's list as an alarm: a task that listens, and an agent at work,
+    /// in the colour that says something is wrong.
+    Following,
     /// HOW A THING STANDS, OR HOW IT ENDED, said discreetly in the hue of the
     /// news — the brain's last column, and the outcome of each record of a
     /// history (`text.status.*`): it went well.
@@ -449,6 +458,11 @@ pub enum Role {
     /// pointer rests on — `Register::Explain` on the host's side, the same
     /// cool grey.
     Explain,
+    /// THE `⌥` IN FRONT OF A WINDOW SHORTCUT'S KEY, and the words it is spelt
+    /// as under the pointer — `Register::LeaderAlt` on the host's side
+    /// (`text.subtle.leader-alt`), a discreet cool grey apart from the key it
+    /// stands before. Drawn by [`crate::table::Row::put_shortcut`] alone.
+    LeaderAlt,
     /// A SHORTCUT UNDER THE POINTER, LIT: its key — `Register::KeyLit` on the
     /// host's side, a small step from [`Role::Key`], so every header of the
     /// system lights a shortcut the same way.
@@ -590,7 +604,8 @@ impl Palette for Tokens {
             Role::Danger => "state-error",
             Role::Warning => "state-warning",
             Role::Once => "text-once",
-            Role::Watching => "modeline-following",
+            Role::Watching => "modeline-watching",
+            Role::Following => "modeline-following",
             // HOW A THING STANDS, in the hue of the news.
             Role::StatusGood => "text-status-good",
             Role::StatusIdle => "text-status-idle",
@@ -626,6 +641,7 @@ impl Palette for Tokens {
             Role::Prose => "text-subtle-default",
             Role::Faint => "text-subtle-faint",
             Role::Explain => "text-subtle-explain",
+            Role::LeaderAlt => "text-subtle-leader-alt",
             Role::Inert => "text-subtle-inert",
             Role::KeyLit => "text-subtle-lit-key",
             Role::ProseLit => "text-subtle-lit-prose",

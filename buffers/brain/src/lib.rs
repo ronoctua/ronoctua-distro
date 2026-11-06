@@ -153,6 +153,33 @@ mod key {
     pub const ABOUT_NEXT: &str = "about-brain-next";
     /// What the footer's click does.
     pub const ABOUT_OPEN_PAGE: &str = "about-brain-open-page";
+    /// What each column of a task's row says under the pointer: when it runs
+    /// next — `{ $when }` the date the row shows, `{ $why }` the reason it
+    /// gives instead of one —
+    pub const ABOUT_NEXT_AT: &str = "about-brain-next-at";
+    pub const ABOUT_NEXT_NONE: &str = "about-brain-next-none";
+    pub const ABOUT_NEXT_WHY: &str = "about-brain-next-why";
+    /// — how it stands while it has not run —
+    pub const ABOUT_IDLE: &str = "about-brain-standing-idle";
+    pub const ABOUT_QUEUED: &str = "about-brain-standing-queued";
+    pub const ABOUT_RUNNING: &str = "about-brain-standing-running";
+    /// — how its last run went, on `{ $when }` —
+    pub const ABOUT_DONE: &str = "about-brain-last-done";
+    pub const ABOUT_FAILED: &str = "about-brain-last-failed";
+    pub const ABOUT_HELD: &str = "about-brain-last-held";
+    pub const ABOUT_SKIPPED: &str = "about-brain-last-skipped";
+    pub const ABOUT_NOTED: &str = "about-brain-last-noted";
+    /// — and what it waits for, while something is in its way.
+    pub const ABOUT_HOLD_RAM: &str = "about-brain-hold-ram";
+    pub const ABOUT_HOLD_CPU: &str = "about-brain-hold-cpu";
+    pub const ABOUT_HOLD_BATTERY: &str = "about-brain-hold-battery";
+    pub const ABOUT_HOLD_BUSY: &str = "about-brain-hold-busy";
+    pub const ABOUT_HOLD_NETWORK: &str = "about-brain-hold-network";
+    pub const ABOUT_HOLD_ASLEEP: &str = "about-brain-hold-asleep";
+    /// THE WAY BACK atop a task's page while the window wears no header, and
+    /// what it does under the pointer.
+    pub const BACK: &str = "brain-back";
+    pub const ABOUT_WAY_BACK: &str = "about-brain-back";
 
     // ---- what the header teaches --------------------------------------
     pub const DO_OPEN: &str = "brain-do-open";
@@ -479,6 +506,11 @@ struct State {
     foot_scroll: u16,
     /// What that offset belongs to, so it does not survive the cursor moving.
     foot_of: String,
+    /// The first wrapped row of a task's DESCRIPTION that is drawn, on its
+    /// page — the host's number, as [`State::foot_scroll`] is. It only moves
+    /// in a window too small for the description to be given every row it
+    /// wraps to ([`about_lines`]).
+    about_scroll: u16,
     /// Whether the window still owes the cursor a move.
     ///
     /// # Why the window does not always follow
@@ -500,6 +532,11 @@ struct State {
     /// The window, as the last `render` saw it.
     lines: u16,
     columns: u16,
+    /// WHETHER THE WINDOW WEARS ITS HEADER (`context.headed`). Without it —
+    /// the distro's default — nothing on the screen names a task's page or
+    /// leads back from it, so the page says both itself, and the home page
+    /// says whose it is beside its first title.
+    headed: bool,
     /// The words the host resolved for the keys this buffer declared.
     ///
     /// It holds them to MEASURE them, never to draw them: every phrase still
@@ -533,6 +570,14 @@ struct State {
     /// opens — asked by the click and the pointer, so what they take is what
     /// the eye saw.
     open_at: Option<OpenAt>,
+    /// WHERE THE WAY BACK WAS DRAWN atop a task's page in the last frame —
+    /// its row inside the body's block and its cells — while the window
+    /// wears no header.
+    back_at: Option<(u16, u16, u16)>,
+    /// WHERE A TASK'S DESCRIPTION WAS DRAWN in the last frame — its first row
+    /// inside the body's block, and the cell the host answers its bar from —
+    /// so a drag or a wheel on it scrolls the paragraph, never the page.
+    about_at: Option<(u16, u16)>,
     /// THE COLUMNS THE LAST FRAME LAID the list of tasks and the activity
     /// log out in — what the pointer is asked against ([`State::pointed`]),
     /// so a glyph is explained where it was drawn.
@@ -598,11 +643,13 @@ impl State {
             watched: None,
             foot_scroll: 0,
             foot_of: String::new(),
+            about_scroll: 0,
             follows: true,
             spot: 0,
             body_from: 0,
             lines: 24,
             columns: 80,
+            headed: true,
             phrases: Phrases::empty(),
             hover: ronoctua_design::Hovers::new(),
             tail: Vec::new(),
@@ -610,6 +657,8 @@ impl State {
             tail_from: 0,
             blocks: Blocks::new(),
             open_at: None,
+            back_at: None,
+            about_at: None,
             task_layout: Layout::default(),
             log_layout: Layout::default(),
         }
@@ -742,6 +791,40 @@ const fn standing_role(s: Standing) -> Role {
     }
 }
 
+/// What a row's status says under the pointer, when it is how the last run
+/// went — on the date that run began.
+const fn last_about(o: OutcomeKind) -> &'static str {
+    match o {
+        OutcomeKind::Done => key::ABOUT_DONE,
+        OutcomeKind::Failed => key::ABOUT_FAILED,
+        OutcomeKind::Held => key::ABOUT_HELD,
+        OutcomeKind::Skipped => key::ABOUT_SKIPPED,
+        OutcomeKind::Noted => key::ABOUT_NOTED,
+    }
+}
+
+/// And when it is where the task stands, having not run yet.
+const fn standing_about(s: Standing) -> &'static str {
+    match s {
+        Standing::Idle => key::ABOUT_IDLE,
+        Standing::Queued => key::ABOUT_QUEUED,
+        Standing::Running => key::ABOUT_RUNNING,
+    }
+}
+
+/// And when it is what is in the task's way: what it waits for.
+const fn hold_about(h: HoldKind) -> Option<&'static str> {
+    match h {
+        HoldKind::None => None,
+        HoldKind::Ram => Some(key::ABOUT_HOLD_RAM),
+        HoldKind::Cpu => Some(key::ABOUT_HOLD_CPU),
+        HoldKind::Battery => Some(key::ABOUT_HOLD_BATTERY),
+        HoldKind::Busy => Some(key::ABOUT_HOLD_BUSY),
+        HoldKind::Network => Some(key::ABOUT_HOLD_NETWORK),
+        HoldKind::Asleep => Some(key::ABOUT_HOLD_ASLEEP),
+    }
+}
+
 /// What a task's glyph means, under the pointer.
 const fn kind_about(k: TaskKind) -> &'static str {
     match k {
@@ -763,11 +846,13 @@ const fn level_tone(l: NoticeLevel) -> Role {
 }
 
 /// The tone of a module's row, by MEANING — one role each, and `watching` is
-/// the gestures' glyph colour, the one the modeline marks a watch with.
+/// the gestures' glyph colour, the one the modeline marks a watch with (the
+/// journal's errors wear it); `working` is the teal of a thing under way.
 const fn tone_role(t: BrainTone) -> Role {
     match t {
         BrainTone::Quiet => Role::Quiet,
         BrainTone::Watching => Role::Watching,
+        BrainTone::Working => Role::Following,
         BrainTone::Warning => Role::Warning,
         BrainTone::Danger => Role::Danger,
         BrainTone::Accent => Role::Accent,
@@ -867,14 +952,15 @@ const fn kind_glyph(k: TaskKind) -> Icon {
 /// The colour a task's own rows are drawn in.
 ///
 /// A routine keeps the ordinary ramp; a one-shot does not, and neither does a
-/// watch — which wears the colour the modeline marks a watch with. The owner
-/// asked for both a glyph and a colour, because a glyph two cells wide is a
-/// small thing to hang a distinction on.
+/// watch — which wears the TEAL of a thing under way and well
+/// ([`Role::Following`]), never the alarm's colour the owner read it in. The
+/// owner asked for both a glyph and a colour, because a glyph two cells wide
+/// is a small thing to hang a distinction on.
 const fn kind_role(k: TaskKind) -> Role {
     match k {
         TaskKind::Routine => Role::Body,
         TaskKind::Once => Role::Once,
-        TaskKind::Watch => Role::Watching,
+        TaskKind::Watch => Role::Following,
     }
 }
 
@@ -968,6 +1054,8 @@ fn every_phrase() -> Vec<String> {
         key::TIMES,
         key::SINCE,
         key::OPEN_PAGE,
+        key::BACK,
+        key::TITLE,
         key::WATCHING,
         key::NEVER,
         key::ENABLED,
@@ -1360,9 +1448,12 @@ impl State {
             // because the host holds the translated string and is what wraps
             // it. It draws the thumb beside the words and clamps the number
             // before handing it back — see `ronoctua_protocol::Command::
-            // Paragraph`. One cell of the width is kept for that thumb, the
-            // same lane every list here keeps.
-            let box_wide = wide.saturating_sub(1);
+            // Paragraph`. THE WHOLE WIDTH IS GIVEN, and the host keeps the
+            // thumb's lane out of the words only while there is a thumb: a cell
+            // kept here as well put the thumb over the last letter of every row
+            // (photographed by the owner), and a sentence that fits lost a cell
+            // to a thumb it had not got.
+            let box_wide = wide;
             let scroll = self.foot_scroll;
             if let Some((text, role)) = &told.logged {
                 pen.paragraph_from(
@@ -1406,7 +1497,7 @@ impl State {
         // under the pointer by a ground under it alone — the row it sits on is
         // not what the click takes.
         self.open_at = None;
-        let mut facts_wide = wide;
+        let mut click_from = None;
         if let Some(task) = told.opens
             && values_at < last
             && values_at > 0
@@ -1428,54 +1519,124 @@ impl State {
                 to: wide,
                 task,
             });
-            facts_wide = from.saturating_sub(ronoctua_design::GAP);
+            click_from = Some(from);
         }
-        if !told.facts.is_empty() && values_at < last && values_at > 0 {
-            // A TABLE AND NOT A RUNNING SUM. The first shape of this measured
-            // each label by its KEY's length — `brain-last-run` is fourteen
-            // characters and `Last run` is eight — so every value landed on
-            // top of the label before it. A key's length is not a label's
-            // length, and this side cannot learn one: it reserves, and the
-            // host elides.
-            let widths: Vec<u16> = told
-                .facts
-                .iter()
-                .map(|(label, _)| {
-                    let said = self.phrases.or(label, "");
-                    if said.is_empty() {
-                        FACT_CELLS
-                    } else {
-                        ronoctua_design::wide(&said).min(FACT_CELLS)
-                    }
-                })
-                .collect();
-            let layout = facts_columns(facts_wide, &widths);
-            let Some(mut row) = pen.row_of(values_at, &layout) else {
-                return;
-            };
-            for ((label, value), (lid, vid)) in told.facts.iter().zip(FACT_SLOTS) {
-                // HALF A FACT IS WORSE THAN NONE. The two columns carry the
-                // same rank and a tie is broken by the later declaration, so
-                // the VALUE gives way first — which left `Processor` on the
-                // screen with nothing after it, read off a photograph at
-                // eighty columns. A pair goes whole or not at all.
-                if !layout.has(vid) {
-                    break;
+        if told.facts.is_empty() || values_at >= last || values_at == 0 {
+            return;
+        }
+        // A TABLE AND NOT A RUNNING SUM. The first shape of this measured
+        // each label by its KEY's length — `brain-last-run` is fourteen
+        // characters and `Last run` is eight — so every value landed on top
+        // of the label before it. A key's length is not a label's length, and
+        // this side learns one only from the host (`Input::Phrases`): it
+        // measures what it was told, and reserves what it was not.
+        let widths: Vec<u16> = told
+            .facts
+            .iter()
+            .map(|(label, _)| {
+                if label.is_empty() {
+                    return 0;
                 }
-                // THE LAST ROW IS DISCREET, label and value: the owner's
-                // *"as infos mais específicas que aparecem na última linha (ex:
-                // 'Last run...'), tenha uma cor discreta"*. The body's dimmest
-                // step, and never the description's: the sentence above is
-                // `quiet`, and a footer that drew both in one grey read as one
-                // block, which the owner said once before about this footer.
-                if !label.is_empty() {
-                    row.put(lid, Run::label(label).dim());
+                let said = self.phrases.or(label, "");
+                if said.is_empty() {
+                    FACT_CELLS
+                } else {
+                    ronoctua_design::wide(&said).min(FACT_CELLS)
                 }
-                row.put(vid, Run::datum(value).dim());
+            })
+            .collect();
+        // THE LAST ROW IS DISCREET, label and value: the owner's *"as infos
+        // mais específicas que aparecem na última linha (ex: 'Last run...'),
+        // tenha uma cor discreta"*. The body's dimmest step, and never the
+        // description's: the sentence above is `quiet`, and a footer that drew
+        // both in one grey read as one block, which the owner said once
+        // before about this footer.
+        if let Some(click) = click_from {
+            self.facts_against(&mut pen, told, &widths, values_at, click);
+            return;
+        }
+        let layout = facts_columns(wide, &widths);
+        let Some(mut row) = pen.row_of(values_at, &layout) else {
+            return;
+        };
+        for ((label, value), (lid, vid)) in told.facts.iter().zip(FACT_SLOTS) {
+            // HALF A FACT IS WORSE THAN NONE. The two columns carry the same
+            // rank and a tie is broken by the later declaration, so the VALUE
+            // gives way first — which left `Processor` on the screen with
+            // nothing after it, read off a photograph at eighty columns. A
+            // pair goes whole or not at all.
+            if !layout.has(vid) {
+                break;
             }
+            if !label.is_empty() {
+                row.put(lid, Run::label(label).dim());
+            }
+            row.put(vid, Run::datum(value).dim());
+        }
+    }
+
+    /// THE FACTS AGAINST THE CLICK: laid out to END [`FACT_AIR`] cells before
+    /// `click`, where the eye already is — the owner's *"a data do 'last run'
+    /// em vez de ficar no início da linha, fique logo ao lado esquerdo do
+    /// 'Open its page', mas separado por um bom espaço"*. Whole pairs, the
+    /// first first: a pair that does not fit goes, with every one after it.
+    fn facts_against(
+        &self,
+        pen: &mut Pen<'_, Wit>,
+        told: &Told,
+        widths: &[u16],
+        row: u16,
+        click: u16,
+    ) {
+        let room = click.saturating_sub(FACT_AIR);
+        let pairs: Vec<(u16, u16)> = told
+            .facts
+            .iter()
+            .zip(widths)
+            .map(|((_, value), label)| (*label, ronoctua_design::wide(value)))
+            .collect();
+        let pair_cells = |(label, value): (u16, u16)| {
+            if label == 0 {
+                value
+            } else {
+                label + ronoctua_design::GAP + value
+            }
+        };
+        let mut many = 0;
+        let mut used: u16 = 0;
+        for (n, pair) in pairs.iter().enumerate() {
+            let cells = pair_cells(*pair) + if n > 0 { FACT_SPACING } else { 0 };
+            if used + cells > room {
+                break;
+            }
+            used += cells;
+            many += 1;
+        }
+        let mut at = room - used;
+        for (n, ((label, value), (label_cells, value_cells))) in
+            told.facts.iter().zip(&pairs).take(many).enumerate()
+        {
+            if n > 0 {
+                at += FACT_SPACING;
+            }
+            if *label_cells > 0 {
+                pen.put(row, Run::label(label).dim().at(at).within(*label_cells));
+                at += label_cells + ronoctua_design::GAP;
+            }
+            pen.put(row, Run::datum(value).dim().at(at).within(*value_cells));
+            at += value_cells;
         }
     }
 }
+
+/// THE AIR BETWEEN THE FACTS AND THE CLICK they sit against: *"separado por
+/// um bom espaço"* — four columns' gaps, so the date reads as the click's
+/// neighbour and not as one more word of it.
+const FACT_AIR: u16 = 4 * ronoctua_design::GAP;
+
+/// The air between one fact and the next, when they sit against the click:
+/// wider than a label's from its value, so two pairs read as two.
+const FACT_SPACING: u16 = 3 * ronoctua_design::GAP;
 
 // ---------------------------------------------------------------------------
 // The home page: everything the brain has, and everything it has done.
@@ -1739,8 +1900,6 @@ impl State {
             pen.put(0, Run::label(key::NOTHING).quiet());
             return;
         }
-        pen.put(0, Run::label(key::TASKS).title());
-
         // THE WINDOW ONTO THE LIST, and the lane its bar takes.
         //
         // The list drew from the first task and stopped when it ran out of
@@ -1750,6 +1909,18 @@ impl State {
         // offset. See [`State::follows`] for which of the two moves it.
         let shown = usize::from(pen.lines().saturating_sub(1)).max(1);
         pen.keeping_for(tasks.len() > shown);
+        // THE TITLE, and — with no header over the window — whose page this
+        // is, at the other end of the same line, in the quietest tone the
+        // page has: the owner's *"o título 'Brain', porém em uma cor bem
+        // discreta e apagada"*. Nothing else on the screen names it then.
+        let mut title_room = pen.columns();
+        if !self.headed {
+            let cells = self.cells_of(key::TITLE, FACT_CELLS).min(pen.columns());
+            let from = pen.columns().saturating_sub(cells);
+            pen.put(0, Run::label(key::TITLE).dim().at(from).within(cells));
+            title_room = from.saturating_sub(ronoctua_design::GAP);
+        }
+        pen.put(0, Run::label(key::TASKS).title().within(title_room));
         if self.follows {
             if cursor < self.body_from {
                 self.body_from = cursor;
@@ -2233,7 +2404,7 @@ impl State {
         // the row says that instead of a date it does not have.
         if task.kind == TaskKind::Watch {
             return (
-                Run::label(key::WATCHING).playing(Role::Watching),
+                Run::label(key::WATCHING).playing(Role::Following),
                 self.cells_of(key::WATCHING, WHEN_CELLS),
             );
         }
@@ -2605,6 +2776,10 @@ impl State {
 /// drawn: the same list answers both questions.
 enum Row {
     Blank,
+    /// THE TASK'S NAME AND THE WAY BACK, atop its page while the window wears
+    /// no header — the two things the header said, and nothing else on the
+    /// screen says then.
+    Title,
     Heading(&'static str),
     /// A section of the module's own page, by its index: its heading is the
     /// module's key, which this side does not hold as a constant.
@@ -2648,6 +2823,7 @@ const fn row_lines(row: &Row) -> u16 {
     match row {
         Row::About(_, want) | Row::Refused(want) => *want,
         Row::Blank
+        | Row::Title
         | Row::Heading(_)
         | Row::Section(_)
         | Row::Field(_)
@@ -2739,10 +2915,18 @@ impl State {
         // `spots()` says the same six in the same order, and the two lists
         // reading alike is what keeps the cursor on a row that exists.
         let mut out = Vec::new();
+        // WITH NO HEADER, THE PAGE SAYS WHOSE IT IS and leads back: the
+        // owner's *"quero que apareça uma linha nova no topo da página da
+        // tarefa, antes do paragrafo descritivo e separado por uma linha de
+        // espaço em branco"*.
+        if !self.headed {
+            out.push(Row::Title);
+            out.push(Row::Blank);
+        }
         // A DESCRIPTION ONLY WHEN THE MODULE DECLARED ONE: an empty key is a
         // key the host did not have, and three rows of brackets say nothing.
         if let Some(does) = key_of(&task.does_key) {
-            out.push(Row::About(does, about_rows(columns)));
+            out.push(Row::About(does, self.about_lines(&task.does_text, columns)));
             out.push(Row::Blank);
         }
         out.push(Row::Heading(key::SCHEDULE));
@@ -2763,7 +2947,7 @@ impl State {
             // be: a refused page and an empty one must not look the same.
             if !sc.refused.is_empty() {
                 out.push(Row::Blank);
-                out.push(Row::Refused(about_rows(columns)));
+                out.push(Row::Refused(self.about_lines(&sc.refused, columns)));
             }
             let mut k = 0;
             for (n, section) in sc.sections.iter().enumerate() {
@@ -2827,9 +3011,12 @@ impl State {
             Row::Screen(n) => spot == Spot::Screen(*n),
             Row::Step(n) => spot == Spot::Step(*n),
             Row::Ran(n) => spot == Spot::Ran(*n),
-            Row::Blank | Row::Heading(_) | Row::Section(_) | Row::About(_, _) | Row::Refused(_) => {
-                false
-            }
+            Row::Blank
+            | Row::Title
+            | Row::Heading(_)
+            | Row::Section(_)
+            | Row::About(_, _)
+            | Row::Refused(_) => false,
         })
     }
 
@@ -2935,6 +3122,23 @@ impl State {
             }
             match row {
                 Row::Blank => line += 1,
+                // THE TASK'S NAME, AND THE WAY BACK flush right — the same
+                // shape as the footer's click, in the same tone, lit by a
+                // ground under it alone: it is a control, not a row.
+                Row::Title => {
+                    let cells = self.cells_of(key::BACK, FACT_CELLS).min(body);
+                    let from = body.saturating_sub(cells);
+                    if let Some(seat) = self.pointed_in(block, line, from, body) {
+                        pen.ground_under(line, from, cells, Role::hover_of(seat));
+                    }
+                    pen.put(line, Run::label(key::BACK).accent().at(from).within(cells));
+                    self.back_at = Some((line, from, body));
+                    if let Some(name) = key_of(&task.name_key) {
+                        let room = from.saturating_sub(ronoctua_design::GAP);
+                        pen.put(line, Run::label(&name).title().within(room));
+                    }
+                    line += 1;
+                }
                 Row::Heading(k) => {
                     // WITHIN, AND NOT TO THE EDGE. The bar down the right of
                     // this page owns the last cell, and a heading with no
@@ -2980,10 +3184,20 @@ impl State {
                     }
                     line += 1;
                 }
+                // THE DESCRIPTION, from the row its own bar was left at: in a
+                // window too small for all of it ([`State::about_lines`]), the
+                // host draws a thumb beside it and answers its drag and wheel
+                // with the row (`Input::Scrolled`), which lands here.
                 Row::About(k, want) => {
                     let room = (*want).min(last.saturating_sub(line));
                     if room > 0 {
-                        pen.paragraph(line, room, Run::label(k).quiet().within(body));
+                        pen.paragraph_from(
+                            line,
+                            room,
+                            self.about_scroll,
+                            Run::label(k).quiet().within(body),
+                        );
+                        self.about_at = Some((line, body.saturating_sub(1)));
                     }
                     line += room;
                 }
@@ -3146,6 +3360,41 @@ const COUNT_AT: u16 = 20;
 /// four, which is a comment asserting the opposite of what it names.
 const fn about_rows(columns: u16) -> u16 {
     if columns >= 60 { 3 } else { 4 }
+}
+
+/// The most rows a description is wrapped into while it is counted — a
+/// bound on the work, far past any description a module writes.
+const ABOUT_MOST: usize = 200;
+
+impl State {
+    /// HOW MANY ROWS A PARAGRAPH OF A TASK'S PAGE IS GIVEN: as many as it
+    /// wraps to at the page's width, counted with the host's own wrap
+    /// ([`ronoctua_design::wrap`]) — the whole of it, so it is read without a
+    /// bar. It was three rows, and the owner photographed a bar over a
+    /// description cut at its third row in a window with half its height
+    /// left: *"não deveria existir em janelas de tamanho normal, pois o texto
+    /// deveria se expandir totalmente na página"*.
+    ///
+    /// AND IN A WINDOW TOO SMALL FOR THAT, half of the page: the rest is
+    /// reached by the paragraph's own bar (`State::about_scroll`), which is
+    /// what makes sense there, in his words — *"em janelas bem pequenas, faz
+    /// todo sentido que o tamanho do container do texto passe a ser
+    /// limitado"*.
+    ///
+    /// `text` is the paragraph in the person's language, as the host made it
+    /// (`does-text`); without one, the old reservation.
+    fn about_lines(&self, text: &str, columns: u16) -> u16 {
+        let floor = about_rows(columns);
+        if text.is_empty() {
+            return floor;
+        }
+        // THE PAGE'S WIDTH, one cell short for its bar — the `body` every run
+        // of the page is placed within, and the width the host wraps at.
+        let wraps = ronoctua_design::wrap(text, columns.saturating_sub(1), ABOUT_MOST).len();
+        let wanted = u16::try_from(wraps).unwrap_or(u16::MAX).max(1);
+        let half = self.blocks.body.lines / 2;
+        wanted.min(half.max(floor))
+    }
 }
 
 impl State {
@@ -3849,9 +4098,20 @@ impl State {
             return self.record_of(at).and_then(|r| self.said_of_record(r));
         }
         let row = self.blocks.body.row_at(line)?;
+        // THE WAY BACK atop a task's page, where the window wears no header.
+        if let Some((at, from, to)) = self.back_at
+            && row == at
+            && (from..to).contains(&column)
+        {
+            return Some(Pointed::Key(key::ABOUT_WAY_BACK.into()));
+        }
         match self.page {
-            // A TASK: what its glyph means under the glyph, and otherwise
-            // what the task does — its own description.
+            // A TASK, COLUMN BY COLUMN: what its glyph means under the glyph,
+            // when it runs next under the date, how it stands or how its last
+            // run went under the status — and anywhere else what it IS, in one
+            // line. It said the whole of its description, the footer's
+            // paragraph run along one line of the minibuffer, and the owner
+            // asked for a line that says what the task is about instead.
             Page::Home => {
                 let task = self
                     .mind
@@ -3860,7 +4120,17 @@ impl State {
                 if within(&self.task_layout, "kind", column) {
                     return Some(Pointed::Key(kind_about(task.kind).into()));
                 }
-                key_of(&task.does_key).map(Pointed::Key)
+                if within(&self.task_layout, "when", column) {
+                    return Some(when_said(task));
+                }
+                if within(&self.task_layout, "note", column)
+                    && let Some(said) = note_said(task)
+                {
+                    return Some(said);
+                }
+                key_of(&task.brief_key)
+                    .or_else(|| key_of(&task.does_key))
+                    .map(Pointed::Key)
             }
             Page::Task => {
                 let task = self.here()?;
@@ -3881,6 +4151,8 @@ impl State {
                         let cell = rows.get(*k)?;
                         said_of_cell(&cell.note).or_else(|| said_of_cell(&cell.value))
                     }
+                    // THE PAGE'S OWN TITLE says what the task is, in one line.
+                    Row::Title => key_of(&task.brief_key).map(Pointed::Key),
                     Row::Blank
                     | Row::Heading(_)
                     | Row::Section(_)
@@ -3918,6 +4190,55 @@ impl State {
             })
             .map(Pointed::Key)
     }
+}
+
+/// What a row's date column says under the pointer — the same cases, in the
+/// same order, as the column itself ([`State::moment`]): a watch has no date,
+/// a reason stands in for one, a task under way is running now, and a date is
+/// when it runs next.
+fn when_said(task: &TaskState) -> Pointed {
+    if task.kind == TaskKind::Watch {
+        return Pointed::Key(kind_about(task.kind).into());
+    }
+    if key_of(&task.why_key).is_some() {
+        return if task.why_text.is_empty() {
+            Pointed::Key(key::ABOUT_NEXT.into())
+        } else {
+            Pointed::Phrase(
+                key::ABOUT_NEXT_WHY.into(),
+                vec![("why".into(), task.why_text.clone())],
+            )
+        };
+    }
+    if task.standing == Standing::Running {
+        return Pointed::Key(key::ABOUT_RUNNING.into());
+    }
+    if task.next_text.is_empty() {
+        return Pointed::Key(key::ABOUT_NEXT_NONE.into());
+    }
+    Pointed::Phrase(
+        key::ABOUT_NEXT_AT.into(),
+        vec![("when".into(), task.next_text.clone())],
+    )
+}
+
+/// What a row's status says under the pointer — the cases of the status
+/// itself ([`State::note`]): what is in its way, how its last run went and
+/// when, or where it stands having not run. `None` where the column is empty.
+fn note_said(task: &TaskState) -> Option<Pointed> {
+    if let Some(waits) = hold_about(task.hold) {
+        return Some(Pointed::Key(waits.into()));
+    }
+    if task.ran {
+        return Some(Pointed::Phrase(
+            last_about(task.last.outcome).into(),
+            vec![("when".into(), task.last.when_text.clone())],
+        ));
+    }
+    if off_by_the_system(task) || task.kind == TaskKind::Watch {
+        return None;
+    }
+    Some(Pointed::Key(standing_about(task.standing).into()))
 }
 
 /// Whether `column` falls in the column `id` of `layout`.
@@ -4246,6 +4567,7 @@ impl State {
         self.page = Page::Task;
         self.spot = 0;
         self.body_from = 0;
+        self.about_scroll = 0;
         self.follows = true;
         vec![Effect::Redraw]
     }
@@ -4404,6 +4726,14 @@ impl State {
         {
             return self.open_task(open.task);
         }
+        // THE WAY BACK atop a task's page, one click like the header's `ESC`.
+        if let Some((at, from, to)) = self.back_at
+            && self.blocks.body.row_at(line) == Some(at)
+            && (from..to).contains(&column)
+        {
+            self.page = Page::Home;
+            return vec![Effect::Redraw];
+        }
         // AND THEN THE BLOCK THAT OWNS THE LINE.
         //
         // It used to be `line >= tasks_at` and `line >= log_at`, with no floor
@@ -4507,7 +4837,7 @@ impl State {
     /// inverse — and this puts it on the right list. Absolute, so a long drag
     /// cannot drift away from the hand, and it clears [`State::follows`] for
     /// the reason the wheel does: what moved is the window, not the cursor.
-    fn scrolled(&mut self, line: u16, first: usize) -> Vec<Effect> {
+    fn scrolled(&mut self, column: u16, line: u16, first: usize) -> Vec<Effect> {
         let put = |at: &mut usize, room: usize, total: usize| {
             *at = first.min(total.saturating_sub(room.min(total)));
         };
@@ -4517,6 +4847,20 @@ impl State {
         // is taken as it comes.
         if self.blocks.foot.holds(line) {
             self.foot_scroll = u16::try_from(first).unwrap_or(u16::MAX);
+            return vec![Effect::Redraw];
+        }
+        // AND A TASK'S DESCRIPTION, by its own row AND cell: the page's bar
+        // begins on the same row when the description is the first thing on
+        // it, and the CELL the host answers with is what tells the two apart
+        // — the page's bar is the last, the paragraph's the one before. It
+        // could not be moved at all while this was missing: the drag reached
+        // the page's list, which did not move either.
+        if self.page == Page::Task
+            && let Some((at, cell)) = self.about_at
+            && self.blocks.body.row_at(line) == Some(at)
+            && column == cell
+        {
+            self.about_scroll = u16::try_from(first).unwrap_or(u16::MAX);
             return vec![Effect::Redraw];
         }
         match self.page {
@@ -4740,6 +5084,7 @@ impl State {
             let s = self;
             s.lines = ctx.lines;
             s.columns = ctx.columns;
+            s.headed = ctx.headed;
             let mut screen = Screen::<Wit>::of(ctx);
 
             // THE WINDOW IS DIVIDED FIRST, AND THE BLOCKS TILE IT.
@@ -4812,6 +5157,10 @@ impl State {
             };
             let _ = left;
 
+            // WHAT THE LAST FRAME PUT WHERE, forgotten: only the page that
+            // draws them now says where they are.
+            s.back_at = None;
+            s.about_at = None;
             s.declare(&mut screen);
             s.warning(&mut screen);
             s.draw_notices(&mut screen);
@@ -4887,7 +5236,7 @@ impl State {
             // A BAR DRAGGED. The host turned the pointer's height into a row;
             // this side says which LIST it belongs to, which is the half only
             // it knows. Same routing as the wheel, one line above.
-            Input::Scrolled(d) => self.scrolled(d.at.line, d.first as usize),
+            Input::Scrolled(d) => self.scrolled(d.at.column, d.at.line, d.first as usize),
             // THE POINTER AT REST, and a frame only when it MOVED to another
             // cell. The host already sends one per cell rather than per pixel;
             // this is the second half of the same economy — a hover that
@@ -5067,6 +5416,8 @@ mod tests {
             calendar: true,
             name_key: format!("brain-task-{id}"),
             does_key: format!("brain-task-{id}-does"),
+            brief_key: format!("brain-task-{id}-brief"),
+            does_text: String::new(),
             why_key: String::new(),
             why_text: String::new(),
             screen_generation: 0,
@@ -5301,6 +5652,7 @@ mod tests {
                 large: 2,
                 huge: 3,
             },
+            headed: true,
         }
     }
 
@@ -5996,9 +6348,12 @@ mod tests {
             "the sentence stopped {} rows short of the footer's end",
             foot.top + foot.lines - (line + lines)
         );
-        // AND IT KEEPS THE LANE ITS THUMB GOES IN, the same cell every list
-        // here keeps: no bar draws over content and no content over a bar.
-        assert_eq!(columns, s.columns - 1);
+        // AND IT IS GIVEN THE WHOLE WIDTH: the host keeps the thumb's lane
+        // out of the words only while there is a thumb. A cell kept here as
+        // well put the thumb over the last letter of every row — the host
+        // drew it in the paragraph's own last cell — which the owner
+        // photographed.
+        assert_eq!(columns, s.columns);
 
         // AND WHERE THERE ARE FIGURES, it stops exactly one row short of them
         // and not two: the row held back is the values' and nothing else.
@@ -6039,7 +6394,7 @@ mod tests {
 
         // AND A DRAG ON ITS BAR MOVES IT. The host answers with a row it has
         // already clamped; this side only says which block it belongs to.
-        let out = s.scrolled(s.blocks.foot.top + 1, 2);
+        let out = s.scrolled(0, s.blocks.foot.top + 1, 2);
         assert!(!out.is_empty(), "a drag in the footer did nothing");
         assert_eq!(s.foot_scroll, 2);
     }
@@ -6209,8 +6564,14 @@ mod tests {
             .unwrap_or_else(|e| panic!("the spelt row met something: {e}"));
         let (_, data) = drawn_texts(&screen);
         assert!(
-            data.iter().any(|d| d.starts_with("SUPER ALT ")),
+            data.iter().any(|d| d == "SUPER ALT"),
             "the ⌥ under the pointer was not spelt: {data:?}"
+        );
+        // AND THE WORDS WEAR THE MARK'S DISCREET INK, not the key's: they are
+        // the same mark, spelt.
+        assert_eq!(
+            colour_of(&runs(&screen), "SUPER ALT").as_deref(),
+            Some("text-subtle-leader-alt")
         );
     }
 
@@ -6344,9 +6705,12 @@ mod tests {
     }
 
     /// FAILS IF: what the pointer rests on is not declared for the host — a
-    /// task's description under its row, what its glyph means under the
-    /// glyph, what the fold's mark means under the mark — or something is
-    /// declared with no pointer on the window.
+    /// task's ONE LINE under its row (never its whole description, the
+    /// footer's paragraph run along the minibuffer), what its glyph means
+    /// under the glyph, when it runs next under its date, how its last run
+    /// went and when under its status, what it waits for under a hold, what
+    /// the fold's mark means under the mark — or something is declared with no
+    /// pointer on the window.
     #[test]
     fn what_the_pointer_rests_on_is_said() {
         use ronoctua_design::frame::{Command, Text};
@@ -6356,9 +6720,21 @@ mod tests {
                 .commands
                 .into_iter()
                 .find_map(|c| match c {
-                    Command::Pointed { about } => Some(about),
+                    Command::Pointed { about, args } => Some((
+                        about,
+                        args.into_iter()
+                            .map(|a| (a.name, a.text))
+                            .collect::<Vec<_>>(),
+                    )),
                     _ => None,
                 })
+        };
+        let key = |k: &str| Some((Text::Key(k.into()), Vec::new()));
+        let with = |k: &str, name: &str, text: &str| {
+            Some((
+                Text::Key(k.into()),
+                vec![(name.to_owned(), text.to_owned())],
+            ))
         };
         let mut s = a_state();
         assert_eq!(
@@ -6367,25 +6743,57 @@ mod tests {
             "said with nobody here"
         );
         let row = s.blocks.body.line_of(1).expect("the first task's row");
-        let _ = s.hover.set(0, (0, row));
+        let at = |s: &State, id: &str| s.task_layout.field(id).expect(id).at;
+        let _ = s.hover.set(0, (at(&s, "name"), row));
         assert_eq!(
             pointed(&drawn(&mut s, 30, 120)),
-            Some(Text::Key("brain-task-fixture-routine-does".into())),
-            "a task's row does not say what the task does"
+            key("brain-task-fixture-routine-brief"),
+            "a task's row does not say what the task is in one line"
         );
-        let glyph = s.task_layout.field("kind").expect("the kind's column").at;
-        let _ = s.hover.set(0, (glyph, row));
+        let _ = s.hover.set(0, (at(&s, "kind"), row));
         assert_eq!(
             pointed(&drawn(&mut s, 30, 120)),
-            Some(Text::Key(key::KIND_ROUTINE.into())),
+            key(key::KIND_ROUTINE),
             "a task's glyph does not say what it means"
+        );
+        let _ = s.hover.set(0, (at(&s, "when"), row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            with(key::ABOUT_NEXT_AT, "when", "2026-08-24 14:00"),
+            "a task's date does not say it is when it runs next"
+        );
+        let _ = s.hover.set(0, (at(&s, "note"), row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            with(key::ABOUT_DONE, "when", "2026-08-23 13:00"),
+            "a task's status does not say how its last run went, and when"
+        );
+        // A HOLD SAYS WHAT IT WAITS FOR; A WATCH, UNDER ITS WORD, THAT IT
+        // ONLY LISTENS; A MODULE WITH NO LINE, ITS DESCRIPTION.
+        // (A hold puts the warning line up, and the list one row down.)
+        s.mind.tasks[0].hold = HoldKind::Battery;
+        let _ = drawn(&mut s, 30, 120);
+        let row = s.blocks.body.line_of(1).expect("the first task's row");
+        let _ = s.hover.set(0, (at(&s, "note"), row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            key(key::ABOUT_HOLD_BATTERY)
+        );
+        s.mind.tasks[0].kind = TaskKind::Watch;
+        let _ = s.hover.set(0, (at(&s, "when"), row));
+        assert_eq!(pointed(&drawn(&mut s, 30, 120)), key(key::KIND_WATCH));
+        s.mind.tasks[0].brief_key = String::new();
+        let _ = s.hover.set(0, (at(&s, "name"), row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            key("brain-task-fixture-routine-does")
         );
         let fold = s.log_layout.field("fold").expect("the fold's column").at;
         let line = s.blocks.log.line_of(2).expect("the folded row");
         let _ = s.hover.set(0, (fold, line));
         assert_eq!(
             pointed(&drawn(&mut s, 30, 120)),
-            Some(Text::Key(key::ABOUT_FOLD.into())),
+            key(key::ABOUT_FOLD),
             "the fold's mark does not say what it is"
         );
         let _ = s.hover.clear(0);
@@ -6394,6 +6802,244 @@ mod tests {
             None,
             "the pointer left and it stayed"
         );
+    }
+
+    /// FAILS IF: a watch is drawn in anything but the teal of a thing under
+    /// way, a module's row toned `watching` loses the alarm's colour it
+    /// shares with the modeline's mark (the journal's errors), or a row toned
+    /// `working` is not the teal. The owner asked for the first and said the
+    /// second had been taken away with it.
+    #[test]
+    fn a_watch_is_teal_and_a_watching_row_keeps_its_alarm() {
+        use ronoctua_design::Palette;
+        let colour = |role: Role| <Wit as Palette>::color(role);
+        assert_eq!(
+            colour(tone_role(BrainTone::Watching)),
+            colour(Role::Watching)
+        );
+        assert_eq!(
+            colour(tone_role(BrainTone::Working)),
+            colour(Role::Following)
+        );
+        assert_eq!(colour(kind_role(TaskKind::Watch)), colour(Role::Following));
+        assert_ne!(colour(Role::Watching), colour(Role::Following));
+    }
+
+    /// FAILS IF: the footer's figures stay at the start of its last row while
+    /// the click that opens the page sits at the other end — the owner asked
+    /// for the date just left of the click, *"separado por um bom espaço"* —
+    /// or they touch the click, or leave it no air.
+    #[test]
+    fn the_footers_figures_sit_against_its_click() {
+        let mut s = a_state();
+        s.task = 0;
+        let seen = runs(&drawn(&mut s, 30, 120));
+        let (_, _, line, click) = seen
+            .iter()
+            .find(|(t, ..)| t == key::OPEN_PAGE)
+            .cloned()
+            .expect("the footer has no click");
+        let on_the_row: Vec<_> = seen.iter().filter(|(_, _, l, _)| *l == line).collect();
+        let date = on_the_row
+            .iter()
+            .find(|(t, ..)| t == "2026-08-23 13:00")
+            .expect("the last run's date is not on the click's row");
+        let label = on_the_row
+            .iter()
+            .find(|(t, ..)| t == key::LAST_RUN)
+            .expect("the date's label is not on the click's row");
+        let end = date.3 + ronoctua_design::wide(&date.0);
+        assert_eq!(
+            end + FACT_AIR,
+            click,
+            "the date does not end a good space before the click"
+        );
+        assert!(label.3 < date.3, "the label is not before its date");
+        assert!(label.3 > 0, "the figures stayed at the start of the row");
+    }
+
+    /// FAILS IF: with no header over the window, the home page does not say
+    /// whose it is at the end of its first title, quietly, or a task's page
+    /// does not open with its name and a way back — a row of its own, a blank
+    /// one under it, then its description — or the way back does not lead
+    /// home and say so under the pointer; or any of it is drawn while the
+    /// header is there to say it.
+    #[test]
+    fn with_no_header_the_page_says_whose_it_is_and_leads_back() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        let mut bare = a_context(30, 120);
+        bare.headed = false;
+        let seen = runs(&s.compose(&bare));
+        let top = s.blocks.body.top;
+        let (_, colour, line, column) = seen
+            .iter()
+            .find(|(t, ..)| t == key::TITLE)
+            .cloned()
+            .expect("the home page does not say whose it is");
+        assert_eq!((line, colour.as_str()), (top, "text-dim"));
+        assert!(
+            column > 100,
+            "its name is not at the end of the line: {column}"
+        );
+        let tasks = seen
+            .iter()
+            .find(|(t, ..)| t == key::TASKS)
+            .expect("the list lost its title");
+        assert_eq!((tasks.2, tasks.3), (top, 0));
+        assert!(
+            !runs(&drawn(&mut s, 30, 120))
+                .iter()
+                .any(|(t, ..)| t == key::TITLE || t == key::BACK),
+            "said again under a header that says it"
+        );
+
+        let _ = s.open_task(0);
+        let screen = s.compose(&bare);
+        let seen = runs(&screen);
+        let top = s.blocks.body.top;
+        let name = seen
+            .iter()
+            .find(|(t, ..)| t == "brain-task-fixture-routine")
+            .expect("the page does not say whose it is");
+        assert_eq!((name.2, name.3), (top, 0));
+        let back = seen
+            .iter()
+            .find(|(t, ..)| t == key::BACK)
+            .cloned()
+            .expect("the page has no way back");
+        assert_eq!((back.1.as_str(), back.2), ("state-accent", top));
+        assert!(back.3 > 100, "the way back is not at the end of the line");
+        let described = screen.as_protocol().commands.iter().find_map(|c| match c {
+            Command::Paragraph {
+                line,
+                content: Text::Key(k),
+                ..
+            } if k.ends_with("-does") => Some(*line),
+            _ => None,
+        });
+        assert_eq!(
+            described,
+            Some(top + 2),
+            "no blank row between the name and the description"
+        );
+        screen
+            .check()
+            .expect("the page's own first row met something");
+
+        let _ = s.hover.set(0, (back.3, back.2));
+        let said = s
+            .compose(&bare)
+            .as_protocol()
+            .commands
+            .into_iter()
+            .find_map(|c| match c {
+                Command::Pointed { about, .. } => Some(about),
+                _ => None,
+            });
+        assert_eq!(said, Some(Text::Key(key::ABOUT_WAY_BACK.into())));
+        let _ = s.act(Input::Click(ronoctua_design::types::Position {
+            column: back.3,
+            line: back.2,
+        }));
+        assert_eq!(s.page, Page::Home, "the way back does not lead home");
+
+        let _ = s.hover.clear(0);
+        let _ = s.open_task(0);
+        let screen = drawn(&mut s, 30, 120);
+        let described = screen.as_protocol().commands.iter().find_map(|c| match c {
+            Command::Paragraph { line, .. } => Some(*line),
+            _ => None,
+        });
+        assert_eq!(
+            described,
+            Some(s.blocks.body.top),
+            "a page under its header still opens with a row of its own"
+        );
+    }
+
+    /// FAILS IF: a task's description is cut at three rows while the window
+    /// has room for all of it — the owner's *"não deveria existir em janelas
+    /// de tamanho normal, pois o texto deveria se expandir totalmente"* — or,
+    /// in a window too small for it, is not held to part of the page with a
+    /// bar that MOVES it: a drag on its bar scrolls the description, and the
+    /// page's own bar still scrolls the page.
+    #[test]
+    fn a_description_takes_the_rows_it_wraps_to_and_scrolls_only_when_small() {
+        use ronoctua_design::frame::Command;
+        let long = "When the disk that holds the system or your home runs short of \
+                    space, it makes room at once, without waiting for the night or for \
+                    a quiet machine: first the builds of compilers nobody uses and, while \
+                    every cargo build under your cache weighs more than its share of the \
+                    disk, the ones built longest ago; then the store's garbage, until the \
+                    disk is back where it should be. It never follows a link.";
+        let mut s = a_state();
+        s.mind.tasks[0].does_text = long.to_owned();
+        let _ = s.open_task(0);
+        let paragraph = |screen: &Screen<Wit>| {
+            screen.as_protocol().commands.iter().find_map(|c| match c {
+                Command::Paragraph {
+                    line,
+                    lines,
+                    columns,
+                    first_row,
+                    ..
+                } => Some((*line, *lines, *columns, *first_row)),
+                _ => None,
+            })
+        };
+        // A WINDOW OF A GOOD SIZE: every row the text wraps to.
+        let screen = drawn(&mut s, 40, 80);
+        let (_, lines, columns, _) = paragraph(&screen).expect("no description");
+        let wraps = ronoctua_design::wrap(long, columns, 200).len();
+        assert!(
+            wraps > 3,
+            "the text fits three rows; the test proves nothing"
+        );
+        assert_eq!(
+            usize::from(lines),
+            wraps,
+            "the description was cut with room to spare"
+        );
+
+        // A SMALL ONE: half the page, and its own bar moves it.
+        let screen = drawn(&mut s, 16, 80);
+        let (line, lines, columns, first) = paragraph(&screen).expect("no description");
+        assert!(
+            usize::from(lines) < wraps,
+            "a small window gave it every row"
+        );
+        assert!(lines <= s.blocks.body.lines / 2 + 1);
+        assert_eq!(first, 0);
+        let from = s.body_from;
+        let out = s.act(Input::Scrolled(ronoctua_design::types::ScrollEvent {
+            at: ronoctua_design::types::Position {
+                column: columns - 1,
+                line,
+            },
+            first: 2,
+        }));
+        assert!(
+            !out.is_empty(),
+            "a drag on the description's bar did nothing"
+        );
+        assert_eq!(s.about_scroll, 2);
+        assert_eq!(s.body_from, from, "the description's bar moved the page");
+        let (_, _, _, first) = paragraph(&drawn(&mut s, 16, 80)).expect("no description");
+        assert_eq!(
+            first, 2,
+            "the description was not drawn from where its bar was left"
+        );
+        // AND THE PAGE'S OWN BAR, in the last cell, still moves the page.
+        let _ = s.act(Input::Scrolled(ronoctua_design::types::ScrollEvent {
+            at: ronoctua_design::types::Position {
+                column: s.columns - 1,
+                line: s.blocks.body.top,
+            },
+            first: 4,
+        }));
+        assert_ne!(s.body_from, from, "the page's bar no longer moves the page");
+        assert_eq!(s.about_scroll, 2);
     }
 
     /// FAILS IF: the footer's last row offers no way to the page of the task

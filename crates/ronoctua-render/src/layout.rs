@@ -417,74 +417,10 @@ pub fn window(s: &str, from: u16, max: u16) -> String {
 /// it cut.
 #[must_use]
 pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
-    let width = usize::from(width.max(1));
-    let mut out = Vec::new();
-    for raw in text.lines() {
-        let mut line = String::new();
-        for word in raw.split_whitespace() {
-            // A WORD LONGER THAN THE LINE AFTER OTHER WORDS starts a line of
-            // its own and is cut like the first: set down whole beside them,
-            // it ran off the surface's edge and was clipped there — a path in
-            // a question read `/tmp/…-ronoctua-` and the rest of it was gone.
-            if !line.is_empty() && usize::from(self::width(word)) > width {
-                out.push(std::mem::take(&mut line));
-                if out.len() >= ceiling {
-                    return out;
-                }
-            }
-            if line.is_empty() && usize::from(self::width(word)) > width {
-                // WORD LONGER THAN THE LINE: split it into pieces the size of the
-                // line. By CLUSTER, and not by character: this is a cut, and a
-                // cut between the two halves of an emoji sequence does not
-                // shorten the word, it draws a different one — the same fault
-                // `elide_end` exists to avoid.
-                let mut rest = word;
-                #[allow(clippy::cast_possible_truncation)]
-                let cells = width as u16;
-                while usize::from(self::width(rest)) > width && out.len() < ceiling {
-                    let piece = prefix_of(rest, cells);
-                    if piece.is_empty() {
-                        // A SINGLE CLUSTER WIDER THAN THE LINE. It cannot be
-                        // cut and it cannot fit; giving it its own line is the
-                        // only answer that neither loops nor drops it.
-                        break;
-                    }
-                    // AND A PATH IS CUT AFTER ITS LAST SEPARATOR ON THE LINE:
-                    // cut at the cell, `…/software/history.jso` and `n` read
-                    // as a file that is not there. The separator stays at the
-                    // end of the line, so the line says the name goes on; one
-                    // at the very start (`/abc…`) is no place to cut.
-                    let piece = match piece.rfind('/') {
-                        Some(at) if at > 0 => &piece[..=at],
-                        _ => piece,
-                    };
-                    rest = &rest[piece.len()..];
-                    out.push(piece.to_owned());
-                }
-                line = rest.to_owned();
-                continue;
-            }
-            let fits =
-                usize::from(self::width(&line)) + 1 + usize::from(self::width(word)) <= width;
-            if line.is_empty() {
-                line.push_str(word);
-            } else if fits {
-                line.push(' ');
-                line.push_str(word);
-            } else {
-                out.push(std::mem::take(&mut line));
-                line.push_str(word);
-            }
-            if out.len() >= ceiling {
-                return out;
-            }
-        }
-        out.push(line);
-        if out.len() >= ceiling {
-            return out;
-        }
-    }
-    out
+    // ONE WRAP FOR BOTH SIDES OF THE WALL: a component counts the rows a
+    // sentence takes with the same function the host draws them with. See
+    // [`ronoctua_protocol::wrap`].
+    ronoctua_protocol::wrap(text, width, ceiling)
 }
 
 /// Resolves the modeline's layout.

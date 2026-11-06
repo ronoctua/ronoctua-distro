@@ -2,6 +2,7 @@
 # its two words on the minibuffer, and its page.
 brain-task-parts-watch = Parts on their way
 brain-task-parts-watch-does = While any of the machine's parts — what arrives after the installation, each on its own — is on its way or needs you, a mark on the modeline says how many, and a click on it opens the parts' page. It reads the records the parts' realizer writes, so it runs nothing and costs nothing while every part is here.
+brain-task-parts-watch-brief = Shows on the modeline the machine's parts that are on their way or need you.
 parts-watch-mark-arriving = { $count ->
         [one] One part is on its way
        *[other] { $count } parts are on their way

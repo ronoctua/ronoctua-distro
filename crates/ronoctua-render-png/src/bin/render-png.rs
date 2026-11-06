@@ -598,12 +598,15 @@ fn main() -> Result<()> {
     // A FIRST FRAME BEFORE ANYTHING, because the host draws one too — and a
     // component that only computes its screen lazily would otherwise be
     // photographed from a frame it never drew.
-    inst.render(ask.columns, ask.lines, paint::heights())?;
+    // AND THE COMPONENT IS TOLD WHETHER THE HEADER IS THERE, as the host
+    // tells it (`context.headed`): with it hidden, a buffer's content may say
+    // what the header would have.
+    inst.render_headed(ask.columns, ask.lines, paint::heights(), ask.header)?;
     for input in &ask.inputs {
         inst.event(input)?;
-        inst.render(ask.columns, ask.lines, paint::heights())?;
+        inst.render_headed(ask.columns, ask.lines, paint::heights(), ask.header)?;
     }
-    let list = inst.render(ask.columns, ask.lines, paint::heights())?;
+    let list = inst.render_headed(ask.columns, ask.lines, paint::heights(), ask.header)?;
     if let Err(e) = list.validate(&d.capabilities) {
         bail!("the frame was refused by the host's own gate: {e}");
     }

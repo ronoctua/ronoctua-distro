@@ -355,6 +355,10 @@ pub enum Pointed {
     Key(String),
     /// A sentence the host already made, drawn as it came.
     Datum(String),
+    /// A TEXT KEY WITH VALUES, each by its Fluent name and already text — a
+    /// row's date as the host made it (`when-text`), so the sentence about it
+    /// is the person's language and the date the person's calendar.
+    Phrase(String, Vec<(String, String)>),
 }
 
 /// ONE PAIR A BUFFER TEACHES, as it crosses to the host's header
@@ -955,12 +959,20 @@ impl<P: Palette> Screen<P> {
             });
         }
         if let Some(p) = &self.pointed {
-            list.push(Command::Pointed {
-                about: match p {
-                    Pointed::Key(k) => Text::Key(k.clone()),
-                    Pointed::Datum(d) => Text::Data(d.clone()),
-                },
-            });
+            let (about, args) = match p {
+                Pointed::Key(k) => (Text::Key(k.clone()), Vec::new()),
+                Pointed::Datum(d) => (Text::Data(d.clone()), Vec::new()),
+                Pointed::Phrase(k, args) => (
+                    Text::Key(k.clone()),
+                    args.iter()
+                        .map(|(name, text)| ronoctua_protocol::TextArg {
+                            name: name.clone(),
+                            text: text.clone(),
+                        })
+                        .collect(),
+                ),
+            };
+            list.push(Command::Pointed { about, args });
         }
         for part in &self.parts {
             list.push(match part {
@@ -1573,6 +1585,7 @@ mod tests {
             columns,
             lines,
             heights: heights(),
+            headed: true,
         }
     }
 
@@ -1667,8 +1680,24 @@ mod tests {
             screen.as_protocol().commands,
             [Command::Pointed {
                 about: Text::Data("what a module said".into()),
+                args: Vec::new(),
             }],
             "the pointer's sentence drew, or more than one crossed"
+        );
+        // AND A KEY WITH ITS VALUES crosses them by name, already text.
+        screen.point(Pointed::Phrase(
+            "about-brain-next-at".into(),
+            vec![("when".into(), "Fri 7 Nov, 03:00".into())],
+        ));
+        assert_eq!(
+            screen.as_protocol().commands,
+            [Command::Pointed {
+                about: Text::Key("about-brain-next-at".into()),
+                args: vec![ronoctua_protocol::TextArg {
+                    name: "when".into(),
+                    text: "Fri 7 Nov, 03:00".into(),
+                }],
+            }]
         );
         assert_eq!(screen.row(), 0, "the pointer's sentence took a row");
         screen

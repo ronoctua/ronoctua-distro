@@ -5,6 +5,7 @@
 # speaks in its own words (`agents-…`).
 brain-task-agent-accounts = LLM accounts
 brain-task-agent-accounts-does = One set per LLM account on the modeline, at rest too: the account's glyph, coloured by how much of its limits is used — or, on an API key, by whether its credits ran out — and one glyph per agent working in it. After an account was used — never on a clock — it counts the account's tokens and asks Anthropic's usage endpoint again, when you allowed it.
+brain-task-agent-accounts-brief = Shows each LLM account's usage, and the agents working in it, on the modeline.
 agent-accounts-mark-claude = Claude Code account “{ $label }”: its colour says how much of its limits is used, and its agents stand beside it — a click opens it
 agent-accounts-mark-codex = Codex account “{ $label }”: its colour says how much of its limits is used — a click opens it
 agent-accounts-mark-claude-api = Claude Code account “{ $label }”, on an API key: it turns to danger when Claude Code says its credits ran out, and its agents stand beside it — a click opens it

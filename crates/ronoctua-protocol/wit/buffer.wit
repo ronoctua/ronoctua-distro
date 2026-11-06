@@ -4,7 +4,7 @@
 // that every future buffer gets to use, and invariant 11 lives
 // precisely off what is NOT here: there is no Wayland import, no access to
 // tokens by value, no translation.
-package ronoctua:buffer@0.3.0;
+package ronoctua:buffer@0.4.0;
 
 interface types {
     // THE COLOUR ENUM IS GENERATED, and comes from `assets/tokens/colors.nix`.
@@ -332,6 +332,17 @@ interface types {
     // with the header hidden, the footer's minibuffer.
     record pointed-command {
         about: text,
+        // EACH VALUE OF THE SENTENCE, by its name — `about` a key with
+        // `{ $when }` in it, and the date already text: a component has no
+        // zone and no calendar, so what it passes on is the `when-text` the
+        // host made. Empty for a sentence with no value in it.
+        args: list<text-arg>,
+    }
+
+    // One value of a sentence, by its name, already text.
+    record text-arg {
+        name: string,
+        text: string,
     }
 
     variant command {
@@ -1485,6 +1496,17 @@ interface types {
         // the component draws, instead of keys it would build itself.
         name-key: string,
         does-key: string,
+        // WHAT IT IS, IN ONE LINE — `brain-task-<id>-brief`, what the pointer
+        // resting on its row says on the minibuffer, where the whole of
+        // `does-key` was a paragraph run on along one line. Empty for a
+        // module that declares none (a person's may not), which then says its
+        // description.
+        brief-key: string,
+        // THE DESCRIPTION, ALREADY TRANSLATED, and it is for MEASURING — the
+        // rule `name-text` follows: a task's page gives its description as
+        // many rows as it wraps to, and only this side's ruler can count them.
+        // Empty when `does-key` is.
+        does-text: string,
         why-key: string,
         // AND THAT REASON, ALREADY TRANSLATED, for MEASURING — the rule
         // `name-text` follows. The list's `when` column holds either a date
@@ -1688,6 +1710,9 @@ interface types {
         warning,
         danger,
         accent,
+        // Under way, and nothing wrong with it — an agent at work: the teal,
+        // never `watching`'s colour, which reads as trouble.
+        working,
     }
 
     // A moment: the number for the arithmetic, the text for the date.
@@ -1844,13 +1869,21 @@ interface types {
         huge: u16,
     }
 
-    // The window's size in cells, and what each scale costs. NOT whether the
-    // window wears its header: the header is the HOST's (`heading-command`,
-    // `taught-command`), and the buffer's rows begin under it whatever it is.
+    // The window's size in cells, and what each scale costs — and whether
+    // the window wears its header.
     record context {
         columns: u16,
         lines: u16,
         heights: heights,
+        // WHETHER THE HOST DRAWS THE HEADER above the rows: false in the "no
+        // header" mode, the distro's default. The header itself is the
+        // HOST's (`heading-command`, `taught-command`) and the rows begin
+        // under it whatever it is; this is for the CONTENT to arrange itself
+        // around its absence — the brain puts a task's name and the way back
+        // atop its page, and its own name beside its first title, because
+        // nothing else on the screen says them then. Never for a buffer to
+        // draw a header of its own (`the-shortcut-line-is-the-systems`).
+        headed: bool,
     }
 
     // Where the pointer touched, in CELLS of the buffer's grid — never in pixels.

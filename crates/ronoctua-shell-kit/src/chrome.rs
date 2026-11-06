@@ -528,6 +528,17 @@ pub enum Register {
     /// piece that arrives without a press, so a key cannot look clickable
     /// and not be.
     Inert,
+    /// THE `⌥` IN FRONT OF A WINDOW SHORTCUT'S KEY — or the words it is spelt
+    /// as while the pointer rests on it ([`leader_alt_text`]).
+    ///
+    /// It was the key's own run, in the key's ink, and the owner read the two
+    /// as one longer key: *"quero que a cor seja diferente e bem discreta"*.
+    /// Nobody chooses it: [`laid`] cuts it off the front of a key piece, the
+    /// way it cuts a modifier, so every line of keys in the system — a
+    /// window's header, the footer's minibuffer, a buffer's header — draws it
+    /// the same. It does not light with its key: it is the same mark on every
+    /// shortcut of a window, and the key is what the click presses.
+    LeaderAlt,
     /// THE CHORD THAT IS WAITING for its next key.
     ///
     /// Blue is what says where the next key goes, and that is not a matter of
@@ -562,6 +573,7 @@ impl Register {
             Self::Glyph => tokens::color::STATE_ACCENT,
             Self::Label => tokens::color::TEXT_SUBTLE_EXPLAIN,
             Self::Title => tokens::color::TEXT_HEADER_TITLE,
+            Self::LeaderAlt => tokens::color::TEXT_SUBTLE_LEADER_ALT,
         }
     }
 }
@@ -1403,11 +1415,16 @@ pub fn declared(
                     control: *control,
                 });
             }
-            Command::Pointed { about } => {
+            Command::Pointed { about, args } => {
                 // A KEY THE TEXTS DO NOT HAVE IS NO SENTENCE: brackets under
-                // the pointer say nothing about what it rests on.
+                // the pointer say nothing about what it rests on. Its values
+                // are already text — a date the host made — and go in by name.
+                let args: Vec<(&str, &str)> = args
+                    .iter()
+                    .map(|a| (a.name.as_str(), a.text.as_str()))
+                    .collect();
                 out.pointed = match about {
-                    Text::Key(k) if texts.has(k) => Some(texts.t(k)),
+                    Text::Key(k) if texts.has(k) => Some(texts.t_with(k, &args)),
                     Text::Data(d) if !d.is_empty() => Some(d.clone()),
                     Text::Key(_) | Text::Data(_) | Text::Icon(_) => None,
                 };
@@ -2317,6 +2334,30 @@ impl Piece {
             });
         }
     }
+}
+
+/// The `LEADER Alt` mark at the head of a key's text and the key after it —
+/// the glyph (`⌥s`), or the words it is spelt as under the pointer
+/// (`SUPER ALT s`, the space going with the words) — or `None` for a key
+/// `LEADER Alt` does not reach. See `Register::LeaderAlt`.
+fn split_at_the_leader_alt(text: &str) -> Option<(&str, &str)> {
+    let glyph = tokens::icon::LEADER_ALT;
+    if let Some(key) = text.strip_prefix(glyph)
+        && !key.is_empty()
+    {
+        return Some(text.split_at(glyph.len_utf8()));
+    }
+    // THE SPELT WORDS ONLY ON A KEY THAT HAS A SPACE, which is asked first
+    // because this is every key of every line, every frame.
+    if !text.contains(' ') {
+        return None;
+    }
+    let spelt = crate::bindings::leader_alt_label();
+    let key = text.strip_prefix(spelt.as_str())?.strip_prefix(' ')?;
+    if key.is_empty() {
+        return None;
+    }
+    Some(text.split_at(text.len() - key.len()))
 }
 
 /// Where a key notation is CUT so a ligature cannot cross the modifier.
@@ -3384,15 +3425,29 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
         } else {
             p.register
         };
-        let runs: Vec<&str> = match register {
+        let runs: Vec<(&str, Register)> = match register {
+            // AND THE `⌥` IS A RUN OF ITS OWN, in front: see
+            // `Register::LeaderAlt`. Cut before the modifier is looked for,
+            // so `⌥` never reads as one.
             Register::Key
             | Register::Alternate
             | Register::Contextual
             | Register::Inert
             | Register::KeyLit
             | Register::AlternateLit
-            | Register::ContextualLit => split_at_the_modifier(&p.text)
-                .map_or_else(|| vec![p.text.as_str()], |(a, b)| vec![a, b]),
+            | Register::ContextualLit => {
+                let (mark, key) = split_at_the_leader_alt(&p.text)
+                    .map_or((None, p.text.as_str()), |(m, k)| (Some(m), k));
+                mark.map(|m| (m, Register::LeaderAlt))
+                    .into_iter()
+                    .chain(
+                        split_at_the_modifier(key)
+                            .map_or_else(|| vec![key], |(a, b)| vec![a, b])
+                            .into_iter()
+                            .map(|run| (run, register)),
+                    )
+                    .collect()
+            }
             // AND `Explain` IS A SENTENCE, drawn whole. It reaches here in one
             // place only — an event's line at rest, where the answer about an
             // action takes the words' cells (`explained_in_place`); everywhere
@@ -3418,9 +3473,11 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::Action
             | Register::ActionLit
             | Register::ActionHere
-            | Register::Loud => vec![p.text.as_str()],
+            | Register::Loud
+            // A `⌥` that arrives as a piece of its own is already the mark.
+            | Register::LeaderAlt => vec![(p.text.as_str(), register)],
         };
-        for run in runs {
+        for (run, register) in runs {
             if left == 0 {
                 break;
             }
@@ -6774,6 +6831,44 @@ mod tests {
                 .and_then(|p| p.press)
         };
         assert_eq!(press(&drawn), press(&hint));
+    }
+
+    /// FAILS IF: the `⌥` in front of a window shortcut's key is drawn in the
+    /// key's own ink — as the glyph or spelt out under the pointer — or a key
+    /// with no `⌥` loses a run to it. The owner read the two in one colour as
+    /// one longer key, and asked for the mark to be discreet.
+    #[test]
+    fn the_leader_alt_mark_is_a_discreet_run_of_its_own() {
+        use super::{Register, hint_spans, leader_alt_text};
+        let drawn = |text: String| -> Vec<(String, tokens::Color)> {
+            let piece = Piece::key_in(text, Register::Key).running("power-window");
+            hint_spans(&[piece], ronoctua_render::Size::Grid, 0, 0, 80)
+                .into_iter()
+                .map(|s| (s.text, s.color))
+                .collect()
+        };
+        let mark = tokens::color::TEXT_SUBTLE_LEADER_ALT;
+        let key = tokens::color::TEXT_SUBTLE_STRONG;
+        assert_eq!(
+            drawn(leader_alt_text("d", false)),
+            [
+                (tokens::icon::LEADER_ALT.to_string(), mark),
+                ("d".to_owned(), key)
+            ]
+        );
+        let label = crate::bindings::leader_alt_label();
+        assert_eq!(
+            drawn(leader_alt_text("d", true)),
+            [(format!("{label} "), mark), ("d".to_owned(), key)]
+        );
+        // A KEY `LEADER Alt` DOES NOT REACH is drawn as it was: `ESC` whole,
+        // and `C-d` cut at its modifier only.
+        assert_eq!(drawn("ESC".to_owned()), [("ESC".to_owned(), key)]);
+        assert_eq!(
+            drawn("C-d".to_owned()),
+            [("C-".to_owned(), key), ("d".to_owned(), key)]
+        );
+        assert_ne!(mark, key);
     }
 
     /// FAILS IF: the glyph is not spelt out while the pointer rests on it, is

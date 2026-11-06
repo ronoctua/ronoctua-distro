@@ -2,6 +2,7 @@
 # page, the hint of its mark, its actions and the words it refuses with.
 brain-task-journal-errors = Errors in the journal
 brain-task-journal-errors-does = Errors the system and your own programs write in the journal, grouped: the same failure with other numbers is one row, with a count. A mark on the modeline counts the kinds you have not seen yet. A snippet you filter by hides the lines that carry it, off the count.
+brain-task-journal-errors-brief = Groups the errors written in the system's journal and counts the ones you have not seen.
 journal-errors-heading-journal = Following the journal
 journal-errors-heading-unseen = Not seen yet — choose one to mark it seen
 journal-errors-heading-earlier = Not seen yet, from an earlier boot — choose one to mark it seen

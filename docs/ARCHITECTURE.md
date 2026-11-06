@@ -13046,8 +13046,9 @@ Fluent escolher o plural).
   com os dois a faixa cresce para uma segunda linha** (decisão do dono): nenhum empurra o outro
   para fora. Um controle que não cabe cede ao texto, nunca o contrário.
 - **As marcas da modeline** são segmentos `brain:<módulo>/<marca>`, só enquanto um módulo publica
-  uma; a cor é a do tom (`Watching` é o teal `modeline.following`, o mesmo das vigias na página; a
-  câmera fica com o rosa), a dica é a chave do módulo com a contagem,
+  uma; a cor é a do tom (`Watching` é a cor dos gestos, a dos erros do journal; `Working`, o
+  agente trabalhando, é o teal `modeline.following`, o mesmo das vigias na página), a dica é a
+  chave do módulo com a contagem,
   e o clique roda a ação da marca (`brain-act <módulo> <ação>`) ou abre a página do módulo
   (`brain-open <módulo>`, que abre a janela já na página dele). Um id de segmento é `&'static str`:
   cada nome distinto vira estático uma vez, com teto (`brain::NAMES_KEPT`).

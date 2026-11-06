@@ -235,7 +235,8 @@ impl Instance {
         descriptor_of(&out[0])
     }
 
-    /// Calls `render`, returning the display list.
+    /// Calls `render`, returning the display list — for a window that wears
+    /// its header ([`Self::render_headed`]).
     ///
     /// # Errors
     ///
@@ -245,6 +246,23 @@ impl Instance {
         columns: u16,
         lines: u16,
         heights: ronoctua_protocol::Heights,
+    ) -> Result<ronoctua_protocol::DisplayList> {
+        self.render_headed(columns, lines, heights, true)
+    }
+
+    /// Calls `render`, saying whether the host draws the header above the
+    /// rows (`context.headed`) — false in the "no header" mode, where a
+    /// buffer's content may say what the header would have.
+    ///
+    /// # Errors
+    ///
+    /// `render` traps.
+    pub fn render_headed(
+        &mut self,
+        columns: u16,
+        lines: u16,
+        heights: ronoctua_protocol::Heights,
+        headed: bool,
     ) -> Result<ronoctua_protocol::DisplayList> {
         use wasmtime::component::Val;
 
@@ -269,6 +287,7 @@ impl Instance {
                     ("huge".into(), Val::U16(heights.huge)),
                 ]),
             ),
+            ("headed".into(), Val::Bool(headed)),
         ]);
         let mut out = [Val::Bool(false)];
         func.call(&mut self.store, &[ctx], &mut out)
@@ -308,7 +327,7 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// The component does not export `ronoctua:buffer/view@0.3.0` with the three
+    /// The component does not export `ronoctua:buffer/view@0.4.0` with the three
     /// functions — which is a contract refusal, and not a detail: a buffer with no
     /// `event` would accept keys and never react.
     pub fn open(&self, component: &wasmtime::component::Component) -> Result<Instance> {
@@ -319,8 +338,8 @@ impl Runtime {
             .context("could not instantiate the component")?;
 
         let vision = instance
-            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.3.0")
-            .context("the component does not export `ronoctua:buffer/view@0.3.0`")?;
+            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.4.0")
+            .context("the component does not export `ronoctua:buffer/view@0.4.0`")?;
         let export = |store: &mut wasmtime::Store<State>, name: &str| {
             instance
                 .get_export_index(store, Some(&vision), name)
@@ -818,6 +837,7 @@ const fn brain_tone_name(t: ronoctua_protocol::BrainTone) -> &'static str {
         T::Warning => "warning",
         T::Danger => "danger",
         T::Accent => "accent",
+        T::Working => "working",
     }
 }
 
@@ -1374,6 +1394,8 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                 ("calendar".into(), Val::Bool(t.calendar)),
                 ("name-key".into(), Val::String(t.name_key.clone())),
                 ("does-key".into(), Val::String(t.does_key.clone())),
+                ("brief-key".into(), Val::String(t.brief_key.clone())),
+                ("does-text".into(), Val::String(t.does_text.clone())),
                 ("why-key".into(), Val::String(t.why_key.clone())),
                 ("why-text".into(), Val::String(t.why_text.clone())),
                 ("screen-generation".into(), Val::U64(t.screen_generation)),
@@ -2042,7 +2064,34 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     },
                     _ => continue,
                 };
-                list.push(prot::Command::Pointed { about });
+                // AND ITS VALUES, by name — a list of `text-arg`, each already
+                // text. A value that is not a name and a text names nothing,
+                // and is left out.
+                let args = match field("args") {
+                    Some(Val::List(items)) => items
+                        .iter()
+                        .filter_map(|item| {
+                            let Val::Record(fields) = item else {
+                                return None;
+                            };
+                            let of = |name: &str| {
+                                fields
+                                    .iter()
+                                    .find(|(n, _)| n == name)
+                                    .and_then(|(_, v)| match v {
+                                        Val::String(s) => Some(s.clone()),
+                                        _ => None,
+                                    })
+                            };
+                            Some(prot::TextArg {
+                                name: of("name")?,
+                                text: of("text")?,
+                            })
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                list.push(prot::Command::Pointed { about, args });
             }
             otherwise => {
                 tracing::warn!(
@@ -2665,6 +2714,8 @@ mod tests {
                 calendar: false,
                 name_key: "brain-task-update".to_owned(),
                 does_key: "brain-task-update-does".to_owned(),
+                brief_key: "brain-task-update-brief".to_owned(),
+                does_text: "Moves the distro forward.".to_owned(),
                 why_key: String::new(),
                 why_text: String::new(),
                 screen_generation: 4,
@@ -2805,6 +2856,8 @@ mod tests {
                 "calendar",
                 "name-key",
                 "does-key",
+                "brief-key",
+                "does-text",
                 "why-key",
                 "why-text",
                 "screen-generation",

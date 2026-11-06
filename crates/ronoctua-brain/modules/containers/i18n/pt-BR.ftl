@@ -3,6 +3,7 @@
 # the shared files (its `namedBy` says which); these are the module's alone.
 brain-task-containers = Containers rodando
 brain-task-containers-does = Enquanto algum dos seus containers roda, uma marca na modeline diz quantos, e um clique nela abre os containers. Ele conta as pastas que o runtime de containers mantém para cada container rodando, então não roda nada e não custa nada enquanto nenhum roda.
+brain-task-containers-brief = Mostra na modeline quantos dos seus containers estão rodando.
 containers-mark-running = { $count ->
         [one] Um container está rodando
        *[other] { $count } containers estão rodando

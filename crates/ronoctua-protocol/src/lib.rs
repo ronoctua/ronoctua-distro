@@ -118,6 +118,106 @@ pub fn cells(text: &str) -> u16 {
         .fold(0u16, |total, one| total.saturating_add(one))
 }
 
+/// Breaks a text into lines of up to `width` cells — by WORD when it can, and
+/// in the middle of a word longer than the line, by cluster.
+///
+/// # Why it lives here
+///
+/// Because a component has to COUNT the rows a sentence comes out in — the
+/// brain gives a task's description as many rows as it wraps to, and a bar
+/// only when a small window cuts it — and the host is what wraps it, by this
+/// same function (`ronoctua_render::layout::wrap` forwards here). Two wraps
+/// would be a description given three rows by one and drawn in four by the
+/// other: a row cut where there was room, or a blank one where there was not.
+///
+/// `ceiling` is a bound on the WORK, never a layout decision: past it the last
+/// row is not the text's last, and a caller that cares says so.
+#[must_use]
+pub fn wrap(text: &str, width: u16, ceiling: usize) -> Vec<String> {
+    let width = usize::from(width.max(1));
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let mut line = String::new();
+        for word in raw.split_whitespace() {
+            // A WORD LONGER THAN THE LINE AFTER OTHER WORDS starts a line of
+            // its own and is cut like the first: set down whole beside them,
+            // it ran off the surface's edge and was clipped there — a path in
+            // a question read `/tmp/…-ronoctua-` and the rest of it was gone.
+            if !line.is_empty() && usize::from(cells(word)) > width {
+                out.push(core::mem::take(&mut line));
+                if out.len() >= ceiling {
+                    return out;
+                }
+            }
+            if line.is_empty() && usize::from(cells(word)) > width {
+                // WORD LONGER THAN THE LINE: split it into pieces the size of the
+                // line. By CLUSTER, and not by character: this is a cut, and a
+                // cut between the two halves of an emoji sequence does not
+                // shorten the word, it draws a different one — the same fault
+                // `elide_end` exists to avoid.
+                let mut rest = word;
+                #[allow(clippy::cast_possible_truncation)]
+                let line_cells = width as u16;
+                while usize::from(cells(rest)) > width && out.len() < ceiling {
+                    let piece = prefix_of(rest, line_cells);
+                    if piece.is_empty() {
+                        // A SINGLE CLUSTER WIDER THAN THE LINE. It cannot be
+                        // cut and it cannot fit; giving it its own line is the
+                        // only answer that neither loops nor drops it.
+                        break;
+                    }
+                    // AND A PATH IS CUT AFTER ITS LAST SEPARATOR ON THE LINE:
+                    // cut at the cell, `…/software/history.jso` and `n` read
+                    // as a file that is not there. The separator stays at the
+                    // end of the line, so the line says the name goes on; one
+                    // at the very start (`/abc…`) is no place to cut.
+                    let piece = match piece.rfind('/') {
+                        Some(at) if at > 0 => &piece[..=at],
+                        _ => piece,
+                    };
+                    rest = &rest[piece.len()..];
+                    out.push(piece.to_owned());
+                }
+                line = rest.to_owned();
+                continue;
+            }
+            let fits = usize::from(cells(&line)) + 1 + usize::from(cells(word)) <= width;
+            if line.is_empty() {
+                line.push_str(word);
+            } else if fits {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                out.push(core::mem::take(&mut line));
+                line.push_str(word);
+            }
+            if out.len() >= ceiling {
+                return out;
+            }
+        }
+        out.push(line);
+        if out.len() >= ceiling {
+            return out;
+        }
+    }
+    out
+}
+
+/// The longest PREFIX of `s` that fits in `max` cells, cut between clusters.
+fn prefix_of(s: &str, max: u16) -> &str {
+    let mut used = 0u16;
+    let mut end = 0usize;
+    for cluster in cells_of(s) {
+        let w = cells_of_one(cluster);
+        if used + w > max {
+            break;
+        }
+        used += w;
+        end += cluster.len();
+    }
+    &s[..end]
+}
+
 /// A colour token, **by name**.
 ///
 /// Never a value. Invariant 9 puts the colours in the tokens and 11 forbids the
@@ -1528,6 +1628,14 @@ pub struct TaskState {
     pub name_key: String,
     /// The key of the sentence that says what it does.
     pub does_key: String,
+    /// WHAT IT IS, IN ONE LINE — `brain-task-<id>-brief`, what the pointer
+    /// resting on its row says on the minibuffer. Empty for a module that
+    /// declares none (a person's may not), which then says its description.
+    pub brief_key: String,
+    /// The description, ALREADY TRANSLATED, for measuring — how many rows it
+    /// wraps to on its page. The rule [`TaskState::name_text`] follows. Empty
+    /// when `does_key` is.
+    pub does_text: String,
     /// The key of [`TaskState::why_not`]. Empty when that is.
     pub why_key: String,
     /// The same reason, ALREADY TRANSLATED, for measuring — the rule
@@ -1723,6 +1831,8 @@ pub enum BrainTone {
     Danger,
     /// The module's own emphasis.
     Accent,
+    /// Under way, and nothing wrong with it — an agent at work.
+    Working,
 }
 
 /// A moment: the number for the arithmetic, the text for the date.
@@ -2473,7 +2583,23 @@ pub enum Command {
     Pointed {
         /// A text key, or data the buffer holds (a module's sentence).
         about: Text,
+        /// Each value of the sentence by its name, already text — a key with
+        /// `{ $when }` in it, and the date the host made. Empty for a
+        /// sentence with no value in it.
+        args: Vec<TextArg>,
     },
+}
+
+/// ONE VALUE OF A SENTENCE, by its Fluent name, already text — what a
+/// buffer passes on to the host with a key ([`Command::Pointed`]): a date the
+/// host itself made (`when-text`), never a word the buffer would have had to
+/// translate.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TextArg {
+    /// The Fluent variable.
+    pub name: String,
+    /// The value, as the person reads it.
+    pub text: String,
 }
 
 /// How many pairs a buffer may teach in one frame: a header is a line and a
@@ -3065,6 +3191,10 @@ pub struct Context {
     pub lines: u16,
     /// How many cells of height each scale occupies.
     pub heights: Heights,
+    /// WHETHER THE HOST DRAWS THE HEADER above the rows — false in the "no
+    /// header" mode. For the content to arrange itself around its absence,
+    /// never for a buffer to draw a header of its own.
+    pub headed: bool,
 }
 
 /// How many **cells** of height each scale occupies.

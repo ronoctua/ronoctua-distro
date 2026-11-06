@@ -2,6 +2,7 @@
 # four marks, and its page.
 brain-task-belongings-reminder = Your belongings
 brain-task-belongings-reminder-does = Reminds you to sync your belongings — your configuration, kept encrypted in your own repository — once the period you chose has gone by since the last sync, with a clock set for that moment alone. While a sync waits for your decisions, after one that failed, and before the first sync of a new machine, a mark on the modeline says so; a click on it opens the belongings, asking the passphrase. It runs nothing by itself: a sync asks your passphrase.
+brain-task-belongings-reminder-brief = Reminds you to sync your encrypted configuration once the period you chose has gone by.
 belongings-reminder-mark-due = A sync of your belongings is due
 belongings-reminder-mark-conflicts = { $count ->
     [one] A sync of your belongings waits for one decision

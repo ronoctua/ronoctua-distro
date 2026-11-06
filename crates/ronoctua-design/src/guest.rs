@@ -49,7 +49,8 @@ impl Palette for Wit {
             Role::Danger => wit::Color::StateError,
             Role::Warning => wit::Color::StateWarning,
             Role::Once => wit::Color::TextOnce,
-            Role::Watching => wit::Color::ModelineFollowing,
+            Role::Watching => wit::Color::ModelineWatching,
+            Role::Following => wit::Color::ModelineFollowing,
             Role::StatusGood => wit::Color::TextStatusGood,
             Role::StatusIdle => wit::Color::TextStatusIdle,
             Role::StatusBad => wit::Color::TextStatusBad,
@@ -79,6 +80,7 @@ impl Palette for Wit {
             Role::Prose => wit::Color::TextSubtleDefault,
             Role::Faint => wit::Color::TextSubtleFaint,
             Role::Explain => wit::Color::TextSubtleExplain,
+            Role::LeaderAlt => wit::Color::TextSubtleLeaderAlt,
             Role::Inert => wit::Color::TextSubtleInert,
             Role::KeyLit => wit::Color::TextSubtleLitKey,
             Role::ProseLit => wit::Color::TextSubtleLitProse,
@@ -127,7 +129,7 @@ impl Palette for Wit {
 /// The context, as the arithmetic here speaks it.
 ///
 /// A conversion and not a second `Context`: the record that crosses the WIT and
-/// [`ronoctua_protocol::Context`] are the same three numbers, and the buffer
+/// [`ronoctua_protocol::Context`] are the same four fields, and the buffer
 /// should be handing the one it received straight to [`Screen::new`].
 impl From<&wit::Context> for ronoctua_protocol::Context {
     fn from(ctx: &wit::Context) -> Self {
@@ -141,6 +143,7 @@ impl From<&wit::Context> for ronoctua_protocol::Context {
                 large: ctx.heights.large,
                 huge: ctx.heights.huge,
             },
+            headed: ctx.headed,
         }
     }
 }
@@ -201,12 +204,20 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
         });
         // AND WHAT THE POINTER RESTS ON, in a sentence (`Screen::point`).
         let pointed = self.pointed().map(|p| {
-            wit::Command::Pointed(wit::PointedCommand {
-                about: match p {
-                    crate::screen::Pointed::Key(k) => wit::Text::Key(k.clone()),
-                    crate::screen::Pointed::Datum(d) => wit::Text::Data(d.clone()),
-                },
-            })
+            let (about, args) = match p {
+                crate::screen::Pointed::Key(k) => (wit::Text::Key(k.clone()), Vec::new()),
+                crate::screen::Pointed::Datum(d) => (wit::Text::Data(d.clone()), Vec::new()),
+                crate::screen::Pointed::Phrase(k, args) => (
+                    wit::Text::Key(k.clone()),
+                    args.iter()
+                        .map(|(name, text)| wit::TextArg {
+                            name: name.clone(),
+                            text: text.clone(),
+                        })
+                        .collect(),
+                ),
+            };
+            wit::Command::Pointed(wit::PointedCommand { about, args })
         });
         anchor
             .into_iter()

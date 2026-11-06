@@ -388,6 +388,10 @@ impl<'a, P: Palette> Row<'a, P> {
     /// that spells gives it [`crate::leader_alt::cells`] spelt, and the column
     /// that fills gives the room up, so the pair grows into its own row and
     /// covers nothing.
+    ///
+    /// THE `⌥` IS NOT THE KEY'S COLOUR: it wears [`crate::Role::LeaderAlt`],
+    /// spelt or not, and only the key wears `role` — the owner read the two
+    /// in one ink as one longer key, and asked for the mark to step back.
     pub fn put_shortcut(
         &mut self,
         id: &str,
@@ -397,27 +401,25 @@ impl<'a, P: Palette> Row<'a, P> {
         spelt: bool,
         role: crate::Role,
     ) -> bool {
-        if spelt {
-            return self.put(
-                id,
-                crate::screen::Run::datum(&crate::leader_alt::spelt(label, key)).playing(role),
-            );
-        }
         let Some(field) = self.layout.field(id) else {
             return false;
         };
         let role = crate::screen::on_ground(role, self.ground);
+        let mark = crate::screen::on_ground(crate::Role::LeaderAlt, self.ground);
         let at = field.at;
-        let glyph = crate::screen::Run::glyph(glyph)
-            .at(at)
-            .within(crate::leader_alt::GLYPH)
-            .in_role(role);
-        let _ = self.screen.put(self.line, glyph);
+        let prefix = crate::leader_alt::prefix_cells(label, spelt);
+        let first = if spelt {
+            crate::screen::Run::datum(label)
+        } else {
+            crate::screen::Run::glyph(glyph)
+        };
+        let first = first.at(at).within(prefix.min(field.width)).in_role(mark);
+        let _ = self.screen.put(self.line, first);
         let key = self
             .screen
             .measured(crate::screen::Run::datum(key))
-            .at(at.saturating_add(crate::leader_alt::GLYPH))
-            .within(field.width.saturating_sub(crate::leader_alt::GLYPH))
+            .at(at.saturating_add(prefix))
+            .within(field.width.saturating_sub(prefix))
             .in_role(role);
         let cells = self.screen.put(self.line, key);
         self.tall = self.tall.max(cells);
@@ -460,6 +462,8 @@ mod tests {
     use super::*;
     use crate::Tokens;
     use crate::screen::Screen;
+    use alloc::borrow::ToOwned;
+    use alloc::string::String;
     use alloc::vec;
     use ronoctua_protocol::{Context, Heights};
 
@@ -580,6 +584,7 @@ mod tests {
                 columns,
                 lines: 24,
                 heights,
+                headed: true,
             };
             let mut screen = Screen::<Tokens>::new(&ctx);
             let mut row = screen.row_of(0, &layout);
@@ -618,6 +623,7 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
+            headed: true,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);
@@ -650,6 +656,7 @@ mod tests {
             columns: 40,
             lines: 8,
             heights,
+            headed: true,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let mut row = screen.row_of(0, &layout);
@@ -721,6 +728,7 @@ mod tests {
             columns: 40,
             lines: 4,
             heights: ronoctua_protocol::Heights::from_sizes(12.0, 14.0, 20.0, 28.0, 40.0, 1.45),
+            headed: true,
         };
         let mut screen = Screen::<Tokens>::new(&ctx);
         let keys = layout.field("keys").expect("the column fits");
@@ -745,7 +753,7 @@ mod tests {
         ));
         let _ = row.done();
         let list = screen.as_protocol();
-        let at = |line: u16| -> Vec<(u16, ronoctua_protocol::Text)> {
+        let at = |line: u16| -> Vec<(u16, ronoctua_protocol::Text, String)> {
             list.commands
                 .iter()
                 .filter_map(|c| match c {
@@ -753,25 +761,46 @@ mod tests {
                         line: l,
                         column,
                         text,
+                        color,
                         ..
-                    } if *l == line => Some((*column, text.clone())),
+                    } if *l == line => Some((*column, text.clone(), color.as_str().to_owned())),
                     _ => None,
                 })
                 .collect()
         };
+        // THE MARK IN ITS OWN DISCREET INK, and the key in the row's — the
+        // owner read the two in one colour as one longer key.
+        let mark = "text-subtle-leader-alt".to_owned();
+        let accent = "state-accent".to_owned();
         assert_eq!(
             at(0),
             [
-                (keys.at, ronoctua_protocol::Text::Icon("leader-alt".into())),
+                (
+                    keys.at,
+                    ronoctua_protocol::Text::Icon("leader-alt".into()),
+                    mark.clone()
+                ),
                 (
                     keys.at + leader_alt::GLYPH,
-                    ronoctua_protocol::Text::Data("o".into())
+                    ronoctua_protocol::Text::Data("o".into()),
+                    accent.clone()
                 ),
             ]
         );
         assert_eq!(
             at(1),
-            [(keys.at, ronoctua_protocol::Text::Data("SUPER ALT o".into()))]
+            [
+                (
+                    keys.at,
+                    ronoctua_protocol::Text::Data("SUPER ALT".into()),
+                    mark
+                ),
+                (
+                    keys.at + leader_alt::prefix_cells("SUPER ALT", true),
+                    ronoctua_protocol::Text::Data("o".into()),
+                    accent
+                ),
+            ]
         );
         screen.check().expect("the pair stays inside its column");
     }

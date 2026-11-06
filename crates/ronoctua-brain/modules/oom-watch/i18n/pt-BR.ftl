@@ -2,6 +2,7 @@
 # the record it writes in the activity and the notification of a kill.
 brain-task-oom-watch = Falta de memória
 brain-task-oom-watch-does = Quando a memória acaba, o kernel ou o systemd-oomd fecha algo para o resto continuar. Cada um é anotado na atividade e dito uma vez: o que foi fechado, onde, quanta memória, quanto a máquina travava e quando.
+brain-task-oom-watch-brief = Registra cada programa fechado porque a memória acabou.
 oom-watch-heading-journal = Acompanhando o journal
 oom-watch-heading-recent = Fechados há pouco
 oom-watch-row-none = Nada foi fechado por falta de memória desde que isto começou a vigiar

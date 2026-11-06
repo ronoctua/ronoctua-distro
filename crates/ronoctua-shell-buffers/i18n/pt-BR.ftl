@@ -238,6 +238,30 @@ brain-kind-once = Acontece uma vez e depois some.
 brain-kind-watch = Só vigia: não roda nada numa agenda, acompanha algo e diz o que ouve.
 about-brain-fold = Registros seguidos que dizem a mesma coisa, dobrados neste; abri-lo mostra cada um numa linha própria.
 about-brain-next = Quando o cérebro vai considerar rodar esta tarefa de novo.
+# O QUE CADA COLUNA DA LINHA DE UMA TAREFA DIZ SOB O PONTEIRO, no minibuffer:
+# quando roda de novo, e como está ou como foi a última vez — `{ $when }` é a
+# data como a linha a mostra, e `{ $why }` o motivo que a linha dá no lugar
+# de uma data.
+about-brain-next-at = A próxima execução está marcada para { $when }.
+about-brain-next-none = Não tem próxima execução no calendário.
+about-brain-next-why = Sem data para a próxima execução — { $why }
+about-brain-standing-idle = Ainda não rodou, e espera o seu momento.
+about-brain-standing-queued = Está na fila, esperando a vez.
+about-brain-standing-running = Está rodando agora.
+about-brain-last-done = A última execução, em { $when }, funcionou.
+about-brain-last-failed = A última execução, em { $when }, falhou.
+about-brain-last-held = A última vez, em { $when }, esperou pela máquina e não rodou.
+about-brain-last-skipped = A última vez, em { $when }, não rodou: foi adiada.
+about-brain-last-noted = O último registro, em { $when }, anotou algo que ouviu.
+about-brain-hold-ram = Está na hora, e espera a memória ficar menos ocupada.
+about-brain-hold-cpu = Está na hora, e espera o processador ficar menos ocupado.
+about-brain-hold-battery = Está na hora, e espera a máquina ser ligada na tomada.
+about-brain-hold-busy = Está na hora, e espera a tarefa que está rodando terminar.
+about-brain-hold-network = Está na hora, e espera a rede.
+about-brain-hold-asleep = Está na hora, e espera a máquina acordar.
+# O CAMINHO DE VOLTA no alto da página de uma tarefa, enquanto a janela está sem cabeçalho.
+brain-back = Voltar
+about-brain-back = Volta à primeira página do Brain, com todas as tarefas.
 # AS TAREFAS. `brain-task-<id>` nomeia uma e `<id>-does` diz o que ela faz — a
 # segunda é um parágrafo no rodapé, então tem espaço para ser uma explicação
 # inteira em vez de uma linha.

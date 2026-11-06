@@ -120,6 +120,13 @@ def main() -> int:
             fail(ident, f"its origin is {m.get('origin')!r}; a module is the distro's or the person's")
 
         needs: set[str] = {f"brain-task-{ident}", f"brain-task-{ident}-does"}
+        # AND A MODULE OF THE DISTRO SAYS WHAT IT IS IN ONE LINE — what the
+        # pointer resting on its row says on the minibuffer, where its whole
+        # description was one paragraph run along one line. A person's module
+        # may leave it out, and its row then says its description
+        # (`mind_wire`'s `brief_key`).
+        if m["origin"] == "distro":
+            needs.add(f"brain-task-{ident}-brief")
 
         marks = []
         for name, spec in sorted(m["marks"].items()):

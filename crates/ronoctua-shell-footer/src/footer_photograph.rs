@@ -105,6 +105,9 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
   --pointed <sentence>  the window in focus has no header and its pointer
                         rests on something that says <sentence>, which the
                         free minibuffer says (the window's `pointed` report)
+  --shortcuts           the footer's settings SHOW a window's shortcuts on
+                        the free minibuffer while it has no header (the
+                        distro hides them): each its `⌥` and its one key
   --out <file>          where to write                 (default: footer.png)
   --language <id>       pt-BR or en-GB                 (default: pt-BR)
   --theme <id>          a theme of assets/themes       (default: the default)
@@ -195,6 +198,9 @@ pub(crate) struct Scene {
     /// What the pointer rests on in the window in focus, with no header —
     /// delivered as the window's `pointed` report is.
     pub pointed: Option<String>,
+    /// Whether the footer's settings show the window's shortcuts on the free
+    /// minibuffer, the header hidden (`adapt::Prefs::shortcuts`).
+    pub shortcuts: bool,
     pub steps: Vec<Step>,
 }
 
@@ -234,6 +240,7 @@ struct Asked {
     terminals: Option<std::path::PathBuf>,
     kiosk: Option<std::path::PathBuf>,
     pointed: Option<String>,
+    shortcuts: bool,
     out: std::path::PathBuf,
     language: String,
     theme: tokens::theme::Theme,
@@ -295,6 +302,7 @@ fn parse(words: &[String]) -> Result<Asked> {
         terminals: None,
         kiosk: None,
         pointed: None,
+        shortcuts: false,
         out: std::path::PathBuf::from("footer.png"),
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
@@ -377,6 +385,7 @@ fn parse(words: &[String]) -> Result<Asked> {
             "--terminals" => me.terminals = Some(std::path::PathBuf::from(value()?)),
             "--kiosk" => me.kiosk = Some(std::path::PathBuf::from(value()?)),
             "--pointed" => me.pointed = Some(value()?),
+            "--shortcuts" => me.shortcuts = true,
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--language" => me.language = value()?,
             "--theme" => {
@@ -734,6 +743,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         terminals,
         kiosk,
         pointed: asked.pointed.clone(),
+        shortcuts: asked.shortcuts,
         steps: asked.steps.clone(),
     };
     let taken = crate::surface::photographed(&conn, scene, composition)?;
@@ -1161,6 +1171,10 @@ mod tests {
             USAGE.contains("--pointed <sentence>"),
             "the word is not taught"
         );
+        // AND THE WINDOW'S SHORTCUTS ON THE FREE LINE, which the distro hides.
+        let shown = parse(&words(&["--door", "footer", "--shortcuts"])).expect("parses");
+        assert!(shown.shortcuts);
+        assert!(USAGE.contains("--shortcuts"), "the word is not taught");
     }
 
     /// FAILS IF: a walk that points is offered no seat, the seat does not

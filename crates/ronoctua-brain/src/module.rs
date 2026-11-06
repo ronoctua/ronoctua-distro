@@ -851,6 +851,12 @@ pub enum Tone {
     Quiet,
     /// Something is being followed.
     Watching,
+    /// SOMETHING IS UNDER WAY, AND NOTHING IS WRONG WITH IT — an agent at
+    /// work. Not [`Tone::Watching`], whose colour is read as something gone
+    /// wrong: the owner saw an agent busy in it and asked whether the agent
+    /// was in trouble. Its own colour, the teal a watch wears on the brain's
+    /// page (`modeline.following`).
+    Working,
     /// Look soon.
     Warning,
     /// Look now.
