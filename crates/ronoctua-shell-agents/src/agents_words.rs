@@ -1,6 +1,6 @@
 //! The LLM accounts' words: which text key each closed set of
 //! `ronoctua-llm` is drawn with — the refusals, the agents, the status line's
-//! three states, what a running agent is doing (and its glyph) — and the few
+//! three states, what a running agent is doing — and the few
 //! numbers the view writes in the language's own marks (a per cent, a count
 //! of tokens).
 //!
@@ -17,7 +17,6 @@ use crate::key;
 use ronoctua_i18n::Arg;
 use ronoctua_llm::statusline::Wrapping;
 use ronoctua_llm::{Kind, Why};
-use ronoctua_tokens as tokens;
 
 /// The sentence of a refusal of the accounts' crate.
 #[must_use]
@@ -110,18 +109,6 @@ pub const fn doing_key(doing: Doing) -> &'static str {
         Doing::Waiting => key::AGENTS_DOING_WAITING,
         Doing::Done => key::AGENTS_DOING_DONE,
         Doing::Failed => key::AGENTS_DOING_FAILED,
-    }
-}
-
-/// Its glyph: the terminals' own for a program's state (OSC 7501), the ones
-/// its mark on the modeline wears — failing is the done glyph, and its row's
-/// danger colour says the rest: danger is a colour, not another drawing.
-#[must_use]
-pub const fn doing_glyph(doing: Doing) -> char {
-    match doing {
-        Doing::Working => tokens::icon::PROGRAM_WORKING,
-        Doing::Waiting => tokens::icon::PROGRAM_BLOCKED,
-        Doing::Done | Doing::Failed => tokens::icon::PROGRAM_DONE,
     }
 }
 

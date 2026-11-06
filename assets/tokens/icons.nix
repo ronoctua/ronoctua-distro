@@ -265,14 +265,13 @@
   # beside it (2026-11-02). tmux's own glyph, because a terminal still running
   # behind a closed window is exactly what a detached session is.
   terminals-away = "cod-terminal_tmux";
-  # WHAT A PROGRAM IN A TERMINAL SAYS IT IS DOING (OSC 7501): one family, so
-  # the three read as states of one thing. An error is `program-done` in the
-  # danger colour — danger is a colour, never another drawing. Generic on purpose: the
-  # terminal's views draw any program's state, and the brain's agent marks
-  # name the same glyphs in their own manifest.
-  program-working = "md-progress_clock";
-  program-blocked = "md-progress_question";
-  program-done = "md-progress_check";
+  # AN AGENT — the program in a terminal that says what it is doing over
+  # OSC 7501: a robot's head (owner, 2026-11-06), the same in every state.
+  # The state is its colour, and the word beside it where a row has one —
+  # danger is a colour, never another drawing. The terminals' views and the
+  # accounts' view draw it, and the brain's agent marks name the same glyph
+  # in their own manifest.
+  agent = "md-robot";
   settings = "cod-settings_gear";
   key = "cod-key";
   code = "cod-code";

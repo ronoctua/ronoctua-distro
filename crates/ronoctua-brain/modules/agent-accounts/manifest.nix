@@ -76,17 +76,16 @@
   # on an API key, and Codex's ring — similar, not the same. The owner took
   # back the rule of no brand on the modeline (2026-11-02): the robots that
   # stood for the accounts said "an agent" and not whose, and an account's
-  # set has to say whose it is with its first glyph. The agents are a glyph
-  # per state, the tone saying it again: working, waiting for you, done.
-  # Failing is the done glyph in danger — danger is a colour, not another
-  # drawing.
+  # set has to say whose it is with its first glyph. Every agent is a robot's
+  # head (owner, 2026-11-06), the generic `agent` of `assets/tokens/icons.nix`
+  # that the terminals and the accounts' view draw too; its tone says what it
+  # is doing: working, waiting for you, done, failing — danger is a colour,
+  # not another drawing.
   glyphs = {
     claude = "ours-claude";
     claude-api = "ours-claude-api";
     codex = "ours-codex";
-    working = "md-progress_clock";
-    waiting = "md-progress_question";
-    done = "md-progress_check";
+    agent = "md-robot";
     more = "md-dots_horizontal";
   };
 
@@ -129,26 +128,26 @@
       resting = true;
     };
     agent-working = {
-      glyph = "working";
+      glyph = "agent";
       hint = "agent-accounts-mark-agent-working";
       sets = 9;
       instances = 9;
     };
     agent-waiting = {
-      glyph = "waiting";
+      glyph = "agent";
       hint = "agent-accounts-mark-agent-waiting";
       sets = 9;
       instances = 9;
     };
     agent-done = {
-      glyph = "done";
+      glyph = "agent";
       hint = "agent-accounts-mark-agent-done";
       sets = 9;
       instances = 9;
       resting = true;
     };
     agent-failed = {
-      glyph = "done";
+      glyph = "agent";
       hint = "agent-accounts-mark-agent-failed";
       sets = 9;
       instances = 9;

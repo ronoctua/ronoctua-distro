@@ -438,7 +438,8 @@ impl Doing {
         }
     }
 
-    /// Its mark: one per state — failing is the done glyph, in danger.
+    /// Its mark: one per state, all the same robot's head — the tone tells
+    /// them apart.
     #[must_use]
     pub const fn mark(self) -> MarkId {
         match self {
@@ -449,7 +450,8 @@ impl Doing {
         }
     }
 
-    /// Its tone, saying the glyph again: blue is for focus and nothing else,
+    /// Its tone, the one thing that says the state on the modeline (every
+    /// agent wears the same glyph): blue is for focus and nothing else,
     /// so working is the teal of a thing under way and well — never the
     /// watch's colour, which the owner read as an agent in trouble — and
     /// waiting the caution's orange.
@@ -1007,8 +1009,10 @@ mod tests {
         assert_eq!(waiting.id.key.as_deref(), Some(agents[0].session.as_str()));
         assert_eq!(waiting.id.opens.as_deref(), Some(SHOWS));
         assert_eq!(waiting.id.label.as_deref(), Some("~/src/p1"));
-        // FAILING IS THE DONE GLYPH, in danger: the same glyph, another tone.
-        assert_eq!(third[3].id.glyph, third[2].id.glyph);
+        // EVERY AGENT IS THE SAME ROBOT'S HEAD, whatever it is doing: the
+        // tone says the state, and the lead keeps the account's own glyph.
+        assert!(third[2..].iter().all(|m| m.id.glyph == third[1].id.glyph));
+        assert_ne!(third[1].id.glyph, third[0].id.glyph);
         assert_eq!(
             in_set(&marks, 1)
                 .iter()

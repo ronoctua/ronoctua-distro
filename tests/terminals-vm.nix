@@ -22,9 +22,9 @@
 # terminal is the holder's (`viewer` in its state file).
 #
 # THE GLYPHS ARE THE GENERIC TOKENS (`assets/tokens/icons.nix`), read from
-# the generated table: `terminals-away`, and the program states
-# `program-working` / `program-blocked`, the Nerd Font glyphs an agent's
-# marks are drawn with. No brain module is named here
+# the generated table: `terminals-away`, and `agent`, the robot's head an
+# agent's marks are drawn with in every state — so what an agent is doing is
+# read off its colour on the screen. No brain module is named here
 # (`brain-modules-are-sealed`): a set is found by its shape on the modeline,
 # `brain:<module>/<n>`, and `n` is the account's place in the list.
 #
@@ -227,8 +227,7 @@ pkgs.testers.runNixOSTest {
     TOKENS = json.load(open("${palette}"))
     ICONS = json.load(open("${glyphdb.db}/icons.json"))
     AWAY = ICONS["terminals-away"]["char"]
-    WORKING = ICONS["program-working"]["char"]
-    WAITING = ICONS["program-blocked"]["char"]
+    AGENT = ICONS["agent"]["char"]
     # WHAT EVERY WINDOW STARTED HERE IS GIVEN: the session's runtime folder
     # and GPU, the home, and the default theme — the one the pixels are
     # compared with (with none, the first theme of the list is worn).
@@ -334,6 +333,15 @@ pkgs.testers.runNixOSTest {
             if m is not None:
                 out[int(m.group(1))] = text
         return out
+
+
+    def set_name(n):
+        """The modeline's segment of set `n`, by its shape — `brain:<module>/<n>`."""
+        import re
+
+        names = [name for name in modeline()[2] if re.fullmatch(rf"brain:[a-z0-9-]+/{n}", name)]
+        assert len(names) == 1, f"set {n} is not one segment on the modeline: {names}"
+        return names[0]
 
 
     def shoot():
@@ -662,10 +670,12 @@ pkgs.testers.runNixOSTest {
     with subtest("a fake Claude Code in a held terminal lights its account's set"):
         # PROVES the agent's way to the modeline: the terminal answers the
         # OSC 7501 probe; the hook ties the session to the SECOND account's
-        # folder and to the terminal; "working" lights the working glyph in
-        # set 2 and nothing in set 1; then "blocked" said ONLY over OSC 7501
-        # — the session's file still says working — turns it to the waiting
-        # glyph, which only the terminal's word can do.
+        # folder and to the terminal; "working" puts the agent's glyph in
+        # set 2, in the working teal, and nothing in set 1; then "blocked"
+        # said ONLY over OSC 7501 — the session's file still says working —
+        # turns the same glyph to the caution's orange, which only the
+        # terminal's word can do. Every state wears the one glyph, so the
+        # state is read off the set's pixels.
         machine.succeed(
             "systemd-run --unit=agent "
             + SESSION_ENV
@@ -685,18 +695,27 @@ pkgs.testers.runNixOSTest {
         assert record["account-dir"] == "/root/.claude-second", record
         until(lambda: viewer(agent) == main_pid("agent"), "the agent's terminal is not the one its window shows")
 
+        def drawn_in(tone, not_in):
+            """The agent's glyph is in the second set, and the set's cells wear `tone`
+            and not `not_in` (the account's own glyph is quiet: nothing was used)."""
+            if AGENT not in account_sets().get(2, ""):
+                return False
+            shoot()
+            box = mark_box(set_name(2))
+            return pixels(tone, box) >= 4 and pixels(not_in, box) == 0
+
         until(
-            lambda: WORKING in account_sets().get(2, ""),
-            lambda: f"no working agent in the second account's set: {account_sets()}",
+            lambda: drawn_in("modeline.following", "state.caution"),
+            lambda: f"no working agent, in the working teal, in the second account's set: {account_sets()}",
         )
         first_set = account_sets().get(1, "")
-        assert WORKING not in first_set and WAITING not in first_set, f"the agent lit the FIRST account's set: {first_set!r}"
+        assert AGENT not in first_set, f"the agent lit the FIRST account's set: {first_set!r}"
 
         machine.succeed(f"touch {ROOM}/block")
         machine.wait_until_succeeds(f"test -e {ROOM}/blocked", timeout=timedelta(seconds=30))
         until(
-            lambda: WAITING in account_sets().get(2, "") and WORKING not in account_sets().get(2, ""),
-            lambda: f"the agent blocked over OSC 7501, and its set does not say it waits: {account_sets()}",
+            lambda: drawn_in("state.caution", "modeline.following"),
+            lambda: f"the agent blocked over OSC 7501, and its set is not drawn in the caution's orange: {account_sets()}",
         )
         record = json.loads(machine.succeed(f"cat {AGENTS}/{SESSION}.json"))
         assert record["status"] == "working", (

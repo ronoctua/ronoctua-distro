@@ -2628,11 +2628,11 @@ fn account_section(
     b.section(&title, e);
 }
 
-/// An agent's row: its state's glyph and its folder, what it is doing in the
-/// colour its glyph wears on the modeline (`Doing::tone`), and `RET` going to
-/// it.
+/// An agent's row: the agent's glyph (a robot's head, the terminals' own and
+/// its mark's on the modeline) and its folder, what it is doing in the colour
+/// its mark wears (`Doing::tone`), and `RET` going to it.
 fn agent_entry(agent: &AgentSeen, t: &ronoctua_i18n::Texts) -> Entry {
-    let glyph = words::doing_glyph(agent.doing).to_string();
+    let glyph = tokens::icon::AGENT.to_string();
     Entry::Pair {
         label: t.t_args(
             key::AGENTS_AGENT,
@@ -4022,7 +4022,7 @@ mod tests {
             ] {
                 let row = of(n);
                 let text: String = row.fields.iter().map(|f| f.text.as_str()).collect();
-                let glyph = words::doing_glyph(doing);
+                let glyph = tokens::icon::AGENT;
                 assert!(
                     text.contains(glyph) && text.contains(&format!("~/src/p{n}")),
                     "{language}: {text}"

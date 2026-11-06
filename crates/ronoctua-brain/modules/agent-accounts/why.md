@@ -23,11 +23,11 @@ uma marca do cérebro, depois dos números dos espaços, do player e dos disposi
 modeline tem faixa própria; na página de uma mesa e no rodapé velado o conjunto é só os glifos, como
 qualquer outra marca.
 
-Os agentes não levam dígito: o lugar no conjunto é onde estão. Cada estado é um glifo, e o tom repete:
-trabalhando (`md-progress_clock`, a cor de vigia — o azul é do foco, e de mais nada), esperando você
-(`md-progress_question`, o laranja de atenção) e pronto (`md-progress_check`, calmo). Erro é o glifo de
-pronto em perigo: perigo é cor, não outro desenho. Um agente recém-aberto e parado é desenhado como
-pronto.
+Os agentes não levam dígito: o lugar no conjunto é onde estão. Todo agente é uma cabeça de robô
+(`md-robot`, pedido do dono, 2026-11-06), o mesmo glifo que os terminais e a vista das contas desenham,
+e o tom diz o estado: trabalhando (o teal de algo em andamento — o azul é do foco, e de mais nada),
+esperando você (o laranja de atenção), pronto (calmo) e erro (perigo): perigo é cor, não outro desenho.
+Um agente recém-aberto e parado é desenhado como pronto.
 
 Cada agente guarda um lugar de nove no conjunto da conta enquanto vive: o menor livre quando aparece
 pela primeira vez (`Places`). Assim um glifo nunca troca de agente enquanto a pessoa olha, e um novo

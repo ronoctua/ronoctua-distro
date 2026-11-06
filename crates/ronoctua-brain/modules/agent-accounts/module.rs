@@ -33,9 +33,10 @@
 //! credits ran out, and quiet otherwise. A click on the lead opens the
 //! accounts' view on that account (`agents-open <n>`). Nine sets at most.
 //!
-//! Then the agents working in the account, a glyph per state in the place
-//! each keeps (`Places`), and past the ninth the count of the rest — all made
-//! by the shared half (`marks_for`), so a photograph's are these. Where the
+//! Then the agents working in the account, each a robot's head in the place
+//! it keeps (`Places`) and in its state's tone, and past the ninth the count
+//! of the rest — all made by the shared half (`marks_for`), so a
+//! photograph's are these. Where the
 //! agents are read from is one seam (`Probe::agents`, `agents_now`): the
 //! records the managed hook writes, one per Claude Code session, and what a
 //! program in one of our terminals said of itself (OSC 7501), which the

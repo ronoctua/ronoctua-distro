@@ -246,18 +246,6 @@ pub fn status_of(t: &TerminalState) -> Option<&StatusRecord> {
         .max_by_key(|r| r.at_ms)
 }
 
-/// The glyph a program's state is drawn with — `program-*`, one family, so
-/// the states read as states of one thing; an error is the done glyph in the
-/// danger colour (danger is a colour, never another drawing).
-#[must_use]
-pub const fn glyph_of(state: ProgramState) -> char {
-    match state {
-        ProgramState::Working => tokens::icon::PROGRAM_WORKING,
-        ProgramState::Blocked => tokens::icon::PROGRAM_BLOCKED,
-        ProgramState::Idle | ProgramState::Done | ProgramState::Error => tokens::icon::PROGRAM_DONE,
-    }
-}
-
 /// The word a program's state is said with.
 #[must_use]
 pub const fn word_of(state: ProgramState) -> &'static str {
@@ -280,9 +268,10 @@ const fn tint_of(state: ProgramState) -> Option<tokens::Color> {
     }
 }
 
-/// What a row says last: the program's state, its glyph first — or, with
-/// none, that it ended (how), or what it asked for while nobody looked. The
-/// glyph and the word, and the colour they are said in.
+/// What a row says last: the program's state, the agent's glyph first (a
+/// robot's head, the same in every state: the word and its colour say which)
+/// — or, with none, that it ended (how), or what it asked for while nobody
+/// looked. The glyph and the word, and the colour they are said in.
 fn state_said(t: &TerminalState, texts: &ronoctua_i18n::Texts) -> (String, Option<tokens::Color>) {
     if let Some(e) = t.ended {
         return if e.code == 0 {
@@ -299,7 +288,7 @@ fn state_said(t: &TerminalState, texts: &ronoctua_i18n::Texts) -> (String, Optio
     }
     if let Some(r) = status_of(t) {
         return (
-            format!("{} {}", glyph_of(r.state), texts.t(word_of(r.state))),
+            format!("{} {}", tokens::icon::AGENT, texts.t(word_of(r.state))),
             tint_of(r.state),
         );
     }
@@ -1064,7 +1053,7 @@ mod tests {
             state.text,
             format!(
                 "{} {}",
-                tokens::icon::PROGRAM_BLOCKED,
+                tokens::icon::AGENT,
                 t.t(crate::key::TERMINALS_BLOCKED)
             )
         );
@@ -1353,7 +1342,7 @@ mod tests {
                     .last()
                     .unwrap()
                     .text
-                    .contains(tokens::icon::PROGRAM_BLOCKED),
+                    .contains(tokens::icon::AGENT),
                 "{columns}: the state was cut: {:?}",
                 agent.fields
             );
