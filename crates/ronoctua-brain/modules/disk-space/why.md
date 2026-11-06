@@ -55,7 +55,9 @@ que reiniciou roda uma folga a mais, que é o erro mais barato.
 
 Pedido do dono (2026-09-30): o disco quase cheio fica FIXO na modeline. Enquanto algum sistema de
 arquivos medido está abaixo da linha de quase cheio, o módulo publica uma marca (`full`, glifo de
-armazenamento com alerta, na cor de aviso); em repouso não há nenhuma (inv. 14). Um disco que
+armazenamento com alerta, na cor de aviso), com quanto do sistema de arquivos que decide está
+ocupado, em porcentagem arredondada para baixo — um disco com alguns gigabytes livres não diz 100%
+(pedido do dono, 2026-11-06); em repouso não há nenhuma (inv. 14). Um disco que
 ninguém mediu não tem marca: uma marca sobre um disco que não se leu mentiria. O clique abre a
 página do módulo, que diz quanto está livre no sistema de arquivos que decide (o de menor fatia
 livre), o tamanho dele e onde ficam as duas linhas; a geração da página é o instante da leitura, então

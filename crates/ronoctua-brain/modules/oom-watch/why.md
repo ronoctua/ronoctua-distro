@@ -68,3 +68,21 @@ A pressão de uma morte do kernel é a da máquina no instante em que a linha fo
 (`/proc/pressure/memory`, pelo `ronoctua-memory`), e só quando a linha é recente: uma linha lida uma
 hora depois, ao voltar de um reinício, levaria a pressão de uma máquina calma. Num kernel sem PSI o
 arquivo não existe, e a frase diz que a pressão não foi medida em vez de dizer zero.
+
+## E a RAM, marcada enquanto está quase toda em uso
+
+Pedido do dono (2026-11-06): um glifo na modeline, com a porcentagem, quando o uso de RAM está alto
+— antes de alguma coisa ser fechada, e não só depois. O pulso que o núcleo já toma a cada tique traz
+a RAM em uso (`Pulse::ram_used_pct`, o que não está em `MemAvailable`), então a marca não lê nada a
+mais. A partir de 85% ela aparece, na cor de aviso, com a porcentagem ao lado do glifo (`percent` no
+manifesto: o rodapé escreve o sinal pela língua); a partir de 95%, na de perigo, porque ali o oomd
+está perto de escolher o que fechar. Depois de subir, só desce cinco pontos abaixo da linha: um uso
+que oscila em cima dela piscaria a marca a cada tique. Em repouso não há marca nenhuma (inv. 14), e
+uma RAM que ninguém mediu também não tem. O clique abre o painel de memória (`LEADER s m`), que diz
+quem está comendo a memória e se a proteção está armada — o mesmo que a notificação de uma morte
+abre.
+
+A marca diz o USO, e não a pressão: a pessoa pediu a porcentagem, e uma porcentagem de RAM é o que
+ela compara com o que vê num monitor. A pressão é o que o oomd julga, e pode subir com a RAM ainda
+longe do teto (o swap lento devolvendo páginas); quando ele age, a morte é dita por este módulo, com
+a pressão daquele momento.

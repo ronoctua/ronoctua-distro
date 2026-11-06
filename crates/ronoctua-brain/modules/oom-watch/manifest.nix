@@ -1,13 +1,15 @@
-# WHAT DIED FOR LACK OF MEMORY, written down and said.
+# WHAT DIED FOR LACK OF MEMORY, written down and said — and the RAM, marked
+# on the modeline while it is nearly all in use.
 #
 # A watch, and nothing more: it runs nothing and has no schedule. It listens
 # to the journal the core already follows for three kinds of line — the
 # kernel's own kill, systemd's word about a unit that lost a process to it,
 # and `systemd-oomd`'s decision — and makes of each kill one record in the
 # activity and one notification with what died, where, how much memory it had,
-# how stalled the machine was and when. Why each is so is in `why.md`.
+# how stalled the machine was and when. And it reads the RAM in use off the
+# heartbeat the core already takes. Why each is so is in `why.md`.
 {
-  what = "Write down and tell every process killed for lack of memory: by the kernel, or by systemd-oomd.";
+  what = "Write down and tell every process killed for lack of memory, by the kernel or by systemd-oomd; mark the modeline while the RAM is nearly all in use.";
 
   needs = {
     root = false;
@@ -19,6 +21,27 @@
 
   # A WATCH: nothing to run, nothing to gate, nothing to announce.
   schedule = null;
+
+  # THE RAM IN USE (owner, 2026-11-06: a glyph on the modeline with the per
+  # cent, while the use is high): the memory chip, the token the memory's own
+  # notification wears.
+  glyphs = {
+    ram = "md-memory";
+  };
+
+  # THE ONE MARK, only while it says something (invariant 14): from 85 per
+  # cent of the RAM in use, in the warning's colour, and in danger's from 95;
+  # once up, it stays until the use falls 5 points under its line, so a use
+  # that hovers on the line does not blink it every heartbeat. Its count is
+  # the share in use (`percent`), and a click opens the memory panel (`LEADER
+  # s m`): who is eating the memory, and whether the protection is armed.
+  marks = {
+    ram = {
+      glyph = "ram";
+      hint = "oom-watch-mark-ram";
+      percent = true;
+    };
+  };
 
   # ONE EVENT PER KILL, and never two for one: the kernel's line and the
   # unit's line of the same kill are one event, and so are oomd's line and the

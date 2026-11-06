@@ -129,6 +129,10 @@ pub struct Mark {
     /// Whether it leads its set (`MarkId::leads`).
     #[serde(default)]
     pub leads: bool,
+    /// Whether its count is a share in per cent (`MarkId::percent`). Absent
+    /// from a catalogue written before there were any, which had none.
+    #[serde(default)]
+    pub percent: bool,
 }
 
 /// A notice a module may raise, as declared.
@@ -386,6 +390,7 @@ impl Declared {
                     resting: k.resting,
                     sets: k.sets,
                     leads: k.leads,
+                    percent: k.percent,
                 })
                 .collect(),
             notices: m

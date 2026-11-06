@@ -26,9 +26,10 @@
 //!
 //! While a filesystem it measures is under its NEARLY-FULL line — a line under
 //! the floor ([`rules`]) — the modeline carries one mark, in the warning's
-//! colour. At rest there is none (invariant 14): the relief handles the floor
-//! by itself, and the mark is for what it could not free. A click opens this
-//! module's page, which says how much is free and where both lines are.
+//! colour, with how much of the fullest of them is used, in per cent. At rest
+//! there is none (invariant 14): the relief handles the floor by itself, and
+//! the mark is for what it could not free. A click opens this module's page,
+//! which says how much is free and where both lines are.
 //!
 //! # What it tells the person
 //!
@@ -201,12 +202,15 @@ impl Module for DiskSpace {
             screen: generation(look.pulse),
             ..Face::default()
         };
-        // A MARK EXISTS ONLY WHEN IT SAYS SOMETHING (invariant 14).
-        if rules::nearly_full(&look.pulse.rooms) {
+        // A MARK EXISTS ONLY WHEN IT SAYS SOMETHING (invariant 14) — and it
+        // says how much of the fullest disk is used, in per cent.
+        if rules::nearly_full(&look.pulse.rooms)
+            && let Some(fullest) = rules::deciding(&look.pulse.rooms)
+        {
             face.marks.push(Mark {
                 id: super::mark::FULL,
                 tone: Tone::Warning,
-                count: 0,
+                count: rules::used_percent(&fullest),
                 act: None,
             });
         }
@@ -409,6 +413,19 @@ mod tests {
         let full = face_of(&m, &at(rules::nearly_full_of(total) - 1));
         assert_eq!(full.marks.len(), 1, "a nearly full disk drew no mark");
         assert_eq!(full.marks[0].id, super::super::mark::FULL);
+        // ITS COUNT IS THE SHARE USED, in per cent (the owner's, 2026-11-06).
+        assert!(
+            full.marks[0].id.percent,
+            "the share is drawn as a plain count"
+        );
+        assert_eq!(
+            full.marks[0].count,
+            rules::used_percent(&Room {
+                total,
+                free: rules::nearly_full_of(total) - 1
+            })
+        );
+        assert_eq!(super::super::MANIFEST.refusal_of(&full.marks[0], &[]), None);
         assert_eq!(full.marks[0].tone, Tone::Warning);
         assert_eq!(full.marks[0].id.glyph, "disk-space-full");
         assert_eq!(
@@ -447,6 +464,11 @@ mod tests {
             },
         ]);
         assert_eq!(face_of(&m, &two).marks.len(), 1);
+        assert_eq!(
+            face_of(&m, &two).marks[0].count,
+            99,
+            "the roomy one's share was said"
+        );
     }
 
     #[test]

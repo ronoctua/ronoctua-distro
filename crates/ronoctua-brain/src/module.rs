@@ -296,6 +296,12 @@ impl Manifest {
         if id.sets != declared.sets || id.leads != declared.leads {
             return Some("a mark whose sets or lead are not its manifest's");
         }
+        // AND ITS PER CENT: the footer writes a sign after the count of a
+        // mark that says it is one, so a module cannot turn a count of
+        // things into a share, or a share into a count, by itself.
+        if id.percent != declared.percent {
+            return Some("a mark whose per cent is not its manifest's");
+        }
         // A SET IS ONE OF THE DECLARED, from 1 — and a mark of sets stands
         // in one: its glyph is drawn inside a set's segment or nowhere.
         if declared.sets == 0 && id.set != 0 {
@@ -564,6 +570,12 @@ pub struct MarkId {
     /// set is. A lead has no instance: there is one per set.
     #[serde(default, skip_serializing_if = "is_false")]
     pub leads: bool,
+    /// DECLARED: its count is a share IN PER CENT (`percent = true` in the
+    /// manifest) — the RAM in use, the disk filled — which the footer draws
+    /// with the language's per cent sign. A mark in per cent is one mark: no
+    /// instance (its digit would stand where the share is) and no set.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub percent: bool,
     /// Which set it stands in, from 1; `0` for a mark in none. The set is
     /// one segment, `brain:<module>/<set>`, and a click on a mark in it hands
     /// [`MarkId::opens`] the mark's [`MarkId::key`], or its instance, or this.
@@ -664,9 +676,19 @@ impl MarkId {
             also: Vec::new(),
             sets,
             leads,
+            percent: false,
             set: 0,
             key: None,
         }
+    }
+
+    /// The same declaration, its count a share in per cent — what the
+    /// generator writes after the constructor for a mark whose manifest says
+    /// `percent` ([`MarkId::percent`]).
+    #[must_use]
+    pub const fn in_per_cent(mut self) -> Self {
+        self.percent = true;
+        self
     }
 
     /// The same mark, standing also for `other` — another mark its module
@@ -1591,6 +1613,10 @@ mod tests {
             ..SET_MARKS[0].in_set(4, None)
         });
         assert!(m.refusal_of(&fewer, &[]).is_some());
+        // A SHARE ITS MANIFEST DOES NOT DECLARE is refused: the footer would
+        // write a per cent sign after a count of agents.
+        let shared = set_mark(SET_MARKS[0].in_set(4, None).in_per_cent());
+        assert!(m.refusal_of(&shared, &[]).is_some());
     }
 
     /// FAILS IF: a key is shown on anything but an instance of a set — a
@@ -1634,7 +1660,7 @@ mod tests {
         let wire = serde_json::to_string(&keyed.id).unwrap();
         assert_eq!(serde_json::from_str::<MarkId>(&wire).unwrap(), keyed.id);
         let plain = serde_json::to_string(&FIXTURE.marks[0]).unwrap();
-        for absent in ["\"sets\"", "\"leads\"", "\"set\"", "\"key\""] {
+        for absent in ["\"sets\"", "\"leads\"", "\"percent\"", "\"set\"", "\"key\""] {
             assert!(!plain.contains(absent), "{absent} in {plain}");
         }
     }

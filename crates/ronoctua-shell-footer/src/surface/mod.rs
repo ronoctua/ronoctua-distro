@@ -4862,7 +4862,7 @@ impl Footer {
             .unwrap_or_default();
         // THE BRAIN'S MARKS, remembered for the colour, the hint and the
         // click — each asked later by the segment's id alone.
-        let brain_marks = crate::brain::marks(self.brain.as_ref());
+        let brain_marks = crate::brain::marks(self.brain.as_ref(), &self.texts);
         crate::brain::remember(&brain_marks);
         let mut out = crate::modeline::segments(
             &crate::daemon::buffer_name(&self.windows, &self.texts),

@@ -63,6 +63,11 @@
 # own — and `leads = true` for the one that comes first in each and says
 # whose the set is. A lead stands in sets and has no instance (one per set),
 # and a module that puts marks in sets has a lead for them.
+#
+# AND MARKS IN PER CENT (2026-11-06): `percent = true` for a mark whose count
+# is a share — the RAM in use, the disk filled — which the footer writes with
+# the language's per cent sign. It is one mark: no instances (their digit
+# would stand where the share is) and no sets.
 {
   lib,
   # The folder every module lives in. A test passes the fixture's instead.
@@ -464,6 +469,7 @@ let
               resting = mk.resting or false;
               sets = mk.sets or null;
               leads = mk.leads or false;
+              percent = mk.percent or false;
             in
             lib.optional (!(isWord k)) "marks.${k}: the name is an English kebab word"
             ++ (
@@ -494,6 +500,10 @@ let
                 ++ lib.optional (
                   leads == true && instances != null
                 ) "marks.${k}.leads: a lead has no instances (one per set)"
+                ++ lib.optional (!(isBool percent)) "marks.${k}.percent is a boolean"
+                ++ lib.optional (
+                  percent == true && (instances != null || sets != null)
+                ) "marks.${k}.percent: a mark in per cent is one mark (no instances and no sets)"
                 # THE MODELINE AT REST IS SILENT, but for the marks the owner
                 # approved one by one — and never a person's.
                 ++ lib.optional (
@@ -502,19 +512,22 @@ let
                 ++
                   lib.optional (resting == true && !person && !(elem "${id}/${k}" restingApproved))
                     "marks.${k}.resting: `${id}/${k}` is not a mark the owner approved to be drawn at rest (assets/brain-resting-marks.nix, AGENTS.md)"
-                ++ map (f: "marks.${k}.${f} is not a field (glyph, hint, instances, resting, sets, leads)") (
-                  filter (
-                    f:
-                    !(elem f [
-                      "glyph"
-                      "hint"
-                      "instances"
-                      "resting"
-                      "sets"
-                      "leads"
-                    ])
-                  ) (attrNames mk)
-                )
+                ++
+                  map (f: "marks.${k}.${f} is not a field (glyph, hint, instances, resting, sets, leads, percent)")
+                    (
+                      filter (
+                        f:
+                        !(elem f [
+                          "glyph"
+                          "hint"
+                          "instances"
+                          "resting"
+                          "sets"
+                          "leads"
+                          "percent"
+                        ])
+                      ) (attrNames mk)
+                    )
             )
           ) (attrNames marks)
           # AND THE MODULE'S OWN: marks in sets have their lead declared.
@@ -804,8 +817,9 @@ let
       whys = m.whys or [ ];
       glyphs = m.glyphs or { };
       # EVERY MARK SAYS how many it is, whether it rests, in how many sets it
-      # stands and whether it leads one: `0` and `false` for a mark that is
-      # one, says nothing at rest and stands in no set.
+      # stands, whether it leads one and whether it counts in per cent: `0`
+      # and `false` for a mark that is one, says nothing at rest, stands in no
+      # set and counts things.
       marks = lib.mapAttrs (
         _: mk:
         {
@@ -813,6 +827,7 @@ let
           resting = false;
           sets = 0;
           leads = false;
+          percent = false;
         }
         // mk
       ) (m.marks or { });

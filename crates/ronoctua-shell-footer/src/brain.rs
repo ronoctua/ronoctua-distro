@@ -603,17 +603,31 @@ pub const MARK_PREFIX: &str = "brain:";
 /// instance (`Manifest::refusal_of`), since two numbers after one glyph would
 /// read as one; a mind that carried both anyway draws the instance, which is
 /// what the segment's id and its click are made of.
+///
+/// A COUNT IN PER CENT ([`Drawn::percent`]: the RAM in use, the disk filled)
+/// is written with the language's sign (`brain-mark-percent`); an instance's
+/// digit never is.
 #[must_use]
-pub fn mark_text(glyph: char, instance: u8, count: u32) -> String {
-    let number = if instance > 0 {
-        u32::from(instance)
-    } else {
-        count
-    };
-    if number > 0 {
-        format!("{glyph} {number}")
-    } else {
-        glyph.to_string()
+pub fn mark_text(
+    glyph: char,
+    instance: u8,
+    count: u32,
+    percent: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> String {
+    if instance > 0 {
+        return format!("{glyph} {instance}");
+    }
+    match (count, percent) {
+        (0, _) => glyph.to_string(),
+        (count, true) => format!(
+            "{glyph} {}",
+            texts.t_args(
+                crate::key::BRAIN_MARK_PERCENT,
+                &[("percent", ronoctua_i18n::Arg::Number(i64::from(count)))],
+            )
+        ),
+        (count, false) => format!("{glyph} {count}"),
     }
 }
 
@@ -698,8 +712,8 @@ pub struct Drawn {
 
 /// The marks one mind publishes, in the order the modules published them.
 #[must_use]
-pub fn marks(mind: Option<&Mind>) -> Vec<Drawn> {
-    mind.map(|m| m.marks.iter().filter_map(drawn_of).collect())
+pub fn marks(mind: Option<&Mind>, texts: &ronoctua_i18n::Texts) -> Vec<Drawn> {
+    mind.map(|m| m.marks.iter().filter_map(|p| drawn_of(p, texts)).collect())
         .unwrap_or_default()
 }
 
@@ -714,7 +728,7 @@ pub fn remember(drawn: &[Drawn]) {
 }
 
 /// One published mark, drawn — or none, past [`NAMES_KEPT`].
-fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
+fn drawn_of(posted: &Posted<Mark>, texts: &ronoctua_i18n::Texts) -> Option<Drawn> {
     let mark = &posted.what;
     // `brain:<module>/<mark>`, and `brain:<module>/<mark>.<n>` for one of its
     // instances — each its own segment, hint and click. A MARK OF A SET is
@@ -739,7 +753,7 @@ fn drawn_of(posted: &Posted<Mark>) -> Option<Drawn> {
     } else {
         0
     };
-    let text = mark_text(glyph, digit, mark.count);
+    let text = mark_text(glyph, digit, mark.count, mark.id.percent, texts);
     Some(Drawn {
         id,
         module: posted.module.clone(),
@@ -1724,7 +1738,7 @@ mod tests {
             ],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m));
+        let drawn = marks(Some(&m), &words());
         assert_eq!(drawn.len(), 2);
         assert_eq!(drawn[0].id, "brain:fixture/full");
         assert!(is_mark(drawn[0].id));
@@ -1764,11 +1778,11 @@ mod tests {
             ("brain-act", "fixture-watch command:fixture-open".to_owned())
         );
         // THE SAME ID IS THE SAME STATIC, however often it is asked for.
-        let again = marks(Some(&m));
+        let again = marks(Some(&m), &words());
         assert!(std::ptr::eq(again[0].id, drawn[0].id));
         // AND AT REST, NOTHING — the modeline says nothing it does not mean.
-        assert!(marks(Some(&Mind::default())).is_empty());
-        assert!(marks(None).is_empty());
+        assert!(marks(Some(&Mind::default()), &words()).is_empty());
+        assert!(marks(None, &words()).is_empty());
     }
 
     /// FAILS IF: a mark that stands for several cases says only its own
@@ -1796,7 +1810,7 @@ mod tests {
             marks: vec![posted("fixture", own.besides(&counting, 4))],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m));
+        let drawn = marks(Some(&m), &words());
         let texts = words();
         let alone = Drawn {
             also: Vec::new(),
@@ -1823,10 +1837,13 @@ mod tests {
         let watch = crate::security_words::WATCH;
         let case = |name: &'static str| MarkId::of(name, "fixture-shield", "fixture-mark-case");
         let opened = |id: MarkId| {
-            let drawn = marks(Some(&Mind {
-                marks: vec![posted(watch, id)],
-                ..Mind::default()
-            }));
+            let drawn = marks(
+                Some(&Mind {
+                    marks: vec![posted(watch, id)],
+                    ..Mind::default()
+                }),
+                &words(),
+            );
             let (command, argument) = click_of(&drawn[0]);
             (command.to_owned(), argument)
         };
@@ -1870,7 +1887,7 @@ mod tests {
             }],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m));
+        let drawn = marks(Some(&m), &words());
         assert_eq!(click_of(&drawn[0]), ("fixture-open", String::new()));
     }
 
@@ -1896,7 +1913,7 @@ mod tests {
             marks: vec![posted(1, Some("home"), 0), posted(3, None, 0)],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m));
+        let drawn = marks(Some(&m), &words());
         assert_eq!(
             drawn.iter().map(|d| d.id).collect::<Vec<_>>(),
             ["brain:fixture/seat.1", "brain:fixture/seat.3"]
@@ -1932,9 +1949,50 @@ mod tests {
         // A MARK THAT IS ONE draws its count where an instance draws its
         // digit, and nothing when it counts nothing; a mind carrying both
         // draws the instance.
-        assert_eq!(mark_text(glyph, 0, 0), glyph.to_string());
-        assert_eq!(mark_text(glyph, 0, 7), format!("{glyph} 7"));
-        assert_eq!(mark_text(glyph, 2, 7), format!("{glyph} 2"));
+        let t = words();
+        assert_eq!(mark_text(glyph, 0, 0, false, &t), glyph.to_string());
+        assert_eq!(mark_text(glyph, 0, 7, false, &t), format!("{glyph} 7"));
+        assert_eq!(mark_text(glyph, 2, 7, false, &t), format!("{glyph} 2"));
+        // A COUNT IN PER CENT carries the language's sign, in every language
+        // — and a share of nothing is no number, like a count of nothing.
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).unwrap();
+            assert_eq!(
+                mark_text(glyph, 0, 85, true, &t),
+                format!("{glyph} 85%"),
+                "{language}"
+            );
+            assert_eq!(mark_text(glyph, 0, 0, true, &t), glyph.to_string());
+        }
+    }
+
+    /// FAILS IF: a mark that declares its count a share is drawn without the
+    /// per cent sign on the modeline, or one that counts things is drawn
+    /// with it.
+    #[test]
+    fn a_share_is_drawn_with_its_sign_and_a_count_without() {
+        let posted = |id: MarkId, count| Posted {
+            module: "fixture".to_owned(),
+            what: Mark {
+                id,
+                tone: Tone::Warning,
+                count,
+                act: None,
+            },
+        };
+        let share = MarkId::of("ram", "fixture-ram", "fixture-mark-ram").in_per_cent();
+        let things = MarkId::of("full", "fixture-full", "fixture-mark-full");
+        let drawn = marks(
+            Some(&Mind {
+                marks: vec![posted(share, 91), posted(things, 3)],
+                ..Mind::default()
+            }),
+            &words(),
+        );
+        assert!(drawn[0].text.ends_with(" 91%"), "{:?}", drawn[0].text);
+        assert!(drawn[1].text.ends_with(" 3"), "{:?}", drawn[1].text);
+        // THE HINT SAYS THE SAME NUMBER, as its `$count`.
+        assert_eq!(drawn[0].count, 91);
     }
 
     /// FAILS IF: a mark's instances read on the modeline in any order but
@@ -1968,7 +2026,7 @@ mod tests {
             ],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m));
+        let drawn = marks(Some(&m), &words());
         let pushed: Vec<&str> = from_the_edge(&drawn).iter().map(|d| d.id).collect();
         assert_eq!(
             pushed,
@@ -2071,10 +2129,13 @@ mod tests {
     /// anything but its set.
     #[test]
     fn a_set_member_draws_no_digit() {
-        let drawn = marks(Some(&Mind {
-            marks: a_set(2),
-            ..Mind::default()
-        }));
+        let drawn = marks(
+            Some(&Mind {
+                marks: a_set(2),
+                ..Mind::default()
+            }),
+            &words(),
+        );
         assert!(drawn.iter().all(|d| d.id == "brain:fixture/2"), "{drawn:?}");
         assert!(is_set(drawn[0].id) && !is_set("brain:fixture/full"));
         let glyph = tokens::icon::BRAIN;
@@ -2143,10 +2204,13 @@ mod tests {
     /// colour but its own tone's.
     #[test]
     fn member_at_is_the_painters_answer() {
-        let drawn = marks(Some(&Mind {
-            marks: a_set(1),
-            ..Mind::default()
-        }));
+        let drawn = marks(
+            Some(&Mind {
+                marks: a_set(1),
+                ..Mind::default()
+            }),
+            &words(),
+        );
         let all = sets(&drawn);
         let set = &all[0];
         let text = set_text(set);

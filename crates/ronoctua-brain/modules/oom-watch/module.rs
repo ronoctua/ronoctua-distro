@@ -24,6 +24,15 @@
 //! and the cgroup and the second of the kill, so the footer ADDS these
 //! details to the notification it raised instead of raising a second one —
 //! the matching is the footer's (`ronoctua_notify::oom::Kills`).
+//!
+//! # And the RAM, marked while it is nearly all in use
+//!
+//! The heartbeat the core already takes says how much of the RAM is in use
+//! ([`crate::pulse::Pulse::ram_used_pct`]), so the mark costs no reading of
+//! its own. It is up from [`RAM_WARN_AT_PERCENT`], with the share as its
+//! count, and comes down only [`RAM_EASE_PERCENT`] points under that line
+//! ([`ram_up`]): a use that hovers on the line would otherwise blink it every
+//! heartbeat. A click opens the memory panel ([`MEMORY_PANEL`]).
 
 mod rules;
 
@@ -37,8 +46,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::module::{
-    Arg, Birth, Cell, Ctx, Event, Face, Field, Heard, Look, Manifest, Match, Module, Noted, Row,
-    Screen, Section, Source, Watcher,
+    Arg, Birth, Cell, Ctx, Event, Face, Field, Heard, Look, Manifest, Mark, Match, Module, Noted,
+    Row, Screen, Section, Source, Tone, Watcher,
 };
 use crate::moment::Moment;
 
@@ -56,6 +65,49 @@ const KERNEL: usize = 0;
 
 /// Reads the machine's memory stall now, in per mille of the time.
 type Stall = Box<dyn Fn() -> Option<u16> + Send + Sync>;
+
+/// From this share of the RAM in use, in per cent, the modeline carries the
+/// RAM's mark, in the warning's colour: what is left is what the machine
+/// swaps out before it stalls.
+const RAM_WARN_AT_PERCENT: u16 = 85;
+
+/// From this share, the mark is in danger's colour: oomd is about to choose
+/// what to close.
+const RAM_DANGER_AT_PERCENT: u16 = 95;
+
+/// How many points under [`RAM_WARN_AT_PERCENT`] the use falls before a mark
+/// that is up comes down.
+const RAM_EASE_PERCENT: u16 = 5;
+
+/// The shell's command a click on the RAM's mark runs: the memory panel
+/// (`LEADER s m`), which says who is eating the memory and whether the
+/// protection is armed — the same the notification of a kill opens.
+const MEMORY_PANEL: &str = "memory-open";
+
+/// Whether the RAM's mark is up, given whether it `was` and the share of the
+/// RAM in `use` now: up from the warning's line, and — once up — until the
+/// use falls [`RAM_EASE_PERCENT`] points under it. A use nobody measured
+/// draws no mark: a mark about memory nobody read would lie.
+const fn ram_up(was: bool, used: Option<u16>) -> bool {
+    let Some(used) = used else {
+        return false;
+    };
+    let line = if was {
+        RAM_WARN_AT_PERCENT - RAM_EASE_PERCENT
+    } else {
+        RAM_WARN_AT_PERCENT
+    };
+    used >= line
+}
+
+/// The colour of the RAM's mark at a share of `used` per cent.
+const fn ram_tone(used: u16) -> Tone {
+    if used >= RAM_DANGER_AT_PERCENT {
+        Tone::Danger
+    } else {
+        Tone::Warning
+    }
+}
 
 /// The entry: the journal's matches, the memory of what was told, and the
 /// machine's stall read through the one crate that reads `/proc`.
@@ -93,6 +145,8 @@ struct State {
     lost: Option<String>,
     /// Its page's generation.
     generation: u64,
+    /// Whether the RAM's mark was up at the last heartbeat ([`ram_up`]).
+    ram_up: bool,
 }
 
 /// A kill as its page and the file keep it.
@@ -253,11 +307,25 @@ impl Module for OomWatch {
         Some(self)
     }
 
-    fn face(&self, _look: &Look<'_>) -> Face {
-        // NO MARK: a kill is told once, as it happens, and the activity keeps
-        // it. Only the page's generation.
+    fn face(&self, look: &Look<'_>) -> Face {
+        // NO MARK FOR A KILL: it is told once, as it happens, and the
+        // activity keeps it. The one mark is the RAM's, while it is nearly
+        // all in use.
+        let mut state = self.state();
+        let used = look.pulse.ram_used_pct;
+        state.ram_up = ram_up(state.ram_up, used);
+        let marks = match used {
+            Some(used) if state.ram_up => vec![Mark {
+                id: super::mark::RAM.opening(MEMORY_PANEL),
+                tone: ram_tone(used),
+                count: u32::from(used),
+                act: None,
+            }],
+            _ => Vec::new(),
+        };
         Face {
-            screen: self.state().generation,
+            screen: state.generation,
+            marks,
             ..Face::default()
         }
     }
@@ -393,6 +461,68 @@ mod tests {
 
     fn watch() -> OomWatch {
         OomWatch::keeping(None, Box::new(|| Some(123)))
+    }
+
+    /// Its face over a heartbeat that read `used` per cent of the RAM.
+    fn face_at(m: &OomWatch, used: Option<u16>) -> Face {
+        let mine = super::super::MANIFEST.defaults();
+        m.face(&Look {
+            now: 100,
+            pulse: &crate::pulse::Pulse {
+                ram_used_pct: used,
+                ..crate::pulse::Pulse::default()
+            },
+            mine: &mine,
+            last: None,
+        })
+    }
+
+    /// FAILS IF: the RAM's mark is up under its line or down over it, does
+    /// not carry the share as its count in per cent, does not turn to danger
+    /// near the top, blinks on a use that hovers on the line, stays up once
+    /// the use has eased, is drawn about memory nobody measured, or opens
+    /// anything but the memory panel.
+    #[test]
+    fn the_ram_is_marked_while_it_is_nearly_all_in_use() {
+        let m = watch();
+        assert!(face_at(&m, Some(RAM_WARN_AT_PERCENT - 1)).marks.is_empty());
+        let up = face_at(&m, Some(RAM_WARN_AT_PERCENT));
+        assert_eq!(up.marks.len(), 1, "a nearly full RAM drew no mark");
+        let mark = &up.marks[0];
+        assert_eq!(mark.id.name, super::super::mark::RAM.name);
+        assert!(mark.id.percent, "the share is drawn as a plain count");
+        assert_eq!(mark.count, u32::from(RAM_WARN_AT_PERCENT));
+        assert_eq!(mark.tone, Tone::Warning);
+        assert_eq!(mark.id.opens.as_deref(), Some(MEMORY_PANEL));
+        // WHAT ITS MANIFEST DECLARES, as the core reads it.
+        assert_eq!(super::super::MANIFEST.refusal_of(mark, &[]), None);
+
+        let top = face_at(&m, Some(RAM_DANGER_AT_PERCENT));
+        assert_eq!(top.marks[0].tone, Tone::Danger);
+        assert_eq!(top.marks[0].count, u32::from(RAM_DANGER_AT_PERCENT));
+
+        // HOVERING ON THE LINE does not blink it: just under, it stays.
+        let hovering = face_at(&m, Some(RAM_WARN_AT_PERCENT - 1));
+        assert_eq!(hovering.marks.len(), 1, "the mark blinked on the line");
+        assert_eq!(hovering.marks[0].tone, Tone::Warning);
+        assert_eq!(
+            face_at(&m, Some(RAM_WARN_AT_PERCENT - RAM_EASE_PERCENT))
+                .marks
+                .len(),
+            1
+        );
+        // EASED: it comes down, and climbs back only to the line itself.
+        assert!(
+            face_at(&m, Some(RAM_WARN_AT_PERCENT - RAM_EASE_PERCENT - 1))
+                .marks
+                .is_empty(),
+            "the mark stayed up once the use had eased"
+        );
+        assert!(face_at(&m, Some(RAM_WARN_AT_PERCENT - 1)).marks.is_empty());
+
+        // NOTHING MEASURED: no mark, even after one was up.
+        assert_eq!(face_at(&m, Some(99)).marks.len(), 1);
+        assert!(face_at(&m, None).marks.is_empty());
     }
 
     fn hear(m: &OomWatch, ctx: &Ctx, source: usize, line: &str) {

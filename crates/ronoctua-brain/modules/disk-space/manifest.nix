@@ -51,12 +51,15 @@
 
   # THE ONE MARK, and only while it says something (invariant 14): while any
   # filesystem the relief measures is under its "nearly full" line
-  # (`assets/cache.nix`, `diskWarnPercent` with its cap). A click opens the
-  # module's page, which says how much is free and where the two lines are.
+  # (`assets/cache.nix`, `diskWarnPercent` with its cap). Its count is how
+  # much of the fullest of them is used (`percent`, owner, 2026-11-06). A
+  # click opens the module's page, which says how much is free and where the
+  # two lines are.
   marks = {
     full = {
       glyph = "full";
       hint = "disk-space-mark-full";
+      percent = true;
     };
   };
 

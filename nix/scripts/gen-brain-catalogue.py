@@ -143,6 +143,7 @@ def main() -> int:
                     "resting": spec["resting"],
                     "sets": spec["sets"],
                     "leads": spec["leads"],
+                    "percent": spec["percent"],
                 }
             )
         for g in m["glyphs"]:

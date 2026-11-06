@@ -238,12 +238,17 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
         # shape already; this only refuses to write one it was not handed.
         sets = spec.get("sets", 0)
         leads = spec.get("leads", False)
+        # AND ONE WHOSE COUNT IS A SHARE says so after its constructor
+        # (`MarkId::in_per_cent`), so every other is generated as it was.
+        percent = spec.get("percent", False)
         if not isinstance(instances, int) or isinstance(instances, bool) or not 0 <= instances <= 9:
             fail(ident, f"the mark `{k}` declares {instances!r} instances; a mark has from 1 to 9")
         if not isinstance(sets, int) or isinstance(sets, bool) or not 0 <= sets <= 9:
             fail(ident, f"the mark `{k}` declares {sets!r} sets; a mark stands in from 1 to 9")
         if leads and (not sets or instances):
             fail(ident, f"the mark `{k}` leads a set: it stands in sets and has no instances")
+        if percent and (sets or instances):
+            fail(ident, f"the mark `{k}` counts in per cent: it is one mark, with no instances and no sets")
         if sets and leads:
             doc = f"`brain:{ident}/<1..={sets}>`'s lead, drawn first in its set with the glyph token `{token}`"
         elif sets and instances:
@@ -256,24 +261,28 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
             doc = f"`brain:{ident}/{k}`, drawn with the glyph token `{token}`"
         if resting:
             doc += ", and drawn at rest too"
+        if percent:
+            doc += ", its count a share in per cent"
         items.append(f"    /// {doc}.")
+        # `.in_per_cent()` after the constructor, before its `;`.
+        then = ".in_per_cent()" if percent else ""
         if sets:
             items.append(
                 f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::declared_in_sets("
                 f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}, "
                 f"{instances}, {'true' if resting else 'false'}, "
-                f"{sets}, {'true' if leads else 'false'});"
+                f"{sets}, {'true' if leads else 'false'}){then};"
             )
         elif instances or resting:
             items.append(
                 f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::declared("
                 f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}, "
-                f"{instances}, {'true' if resting else 'false'});"
+                f"{instances}, {'true' if resting else 'false'}){then};"
             )
         else:
             items.append(
                 f"    pub const {const(k)}: crate::module::MarkId = crate::module::MarkId::of("
-                f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]});"
+                f"{rust_str(k)}, {rust_str(token)}, super::key::{key_of[spec['hint']]}){then};"
             )
     block("The marks it may put on the modeline", "mark", items)
 

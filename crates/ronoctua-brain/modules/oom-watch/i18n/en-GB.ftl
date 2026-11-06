@@ -1,8 +1,10 @@
 # The oom-watch module's own texts: its name and the line under it, its page,
-# the record it writes in the activity and the notification of a kill.
+# the record it writes in the activity, the notification of a kill, and the
+# hint of the RAM's mark ($count is the share of the RAM in use, in per cent).
 brain-task-oom-watch = Closed for lack of memory
-brain-task-oom-watch-does = When the machine runs out of memory, the kernel or systemd-oomd closes a program so the rest can keep going. Each time, this writes it down in the activity and tells you once: what was closed, where, how much memory it held, how much the machine was stalling, and when.
+brain-task-oom-watch-does = When the machine runs out of memory, the kernel or systemd-oomd closes a program so the rest can keep going. Each time, this writes it down in the activity and tells you once: what was closed, where, how much memory it held, how much the machine was stalling, and when. While the RAM is nearly all in use, a mark on the modeline says how much of it is.
 brain-task-oom-watch-brief = Writes down every program closed because memory ran out.
+oom-watch-mark-ram = { $count }% of the RAM is in use. Click to see what is using it.
 oom-watch-heading-journal = Following the journal
 oom-watch-heading-recent = Closed lately
 oom-watch-row-none = Nothing has been closed for lack of memory since this began watching

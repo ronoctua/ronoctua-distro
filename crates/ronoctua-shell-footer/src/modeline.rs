@@ -1201,10 +1201,13 @@ mod tests {
             marks.push(posted(LEAD.in_set(n, None)));
             marks.push(posted(BUSY.in_set(n, None).numbered(1, None)));
         }
-        crate::brain::marks(Some(&ronoctua_brain::Mind {
-            marks,
-            ..ronoctua_brain::Mind::default()
-        }))
+        crate::brain::marks(
+            Some(&ronoctua_brain::Mind {
+                marks,
+                ..ronoctua_brain::Mind::default()
+            }),
+            &ronoctua_i18n::Texts::fresh("en-GB").unwrap(),
+        )
     }
 
     /// FAILS IF: a set sits anywhere but to the left of every glyph on the

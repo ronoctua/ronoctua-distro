@@ -972,6 +972,9 @@ brain-band-snooze = { $minutes } min
 brain-band-more = +{ $count }
 # Two cases one mark stands for, read one after the other under the pointer.
 brain-mark-also = { $first } · { $then }
+# A MARK'S COUNT THAT IS A SHARE (`percent` in its manifest: the RAM in use,
+# the disk filled), after its glyph on the modeline.
+brain-mark-percent = { $percent }%
 hint-brain-more = todos os avisos, na página do Brain
 echo-brain-no-notice = O cérebro não tem nada a dizer agora
 cmd-leader-set-default = As teclas como são, cada uma abrindo o seu app no rodapé

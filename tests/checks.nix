@@ -51018,6 +51018,20 @@ let
             10
           ];
           leadsAlone = with' { leads = true; };
+          # AND A COUNT IN PER CENT (the RAM in use, the disk filled,
+          # 2026-11-06): a boolean, on a mark that is one.
+          percentAccepted = with' { percent = true; };
+          percentRefused = map with' [
+            { percent = "yes"; }
+            {
+              percent = true;
+              instances = 3;
+            }
+            {
+              percent = true;
+              sets = 2;
+            }
+          ];
           # THE REAL TREE: every mark, with what it declares.
           declared = map (m: {
             inherit (m) id snake;
@@ -51027,6 +51041,7 @@ let
                 resting
                 sets
                 leads
+                percent
                 ;
             }) m.marks;
           }) brainModules.every;
@@ -51057,10 +51072,16 @@ let
               wrong.append("a mark declaring sets outside 1..9 was not refused")
       if not f["leadsAlone"]:
           wrong.append("a mark leading with no sets was not refused")
+      if f["percentAccepted"]:
+          wrong.append(f"a mark that is one, counting in per cent, was refused: {f['percentAccepted']}")
+      for said in f["percentRefused"]:
+          if not any("percent" in s for s in said):
+              wrong.append(f"a per cent that is not a boolean, or on a mark of instances or sets, was not refused by its sentence: {said}")
       # EVERY MARK OF THE REAL TREE, against what the generator wrote for it:
       # `MarkId::declared` exactly when it declares instances or a rest, and
       # never more instances than one digit draws.
       seen = 0
+      percents = 0
       for m in f["declared"]:
           made = uncommented(pathlib.Path("${brainManifestsRs}", m["id"], "manifest.rs").read_text())
           for k, d in m["marks"].items():
@@ -51075,7 +51096,14 @@ let
                   wrong.append(f"{m['id']}/{k} stands in {d['sets']} sets")
               if not found or found.group(1) != want:
                   wrong.append(f"{m['id']}/{k} is not written with `MarkId::{want}`")
+              # IN PER CENT exactly when declared: the footer writes the sign
+              # by what the published mark says of itself.
+              line = made[found.start():made.find(";", found.start())] if found else ""
+              if (".in_per_cent()" in line) != d["percent"]:
+                  wrong.append(f"{m['id']}/{k} declares percent = {str(d['percent']).lower()}, and its constant says otherwise: `{line}`")
+              percents += d["percent"]
       floor(seen, 8, "marks of the real tree")
+      floor(percents, 2, "marks of the real tree in per cent (the RAM's and the disk's)")
 
       # THE GENERATOR, on the person's fixture (3 instances): the number lands
       # in the declaration; and handed 10 directly, it refuses.

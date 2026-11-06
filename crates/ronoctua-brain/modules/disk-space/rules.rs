@@ -87,6 +87,18 @@ pub(super) fn deciding<'a>(rooms: impl IntoIterator<Item = &'a Room>) -> Option<
         .min_by_key(|r| r.free_per_mille())
 }
 
+/// How much of a filesystem is used, in whole per cent, ROUNDED DOWN: a disk
+/// with a few gigabytes left is not "100 %" until nothing is. `0` for one
+/// whose size is unknown.
+#[must_use]
+pub(super) fn used_percent(room: &Room) -> u32 {
+    if room.total == 0 {
+        return 0;
+    }
+    let used = u128::from(room.total.saturating_sub(room.free)) * 100;
+    u32::try_from(used / u128::from(room.total)).unwrap_or(100)
+}
+
 /// What a relief did, measured before and after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Relief {
@@ -297,6 +309,19 @@ mod tests {
             long_after,
             left(150, false)
         ));
+    }
+
+    #[test]
+    fn the_used_share_is_rounded_down_and_never_says_full_with_room_left() {
+        assert_eq!(used_percent(&room(50, 1000)), 95);
+        // 99.6 per cent used is 99: there is still room.
+        assert_eq!(used_percent(&room(4, 1000)), 99);
+        assert_eq!(used_percent(&room(0, 1000)), 100);
+        assert_eq!(used_percent(&room(1000, 1000)), 0);
+        // A SIZE NOBODY READ says nothing, rather than dividing by it.
+        assert_eq!(used_percent(&room(0, 0)), 0);
+        // AND A BIG DISK does not overflow on the way.
+        assert_eq!(used_percent(&room(GIB, 64 * 1024 * GIB)), 99);
     }
 
     #[test]
