@@ -656,10 +656,29 @@ fn main() -> Result<()> {
     let declared = ronoctua_shell_kit::chrome::declared(&list, &keymap, &mut interned, &texts);
     let mut hinted = ronoctua_shell_kit::chrome::Hinted::default();
     hinted.offers_leader_alt(&[]);
+    // WHAT THE POINTER RESTS ON (`--hover`), as the host says it
+    // (`door::list::line_zero`): on the header's line in place of the keys —
+    // and, with the header hidden, on the footer's minibuffer, which this
+    // tool does not draw and so prints.
+    let (pieces, carries) = match &declared.pointed {
+        Some(about) => (
+            vec![ronoctua_shell_kit::chrome::Piece::said(about.clone())],
+            ronoctua_shell_kit::chrome::Carries::About,
+        ),
+        None => (
+            declared.pieces(&texts),
+            ronoctua_shell_kit::chrome::Carries::Keys,
+        ),
+    };
+    if !ask.header
+        && let Some(about) = &declared.pointed
+    {
+        println!("the footer's minibuffer says: {about}");
+    }
     let header = if ask.header {
         hinted.head(
-            &declared.pieces(&texts),
-            ronoctua_shell_kit::chrome::Carries::Keys,
+            &pieces,
+            carries,
             tokens::space::CONTENT_INSET,
             ask.columns,
             &texts,

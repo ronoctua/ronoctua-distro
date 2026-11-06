@@ -341,6 +341,20 @@ pub struct Screen<P: Palette> {
     /// WHAT THE BUFFER TEACHES NOW, in order, for that header
     /// ([`Screen::teach`]; `Command::Taught`).
     taught: Vec<Taught>,
+    /// WHAT THE THING UNDER THE POINTER IS, in a sentence ([`Screen::point`];
+    /// `Command::Pointed`) — the last said this frame.
+    pointed: Option<Pointed>,
+}
+
+/// WHAT THE THING UNDER THE POINTER IS, as it crosses to the host
+/// (`ronoctua_protocol::Command::Pointed`): a text key the host translates,
+/// or a sentence the buffer was handed already made (a module's own words).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pointed {
+    /// A text key.
+    Key(String),
+    /// A sentence the host already made, drawn as it came.
+    Datum(String),
 }
 
 /// ONE PAIR A BUFFER TEACHES, as it crosses to the host's header
@@ -374,6 +388,7 @@ impl<P: Palette> Screen<P> {
             title: None,
             headings_below_the_top: 0,
             taught: Vec::new(),
+            pointed: None,
         }
     }
 
@@ -783,6 +798,24 @@ impl<P: Palette> Screen<P> {
         &self.taught
     }
 
+    /// SAYS WHAT THE THING UNDER THE POINTER IS — a task's description under
+    /// its row, what a glyph means under the glyph. It draws nothing and keeps
+    /// no row: the HOST says it where every window says what its row under the
+    /// pointer adds — the header's line, or, with the header hidden, the
+    /// footer's minibuffer (`Command::Pointed`). One a frame, the last said.
+    ///
+    /// A buffer says it only for the cell a pointer rests on (`Input::Hover`),
+    /// and says nothing when none does: what is not said is taken off.
+    pub fn point(&mut self, about: Pointed) {
+        self.pointed = Some(about);
+    }
+
+    /// What this frame said about the pointer, if anything ([`Screen::point`]).
+    #[must_use]
+    pub const fn pointed(&self) -> Option<&Pointed> {
+        self.pointed.as_ref()
+    }
+
     /// The window's title this frame declared, if any ([`Screen::heading`]).
     #[must_use]
     pub const fn title(&self) -> Option<&(P::Icon, String)> {
@@ -919,6 +952,14 @@ impl<P: Palette> Screen<P> {
                 says: t.says.clone(),
                 about: t.about.clone(),
                 control: t.control,
+            });
+        }
+        if let Some(p) = &self.pointed {
+            list.push(Command::Pointed {
+                about: match p {
+                    Pointed::Key(k) => Text::Key(k.clone()),
+                    Pointed::Datum(d) => Text::Data(d.clone()),
+                },
             });
         }
         for part in &self.parts {
@@ -1320,6 +1361,21 @@ impl<P: Palette> Pen<'_, P> {
         }
     }
 
+    /// The ground under a STRETCH of one row — `columns` cells from `column`
+    /// — for a control a few cells wide that lights alone under the pointer,
+    /// the way a header's shortcut does and the row it sits on does not.
+    pub fn ground_under(&mut self, row: u16, column: u16, columns: u16, role: Role) {
+        // NOT `banded()`, whose zero means "to the edge": a stretch is cut
+        // at the cell where the bar's lane begins, or the window's edge.
+        let edge = self.screen.columns.saturating_sub(self.keeps);
+        let columns = columns.min(edge.saturating_sub(column));
+        if columns > 0
+            && let Some(line) = self.at(row, 1)
+        {
+            self.screen.ground_in(line, column, columns, role);
+        }
+    }
+
     /// The ground under EVERY row of this block.
     ///
     /// The common case for a container, and the one that cannot be written
@@ -1550,6 +1606,74 @@ mod tests {
             "the top heading drew a glyph or a title of its own"
         );
         screen.check().expect("a declared title is a whole frame");
+    }
+
+    /// FAILS IF: a stretch of a row is not grounded where it was asked, or
+    /// runs under the bar's lane past the block's own cells.
+    #[test]
+    fn a_ground_under_a_stretch_stays_in_it_and_off_the_bar() {
+        let mut screen = Screen::<Tokens>::new(&context(40, 8));
+        let blocks = screen.split(&[crate::Slice::Fixed(2), crate::Slice::Rest]);
+        let mut pen = screen.region(blocks[1]);
+        pen.keeping_for(true);
+        pen.ground_under(1, 30, 20, Role::Hover);
+        let grounds: Vec<(u16, u16, u16)> = screen
+            .as_protocol()
+            .commands
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Selection {
+                    line,
+                    column,
+                    columns,
+                    ..
+                } => Some((line, column, columns)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            grounds,
+            [(3, 30, 9)],
+            "the stretch leaked, or went under the bar"
+        );
+        // AND IN A BLOCK THAT KEEPS NO LANE, to the window's edge.
+        let mut screen = Screen::<Tokens>::new(&context(40, 8));
+        let blocks = screen.split(&[crate::Slice::Rest]);
+        let mut pen = screen.region(blocks[0]);
+        pen.ground_under(0, 30, 6, Role::Hover);
+        assert!(
+            screen.as_protocol().commands.iter().any(|c| matches!(
+                c,
+                Command::Selection {
+                    line: 0,
+                    column: 30,
+                    columns: 6,
+                    ..
+                }
+            )),
+            "a stretch in a block with no lane was not drawn"
+        );
+    }
+
+    /// FAILS IF: what the pointer rests on draws anything, keeps a row, or
+    /// crosses as anything but the one sentence the host says — the last one
+    /// said this frame.
+    #[test]
+    fn what_the_pointer_rests_on_is_declared_and_draws_nothing() {
+        let mut screen = Screen::<Tokens>::new(&context(80, 24));
+        screen.point(Pointed::Key("brain-kind-watch".into()));
+        screen.point(Pointed::Datum("what a module said".into()));
+        assert_eq!(
+            screen.as_protocol().commands,
+            [Command::Pointed {
+                about: Text::Data("what a module said".into()),
+            }],
+            "the pointer's sentence drew, or more than one crossed"
+        );
+        assert_eq!(screen.row(), 0, "the pointer's sentence took a row");
+        screen
+            .check()
+            .expect("a declared sentence is a whole frame");
     }
 
     /// FAILS IF: a heading below the top draws a title inside the content, is

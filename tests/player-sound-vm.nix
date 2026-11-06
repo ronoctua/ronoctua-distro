@@ -104,10 +104,25 @@ pkgs.testers.runNixOSTest {
             f"XDG_RUNTIME_DIR=/run/user/0 python3 ${client} '{json.dumps(what)}'"
         ))
 
+    def graph():
+        """`pw-dump`'s snapshot of the sound graph, TAKEN AGAIN when it does
+        not parse: it is a snapshot of a live graph, and one taken while a
+        stream comes up has come back malformed (`Expecting ',' delimiter`,
+        2026-11-06) — a fault of the snapshot, not of what the test asks it,
+        and a second look a moment later answers. Five that never parse are
+        the failure they are."""
+        for _ in range(5):
+            try:
+                return json.loads(machine.succeed("PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump"))
+            except json.JSONDecodeError as refused:
+                last = refused
+                machine.sleep(duration=timedelta(seconds=1))
+        raise last
+
     def output_streams():
         """The sound streams the server holds for the player, read from
         outside: `pw-dump`'s nodes of class `Stream/Output/Audio`."""
-        dump = json.loads(machine.succeed("PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump"))
+        dump = graph()
         return [
             o for o in dump
             if o.get("type") == "PipeWire:Interface:Node"
@@ -185,7 +200,7 @@ pkgs.testers.runNixOSTest {
         """Where each of the player's sound streams goes: the sink a LINK
         from it reaches, by name — the server's routing, not the engine's
         intention."""
-        dump = json.loads(machine.succeed("PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump"))
+        dump = graph()
         names = {o["id"]: o.get("info", {}).get("props", {}).get("node.name") for o in dump
                  if o.get("type") == "PipeWire:Interface:Node"}
         streams = {s["id"] for s in output_streams()}
@@ -243,7 +258,7 @@ pkgs.testers.runNixOSTest {
     def moved_stream():
         """The id of the program this subtest plays, the outputs by name with
         their serials, and the names of the sinks its links reach."""
-        dump = json.loads(machine.succeed("PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-dump"))
+        dump = graph()
         props = {o["id"]: (o.get("info") or {}).get("props", {}) for o in dump
                  if o.get("type") == "PipeWire:Interface:Node"}
         stream = next((i for i, p in props.items()

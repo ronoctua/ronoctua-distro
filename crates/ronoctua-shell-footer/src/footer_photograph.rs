@@ -102,6 +102,9 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
                         writes), whose first kiosk is that window — Chrome's
                         bars hidden when it says `fullscreen` — never this
                         machine's Chrome
+  --pointed <sentence>  the window in focus has no header and its pointer
+                        rests on something that says <sentence>, which the
+                        free minibuffer says (the window's `pointed` report)
   --out <file>          where to write                 (default: footer.png)
   --language <id>       pt-BR or en-GB                 (default: pt-BR)
   --theme <id>          a theme of assets/themes       (default: the default)
@@ -189,6 +192,9 @@ pub(crate) struct Scene {
     /// What a kiosk's bridge says, the window in focus being its first
     /// kiosk — delivered as the bridge's thread delivers a state.
     pub kiosk: Option<ronoctua_browser::wire::State>,
+    /// What the pointer rests on in the window in focus, with no header —
+    /// delivered as the window's `pointed` report is.
+    pub pointed: Option<String>,
     pub steps: Vec<Step>,
 }
 
@@ -227,6 +233,7 @@ struct Asked {
     agents: Option<std::path::PathBuf>,
     terminals: Option<std::path::PathBuf>,
     kiosk: Option<std::path::PathBuf>,
+    pointed: Option<String>,
     out: std::path::PathBuf,
     language: String,
     theme: tokens::theme::Theme,
@@ -287,6 +294,7 @@ fn parse(words: &[String]) -> Result<Asked> {
         agents: None,
         terminals: None,
         kiosk: None,
+        pointed: None,
         out: std::path::PathBuf::from("footer.png"),
         language: "pt-BR".to_owned(),
         theme: tokens::theme::default_one(),
@@ -368,6 +376,7 @@ fn parse(words: &[String]) -> Result<Asked> {
             }
             "--terminals" => me.terminals = Some(std::path::PathBuf::from(value()?)),
             "--kiosk" => me.kiosk = Some(std::path::PathBuf::from(value()?)),
+            "--pointed" => me.pointed = Some(value()?),
             "--out" | "-o" => me.out = std::path::PathBuf::from(value()?),
             "--language" => me.language = value()?,
             "--theme" => {
@@ -458,6 +467,10 @@ fn parse(words: &[String]) -> Result<Asked> {
     ensure!(
         me.app.is_some() || me.kiosk.is_none(),
         "`--kiosk` makes the window in focus a kiosk, and there is none without `--app`"
+    );
+    ensure!(
+        me.app.is_some() || me.pointed.is_none(),
+        "`--pointed` is said by the window in focus, and there is none without `--app`"
     );
     Ok(me)
 }
@@ -720,6 +733,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
         player,
         terminals,
         kiosk,
+        pointed: asked.pointed.clone(),
         steps: asked.steps.clone(),
     };
     let taken = crate::surface::photographed(&conn, scene, composition)?;
@@ -1126,6 +1140,27 @@ mod tests {
         );
         assert!(parse(&words(&["--door", "footer", "--kiosk", "bridge.json"])).is_err());
         assert!(USAGE.contains("--kiosk <file>"), "the word is not taught");
+    }
+
+    /// FAILS IF: `--pointed` loses its sentence, is taken with no window in
+    /// focus to say it, or is not taught.
+    #[test]
+    fn what_the_pointer_rests_on_is_the_window_in_focus_s() {
+        let a = parse(&words(&[
+            "--door",
+            "footer",
+            "--app",
+            "br.ronoctua.brain",
+            "--pointed",
+            "Only watches",
+        ]))
+        .expect("the words parse");
+        assert_eq!(a.pointed.as_deref(), Some("Only watches"));
+        assert!(parse(&words(&["--door", "footer", "--pointed", "x"])).is_err());
+        assert!(
+            USAGE.contains("--pointed <sentence>"),
+            "the word is not taught"
+        );
     }
 
     /// FAILS IF: a walk that points is offered no seat, the seat does not

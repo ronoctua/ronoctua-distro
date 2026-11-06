@@ -559,7 +559,9 @@ OSC 7501, que o guardião lê.
   buffer fecha na primeira página (`Effect::Close`). Ficam fora terminal, bloqueio, captura,
   redimensionador e coluna (`Content::confirms_closing`).
 - Sem cabeçalho (o padrão da distro), a linha 0 aparece só enquanto há uma frase ou uma pergunta
-  (`chrome::Carries::speaks`), e a lista desce uma linha nesse tempo.
+  (`chrome::Carries::speaks`), e a lista desce uma linha nesse tempo; o que o ponteiro diz
+  (`Carries::About`; num buffer, `Screen::point`) vai para o minibuffer do rodapé
+  (`door::pointed_order`, ordem `pointed`).
 - Tecla nunca é texto no `.ftl`: sai do código (`bindings::taught`) + `bindings::label()`, num
   `{ $keys }` (cobra `keys-are-never-text`). "LEADER" em produção é `SUPER`, no `.#dev` `CTRL ALT SPC`.
 

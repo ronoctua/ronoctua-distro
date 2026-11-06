@@ -1,48 +1,59 @@
-//! What happened, as it crosses: how many records are kept and shown, and
-//! how the activity log folds them.
+//! What happened, as it crosses: how far back records are kept and shown,
+//! and how the activity log folds them.
 //!
 //! The journal ITSELF — the file the daemon rewrites whole, and why a failed
 //! run moves the schedule while a hold is never written down — is the
 //! daemon's (`ronoctua_brain_daemon::journal`). What is here is what both
-//! sides of the socket agree on: the numbers a screen draws ([`RECENT`],
-//! [`ACTIVITY`], [`HISTORY`]), which records the schedule counts from
-//! ([`schedules`]), and the fold the footer and the daemon both make of one
-//! list ([`grouped`]).
+//! sides of the socket agree on: the reaches a screen draws
+//! ([`ACTIVITY_DAYS`], [`RECENT_DAYS`]) and the ceiling under them
+//! ([`HISTORY`]), which records the schedule counts from ([`schedules`]), and
+//! the fold the footer and the daemon both make of one list ([`grouped`]).
 
-use crate::moment::Moment;
+use crate::moment::{DAY, Moment};
 use crate::task::RunRecord;
 
-/// How many runs are kept, across every task.
+/// How far back the home page's activity log reaches, in days.
 ///
-/// It was sixty-four, matched to the transfer queue's ceiling on finished
-/// jobs. Two things moved it. The home page now shows the last [`ACTIVITY`]
-/// things the brain did, so the list has to be at least that long to fill it;
-/// and a five-minute watch was added, which at sixty-four would have wrapped
-/// the whole list inside six hours and taken every other task's history with
-/// it. Two hundred and fifty-six is a few days of the watch and still years of
-/// everything else — and what protects the rare tasks is not this number, it
-/// is the floor in the daemon's `Journal::put`.
-///
-/// The whole list crosses the socket on every change. At this size that is a
-/// few tens of kilobytes, and the argument for sending the whole mind is in
-/// `crate::wire`.
-pub const HISTORY: usize = 256;
+/// FIFTEEN, because the owner asked for fifteen days in place of the last
+/// hundred records: *"em vez de mostrar as últimas 100 atividades, passe a
+/// mostrar os últimos 15 dias"*. A count was a reach that changed with how
+/// busy the machine was — a hundred records is three days of an agent at
+/// work and a month of a quiet machine — and a reach in days is the same
+/// promise on both.
+pub const ACTIVITY_DAYS: u16 = 15;
 
-/// How many of a task's OWN runs are kept whatever else happens, and shown.
+/// How far back a task's OWN history reaches, in days.
 ///
-/// Ten, because the owner asked for ten. It is a floor on the pruning of the
-/// daemon's `Journal::put` as well as the number the screen draws: a task's
-/// row promises its last ten, and a ceiling that could take them is a promise
-/// the screen cannot keep.
-pub const RECENT: usize = 10;
+/// TWENTY, the owner's number, in place of a task's last ten runs: *"passem a
+/// armazenar os últimos 20 dias"*. A task that ran last a month ago has an
+/// empty history and still its last run, which its row shows — the journal
+/// never drops a task's last record ([`Journal::put`] in the daemon).
+pub const RECENT_DAYS: u16 = 20;
 
-/// How many records the home page's activity log shows.
+/// How far back the journal keeps anything: the longer of the two reaches,
+/// so a screen is never promised a day the file already let go of.
+pub const KEPT_DAYS: u16 = if ACTIVITY_DAYS > RECENT_DAYS {
+    ACTIVITY_DAYS
+} else {
+    RECENT_DAYS
+};
+
+/// How many records are kept at most, however young they are.
 ///
-/// A hundred, because the owner asked for a hundred. It is smaller than
-/// [`HISTORY`] on purpose — what is kept and what is shown are two questions,
-/// and the log scrolls, so showing fewer than are kept is a choice about the
-/// list and not about the disk.
-pub const ACTIVITY: usize = 100;
+/// A CEILING UNDER THE REACH, and not the reach: the days are what a screen
+/// promises, and this is what bounds the file and the mind that crosses the
+/// socket on every change when something writes far more than anybody
+/// planned for. Twenty days of an agent counted every ten minutes of a
+/// working day is around a thousand records; two thousand and forty-eight is
+/// that twice, and still a few hundred kilobytes. Past it the oldest go
+/// first, whatever their age — never a task's last record.
+pub const HISTORY: usize = 2048;
+
+/// The first moment a reach of `days` counted back from `now` covers.
+#[must_use]
+pub const fn since(now: Moment, days: u16) -> Moment {
+    now.saturating_sub(days as Moment * DAY)
+}
 
 /// Whether the schedule counts from this record: a run that worked, failed or
 /// was put off — never a hold (the machine was busy) and never a note (a

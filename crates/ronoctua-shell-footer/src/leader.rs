@@ -77,6 +77,19 @@ pub enum Order {
         /// The tone that state declared — the colour the modeline draws it in.
         tone: ronoctua_protocol::Tone,
     },
+    /// WHAT THE POINTER RESTS ON in a window with no header — the sentence
+    /// the window's line 0 would say, said on the free minibuffer instead
+    /// (`door::pointed_order`). Like [`Order::State`], a REPORT nobody asks
+    /// for, by the window's PID; `text` empty takes it off.
+    Pointed {
+        /// The window's process.
+        pid: u32,
+        /// How many times that window has told it: reports cross on threads
+        /// of their own, and only a newer one replaces an older.
+        seq: u64,
+        /// The sentence, or nothing.
+        text: String,
+    },
     /// The clipboard's window wants the history, now and after every change:
     /// the connection it came on stays open, and the footer writes the whole
     /// history down it (`crate::clipboard_wire`).
@@ -343,6 +356,26 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                     (Some(YIELD), None) => Order::Quit,
                     (Some("command"), Some(id)) => {
                         Order::Command(id.to_owned(), fields.next().map(str::to_owned))
+                    }
+                    // `pointed <pid> <seq> [sentence]`, the sentence being the
+                    // rest of the line. A report with no pid or no seq names
+                    // nobody, and is dropped.
+                    (Some("pointed"), Some(pid)) => {
+                        let mut rest = fields.next().unwrap_or_default().splitn(2, ' ');
+                        match (pid.parse(), rest.next().map(str::parse)) {
+                            (Ok(pid), Some(Ok(seq))) => Order::Pointed {
+                                pid,
+                                seq,
+                                text: rest.next().unwrap_or_default().trim().to_owned(),
+                            },
+                            _ => {
+                                tracing::warn!(
+                                    order = line.trim(),
+                                    "a pointed report with no pid or no seq"
+                                );
+                                continue;
+                            }
+                        }
                     }
                     // `state <pid> <id> [tone]`. A pid that does not parse is
                     // dropped with the rest: there is nothing sensible to do

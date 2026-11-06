@@ -60,17 +60,6 @@ use crate::task::{Due, Hold, Report, RunRecord, Verdict};
 /// minute to redraw an identical line.
 pub const TICK: Duration = Duration::from_secs(30);
 
-/// HOW MANY OF A TASK'S OWN RUNS A SCREEN IS TOLD ABOUT.
-///
-/// Ten, and the owner asked for ten in those words.
-///
-/// It is [`crate::journal::RECENT`] and not a second number, which is the
-/// whole point of it living there: the journal's pruning uses it as a FLOOR —
-/// a task keeps its last ten whatever else fills the list — and the screen
-/// uses it as a count. Two constants would let the screen promise ten of
-/// something the journal had already thrown away.
-pub use crate::journal::RECENT;
-
 /// How often a run in flight is looked at.
 ///
 /// Two seconds. It is a `stat` of one file — no process spawned, no journal

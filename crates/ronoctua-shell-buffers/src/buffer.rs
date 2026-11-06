@@ -2163,16 +2163,20 @@ impl Host {
     }
 
     /// THE HEADER, as every window's is drawn (`chrome::Hinted::head`): the
-    /// question being typed, else the door's message, else the title and
-    /// what the component teaches (`door::list::line_zero`). With the window's
-    /// header hidden it is drawn only while it says or asks something.
+    /// question being typed, else the door's message, else what the thing
+    /// under the pointer is (`Command::Pointed`), else the title and what the
+    /// component teaches (`door::list::line_zero`). With the window's header
+    /// hidden it is drawn only while it says or asks something — and what the
+    /// pointer rests on goes to the footer's minibuffer (`Hinted::pointed`).
     fn header(&self, ui: &mut Ui) -> Vec<ronoctua_render::Span> {
         // EACH SHORTCUT AS `LEADER Alt` REACHES IT — `⌥` and its one key, spelt
         // under the pointer — by the one rule every window's header keeps.
         ui.hinted.offers_leader_alt(&[]);
         let texts = std::rc::Rc::clone(&ui.texts);
         let (pieces, carries) =
-            crate::door::list::line_zero(ui, None, |_| self.declared.pieces(&texts));
+            crate::door::list::line_zero(ui, self.declared.pointed.clone(), |_| {
+                self.declared.pieces(&texts)
+            });
         let (columns, _) = self.context_of();
         ui.hinted.head(
             &pieces,

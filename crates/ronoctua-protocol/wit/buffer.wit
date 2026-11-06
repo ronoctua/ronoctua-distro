@@ -4,7 +4,7 @@
 // that every future buffer gets to use, and invariant 11 lives
 // precisely off what is NOT here: there is no Wayland import, no access to
 // tokens by value, no translation.
-package ronoctua:buffer@0.2.0;
+package ronoctua:buffer@0.3.0;
 
 interface types {
     // THE COLOUR ENUM IS GENERATED, and comes from `assets/tokens/colors.nix`.
@@ -324,11 +324,22 @@ interface types {
         control: bool,
     }
 
+    // WHAT THE THING UNDER THE POINTER IS, in a sentence — a task's own
+    // description under its row, what a glyph means under the glyph. At most
+    // one a frame, from the buffer that holds the pointer's cell (`hover`).
+    // Like `heading`, it claims no row and no column: the HOST says it where
+    // every window says what its row under the pointer adds — line 0, or,
+    // with the header hidden, the footer's minibuffer.
+    record pointed-command {
+        about: text,
+    }
+
     variant command {
         text(text-command),
         anchor(anchor-command),
         heading(heading-command),
         taught(taught-command),
+        pointed(pointed-command),
         paragraph(paragraph-command),
         rule(band-command),
         selection(band-command),
@@ -1309,6 +1320,21 @@ interface types {
         trouble: string,
     }
 
+    // A MOMENT IN THE THREE PIECES A ROW DRAWS IT IN — `2026-11-`, `06` and
+    // ` 02:07` — and whether its day is today.
+    //
+    // The owner asked for the DAY of a date to be drawn above the rest of it,
+    // and today's in a hue of its own. The component cannot find the day in
+    // `when-text`: no field crosses as text for it to take apart, and it has
+    // no zone and no calendar to know which day is today (invariant 11). So
+    // the host cuts it where it formats it, and says which day today is.
+    record stamp {
+        lead: string,
+        day: string,
+        tail: string,
+        today: bool,
+    }
+
     // One run, as the journal keeps it.
     //
     // `run-record` and NOT `run`: the layout vocabulary every component now
@@ -1332,6 +1358,8 @@ interface types {
         // arithmetic this side does and the text is for the date it cannot
         // compute.
         when-text: string,
+        // THE SAME MOMENT, cut where its day is — see `stamp`.
+        when-stamp: stamp,
         outcome: outcome-kind,
         // The step it failed at, by id. Empty when there is none.
         at: string,
@@ -1458,6 +1486,11 @@ interface types {
         name-key: string,
         does-key: string,
         why-key: string,
+        // AND THAT REASON, ALREADY TRANSLATED, for MEASURING — the rule
+        // `name-text` follows. The list's `when` column holds either a date
+        // or this, and reserved blind it cut `After an account was used`
+        // where the row had room to spare. Empty when `why-key` is.
+        why-text: string,
         // THE MODULE'S PAGE MOVED when this does: a page that shows the
         // module's screen asks for it again (`request::watch-screen`), and
         // never on a clock. The screen itself is not in the mind.
@@ -1586,30 +1619,21 @@ interface types {
         // A task's own `history` answers "how has this one been going"; this
         // answers "what has this machine been doing", which is the question
         // somebody opens the page with. They are two lists and not one view of
-        // one list, because the per-task one has a floor — a task that runs
-        // monthly keeps its last ten however much else happens — and this one
-        // has a ceiling. Neither can be cut out of the other.
+        // one list, because they reach back differently — a task's twenty
+        // days, the machine's fifteen — and neither is cut out of the other.
         activity-rows: list<activity-row>,
-        // HOW MANY RECORDS THAT LIST FOLDS AT MOST, which is not how many it
-        // holds today.
+        // HOW FAR BACK THAT LIST REACHES, said in the person's language —
+        // `last 15 days` — which the activity block's title says beside it.
         //
-        // It crosses for the reason `cadence` does: it is a POLICY, decided in
-        // `ronoctua-brain` with its argument beside it, and the screen names it
-        // — the activity block's title says what it is a window ONTO, and "the
-        // last hundred" is a different promise from "these fourteen". Written
-        // into the two translations instead, it would be a number in four
-        // places that can disagree with the one that does the cutting.
-        remembers: u32,
-        // AND HOW MANY OF ITS OWN A TASK KEEPS, which its `history` is the
-        // whole of.
-        //
-        // The same argument, one list down: the `History` heading on a task's
-        // page is a window onto this number, and the owner asked it to say so
-        // — *"algo como (last 10)"*. It is `journal::RECENT`, the brain's own
-        // floor on pruning, and a screen that wrote `10` into two translations
-        // would be a fourth place for the number to disagree with the one that
-        // does the keeping.
-        recent: u32,
+        // It crosses for the reason `cadence` does: it is a POLICY, decided
+        // in `ronoctua-brain` with its argument beside it (`ACTIVITY_DAYS`),
+        // and the screen names it — the title says what it is a window ONTO.
+        // A SENTENCE and not a number: the number is inside words this side
+        // cannot put together (invariant 11).
+        activity-reach: string,
+        // AND HOW FAR BACK A TASK'S OWN `history` REACHES — `last 20 days`,
+        // `RECENT_DAYS` — which the `History` heading on its page says.
+        history-reach: string,
         // EVERY NOTICE every module raised, in the order the strip ranks them:
         // an alarm first, then danger, warn and info, the newest first among
         // equals. Empty is a machine with nothing to say.

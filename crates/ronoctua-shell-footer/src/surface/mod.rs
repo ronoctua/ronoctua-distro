@@ -746,6 +746,15 @@ struct Footer {
     /// the modeline draws it in (`state_colour`). Kept beside `states` and
     /// pruned with it.
     state_tones: std::collections::HashMap<u32, ronoctua_protocol::Tone>,
+    /// WHAT THE POINTER RESTS ON in a window with no header, and whose — the
+    /// sentence its line 0 would say (`leader::Order::Pointed`), said on the
+    /// free minibuffer line. One at a time: there is one pointer over one
+    /// window, and moving it off takes the sentence off. Pruned with
+    /// `states`, so a window closed under the pointer leaves nothing behind.
+    pointed: Option<(u32, String)>,
+    /// The newest report each window sent, by pid: an older one arriving
+    /// after it — they cross on threads of their own — changes nothing.
+    pointed_seqs: std::collections::HashMap<u32, u64>,
     /// `SPC w s` is open and the next key picks a state.
     ///
     /// A flag and not a pending sequence, because the level is exactly ONE deep:
@@ -2923,6 +2932,8 @@ fn assemble(
         jobs: Vec::new(),
         states: std::collections::HashMap::new(),
         state_tones: std::collections::HashMap::new(),
+        pointed: None,
+        pointed_seqs: std::collections::HashMap::new(),
         modeline_placed: Vec::new(),
         state_pending: false,
         state_menu: Vec::new(),
@@ -3196,6 +3207,7 @@ pub(crate) fn photographed(
         ));
     }
     if let Some(w) = scene.window {
+        let pid = w.pid.and_then(|p| u32::try_from(p).ok()).unwrap_or(0);
         state
             .windows
             .apply_to(&ronoctua_compositor::Event::Windows(vec![w]));
@@ -3204,6 +3216,10 @@ pub(crate) fn photographed(
         // (`FocusChanged`): the free line at rest is drawn from them, and the
         // camera's window arrives already in focus, with no such event.
         state.refresh_buffer_keymap();
+        // AND WHAT ITS POINTER RESTS ON, by the door its report comes through.
+        if let Some(said) = scene.pointed {
+            let _ = state.pointed_heard(pid, 1, said);
+        }
     }
     if let Some(s) = scene.screens {
         state.display_event(ronoctua_display::Event::Snapshot(Box::new(s)));
@@ -3946,6 +3962,14 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                             && state.windows.focused().and_then(|w| w.pid)
                                 == i32::try_from(pid).ok()
                         {
+                            state.draw_and_paint();
+                        }
+                    }
+                    // WHAT THE POINTER RESTS ON in a window with no header:
+                    // the newest report of each window, and a frame only when
+                    // what the free line says changed.
+                    Order::Pointed { pid, seq, text } => {
+                        if state.pointed_heard(pid, seq, text) {
                             state.draw_and_paint();
                         }
                     }
@@ -4976,6 +5000,14 @@ impl Footer {
     /// The prune is against the compositor's list and not a timer: a buffer that
     /// dies takes its entry with it, and a PID is reused by the kernel sooner
     /// than anybody expects.
+    /// A window's report of what its pointer rests on: kept when it is that
+    /// window's newest, and `true` when what the free line says changed.
+    /// Empty takes the sentence off — only that window's: the pointer may
+    /// already be on another, which said its own.
+    fn pointed_heard(&mut self, pid: u32, seq: u64, text: String) -> bool {
+        hear_pointed(&mut self.pointed, &mut self.pointed_seqs, pid, seq, text)
+    }
+
     fn states_arrived(&mut self) {
         let alive: std::collections::HashSet<u32> = self
             .windows
@@ -4986,6 +5018,15 @@ impl Footer {
             .collect();
         self.states.retain(|pid, _| alive.contains(pid));
         self.state_tones.retain(|pid, _| alive.contains(pid));
+        self.pointed_seqs.retain(|pid, _| alive.contains(pid));
+        if self
+            .pointed
+            .as_ref()
+            .is_some_and(|(pid, _)| !alive.contains(pid))
+        {
+            self.pointed = None;
+            self.draw_and_paint();
+        }
 
         // ONLY A WINDOW OF OURS IS ASKED. This runs on every event the
         // compositor sends, and a foreign window has no socket to answer on —
@@ -17156,6 +17197,15 @@ impl Footer {
                 // THE FLASH IS DRAWN BELOW, placed by `sound::line` — the
                 // same drawing the row above the modeline carries.
                 Vec::new()
+            } else if let Some((_, said)) = &self.pointed {
+                // WHAT THE POINTER RESTS ON in a window with no header — the
+                // sentence its line 0 would say, said here, where its keys
+                // went: over the relocated shortcuts and a kiosk's address,
+                // which are there to come back to when the pointer moves on.
+                // Cut to the line: the hand that would open it is on the
+                // window, not here.
+                let room = minibuffer_room(columns, indicator_cells, false, glyph_beside);
+                vec![crate::chrome::Piece::said(layout::elide_end(said, room))]
             } else if let Some(address) = &address {
                 // THE ADDRESS OF THE KIOSK IN FRONT, on the free line — Chrome's
                 // omnibox, which a kiosk hides: a click on it asks for the
@@ -17193,7 +17243,11 @@ impl Footer {
             // NOT FOR A KIOSK'S ADDRESS, which takes their place and is cut to
             // the line: the click that edits it is where it is read whole.
             let opens = self.shape.draws_minibuffer()
-                && (held.open || !at_rest || (!mini_rest_pieces.is_empty() && address.is_none()));
+                && (held.open
+                    || !at_rest
+                    || (!mini_rest_pieces.is_empty()
+                        && address.is_none()
+                        && self.pointed.is_none()));
             // THE POINTER IS OVER THE MINIBUFFER'S LINE. The controls come up
             // only then — the way the file manager's own line-0 chevron does —
             // so a resting minibuffer is bare and the glyphs appear under the
@@ -19354,6 +19408,29 @@ const fn above_row_taken(glance: bool, sound: bool, sound_on_minibuffer: bool) -
 /// The room the minibuffer's line gives its text on a screen `columns` wide:
 /// from the margin to one cell before whatever stands at its right end — the
 /// page counter (`indicator_cells` wide) and the drawer's chevron.
+/// [`Footer::pointed_heard`]'s arithmetic, apart so it is asked without a
+/// footer: the newest report of each window kept, an empty one taking off
+/// only that window's sentence, and `true` when what is said changed.
+fn hear_pointed(
+    pointed: &mut Option<(u32, String)>,
+    seqs: &mut std::collections::HashMap<u32, u64>,
+    pid: u32,
+    seq: u64,
+    text: String,
+) -> bool {
+    if seqs.get(&pid).is_some_and(|heard| *heard >= seq) {
+        return false;
+    }
+    seqs.insert(pid, seq);
+    let was = pointed.clone();
+    if !text.is_empty() {
+        *pointed = Some((pid, text));
+    } else if pointed.as_ref().is_some_and(|(p, _)| *p == pid) {
+        *pointed = None;
+    }
+    *pointed != was
+}
+
 fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool, glyph: bool) -> u16 {
     let taken = indicator_cells.map_or(0, |w| w + 1);
     let plain_room = columns
@@ -22020,6 +22097,45 @@ mod tests {
             "the glance keeps its row"
         );
         assert!(!above_row_taken(false, false, false));
+    }
+
+    /// FAILS IF: what a pointer rests on in a window with no header is not
+    /// the newest that window said — a report crossing on its own thread
+    /// arrives late, and an older one must not put back what a newer took
+    /// off — or one window taking its sentence off takes another's.
+    #[test]
+    fn the_pointers_sentence_is_the_newest_and_only_its_windows_to_take_off() {
+        use super::hear_pointed;
+        let mut pointed = None;
+        let mut seqs = std::collections::HashMap::new();
+        assert!(hear_pointed(
+            &mut pointed,
+            &mut seqs,
+            7,
+            1,
+            "a task".to_owned()
+        ));
+        assert!(hear_pointed(&mut pointed, &mut seqs, 7, 3, String::new()));
+        assert_eq!(pointed, None);
+        // THE OLDER REPORT, LATE: nothing comes back.
+        assert!(!hear_pointed(
+            &mut pointed,
+            &mut seqs,
+            7,
+            2,
+            "stale".to_owned()
+        ));
+        assert_eq!(pointed, None, "a late report put back what was taken off");
+        // ANOTHER WINDOW'S SENTENCE is not taken off by the first's empty one.
+        assert!(hear_pointed(
+            &mut pointed,
+            &mut seqs,
+            9,
+            1,
+            "a glyph".to_owned()
+        ));
+        assert!(!hear_pointed(&mut pointed, &mut seqs, 7, 4, String::new()));
+        assert_eq!(pointed, Some((9, "a glyph".to_owned())));
     }
 
     #[test]

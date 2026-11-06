@@ -72,16 +72,18 @@ pub fn interned(id: &str) -> Option<&'static str> {
     Some(made)
 }
 
-/// A mark's colour, by the MEANING its module gave it — one token each, and a
-/// watch wears the colour the modeline already marks a watch with. A warning
-/// is the marks' own ORANGE (`state.caution`, owner 2026-11-02), not the
-/// band's amber: beside the dev build's amber and the answer's gold, the
-/// amber read as one more gold mark.
+/// A mark's colour, by the MEANING its module gave it — one token each. A
+/// watch — an agent at work, a container up — is the TEAL of what the brain
+/// follows (`modeline.following`, owner 2026-11-06), the colour its rows wear
+/// on the brain's page: it was the camera's pink, which read as something
+/// wrong with the agent. A warning is the marks' own ORANGE (`state.caution`,
+/// owner 2026-11-02), not the band's amber: beside the dev build's amber and
+/// the answer's gold, the amber read as one more gold mark.
 #[must_use]
 pub const fn tone_colour(tone: Tone) -> tokens::Color {
     match tone {
         Tone::Quiet => tokens::color::TEXT_SECONDARY,
-        Tone::Watching => tokens::color::MODELINE_WATCHING,
+        Tone::Watching => tokens::color::MODELINE_FOLLOWING,
         Tone::Warning => tokens::color::STATE_CAUTION,
         Tone::Danger => tokens::color::STATE_ERROR,
         Tone::Accent => tokens::color::STATE_ACCENT,

@@ -231,12 +231,21 @@ brain-flake-owned = In the flake
 brain-changed = Changed by you
 # THE FOOTER'S FIELDS.
 brain-last-run = Last run
+# THE CLICK AT THE END OF THE FOOTER'S LAST ROW, and what it does.
+brain-open-page = Open its page
+about-brain-open-page = Open the page of the task this is about: its schedule, its steps and its history.
+# WHAT THE POINTER RESTS ON: a task's glyph, a fold's mark, the next run.
+brain-kind-routine = Repeats on its own: it runs again and again, on its schedule or when the machine calls for it.
+brain-kind-once = Happens once, and is then gone.
+brain-kind-watch = Only watches: it runs nothing on a schedule, it follows something and says what it hears.
+about-brain-fold = Records in a row that say the same thing, folded into this one; opening it shows each of them on a line of its own.
+about-brain-next = When the brain will next consider running this task.
 # THE TASKS. `brain-task-<id>` names one and `<id>-does` says what it does —
 # the second is a paragraph in the footer, so it has room to be a whole
 # explanation rather than a line.
 
-# WHERE A TASK IS RIGHT NOW. A short phrase each: they sit in a column twelve
-# cells wide on the home page.
+# WHERE A TASK IS RIGHT NOW. A short phrase each: they sit in the home page's
+# last column, as wide as the widest of them comes out.
 brain-standing-idle = Waiting
 brain-standing-queued = In the queue
 brain-standing-running = Running
@@ -328,7 +337,6 @@ brain-outcome-noted = Noted
 brain-notices = Notices
 brain-actions = What it offers
 brain-watching = Watching
-brain-activity-last = Last:
 brain-activity-first = First
 brain-activity-times = Times
 brain-since = Since

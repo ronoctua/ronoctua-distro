@@ -52,7 +52,7 @@ use ronoctua_design::types::{
     ModuleScreen, Notice, NoticeLevel, OutcomeKind, Request, Role, Run, RunRecord, Screen,
     ScreenCell, Scroll, Setting, Standing, StepSwitch, Table, TaskKind, TaskState, Tone,
 };
-use ronoctua_design::{Phrases, Region, Slice};
+use ronoctua_design::{Phrases, Pointed, Region, Slice};
 use std::cell::RefCell;
 
 /// Every text key this buffer names as a literal.
@@ -89,8 +89,6 @@ mod key {
     pub const ACTIONS: &str = "brain-actions";
     /// What a module that only listens says instead of a date.
     pub const WATCHING: &str = "brain-watching";
-    /// The discreet word before the date of a folded row of the log.
-    pub const LAST: &str = "brain-activity-last";
     /// The footer's two other facts about a folded row.
     pub const FIRST: &str = "brain-activity-first";
     pub const TIMES: &str = "brain-activity-times";
@@ -140,6 +138,21 @@ mod key {
     // ---- the footer ---------------------------------------------------
     pub const LAST_RUN: &str = "brain-last-run";
     pub const NO_ACTIVITY: &str = "brain-no-activity";
+    /// The click at the end of the footer's last row that opens the page of
+    /// the task the footer is about.
+    pub const OPEN_PAGE: &str = "brain-open-page";
+
+    // ---- what the pointer rests on ------------------------------------
+    /// What a task's glyph says, one sentence per kind.
+    pub const KIND_ROUTINE: &str = "brain-kind-routine";
+    pub const KIND_ONCE: &str = "brain-kind-once";
+    pub const KIND_WATCH: &str = "brain-kind-watch";
+    /// What the fold's mark on a row of the log means.
+    pub const ABOUT_FOLD: &str = "about-brain-fold";
+    /// What the `Next run` row answers.
+    pub const ABOUT_NEXT: &str = "about-brain-next";
+    /// What the footer's click does.
+    pub const ABOUT_OPEN_PAGE: &str = "about-brain-open-page";
 
     // ---- what the header teaches --------------------------------------
     pub const DO_OPEN: &str = "brain-do-open";
@@ -282,20 +295,6 @@ fn about_of(says: &str) -> &'static str {
     }
 }
 
-/// How wide a taught phrase is assumed to be when nobody has said.
-///
-/// A FALLBACK and no longer a column. Every phrase in the header used to be
-/// given exactly this many cells, because a buffer cannot measure a sentence
-/// it does not hold — so `Open it` and `Other half` were each charged
-/// thirteen, and the owner read the header beside the file manager's minibuffer
-/// and said what it is: enormous gaps where the minibuffer is tight.
-///
-/// Now the host hands the words over (`Input::Phrases`, the same door the
-/// three browsers' search field uses) and the header measures them. This is
-/// what a phrase is worth before the first frame, or in a driver that sends
-/// none: the layout comes out loose, never wrong.
-const TEACH_CELLS: u16 = 13;
-
 /// How many rows of the activity log are shown at once.
 ///
 /// EIGHT, by the owner's count. It used to take every line the page had left,
@@ -320,9 +319,18 @@ const LOG_LINES: u16 = LOG_ROWS + 1;
 /// under the minibuffer has already said the loudest of all.
 const NOTICE_ROWS: u16 = 3;
 
-/// The width of the count beside the fold's mark on a row of the log: three
-/// digits — the log folds at most `mind.remembers` records, a hundred.
-const COUNT_CELLS: u16 = 3;
+/// The width of the count beside the fold's mark on a row of the log: four
+/// digits — fifteen days of an agent counted every ten minutes fold into a
+/// row of more than a thousand, and the journal keeps at most two thousand
+/// and forty-eight records (`journal::HISTORY`).
+const COUNT_CELLS: u16 = 4;
+
+/// What a date column is worth before the host has said how wide its words
+/// come out — the old reservation, which a measured column replaces.
+const WHEN_CELLS: u16 = 17;
+
+/// And a status's, for the same reason: the longest translation's, with air.
+const NOTE_CELLS: u16 = 20;
 
 /// How wide the name in the header may be.
 ///
@@ -336,6 +344,12 @@ const COUNT_CELLS: u16 = 3;
 /// budget sized to one language is the same defect the listing's `note` column
 /// had — see the trap the `AGENTS.md` keeps about it.
 const NAME_CELLS: u16 = 26;
+
+/// The widest a MEASURED name is given: a name is as wide as it comes out —
+/// `Vigiar a central de segurança` is twenty-nine cells, past the blind
+/// reservation above, and was cut at it — up to a ceiling that leaves the
+/// rest of the row something to say.
+const NAME_MOST: u16 = 40;
 
 /// What names a line of the activity log across minds — see
 /// [`State::line_key`].
@@ -515,6 +529,27 @@ struct State {
     /// so a click in the FOOTER was attributed to the activity log whenever
     /// the log was long enough to reach that far.
     blocks: Blocks,
+    /// WHERE THE FOOTER'S CLICK WAS DRAWN in the last frame, and whose page it
+    /// opens — asked by the click and the pointer, so what they take is what
+    /// the eye saw.
+    open_at: Option<OpenAt>,
+    /// THE COLUMNS THE LAST FRAME LAID the list of tasks and the activity
+    /// log out in — what the pointer is asked against ([`State::pointed`]),
+    /// so a glyph is explained where it was drawn.
+    task_layout: Layout,
+    log_layout: Layout,
+}
+
+/// The footer's click that opens a task's page, as the last frame drew it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenAt {
+    /// Its row, inside the footer's block.
+    row: u16,
+    /// Its first cell, and the cell after its last.
+    from: u16,
+    to: u16,
+    /// The task it opens, by its index in `mind.tasks`.
+    task: usize,
 }
 
 /// Where each block of the screen was, in the last frame drawn.
@@ -574,6 +609,9 @@ impl State {
             tail_at: 0,
             tail_from: 0,
             blocks: Blocks::new(),
+            open_at: None,
+            task_layout: Layout::default(),
+            log_layout: Layout::default(),
         }
     }
 
@@ -621,8 +659,8 @@ const fn empty_mind() -> Mind {
         },
         cadence: Vec::new(),
         activity_rows: Vec::new(),
-        remembers: 0,
-        recent: 0,
+        activity_reach: String::new(),
+        history_reach: String::new(),
         notices: Vec::new(),
     }
 }
@@ -676,6 +714,41 @@ const fn outcome_word(o: OutcomeKind) -> &'static str {
 /// The key of an outcome's word.
 fn outcome_key(o: OutcomeKind) -> String {
     format!("brain-outcome-{}", outcome_word(o))
+}
+
+/// THE TONE OF A RUN'S OUTCOME — discreet, in the hue of the news (the
+/// owner's ask: *"o worked … um tom positivo, como é a cor verde"*). One table
+/// for the list's last column, a task's history and the activity log, so a
+/// word wears one colour wherever it is read.
+const fn outcome_role(o: OutcomeKind) -> Role {
+    match o {
+        OutcomeKind::Done => Role::StatusGood,
+        OutcomeKind::Failed => Role::StatusBad,
+        OutcomeKind::Held => Role::StatusHeld,
+        OutcomeKind::Skipped => Role::StatusSkipped,
+        // WHAT A WATCH WROTE DOWN: the teal of what the brain follows.
+        OutcomeKind::Noted => Role::StatusBusy,
+    }
+}
+
+/// And of where a task stands now: a turn waited for, or a place in the
+/// queue, is news with little meaning (*"o waiting … um tom com menos
+/// significado, como é a cor roxa"*); a run under way is the teal of what is
+/// being followed.
+const fn standing_role(s: Standing) -> Role {
+    match s {
+        Standing::Idle | Standing::Queued => Role::StatusIdle,
+        Standing::Running => Role::StatusBusy,
+    }
+}
+
+/// What a task's glyph means, under the pointer.
+const fn kind_about(k: TaskKind) -> &'static str {
+    match k {
+        TaskKind::Routine => key::KIND_ROUTINE,
+        TaskKind::Once => key::KIND_ONCE,
+        TaskKind::Watch => key::KIND_WATCH,
+    }
 }
 
 /// The tone a notice is drawn in, by how loud it is: the two that cost
@@ -840,27 +913,98 @@ fn clock(seconds: u64) -> String {
 /// arrangement inside is fixed too; see [`State::foot`].
 const FOOT_LINES: u16 = 6;
 
+/// Every outcome a record can have, for the phrases measured below.
+const OUTCOMES: [OutcomeKind; 5] = [
+    OutcomeKind::Skipped,
+    OutcomeKind::Done,
+    OutcomeKind::Failed,
+    OutcomeKind::Held,
+    OutcomeKind::Noted,
+];
+
+/// Every standing a task can be in.
+const STANDINGS: [Standing; 3] = [Standing::Idle, Standing::Queued, Standing::Running];
+
+/// Every hold that has a word.
+const HOLDS: [HoldKind; 6] = [
+    HoldKind::Ram,
+    HoldKind::Cpu,
+    HoldKind::Battery,
+    HoldKind::Busy,
+    HoldKind::Network,
+    HoldKind::Asleep,
+];
+
+/// Every part of the day.
+const PARTS: [ronoctua_design::types::DayPart; 5] = [
+    ronoctua_design::types::DayPart::Any,
+    ronoctua_design::types::DayPart::Night,
+    ronoctua_design::types::DayPart::Morning,
+    ronoctua_design::types::DayPart::Afternoon,
+    ronoctua_design::types::DayPart::Evening,
+];
+
 /// Every phrase this buffer MEASURES, for the descriptor to ask the host for:
-/// the footer's fact labels, the word before a folded row's date — and how
-/// `LEADER Alt` is spelt on this machine, which a row's `⌥` turns into under
-/// the pointer ([`ronoctua_design::Phrases::LEADER_ALT`]). What the header
-/// teaches is the host's to draw and measure (`Screen::teach`).
+/// the footer's fact labels and its click, the words of the list's two last
+/// columns and of a page's schedule — and how `LEADER Alt` is spelt on this
+/// machine, which a row's `⌥` turns into under the pointer
+/// ([`ronoctua_design::Phrases::LEADER_ALT`]). What the header teaches is the
+/// host's to draw and measure (`Screen::teach`).
+///
+/// # Why the columns are measured
+///
+/// Because they were RESERVED, each at the longest translation, and the owner
+/// read the result off the screen: *"os espaços estão sendo mal utilizados"* —
+/// `After an account…` cut in a column of seventeen, beside a name column
+/// with forty cells of nothing in it. A column as wide as what it holds today,
+/// in the person's language, gives the room back to the one that needs it.
 fn every_phrase() -> Vec<String> {
-    [
+    let mut out: Vec<String> = [
         key::LAST_RUN,
         key::NEEDS_ROOT,
         key::FLAKE_OWNED,
+        key::CHANGED,
         key::FIRST,
         key::TIMES,
         key::SINCE,
-        // AND THE WORD BEFORE A FOLDED ROW'S DATE, whose column is as wide as
-        // the word comes out in the person's language. See [`facts_columns`].
-        key::LAST,
+        key::OPEN_PAGE,
+        key::WATCHING,
+        key::NEVER,
+        key::ENABLED,
+        key::ON,
+        key::OFF,
+        key::EVERY,
+        key::PART,
+        key::NEXT,
+        key::SOON,
+        key::RUN_NOW,
+        key::REHEARSE,
+        key::REHEARSAL,
         ronoctua_design::Phrases::LEADER_ALT,
     ]
     .into_iter()
     .map(str::to_owned)
-    .collect()
+    .collect();
+    out.extend(OUTCOMES.iter().map(|o| outcome_key(*o)));
+    out.extend(STANDINGS.iter().map(|s| standing_key(*s)));
+    out.extend(HOLDS.iter().filter_map(|h| hold_key(*h)));
+    out.extend(PARTS.iter().map(|p| part_key(*p)));
+    out
+}
+
+/// The key of a standing's word.
+fn standing_key(s: Standing) -> String {
+    format!("brain-standing-{}", standing_word(s))
+}
+
+/// The key of a hold's word, when it has one.
+fn hold_key(h: HoldKind) -> Option<String> {
+    hold_word(h).map(|w| format!("brain-hold-{w}"))
+}
+
+/// The key of a part of the day's words.
+fn part_key(p: ronoctua_design::types::DayPart) -> String {
+    format!("brain-part-{}", part_word(p))
 }
 
 impl State {
@@ -1082,6 +1226,10 @@ struct Told {
     logged: Option<(String, Role)>,
     /// A line of label-and-value pairs.
     facts: Vec<(String, String)>,
+    /// The task whose page the click at the end of the last row opens, by
+    /// its index in `mind.tasks` — the task this footer is about, when it is
+    /// about one and that page is not the page in front.
+    opens: Option<usize>,
 }
 
 impl Told {
@@ -1194,8 +1342,9 @@ impl State {
         }
         // THE SENTENCE TAKES EVERYTHING THAT IS LEFT: the error when there is
         // one, the description when there is not. Only the values' row is held
-        // back, and only when there are values to put in it.
-        let until = if told.facts.is_empty() {
+        // back, and only when there are values — or the click that opens the
+        // page — to put in it.
+        let until = if told.facts.is_empty() && told.opens.is_none() {
             last
         } else {
             values_at
@@ -1248,6 +1397,39 @@ impl State {
         //
         // What goes is the figures, because the name says WHAT is in focus and
         // a date with nothing naming it is a number on a line.
+        //
+        // THE CLICK THAT OPENS THE PAGE FIRST, flush against the right edge of
+        // that row — the owner's *"do lado direito ao final da linha, em todas
+        // as tarefas, exista um clicável para abrir a página da tarefa"* — so
+        // the figures are laid out in what it leaves. In the tone every control
+        // in this buffer's rows wears (the `⌥` of a schedule's row), and lit
+        // under the pointer by a ground under it alone — the row it sits on is
+        // not what the click takes.
+        self.open_at = None;
+        let mut facts_wide = wide;
+        if let Some(task) = told.opens
+            && values_at < last
+            && values_at > 0
+        {
+            let cells = self.cells_of(key::OPEN_PAGE, FACT_CELLS);
+            let from = wide.saturating_sub(cells);
+            if let Some(seat) = self.pointed_in(self.blocks.foot, values_at, from, wide) {
+                pen.ground_under(values_at, from, cells, Role::hover_of(seat));
+            }
+            // COUNTED FROM THE LEFT like the ground under it, so the two are
+            // the same cells at every width.
+            pen.put(
+                values_at,
+                Run::label(key::OPEN_PAGE).accent().at(from).within(cells),
+            );
+            self.open_at = Some(OpenAt {
+                row: values_at,
+                from,
+                to: wide,
+                task,
+            });
+            facts_wide = from.saturating_sub(ronoctua_design::GAP);
+        }
         if !told.facts.is_empty() && values_at < last && values_at > 0 {
             // A TABLE AND NOT A RUNNING SUM. The first shape of this measured
             // each label by its KEY's length — `brain-last-run` is fourteen
@@ -1267,7 +1449,7 @@ impl State {
                     }
                 })
                 .collect();
-            let layout = facts_columns(wide, &widths);
+            let layout = facts_columns(facts_wide, &widths);
             let Some(mut row) = pen.row_of(values_at, &layout) else {
                 return;
             };
@@ -1280,18 +1462,16 @@ impl State {
                 if !layout.has(vid) {
                     break;
                 }
-                // A FACT'S LABEL, in the tone every fact's label wears
-                // (`Role::LabelFact`, the host's `chrome::Kind::Fact`).
+                // THE LAST ROW IS DISCREET, label and value: the owner's
+                // *"as infos mais específicas que aparecem na última linha (ex:
+                // 'Last run...'), tenha uma cor discreta"*. The body's dimmest
+                // step, and never the description's: the sentence above is
+                // `quiet`, and a footer that drew both in one grey read as one
+                // block, which the owner said once before about this footer.
                 if !label.is_empty() {
-                    row.put(lid, Run::label(label).names(false));
+                    row.put(lid, Run::label(label).dim());
                 }
-                // A VALUE IS NOT THE DESCRIPTION, and it may not wear the
-                // description's colour. Both were `quiet` — `text.dim` — so
-                // the sentence above and the figures below read as one block
-                // of grey, which is what the owner said about this footer.
-                // The label names and the value is the fact — the pairing
-                // every list in the system uses (`chrome::Kind::Fact`).
-                row.put(vid, Run::datum(value).answers(false));
+                row.put(vid, Run::datum(value).dim());
             }
         }
     }
@@ -1301,27 +1481,53 @@ impl State {
 // The home page: everything the brain has, and everything it has done.
 // ---------------------------------------------------------------------------
 
+/// How wide each of the list's measured columns comes out today, in the
+/// person's language — see [`every_phrase`] for why they are measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskCells {
+    /// The widest name.
+    name: u16,
+    /// The widest moment: a date, or the words for why there is none.
+    when: u16,
+    /// The widest status.
+    note: u16,
+}
+
+/// The narrowest the moment is given before a column gives way instead: a
+/// date, whole.
+const WHEN_FLOOR: u16 = 16;
+
 /// The columns of a row in the list of tasks.
 ///
 /// The kind's glyph is to the LEFT of the moment, which is where the owner
 /// asked for it: it belongs to when the task happens rather than to what it is
 /// called.
-fn task_columns(columns: u16) -> Layout {
+///
+/// # Every column as wide as what it holds, and the moment takes the rest
+///
+/// It was a name column that FILLED and three reserved ones beside it — so the
+/// row was the widest name and forty cells of nothing, then a moment of
+/// seventeen that cut `After an account…` short. The owner read exactly that
+/// off the screen. Now the name, the moment and the status are each as wide as
+/// their widest entry, measured in the person's language ([`TaskCells`]); the
+/// moment gives up what the row cannot hold, never below a whole date, and
+/// past that the columns give way whole, the status first.
+fn task_columns(columns: u16, cells: TaskCells) -> Layout {
+    use ronoctua_design::{GAP, ICON};
     // A CELL IS KEPT ON THE RIGHT FOR THE BAR, always — the same line
     // `log_columns` carries, and for the same reason: a bar drawn over the
     // last column is the defect the working rules name in those words.
-    Table::across(columns.saturating_sub(1))
-        .with(Column::fill("name", 12))
-        .with(Column::fixed("kind", ronoctua_design::ICON, 2))
-        .with(Column::fixed("when", 17, 1))
-        // TWENTY, AND THE NUMBER IS THE LONGEST TRANSLATION. A key reserves
-        // the whole of what it is given — this side never sees the sentence —
-        // so the budget has to be the widest language's, not English's. At
-        // twelve it was English's: `brain-hold-cpu` comes out as
-        // `Processador ocupado`, nineteen cells, and the host cut it. The
-        // name beside it is the one column that FILLS, so the cells come out
-        // of the part of the row that has them to spare.
-        .with(Column::fixed("note", 20, 3))
+    let usable = columns.saturating_sub(1);
+    let others = cells.name + ICON + cells.note + 3 * GAP;
+    let when = cells
+        .when
+        .min(usable.saturating_sub(others))
+        .max(WHEN_FLOOR);
+    Table::across(usable)
+        .with(Column::fixed("name", cells.name, 1))
+        .with(Column::fixed("kind", ICON, 2))
+        .with(Column::fixed("when", when, 1))
+        .with(Column::fixed("note", cells.note, 3))
         .resolve()
 }
 
@@ -1335,7 +1541,7 @@ fn widest_name(runs: &[RunRecord]) -> u16 {
         .map(|r| ronoctua_design::wide(&r.task_text))
         .max()
         .filter(|w| *w > 0)
-        .map_or(NAME_CELLS, |w| w.min(NAME_CELLS))
+        .map_or(NAME_CELLS, |w| w.min(NAME_MOST))
 }
 
 /// The columns of a row in the activity log.
@@ -1384,14 +1590,18 @@ fn notice_columns(columns: u16) -> Layout {
 
 /// The columns of a row of the activity log.
 ///
-/// `last` is how wide the word before a folded row's date comes out, MEASURED
-/// in the person's language (`Input::Phrases`).
+/// `outcome` is how wide the widest outcome comes out, MEASURED in the
+/// person's language (`Input::Phrases`).
 ///
-/// `folds` is whether ANY row of the log folds more than one record: the
-/// three columns of the fold — its mark, its count and the word before the
-/// date — exist only then, so a log where nothing repeats is as compact as it
-/// always was, and the columns do not come and go as the window scrolls.
-fn log_columns(columns: u16, name: u16, last: u16, folds: bool) -> Layout {
+/// `folds` is whether ANY row of the log folds more than one record: the two
+/// columns of the fold — its mark and its count — exist only then, so a log
+/// where nothing repeats is as compact as it always was, and the columns do
+/// not come and go as the window scrolls.
+///
+/// THERE IS NO `Last:` any more before a folded row's date, at the owner's
+/// word: the fold's mark and its count already say the row stands for many,
+/// and the date is the newest's because every row's date is.
+fn log_columns(columns: u16, name: u16, outcome: u16, folds: bool) -> Layout {
     let mut table = Table::across(columns.saturating_sub(1));
     if folds {
         // THE FOLD'S MARK AND ITS COUNT come first, where the eye starts the
@@ -1400,11 +1610,10 @@ fn log_columns(columns: u16, name: u16, last: u16, folds: bool) -> Layout {
         // row's extras, so they give way before the date and the name.
         table = table
             .with(Column::fixed("fold", ronoctua_design::ICON, 4))
-            .with(Column::fixed("count", COUNT_CELLS, 4))
-            .with(Column::fixed("last", last, 4));
+            .with(Column::fixed("count", COUNT_CELLS, 4));
     }
     table
-        .with(Column::fixed("when", 16, 2))
+        .with(Column::fixed("when", WHEN_FLOOR, 2))
         // AS WIDE AS THE WIDEST NAME ON SCREEN, and no wider.
         //
         // It was [`NAME_CELLS`] — twenty-six, the longest translation — for a
@@ -1423,8 +1632,87 @@ fn log_columns(columns: u16, name: u16, last: u16, folds: bool) -> Layout {
         // this row that is an extra: a row with no reason is still a row, and
         // a row with no date or no name is not.
         .with(Column::fill("trouble", 0))
-        .with(Column::fixed("outcome", 12, 3))
+        .with(Column::fixed("outcome", outcome, 3))
         .resolve()
+}
+
+/// A MOMENT IN ITS THREE PIECES (`stamp`), from cell `at` with `room` cells:
+/// the rest of the date in `rest`, and its DAY above it — the body's quiet
+/// step, or today's own hue.
+///
+/// The owner's ask, for every date of the activity log and of a task's
+/// history: *"o dia da data não tenha uma cor tão discreta como ocorre com o
+/// resto da data e horário, e … o dia corrente receba ainda mais destaque"*.
+/// A host that sent no pieces (`day` empty) gets the whole text in `rest`,
+/// which is how every date was drawn before.
+fn put_stamp(
+    pen: &mut Pen<'_, Wit>,
+    line: u16,
+    (at, room): (u16, u16),
+    whole: &str,
+    stamp: &ronoctua_design::types::Stamp,
+    rest: Role,
+) {
+    if room == 0 {
+        return;
+    }
+    if stamp.day.is_empty() {
+        pen.put(line, Run::datum(whole).playing(rest).at(at).within(room));
+        return;
+    }
+    let day = if stamp.today {
+        Role::Today
+    } else {
+        Role::Quiet
+    };
+    let mut x = at;
+    let end = at.saturating_add(room);
+    for (text, role) in [(&stamp.lead, rest), (&stamp.day, day), (&stamp.tail, rest)] {
+        let left = end.saturating_sub(x);
+        if left == 0 || text.is_empty() {
+            continue;
+        }
+        let wide = ronoctua_design::wide(text).min(left);
+        pen.put(line, Run::datum(text).playing(role).at(x).within(wide));
+        x = x.saturating_add(wide);
+    }
+}
+
+/// HOW FAR BACK A LIST REACHES AND HOW MANY IT HOLDS, beside its heading on
+/// `line`, from [`COUNT_AT`] — `last 15 days  42`: the reach in the
+/// person's words (the host made the sentence, `mind.activity-reach`) and
+/// the count, told apart by their tones and the air between them. The
+/// owner's ask for the activity block: *"«últimos 15 dias» … ao lado do
+/// título 'Activity', e também a contagem de itens"*.
+///
+/// NOT THE SYSTEM'S DOT between them: the dot and the hint line's tones are
+/// the host's shortcut line (`the-shortcut-line-is-the-systems`), and this is
+/// no line of keys.
+///
+/// AT THE BODY'S SIZE, and not small: something is drawn after each piece,
+/// and a small run does not advance the cells it was given.
+fn put_reach(pen: &mut Pen<'_, Wit>, line: u16, end: u16, reach: &str, count: usize) {
+    let mut x = COUNT_AT;
+    if !reach.is_empty() {
+        let wide = ronoctua_design::wide(reach);
+        pen.put(
+            line,
+            Run::datum(reach)
+                .dim()
+                .at(x)
+                .within(wide.min(end.saturating_sub(x).max(1))),
+        );
+        x = x.saturating_add(wide + 2 * ronoctua_design::GAP);
+    }
+    if x < end {
+        pen.put(
+            line,
+            Run::datum(&count.to_string())
+                .quiet()
+                .at(x)
+                .within(end.saturating_sub(x)),
+        );
+    }
 }
 
 impl State {
@@ -1442,6 +1730,7 @@ impl State {
         let pane = self.pane;
         let moments: Vec<Run<Icon>> = tasks.iter().map(|t| self.moment_of(t)).collect();
         let notes: Vec<Option<Run<Icon>>> = tasks.iter().map(|t| self.note_of(t)).collect();
+        let cells = self.task_cells();
         let mut pen = screen.region(self.blocks.body);
         if pen.empty() {
             return;
@@ -1473,7 +1762,8 @@ impl State {
             .min(tasks.len().saturating_sub(shown.min(tasks.len())));
         let from = self.body_from;
 
-        let layout = task_columns(pen.columns());
+        let layout = task_columns(pen.columns(), cells);
+        self.task_layout = layout.clone();
         let mut row_at = 1;
         for (n, task) in tasks.iter().enumerate().skip(from) {
             if row_at >= pen.lines() {
@@ -1673,7 +1963,7 @@ impl State {
     ///
     /// Because it was the end of the home page, taking every line that was
     /// left, and the owner read the result: a container the height of the
-    /// screen with five entries in it. What a log of a hundred wants is a
+    /// screen with five entries in it. What fifteen days of a log want is a
     /// WINDOW onto them — eight at a time and a bar for the rest — and a
     /// window is a fixed height, which is a block.
     ///
@@ -1684,8 +1974,9 @@ impl State {
     /// every night. Forty rows of "the memory was busy" bury the one row that
     /// says the update failed. The brain folds them (`journal::grouped`) and
     /// the row says so: the fold's triangle and HOW MANY in the first column,
-    /// a discreet `Last:` before the newest date, and `RET` on it opens every
-    /// record it folds, one line each, under it.
+    /// and `RET` on it opens every record it folds, one line each, under it —
+    /// only their dates, in a cool grey of their own (`Role::Folded`): the
+    /// row above already says what each of them was.
     ///
     /// # Its ground is its own
     ///
@@ -1721,16 +2012,15 @@ impl State {
         let cursor = self.log;
         let pane = self.pane;
         let total = lines.len();
-        // THE RECORDS, and not the rows, are what the title counts: the reach
-        // it names is the daemon's cap on records, and forty folded into one
-        // row are still forty of the hundred.
+        // THE RECORDS, and not the rows, are what the title counts: forty
+        // folded into one row are still forty things that happened.
         let records: u64 = self
             .mind
             .activity_rows
             .iter()
             .map(|r| u64::from(r.repeats))
             .sum();
-        let remembers = self.mind.remembers;
+        let reach = self.mind.activity_reach.clone();
         let seen: Vec<(Line, RunRecord)> = lines
             .iter()
             .skip(from)
@@ -1743,39 +2033,30 @@ impl State {
             .iter()
             .map(|r| (r.repeats, self.is_open(r)))
             .collect();
-        let last_cells = {
-            let said = self.phrases.or(key::LAST, "");
-            if said.is_empty() {
-                TEACH_CELLS
-            } else {
-                ronoctua_design::wide(&said)
-            }
-        };
+        let outcome_cells = self.outcome_cells();
         let names: Vec<RunRecord> = seen.iter().map(|(_, r)| r.clone()).collect();
 
         let mut pen = screen.region(self.blocks.log);
         pen.fill(Role::Shelf);
-        // THE TITLE IS INSIDE THE GROUND, and it stops where the count begins
+        // THE TITLE IS INSIDE THE GROUND, and it stops where the reach begins
         // — a key reserves the whole of what it is given.
-        let room = if remembers > 0 {
-            COUNT_AT.saturating_sub(ronoctua_design::GAP)
-        } else {
-            pen.columns().saturating_sub(1)
-        };
-        pen.put(0, Run::label(key::ACTIVITY).title().within(room));
-        // AND HOW MANY OF HOW MANY, beside the name — the owner's *"algo como
-        // (last 100)"*, in the house's own shape: the `Steps` heading reads
-        // `6 / 12` in the same column.
-        if remembers > 0 {
-            pen.put(
-                0,
-                Run::datum(&format!("{records} / {remembers}"))
-                    .quiet()
-                    .small()
-                    .at(COUNT_AT)
-                    .within(pen.columns().saturating_sub(COUNT_AT + 1)),
-            );
-        }
+        pen.put(
+            0,
+            Run::label(key::ACTIVITY)
+                .title()
+                .within(COUNT_AT.saturating_sub(ronoctua_design::GAP)),
+        );
+        // AND HOW FAR BACK, AND HOW MANY — the owner's *"«últimos 15 dias» …
+        // e também a contagem de itens"*, in the shape the `History` heading
+        // on a task's page has too.
+        let edge = pen.columns().saturating_sub(1);
+        put_reach(
+            &mut pen,
+            0,
+            edge,
+            &reach,
+            usize::try_from(records).unwrap_or(usize::MAX),
+        );
         if seen.is_empty() {
             // SMALL IS ALLOWED HERE, and only here: nothing is positioned
             // after this run.
@@ -1785,7 +2066,9 @@ impl State {
         // THE LANE THE BAR TAKES, declared before a single row is drawn.
         pen.keeping_for(total > shown);
         let any_fold = folds.iter().any(|(repeats, _)| *repeats > 1);
-        let layout = log_columns(pen.columns(), widest_name(&names), last_cells, any_fold);
+        let layout = log_columns(pen.columns(), widest_name(&names), outcome_cells, any_fold);
+        self.log_layout = layout.clone();
+        let when = layout.field("when").map(|f| (f.at, f.width));
         for (n, (line, run)) in seen.iter().enumerate() {
             let row = 1 + u16::try_from(n).unwrap_or(0);
             let at = from + n;
@@ -1797,9 +2080,13 @@ impl State {
             let Some(mut cells) = pen.row_of(row, &layout) else {
                 break;
             };
-            // A RECORD AN OPENED ROW FOLDS is drawn one step quieter, and
-            // without the fold's mark: it belongs to the row above it.
+            // A RECORD AN OPENED ROW FOLDS is drawn in a tone of its own — a
+            // cool grey, quieter than the row's (`Role::Folded`, the owner's
+            // *"outro tom de cor discreta"*) — and with nothing the row above
+            // already says: no fold's mark, no name, no outcome. It belongs
+            // to the row above it, which says what every one of them was.
             let member = matches!(line, Line::Member(..));
+            let rest = if member { Role::Folded } else { Role::Dim };
             if let Line::Row(g) = line
                 && let Some((repeats, open)) = folds.get(*g).copied()
                 && repeats > 1
@@ -1807,7 +2094,7 @@ impl State {
                 // THE FOLD'S MARK: the triangle points at what it holds —
                 // right while shut, down while open — and the count says how
                 // many. A glyph and a number, never a word: the column is
-                // three digits wide in every language.
+                // four digits wide in every language.
                 cells.put(
                     "fold",
                     Run::glyph(if open {
@@ -1818,10 +2105,7 @@ impl State {
                     .quiet(),
                 );
                 cells.put("count", Run::datum(&repeats.to_string()).quiet());
-                // AND THE DATE SAYS IT IS THE NEWEST OF THEM, discreetly.
-                cells.put("last", Run::label(key::LAST).dim());
             }
-            cells.put("when", Run::datum(&run.when_text).dim());
             if !member && let Some(name) = key_of(&run.task_key) {
                 cells.put("task", Run::label(&name).quiet());
             }
@@ -1829,11 +2113,21 @@ impl State {
             // a note says. The machine's own words and the module's sentence
             // are both DATA, never a key.
             if run.outcome == OutcomeKind::Noted && !run.says_text.is_empty() {
-                cells.put("trouble", Run::datum(&run.says_text).dim());
+                cells.put("trouble", Run::datum(&run.says_text).playing(rest));
             } else if !run.trouble.is_empty() {
-                cells.put("trouble", Run::datum(&run.trouble).dim());
+                cells.put("trouble", Run::datum(&run.trouble).playing(rest));
             }
-            cells.put("outcome", Run::label(&outcome_key(run.outcome)).quiet());
+            if !member {
+                cells.put(
+                    "outcome",
+                    Run::label(&outcome_key(run.outcome)).playing(outcome_role(run.outcome)),
+                );
+            }
+            // AND THE DATE, in its three pieces: placed after the row's last
+            // use, since a moment is three runs in one column.
+            if let Some(field) = when {
+                put_stamp(&mut pen, row, field, &run.when_text, &run.when_stamp, rest);
+            }
         }
         // THE BAR IS OVER THE ROWS AND NOT THE TITLE.
         pen.bar_from(
@@ -1929,30 +2223,75 @@ impl State {
 
     /// When this task will next be considered, or the word for why it will not.
     fn moment_of(&self, task: &TaskState) -> Run<Icon> {
+        self.moment(task).0
+    }
+
+    /// The same, and how many cells it comes out in — one walk for the run
+    /// and its width, so the column measured is the column drawn.
+    fn moment(&self, task: &TaskState) -> (Run<Icon>, u16) {
         // A MODULE THAT ONLY LISTENS has no next moment: it is watching, and
         // the row says that instead of a date it does not have.
         if task.kind == TaskKind::Watch {
-            return Run::label(key::WATCHING).playing(Role::Watching);
+            return (
+                Run::label(key::WATCHING).playing(Role::Watching),
+                self.cells_of(key::WATCHING, WHEN_CELLS),
+            );
         }
         if let Some(why) = key_of(&task.why_key) {
-            return Run::label(&why).quiet();
+            // THE REASON IN WORDS, as the host resolved it for measuring
+            // (`task-state::why-text`) — the one column of this list whose
+            // words are a module's and not this buffer's.
+            let cells = if task.why_text.is_empty() {
+                WHEN_CELLS
+            } else {
+                ronoctua_design::wide(&task.why_text)
+            };
+            return (Run::label(&why).quiet(), cells);
         }
         if task.standing == Standing::Running {
-            return Run::label("brain-standing-running").accent();
+            let running = standing_key(Standing::Running);
+            let cells = self.cells_of(&running, WHEN_CELLS);
+            return (Run::label(&running).accent(), cells);
         }
         if task.next_text.is_empty() {
-            return Run::label(key::NEVER).quiet();
+            return (
+                Run::label(key::NEVER).quiet(),
+                self.cells_of(key::NEVER, WHEN_CELLS),
+            );
         }
-        Run::datum(&task.next_text).quiet()
+        (
+            Run::datum(&task.next_text).quiet(),
+            ronoctua_design::wide(&task.next_text),
+        )
     }
 
     /// What is happening to it, in one short phrase — or nothing.
     fn note_of(&self, task: &TaskState) -> Option<Run<Icon>> {
-        if let Some(word) = hold_word(task.hold) {
-            return Some(Run::label(&format!("brain-hold-{word}")).playing(Role::Danger));
+        self.note(task).map(|(run, _)| run)
+    }
+
+    /// The same, and how many cells it comes out in.
+    ///
+    /// # Discreet, and in the hue of the news
+    ///
+    /// The owner's two asks at once: *"uma cor mais discreta"*, and the hue
+    /// changing with the state — a run that worked in a quiet green, a turn
+    /// waited for in a quiet purple. A HOLD is no longer the alarm's red: the
+    /// machine being busy is a wait, not a fault, and the warning line above
+    /// the list is where an alarm is said.
+    fn note(&self, task: &TaskState) -> Option<(Run<Icon>, u16)> {
+        let said = |key: String, role: Role| {
+            let cells = self.cells_of(&key, NOTE_CELLS);
+            (Run::label(&key).playing(role), cells)
+        };
+        if let Some(hold) = hold_key(task.hold) {
+            return Some(said(hold, Role::StatusHeld));
         }
         if task.ran {
-            return Some(Run::label(&outcome_key(task.last.outcome)).quiet());
+            return Some(said(
+                outcome_key(task.last.outcome),
+                outcome_role(task.last.outcome),
+            ));
         }
         // NOR IS A MODULE THE SYSTEM SWITCHED OFF: it waits for nothing, and
         // the column before this one already says why.
@@ -1964,7 +2303,56 @@ impl State {
         if task.kind == TaskKind::Watch {
             return None;
         }
-        Some(Run::label(&format!("brain-standing-{}", standing_word(task.standing))).quiet())
+        Some(said(
+            standing_key(task.standing),
+            standing_role(task.standing),
+        ))
+    }
+
+    /// How wide the widest outcome comes out — every outcome there is, so a
+    /// history's and the log's columns do not move with what happened.
+    fn outcome_cells(&self) -> u16 {
+        OUTCOMES
+            .iter()
+            .map(|o| self.cells_of(&outcome_key(*o), 12))
+            .max()
+            .unwrap_or(12)
+    }
+
+    /// How wide the list's columns come out for the tasks there are now.
+    fn task_cells(&self) -> TaskCells {
+        let tasks = &self.mind.tasks;
+        let name = tasks
+            .iter()
+            .map(|t| ronoctua_design::wide(&t.name_text))
+            .max()
+            .filter(|w| *w > 0)
+            .map_or(NAME_CELLS, |w| w.min(NAME_MOST));
+        let when = tasks
+            .iter()
+            .map(|t| self.moment(t).1)
+            .max()
+            .unwrap_or(WHEN_CELLS);
+        // A LIST WITH NO STATUS AT ALL still keeps a narrow column, so the
+        // first status to come does not move the rest of the row.
+        let note = tasks
+            .iter()
+            .filter_map(|t| self.note(t).map(|(_, w)| w))
+            .max()
+            .unwrap_or(0)
+            .max(4);
+        TaskCells { name, when, note }
+    }
+
+    /// How many cells `key` comes out in, in the person's language — or
+    /// `blind`, the reservation, while the host has not said.
+    fn cells_of(&self, key: &str, blind: u16) -> u16 {
+        let said = self.phrases.or(key, "");
+        if said.is_empty() {
+            blind
+        } else {
+            ronoctua_design::wide(&said)
+        }
     }
 }
 
@@ -2008,10 +2396,16 @@ fn seat_on(hovered: &[(u16, u16)], row: u16) -> Option<u16> {
 /// window. That is not a preference: it was at the other edge, and the owner
 /// read `every` down the left of the screen and `days` down the right with a
 /// bare `7` between them. A number and its unit are one phrase.
-fn field_columns(columns: u16, keys: u16) -> Layout {
+///
+/// THE LABEL AND THE VALUE ARE AS WIDE AS WHAT THEY HOLD on this page, in the
+/// person's language (`cells`, [`State::field_cells`]) — they were twenty and
+/// twenty-four reserved, which cut a module's reason short in the `Next run`
+/// row while the unit beside it had the rest of the line to itself.
+fn field_columns(columns: u16, keys: u16, cells: (u16, u16)) -> Layout {
+    let (label, value) = cells;
     Table::across(columns.saturating_sub(1))
-        .with(Column::fixed("label", 20, 2))
-        .with(Column::fixed("value", 24, 1))
+        .with(Column::fixed("label", label, 2))
+        .with(Column::fixed("value", value, 1))
         .with(Column::fill("unit", 6))
         // THE SHORTCUT: `⌥` against its one key, or — spelt, under the
         // pointer — `SUPER ALT` and the key, which `unit` gives the room for
@@ -2026,6 +2420,13 @@ impl State {
         self.hover
             .first(|(at, line)| region.row_at(line) == Some(row) && at == column)
             .is_some()
+    }
+
+    /// WHOSE pointer is resting on this row of this block, between the two
+    /// cells — a control a few cells wide — if any.
+    fn pointed_in(&self, region: Region, row: u16, from: u16, to: u16) -> Option<u16> {
+        self.hover
+            .first(|(at, line)| region.row_at(line) == Some(row) && (from..to).contains(&at))
     }
 
     /// A field row's key, as it is reached: `⌥` and the one key the keymap
@@ -2093,10 +2494,13 @@ fn step_columns(columns: u16) -> Layout {
 /// Three columns that add up, with no fourth trailing off the edge. What the
 /// row cannot hold — what the machine said, which step it stopped at — is in
 /// the footer, whole, and that is what the footer is for.
-fn history_columns(columns: u16) -> Layout {
+///
+/// The outcome is as wide as the widest outcome comes out in the person's
+/// language (`outcome`), and the reason takes the rest.
+fn history_columns(columns: u16, outcome: u16) -> Layout {
     Table::across(columns.saturating_sub(1))
-        .with(Column::fixed("when", 17, 2))
-        .with(Column::fixed("outcome", 12, 1))
+        .with(Column::fixed("when", WHEN_FLOOR, 2))
+        .with(Column::fixed("outcome", outcome, 1))
         .with(Column::fill("why", 10))
         .resolve()
 }
@@ -2429,23 +2833,18 @@ impl State {
         })
     }
 
-    /// The two numbers beside a heading, when it has them.
+    /// The two numbers beside the `Steps` heading — how many of them are on,
+    /// of how many — when it is that heading.
     ///
-    /// `Steps` says how many of them are on; `History` says how many runs it
-    /// is showing of how many a task keeps — the owner asked for the second in
-    /// those words, *"algo como (last 10)"*, and this is the house's own way
-    /// of saying it: the same column, the same tone, the same shape as the
-    /// `Activity` container's `14 / 100` one screen away.
-    ///
-    /// The keep is the DAEMON's (`journal::RECENT`, crossing in the mind), not
-    /// a ten written into two translations.
-    fn count_beside(&self, task: &TaskState, heading: &str) -> Option<String> {
+    /// `History` says something else beside it: how far back it reaches and
+    /// how many runs that holds ([`put_reach`]), the shape the `Activity`
+    /// container's title has one screen away. The reach is the DAEMON's
+    /// (`journal::RECENT_DAYS`, said in the mind), not a number written into
+    /// two translations.
+    fn count_beside(task: &TaskState, heading: &str) -> Option<String> {
         if heading == key::STEPS {
             let on = task.steps.iter().filter(|s| s.on).count();
             return Some(format!("{on} / {}", task.steps.len()));
-        }
-        if heading == key::HISTORY && self.mind.recent > 0 {
-            return Some(format!("{} / {}", task.history.len(), self.mind.recent));
         }
         None
     }
@@ -2489,7 +2888,7 @@ impl State {
         self.body_from = self.body_from.min(last_window(&rows, height));
 
         let steps = step_columns(columns);
-        let history = history_columns(columns);
+        let history = history_columns(columns, self.outcome_cells());
         // EVERY ROW OF THIS PAGE STOPS ONE CELL SHORT, because the bar is
         // there. The three layouts above already do it; these are the runs
         // that are placed by hand.
@@ -2546,8 +2945,9 @@ impl State {
                     // one. A key reserves its whole budget — nothing here can
                     // know how long the word comes out — so a heading that
                     // reached the edge would reserve the count's cells too.
-                    let count = self.count_beside(&task, k);
-                    let room = if count.is_some() {
+                    let count = Self::count_beside(&task, k);
+                    let history = *k == key::HISTORY;
+                    let room = if count.is_some() || history {
                         COUNT_AT.saturating_sub(ronoctua_design::GAP)
                     } else {
                         body
@@ -2564,6 +2964,13 @@ impl State {
                                 .at(COUNT_AT)
                                 .within(body.saturating_sub(COUNT_AT)),
                         );
+                    }
+                    // AND THE HISTORY'S REACH AND HOW MANY RUNS IT HOLDS —
+                    // `last 20 days · 4`, the owner's twenty days in place
+                    // of the last ten runs.
+                    if history {
+                        let reach = self.mind.history_reach.clone();
+                        put_reach(&mut pen, line, body, &reach, task.history.len());
                     }
                     line += 1;
                 }
@@ -2723,8 +3130,9 @@ const FACT_CELLS: u16 = 14;
 /// knows how long a translated word comes out), so a heading that reached the
 /// edge would reserve the count's cells as well.
 ///
-/// ONE constant for `Steps  6 / 12` and `Activity  14 / 100`: the two are the
-/// same thing said about two lists, and in two columns they would read as two
+/// ONE constant for `Steps  6 / 12`, `History  last 20 days · 4` and
+/// `Activity  last 15 days · 55`: the three are the same kind of thing said
+/// about three lists, and in three columns they would read as three
 /// different kinds of number.
 const COUNT_AT: u16 = 20;
 
@@ -2763,9 +3171,11 @@ impl State {
         // glyph is AT REST, so the spelling stays put under the hand that
         // asked for it — and the column that fills gives the room up.
         let label = self.phrases.or(Phrases::LEADER_ALT, "");
+        let cells = self.field_cells(task, columns);
         let rest = field_columns(
             columns,
             ronoctua_design::leader_alt::cells(&label, "x", false),
+            cells,
         );
         let spelt = !label.is_empty()
             && rest
@@ -2775,6 +3185,7 @@ impl State {
             field_columns(
                 columns,
                 ronoctua_design::leader_alt::cells(&label, "x", true),
+                cells,
             )
         } else {
             rest
@@ -2887,6 +3298,65 @@ impl State {
         }
     }
 
+    /// How wide the schedule's labels and values come out on this task's
+    /// page — the widest of each among the rows it has, measured, with the
+    /// value never wider than the row leaves it.
+    fn field_cells(&self, task: &TaskState, columns: u16) -> (u16, u16) {
+        let mut label = 0;
+        let mut value = 0;
+        for spot in Self::schedule_of(task) {
+            let (labels, values): (Vec<&str>, Vec<u16>) = match spot {
+                Spot::Enabled => (
+                    vec![key::ENABLED],
+                    if off_not_by_you(task).is_some() {
+                        vec![if task.why_text.is_empty() {
+                            WHEN_CELLS
+                        } else {
+                            ronoctua_design::wide(&task.why_text)
+                        }]
+                    } else {
+                        vec![self.cells_of(key::ON, 4), self.cells_of(key::OFF, 20)]
+                    },
+                ),
+                Spot::Interval => (
+                    vec![key::EVERY],
+                    vec![u16::try_from(task.interval_days.to_string().len()).unwrap_or(3)],
+                ),
+                Spot::Window => (
+                    vec![key::PART],
+                    PARTS
+                        .iter()
+                        .map(|p| self.cells_of(&part_key(*p), 16))
+                        .collect(),
+                ),
+                // A DATE OR ITS REASON, or a countdown's `mm:ss` — and either
+                // of the two words that name them.
+                Spot::Next => (vec![key::NEXT, key::SOON], vec![self.moment(task).1, 5]),
+                Spot::RunNow => (
+                    vec![key::RUN_NOW],
+                    vec![
+                        self.cells_of(key::REHEARSAL, 16),
+                        self.cells_of(&standing_key(Standing::Running), 12),
+                    ],
+                ),
+                Spot::Rehearse => (vec![key::REHEARSE], Vec::new()),
+                Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {
+                    (Vec::new(), Vec::new())
+                }
+            };
+            for l in labels {
+                label = label.max(self.cells_of(l, 20));
+            }
+            value = values.into_iter().fold(value, u16::max);
+        }
+        // THE VALUE GIVES WAY to the row before the label does: a label cut
+        // says nothing, a reason cut still says how it begins.
+        let room = columns
+            .saturating_sub(1)
+            .saturating_sub(label + 6 + 3 * ronoctua_design::GAP + 8);
+        (label.max(4), value.max(4).min(room.max(WHEN_FLOOR)))
+    }
+
     /// What is happening to this task right now, beside `Run now`.
     ///
     /// `None` when nothing is: a verb with no answer beside it draws no value
@@ -2988,8 +3458,12 @@ impl State {
         let Some(mut row) = pen.row_of(line, layout) else {
             return;
         };
-        row.put("when", Run::datum(&run.when_text).dim());
-        row.put("outcome", Run::label(&outcome_key(run.outcome)));
+        // HOW IT ENDED, discreetly, in the hue of the news — the colours the
+        // list's last column wears, so a word is one colour everywhere.
+        row.put(
+            "outcome",
+            Run::label(&outcome_key(run.outcome)).playing(outcome_role(run.outcome)),
+        );
         // THE SHORT REASON ONLY. What the machine said can be a paragraph, and
         // a paragraph in a column is a paragraph with its end cut off — it is
         // in the footer, whole, under the cursor. The keys are the ones the
@@ -3000,6 +3474,18 @@ impl State {
             row.put("why", Run::label(&why).quiet());
         } else if run.outcome == OutcomeKind::Noted && !run.says_text.is_empty() {
             row.put("why", Run::datum(&run.says_text).quiet());
+        }
+        // AND WHEN, its day above the rest and today's in its own hue — the
+        // activity log's dates, drawn by the same hand ([`put_stamp`]).
+        if let Some(when) = layout.field("when") {
+            put_stamp(
+                pen,
+                line,
+                (when.at, when.width),
+                &run.when_text,
+                &run.when_stamp,
+                Role::Dim,
+            );
         }
     }
 
@@ -3113,6 +3599,8 @@ impl State {
             // the tone of how loud it is.
             logged: Some((notice.says_text.clone(), level_tone(notice.level))),
             facts: vec![(key::SINCE.to_owned(), notice.since_text.clone())],
+            // AND ITS MODULE'S PAGE, which `RET` on a notice opens too.
+            opens: self.mind.tasks.iter().position(|t| t.id == notice.module),
             ..Told::default()
         }
     }
@@ -3138,6 +3626,8 @@ impl State {
             // as meaningless without it.
             trouble: (task.ran && !task.last.trouble.is_empty()).then(|| task.last.trouble.clone()),
             facts,
+            // AND ITS PAGE, for every task — the click at the end of the row.
+            opens: Some(self.task),
             ..Told::default()
         }
     }
@@ -3179,6 +3669,10 @@ impl State {
             return Told::default();
         };
         let mut told = Self::told_about_record(run, key_of(&run.task_key));
+        // A RECORD IS OF A TASK, and the click at the end of the last row
+        // opens that task's page — on a folded row too, whose `RET` opens the
+        // fold instead.
+        told.opens = self.mind.tasks.iter().position(|t| t.id == run.task);
         if let Line::Row(n) = line
             && let Some(row) = self.mind.activity_rows.get(n)
             && row.repeats > 1
@@ -3303,6 +3797,162 @@ impl State {
                 }
             }
         }
+    }
+}
+
+impl State {
+    /// WHAT THE THING UNDER THE POINTER IS, in a sentence — declared for the
+    /// host (`Screen::point`), which says it where every window says what its
+    /// row under the pointer adds: the header's line, or, with the header
+    /// hidden — the distro's default — the footer's minibuffer.
+    ///
+    /// # Why the pointer and not the cursor
+    ///
+    /// Because the owner rested the pointer on a task and on its glyph and
+    /// nothing said anything: *"ao colocar o mouse por cima de uma task do
+    /// Brain, nada aparece … ou se eu coloco o cursor sobre o glifo … não é
+    /// mostrado do que se trata o glifo"*. The footer of this page explains
+    /// what the KEYBOARD is on; this is the same question asked by the hand,
+    /// answered without moving the cursor.
+    ///
+    /// Asked of the blocks and the columns the last frame drew, by the first
+    /// pointer to rest here: one line says it, and one hand is reading.
+    fn pointed(&self) -> Option<Pointed> {
+        let (_, (column, line)) = self.hover.cells().next()?;
+        if let Some(open) = self.open_at
+            && self.blocks.foot.row_at(line) == Some(open.row)
+            && (open.from..open.to).contains(&column)
+        {
+            return Some(Pointed::Key(key::ABOUT_OPEN_PAGE.into()));
+        }
+        // A NOTICE: its whole sentence, which its row cuts at the width.
+        if let Some(row) = self.blocks.notices.row_at(line) {
+            let n = self.notices_from + usize::from(row.checked_sub(1)?);
+            let notice = self.mind.notices.get(n)?;
+            return Some(Pointed::Datum(notice.says_text.clone()));
+        }
+        // A LINE OF THE ACTIVITY LOG: what the fold's mark means, under it,
+        // and otherwise what the record says.
+        if let Some(row) = self.blocks.log.row_at(line) {
+            let n = self.log_from + usize::from(row.checked_sub(1)?);
+            let at = self.activity_lines().get(n).copied()?;
+            if let Line::Row(g) = at
+                && self
+                    .mind
+                    .activity_rows
+                    .get(g)
+                    .is_some_and(|r| r.repeats > 1)
+                && within(&self.log_layout, "fold", column)
+            {
+                return Some(Pointed::Key(key::ABOUT_FOLD.into()));
+            }
+            return self.record_of(at).and_then(|r| self.said_of_record(r));
+        }
+        let row = self.blocks.body.row_at(line)?;
+        match self.page {
+            // A TASK: what its glyph means under the glyph, and otherwise
+            // what the task does — its own description.
+            Page::Home => {
+                let task = self
+                    .mind
+                    .tasks
+                    .get(self.body_from + usize::from(row.checked_sub(1)?))?;
+                if within(&self.task_layout, "kind", column) {
+                    return Some(Pointed::Key(kind_about(task.kind).into()));
+                }
+                key_of(&task.does_key).map(Pointed::Key)
+            }
+            Page::Task => {
+                let task = self.here()?;
+                let rows = self.page_rows();
+                let n = row_at_line(&rows, self.body_from, row)?;
+                match rows.get(n)? {
+                    Row::Field(spot) => Some(Pointed::Key(spot_about(*spot)?.into())),
+                    Row::Step(k) => key_of(&task.steps.get(*k)?.does_key).map(Pointed::Key),
+                    Row::Ran(k) => self.said_of_record(task.history.get(*k)?),
+                    Row::Action(k) => {
+                        let action = task.actions.get(*k)?;
+                        key_of(&action.asks_key)
+                            .or_else(|| key_of(&action.label_key))
+                            .map(Pointed::Key)
+                    }
+                    Row::Screen(k) => {
+                        let rows = self.screen_rows(task);
+                        let cell = rows.get(*k)?;
+                        said_of_cell(&cell.note).or_else(|| said_of_cell(&cell.value))
+                    }
+                    Row::Blank
+                    | Row::Heading(_)
+                    | Row::Section(_)
+                    | Row::About(_, _)
+                    | Row::Refused(_) => None,
+                }
+            }
+            // A LINE OF THE DAEMON'S LOG: the whole of it, which its row cuts.
+            Page::Log => self
+                .tail
+                .get(self.tail_from + usize::from(row))
+                .map(|l| Pointed::Datum(l.text.clone())),
+        }
+    }
+
+    /// The most useful sentence about a record, under the pointer: what a
+    /// watch noted, what the machine said went wrong, the brain's reason or
+    /// the step it stopped at — and, for a run that simply worked, what its
+    /// task does, since `Worked` beside it already says how it went.
+    fn said_of_record(&self, run: &RunRecord) -> Option<Pointed> {
+        if run.outcome == OutcomeKind::Noted && !run.says_text.is_empty() {
+            return Some(Pointed::Datum(run.says_text.clone()));
+        }
+        if !run.trouble.is_empty() {
+            return Some(Pointed::Datum(run.trouble.clone()));
+        }
+        key_of(&run.why_key)
+            .or_else(|| key_of(&run.at_key))
+            .or_else(|| {
+                self.mind
+                    .tasks
+                    .iter()
+                    .find(|t| t.id == run.task)
+                    .and_then(|t| key_of(&t.does_key))
+            })
+            .map(Pointed::Key)
+    }
+}
+
+/// Whether `column` falls in the column `id` of `layout`.
+fn within(layout: &Layout, id: &str, column: u16) -> bool {
+    layout
+        .field(id)
+        .is_some_and(|f| (f.at..f.at.saturating_add(f.width)).contains(&column))
+}
+
+/// What a schedule's row does, under the pointer — the sentences the header
+/// says about the same keys.
+const fn spot_about(spot: Spot) -> Option<&'static str> {
+    match spot {
+        Spot::Enabled => Some(key::ABOUT_SWITCH),
+        Spot::Interval => Some(key::ABOUT_INTERVAL),
+        Spot::Window => Some(key::ABOUT_WINDOW),
+        Spot::Next => Some(key::ABOUT_NEXT),
+        Spot::RunNow => Some(key::ABOUT_RUN),
+        Spot::Rehearse => Some(key::ABOUT_REHEARSE),
+        Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => None,
+    }
+}
+
+/// A cell of a module's row as a sentence: its key, or its data.
+fn said_of_cell(c: &ScreenCell) -> Option<Pointed> {
+    match c {
+        ScreenCell::Key(k) => key_of(k).map(Pointed::Key),
+        ScreenCell::Data(d) if !d.is_empty() => Some(Pointed::Datum(d.clone())),
+        ScreenCell::Moment(t) if !t.text.is_empty() => Some(Pointed::Datum(t.text.clone())),
+        ScreenCell::Bytes(m) if !m.text.is_empty() => Some(Pointed::Datum(m.text.clone())),
+        ScreenCell::Empty
+        | ScreenCell::Data(_)
+        | ScreenCell::Moment(_)
+        | ScreenCell::Bytes(_)
+        | ScreenCell::Count(_) => None,
     }
 }
 
@@ -3531,21 +4181,13 @@ impl State {
                         else {
                             return Vec::new();
                         };
-                        self.task = at;
-                        self.page = Page::Task;
-                        self.spot = 0;
-                        self.body_from = 0;
-                        return vec![Effect::Redraw];
+                        return self.open_task(at);
                     }
                 };
                 let Some(at) = at else {
                     return Vec::new();
                 };
-                self.task = at;
-                self.page = Page::Task;
-                self.spot = 0;
-                self.body_from = 0;
-                vec![Effect::Redraw]
+                self.open_task(at)
             }
             // ON A TASK'S PAGE, `RET` IS THE ROW'S OWN KEY. Every row that can
             // be changed says which key changes it, and this is that key
@@ -3592,6 +4234,20 @@ impl State {
             // written.
             Page::Log => Vec::new(),
         }
+    }
+
+    /// Opens the page of task `n`, from its top — what `RET` does on a task,
+    /// a notice or a record, and the footer's click.
+    fn open_task(&mut self, n: usize) -> Vec<Effect> {
+        if n >= self.mind.tasks.len() {
+            return Vec::new();
+        }
+        self.task = n;
+        self.page = Page::Task;
+        self.spot = 0;
+        self.body_from = 0;
+        self.follows = true;
+        vec![Effect::Redraw]
     }
 
     /// The part of the home page `Tab` goes to next: the notices only while
@@ -3738,7 +4394,16 @@ impl State {
     }
 
     /// Where a click landed, as an index into whichever list is there.
-    fn clicked(&mut self, _column: u16, line: u16) -> Vec<Effect> {
+    fn clicked(&mut self, column: u16, line: u16) -> Vec<Effect> {
+        // THE FOOTER'S CLICK, where the last frame drew it: it opens the page
+        // of the task the footer is about, at once — it is a control, as a
+        // header's shortcut is, and not a row to select first.
+        if let Some(open) = self.open_at
+            && self.blocks.foot.row_at(line) == Some(open.row)
+            && (open.from..open.to).contains(&column)
+        {
+            return self.open_task(open.task);
+        }
         // AND THEN THE BLOCK THAT OWNS THE LINE.
         //
         // It used to be `line >= tasks_at` and `line >= log_at`, with no floor
@@ -4157,6 +4822,10 @@ impl State {
             }
             s.draw_log(&mut screen);
             s.foot(&mut screen, &told);
+            // AND WHAT THE POINTER RESTS ON, asked of what was just drawn.
+            if let Some(about) = s.pointed() {
+                screen.point(about);
+            }
             screen
         }
     }
@@ -4286,6 +4955,14 @@ mod tests {
             began: 1_000,
             ended: 1_060,
             when_text: "2026-08-23 13:00".to_owned(),
+            // AND CUT WHERE ITS DAY IS, as the host would have cut it — a
+            // day that is not today.
+            when_stamp: ronoctua_design::types::Stamp {
+                lead: "2026-08-".to_owned(),
+                day: "23".to_owned(),
+                tail: " 13:00".to_owned(),
+                today: false,
+            },
             outcome,
             at: String::new(),
             why: String::new(),
@@ -4391,6 +5068,7 @@ mod tests {
             name_key: format!("brain-task-{id}"),
             does_key: format!("brain-task-{id}-does"),
             why_key: String::new(),
+            why_text: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
         }
@@ -4430,16 +5108,16 @@ mod tests {
             // the most runs on its row and the most rungs in the header.
             notices: vec![a_notice("fixture-routine")],
             // A ROW THAT STANDS ALONE AND ONE THAT FOLDS THREE, because the
-            // two draw different columns: the fold's mark, its count and the
-            // word before the date exist only for the second.
+            // two draw different columns: the fold's mark and its count
+            // exist only for the second.
             activity_rows: folded(&[
                 a_run("fixture-routine", OutcomeKind::Done),
                 a_run("fixture-once", OutcomeKind::Held),
                 a_run("fixture-once", OutcomeKind::Held),
                 a_run("fixture-once", OutcomeKind::Held),
             ]),
-            remembers: 100,
-            recent: 10,
+            activity_reach: "last 15 days".to_owned(),
+            history_reach: "last 20 days".to_owned(),
         }
     }
 
@@ -5536,6 +6214,259 @@ mod tests {
         );
     }
 
+    /// Every run the frame drew: what it says (its key, its data or its
+    /// icon), the token it is drawn in, and its line and cell.
+    fn runs(screen: &Screen<Wit>) -> Vec<(String, String, u16, u16)> {
+        use ronoctua_design::frame::{Command, Text};
+        screen
+            .as_protocol()
+            .commands
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Text {
+                    text,
+                    color,
+                    line,
+                    column,
+                    ..
+                } => Some((
+                    match text {
+                        Text::Key(k) | Text::Data(k) | Text::Icon(k) => k,
+                    },
+                    color.as_str().to_owned(),
+                    line,
+                    column,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The token the first run saying `what` is drawn in.
+    fn colour_of(drawn: &[(String, String, u16, u16)], what: &str) -> Option<String> {
+        drawn
+            .iter()
+            .find(|(t, ..)| t == what)
+            .map(|(_, c, ..)| c.clone())
+    }
+
+    /// FAILS IF: a status is drawn in one grey again, or a hold in the
+    /// alarm's red — the owner's discreet tones, each in the hue of its news —
+    /// or a watch wears the camera's pink instead of what the brain follows.
+    #[test]
+    fn a_status_wears_the_hue_of_its_news() {
+        let mut s = a_state();
+        s.mind.tasks[1].ran = false;
+        let mut held = a_task("fixture-held", TaskKind::Routine);
+        held.ran = false;
+        held.hold = HoldKind::Ram;
+        let mut watch = a_task("fixture-watch", TaskKind::Watch);
+        watch.ran = false;
+        s.mind.tasks.extend([held, watch]);
+        let seen = runs(&drawn(&mut s, 30, 120));
+        for (said, wanted) in [
+            ("brain-outcome-done", "text-status-good"),
+            ("brain-standing-idle", "text-status-idle"),
+            ("brain-hold-ram", "text-status-held"),
+            ("brain-watching", "modeline-following"),
+            ("brain-task-fixture-watch", "modeline-following"),
+        ] {
+            assert_eq!(
+                colour_of(&seen, said).as_deref(),
+                Some(wanted),
+                "`{said}` in the wrong tone"
+            );
+        }
+        // AND EVERY OUTCOME HAS A HUE OF ITS OWN.
+        let mut hues: Vec<Role> = OUTCOMES.iter().map(|o| outcome_role(*o)).collect();
+        hues.dedup();
+        assert_eq!(hues.len(), OUTCOMES.len(), "two outcomes share a hue");
+    }
+
+    /// FAILS IF: a date's day is drawn as quietly as the rest of it, today's
+    /// has no hue of its own, an opened fold's records wear the row's tone or
+    /// say its outcome again — or a task's history draws its dates whole.
+    #[test]
+    fn a_dates_day_stands_out_and_todays_in_its_own_hue() {
+        let mut s = a_state();
+        s.mind.activity_rows[0].newest.when_stamp.today = true;
+        s.pane = Pane::Log;
+        s.log = 1;
+        let _ = s.act(Input::Confirm);
+        assert_eq!(s.activity_lines().len(), 4, "the fold did not open");
+        let seen = runs(&drawn(&mut s, 30, 120));
+        let days: Vec<&String> = seen
+            .iter()
+            .filter(|(t, ..)| t == "23")
+            .map(|(_, c, ..)| c)
+            .collect();
+        assert!(
+            days.iter().any(|c| *c == "text-today"),
+            "today has no hue: {days:?}"
+        );
+        assert!(
+            days.iter().any(|c| *c == "text-secondary"),
+            "a day is as quiet as its date: {days:?}"
+        );
+        let leads: Vec<&String> = seen
+            .iter()
+            .filter(|(t, ..)| t == "2026-08-")
+            .map(|(_, c, ..)| c)
+            .collect();
+        assert!(leads.iter().any(|c| *c == "text-dim"), "{leads:?}");
+        assert!(
+            leads.iter().any(|c| *c == "text-folded"),
+            "an opened fold's records wear the row's tone: {leads:?}"
+        );
+        assert_eq!(
+            seen.iter()
+                .filter(|(t, ..)| t == "brain-outcome-held")
+                .count(),
+            1,
+            "an opened fold's records say their outcome again"
+        );
+        // AND THE HISTORY ON A TASK'S PAGE, by the same hand.
+        let _ = s.act(Input::Cancel);
+        s.pane = Pane::Tasks;
+        let _ = s.act(Input::Confirm);
+        assert_eq!(s.page, Page::Task);
+        let seen = runs(&drawn(&mut s, 40, 120));
+        assert!(
+            seen.iter()
+                .any(|(t, c, ..)| t == "23" && c == "text-secondary"),
+            "a history's dates are drawn whole"
+        );
+        assert!(
+            seen.iter()
+                .any(|(t, c, ..)| t == "last 20 days" && c == "text-dim"),
+            "the history does not say how far back it reaches"
+        );
+    }
+
+    /// FAILS IF: what the pointer rests on is not declared for the host — a
+    /// task's description under its row, what its glyph means under the
+    /// glyph, what the fold's mark means under the mark — or something is
+    /// declared with no pointer on the window.
+    #[test]
+    fn what_the_pointer_rests_on_is_said() {
+        use ronoctua_design::frame::{Command, Text};
+        let pointed = |screen: &Screen<Wit>| {
+            screen
+                .as_protocol()
+                .commands
+                .into_iter()
+                .find_map(|c| match c {
+                    Command::Pointed { about } => Some(about),
+                    _ => None,
+                })
+        };
+        let mut s = a_state();
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            None,
+            "said with nobody here"
+        );
+        let row = s.blocks.body.line_of(1).expect("the first task's row");
+        let _ = s.hover.set(0, (0, row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            Some(Text::Key("brain-task-fixture-routine-does".into())),
+            "a task's row does not say what the task does"
+        );
+        let glyph = s.task_layout.field("kind").expect("the kind's column").at;
+        let _ = s.hover.set(0, (glyph, row));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            Some(Text::Key(key::KIND_ROUTINE.into())),
+            "a task's glyph does not say what it means"
+        );
+        let fold = s.log_layout.field("fold").expect("the fold's column").at;
+        let line = s.blocks.log.line_of(2).expect("the folded row");
+        let _ = s.hover.set(0, (fold, line));
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            Some(Text::Key(key::ABOUT_FOLD.into())),
+            "the fold's mark does not say what it is"
+        );
+        let _ = s.hover.clear(0);
+        assert_eq!(
+            pointed(&drawn(&mut s, 30, 120)),
+            None,
+            "the pointer left and it stayed"
+        );
+    }
+
+    /// FAILS IF: the footer's last row offers no way to the page of the task
+    /// it is about — whatever the task — its click does not open that page,
+    /// or its figures are not drawn discreetly.
+    #[test]
+    fn the_footer_opens_the_page_of_what_it_is_about() {
+        let mut s = a_state();
+        s.task = 1;
+        s.mind.tasks[1].ran = false;
+        let screen = drawn(&mut s, 30, 120);
+        let seen = runs(&screen);
+        let (_, colour, line, column) = seen
+            .iter()
+            .find(|(t, ..)| t == key::OPEN_PAGE)
+            .cloned()
+            .expect("a task that never ran has no way to its page");
+        assert_eq!(colour, "state-accent");
+        s.task = 0;
+        let seen = runs(&drawn(&mut s, 30, 120));
+        assert_eq!(colour_of(&seen, key::LAST_RUN).as_deref(), Some("text-dim"));
+        assert!(
+            seen.iter()
+                .any(|(t, c, ..)| t == "2026-08-23 13:00" && c == "text-dim"),
+            "the last row's figures are not discreet"
+        );
+        let _ = s.act(Input::Click(ronoctua_design::types::Position {
+            column,
+            line,
+        }));
+        assert_eq!(s.page, Page::Task, "the click did not open the page");
+        assert_eq!(s.task, 0);
+    }
+
+    /// FAILS IF: the list's columns are reserved blind again — a module's
+    /// reason cut in a column of seventeen while the name beside it holds a
+    /// fraction of its own.
+    #[test]
+    fn the_lists_columns_are_as_wide_as_what_they_hold() {
+        let mut s = a_state();
+        s.phrases = Phrases::of(vec![
+            ("brain-outcome-done".to_owned(), "Worked".to_owned()),
+            ("brain-standing-idle".to_owned(), "Waiting".to_owned()),
+        ]);
+        s.mind.tasks[1].why_key = "brain-why-when-used".to_owned();
+        s.mind.tasks[1].why_text = "After an account was used".to_owned();
+        let _ = drawn(&mut s, 30, 120);
+        let width = |s: &State, id: &str| s.task_layout.field(id).map(|f| f.width);
+        assert_eq!(
+            width(&s, "name"),
+            Some(15),
+            "the name is not as wide as the widest"
+        );
+        assert_eq!(
+            width(&s, "when"),
+            Some(25),
+            "the reason is cut, or reserved"
+        );
+        assert_eq!(
+            width(&s, "note"),
+            Some(6),
+            "the status is not as wide as the widest"
+        );
+        // AND IN A NARROWER WINDOW THE REASON GIVES WAY TO THE ROW — a
+        // hundred and twenty cells hold it, fifty leave it twenty-three —
+        // and never below a whole date, the status going first.
+        let _ = drawn(&mut s, 30, 50);
+        assert_eq!(width(&s, "when"), Some(23));
+        let _ = drawn(&mut s, 30, 40);
+        assert_eq!(width(&s, "when"), Some(WHEN_FLOOR));
+        assert_eq!(width(&s, "note"), None, "the status did not give way first");
+    }
+
     fn drawn_texts(screen: &Screen<Wit>) -> (Vec<String>, Vec<String>) {
         let mut keys = Vec::new();
         let mut data = Vec::new();
@@ -5552,8 +6483,10 @@ mod tests {
     }
 
     /// FAILS IF: what says the same thing three times is three rows, the
-    /// folded row does not say it is the newest of how many, or `RET` on it
-    /// does not open the records it folds — and close them again.
+    /// folded row does not say how many it folds — or says `Last:` again,
+    /// which the owner took off — the title does not say how far back the
+    /// log reaches and how many records it holds, or `RET` on a fold does not
+    /// open the records it folds — and close them again.
     #[test]
     fn a_folded_row_says_how_many_and_opens_on_return() {
         let mut s = a_state();
@@ -5561,15 +6494,16 @@ mod tests {
         assert_eq!(s.activity_lines().len(), 2, "a shut fold drew its members");
         let (keys, data) = drawn_texts(&drawn(&mut s, 30, 120));
         assert!(
-            keys.iter().any(|k| k == key::LAST),
-            "the folded row does not say `Last:` before its date"
+            !keys.iter().any(|k| k == "brain-activity-last"),
+            "the folded row says `Last:` before its date again"
         );
         assert!(
             data.iter().any(|d| d == "3"),
             "the folded row does not say how many it folds: {data:?}"
         );
-        // AND THE TITLE COUNTS RECORDS, not rows: four of a hundred.
-        assert!(data.iter().any(|d| d == "4 / 100"), "{data:?}");
+        // AND THE TITLE SAYS HOW FAR BACK, AND COUNTS RECORDS, not rows.
+        assert!(data.iter().any(|d| d == "last 15 days"), "{data:?}");
+        assert!(data.iter().any(|d| d == "4"), "{data:?}");
 
         s.pane = Pane::Log;
         s.log = 1;

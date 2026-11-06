@@ -229,12 +229,21 @@ brain-flake-owned = No flake
 brain-changed = Alterado por você
 # OS CAMPOS DO RODAPÉ.
 brain-last-run = Última vez
+# THE CLICK AT THE END OF THE FOOTER'S LAST ROW, and what it does.
+brain-open-page = Abrir a página
+about-brain-open-page = Abre a página da tarefa de que isto fala: a agenda, os passos e o histórico.
+# WHAT THE POINTER RESTS ON: a task's glyph, a fold's mark, the next run.
+brain-kind-routine = Se repete sozinha: roda de novo e de novo, na agenda dela ou quando a máquina pede.
+brain-kind-once = Acontece uma vez e depois some.
+brain-kind-watch = Só vigia: não roda nada numa agenda, acompanha algo e diz o que ouve.
+about-brain-fold = Registros seguidos que dizem a mesma coisa, dobrados neste; abri-lo mostra cada um numa linha própria.
+about-brain-next = Quando o cérebro vai considerar rodar esta tarefa de novo.
 # AS TAREFAS. `brain-task-<id>` nomeia uma e `<id>-does` diz o que ela faz — a
 # segunda é um parágrafo no rodapé, então tem espaço para ser uma explicação
 # inteira em vez de uma linha.
 
-# ONDE UMA TAREFA ESTÁ AGORA. Uma frase curta cada: elas ficam numa coluna de
-# doze células na página inicial.
+# ONDE UMA TAREFA ESTÁ AGORA. Uma frase curta cada: elas ficam na última
+# coluna da página inicial, tão larga quanto a mais larga delas.
 brain-standing-idle = Esperando
 brain-standing-queued = Na fila
 brain-standing-running = Rodando
@@ -325,7 +334,6 @@ brain-outcome-noted = Anotado
 brain-notices = Avisos
 brain-actions = O que ele oferece
 brain-watching = Vigiando
-brain-activity-last = Último:
 brain-activity-first = Primeiro
 brain-activity-times = Vezes
 brain-since = Desde

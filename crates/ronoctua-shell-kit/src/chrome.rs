@@ -1314,6 +1314,11 @@ pub struct Declared {
     /// Each pair's sentence under the pointer, by the piece's id — the
     /// buffer's `about`, because its `cmd-<id>` is the short word.
     pub abouts: Vec<(&'static str, &'static str)>,
+    /// WHAT THE THING UNDER THE POINTER IS, in the reader's language — what
+    /// the buffer said of the cell a pointer rests on (`Command::Pointed`),
+    /// which the window says where a native window says what its row under
+    /// the pointer adds (`door::list::line_zero`).
+    pub pointed: Option<String>,
 }
 
 impl Declared {
@@ -1397,6 +1402,15 @@ pub fn declared(
                     says,
                     control: *control,
                 });
+            }
+            Command::Pointed { about } => {
+                // A KEY THE TEXTS DO NOT HAVE IS NO SENTENCE: brackets under
+                // the pointer say nothing about what it rests on.
+                out.pointed = match about {
+                    Text::Key(k) if texts.has(k) => Some(texts.t(k)),
+                    Text::Data(d) if !d.is_empty() => Some(d.clone()),
+                    Text::Key(_) | Text::Data(_) | Text::Icon(_) => None,
+                };
             }
             _ => {}
         }
@@ -2584,6 +2598,11 @@ pub struct Hinted {
     /// and the door owes the window its size again
     /// ([`Hinted::line_zero_moved`]).
     spoke_moved: bool,
+    /// WITH NO HEADER, what the row or the button under the pointer had to add
+    /// in the last frame ([`Carries::About`]) — which line 0 does not carry
+    /// then, and the door tells the footer's minibuffer instead
+    /// ([`Hinted::pointed`]).
+    pointed: Option<String>,
 }
 
 /// WHAT LINE 0 CARRIES this frame — [`Hinted::head`] draws it accordingly.
@@ -2644,6 +2663,7 @@ impl Default for Hinted {
             glyph_lit: None,
             spoke: false,
             spoke_moved: false,
+            pointed: None,
         }
     }
 }
@@ -2931,6 +2951,12 @@ impl Hinted {
             self.spoke = speaking;
             self.spoke_moved = true;
         }
+        // WHAT THE POINTER RESTS ON, with nowhere on the window to be said:
+        // kept for the door, which says it on the footer's minibuffer — the
+        // line a hidden header lends its keys to (`Hinted::pointed`).
+        self.pointed = (self.hidden && carries == Carries::About)
+            .then(|| pieces.iter().map(|p| p.text.as_str()).collect::<String>())
+            .filter(|t| !t.trim().is_empty());
         if self.hidden && !speaking {
             self.withdraw();
             return Vec::new();
@@ -3126,6 +3152,16 @@ impl Hinted {
     #[must_use]
     pub const fn speaks(&self) -> bool {
         self.spoke
+    }
+
+    /// WITH NO HEADER, what the row or the button under the pointer had to
+    /// add in the last frame — line 0 does not carry it then (it would move
+    /// the list at every row the pointer crossed), so the door says it on the
+    /// footer's minibuffer, the line the header's keys went to. `None` with a
+    /// header, which says it itself.
+    #[must_use]
+    pub fn pointed(&self) -> Option<&str> {
+        self.pointed.as_deref()
     }
 
     /// Is the pointer on the control that opens the line?
@@ -6799,8 +6835,24 @@ mod tests {
             h.head(&said, Carries::About, 1, 40, &t).is_empty(),
             "what the pointer rests on took line 0"
         );
+        // AND IS KEPT FOR THE FOOTER'S MINIBUFFER, where the door says it.
+        assert_eq!(h.pointed(), Some("it was saved"));
         assert!(!h.speaks());
         assert!(!h.line_zero_moved());
+        assert!(h.head(&keys, Carries::Keys, 1, 40, &t).is_empty());
+        assert_eq!(
+            h.pointed(),
+            None,
+            "the pointer moved on and its sentence stayed"
+        );
+        // WITH A HEADER, the header says it itself, and nothing is kept.
+        let mut shown = Hinted::default();
+        let _ = shown.head(&said, Carries::About, 1, 40, &t);
+        assert_eq!(
+            shown.pointed(),
+            None,
+            "a header that says it also told the footer"
+        );
 
         let spans = h.head(&said, Carries::Said, 1, 40, &t);
         assert!(

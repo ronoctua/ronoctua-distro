@@ -875,6 +875,69 @@
     # shared name would move the other with it. They never meet on a screen —
     # `shared` is a notification filter, this is a row of the brain.
     once = "alternate.text";
+
+    # HOW A TASK STANDS, OR HOW A RUN ENDED — the brain's last column, and the
+    # outcome of every record in a task's history and in the activity log.
+    #
+    # DISCREET, AND EACH IN ITS OWN HUE: the owner asked for both at once —
+    # *"tenham uma cor mais discreta … mas o hue … alterado de acordo com o
+    # status"*. So one rung, twelve below `text.secondary` (a `shift`: the
+    # family's own `text` step solved to a lower contrast), and the hue says
+    # what kind of news it is: a run that worked is the success green, a turn
+    # being waited for the group's purple (a tone with less meaning), a
+    # failure the error red, a hold — and every reason the machine gave for
+    # one — the dev build's muted amber (the warning's own is a yellow beside
+    # the success green at this rung, and the caution orange a red), a run
+    # the person put off a cool grey-blue (the `explain` family's hue, half
+    # again its chroma, at the same rung), and
+    # something under way (running, a watch's note) the teal of what the
+    # brain follows. Told apart by the gates.
+    status = {
+      good = {
+        of = "success.text";
+        shift = -12;
+      };
+      idle = {
+        of = "group.text";
+        shift = -12;
+      };
+      bad = {
+        of = "error.text";
+        shift = -12;
+      };
+      held = {
+        of = "build.text";
+        shift = -12;
+      };
+      skipped = {
+        of = "explain.text";
+        chroma = 1.5;
+        shift = -2;
+      };
+      busy = {
+        of = "follow.text";
+        shift = -12;
+      };
+    };
+
+    # THE OLDER RECORDS AN OPENED ROW OF THE ACTIVITY LOG FOLDS — only their
+    # dates, under the row that stands for them. Another discreet tone than
+    # the row's own, the owner's ask, and a COOL grey (*"um cinza não warm"*):
+    # the cool family the sentence under the shortcuts already wears, a few
+    # Lc under it.
+    folded = {
+      of = "explain.text";
+      shift = -6;
+    };
+
+    # TODAY'S DAY in a date the brain lists — `2026-11-06 02:07`, the `06`.
+    # Every day of a date is drawn above the rest of it (`text.secondary`
+    # against `text.dim`), and today's takes a hue of its own on top, the
+    # owner's ask: a gold, a step louder than the day beside it.
+    today = {
+      of = "build.text";
+      shift = 10;
+    };
   };
 
   # -------------------------------------------------------------------
@@ -1454,6 +1517,16 @@
     # blue: the same quietness, another KIND of thing. Not the danger red,
     # which is the RECORDING mark's: looking is not yet keeping.
     watching = "watching.text";
+    # WHAT THE BRAIN IS FOLLOWING — every brain mark and row a module tones
+    # `watching` (an agent at work, a container up, the index walking), and
+    # the brain's watches on its page. It was the camera's pink above, and
+    # the owner read it as an alarm: *"dá uma conotação negativa"*, *"dá a
+    # impressão que há algo errado com o agente"*. A TEAL of its own
+    # (`follow`, in every seed), at the marks' rung: something being
+    # followed, and nothing wrong with it. Told from the tunnel's green, the
+    # drawer's, the device blue and the one-shot task's `text.once` by the
+    # gates.
+    following = "follow.text";
     # THE SELECTION — windows marked to be acted on together. The green of
     # their outline (`border.selected`), at the rung every other mark reads
     # at: the mark and the windows it counts are told apart by nothing else.

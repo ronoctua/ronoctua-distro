@@ -355,7 +355,7 @@ fn spans_from(
         Command::Anchor { .. } => Vec::new(),
         // WHAT THE HOST'S HEADER CARRIES is drawn there, by the chrome
         // (`chrome::taught_pieces`), never as a run of the buffer's.
-        Command::Heading { .. } | Command::Taught { .. } => Vec::new(),
+        Command::Heading { .. } | Command::Taught { .. } | Command::Pointed { .. } => Vec::new(),
     }
 }
 

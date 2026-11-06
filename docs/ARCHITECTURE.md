@@ -12956,9 +12956,11 @@ para o arquivo no máximo uma vez por segundo, sempre antes do cursor que diz qu
 o registro de uma execução é gravado na hora. E o `runner` só acorda para o que decide (fila, o que
 roda, anúncio, preferências e os dois recados do soquete): antes, cada publicação da thread que
 escuta o acordava, e a volta dele lia o medidor, publicava um pulso novo e escrevia um `tick` na
-página. O piso do journal (as últimas dez de cada módulo) conta registros de todo tipo, então a
-última EXECUÇÃO de um módulo nunca é podada: sem isso, a décima primeira nota de uma vigia semanal
-apagava a execução e o módulo vencia como se nunca tivesse rodado.
+página. O journal guarda os últimos 20 dias (`journal::KEPT_DAYS`, o maior dos dois alcances que as
+telas prometem: 15 dias do log de atividade, 20 do histórico de uma tarefa), contados do registro
+mais novo, sob um teto de registros (`HISTORY`); o último registro e a última EXECUÇÃO de cada módulo
+nunca são podados: sem isso, uma tarefa mensal perdia o único registro e vencia como se nunca
+tivesse rodado.
 
 **Uma recusa do módulo é uma chave, e vai num caso próprio** (`Say::Declined { key }`): a porta
 sabe o que traduzir. As outras recusas continuam frases (`Say::Refused`). Uma ação não bloqueia a
@@ -13044,7 +13046,8 @@ Fluent escolher o plural).
   com os dois a faixa cresce para uma segunda linha** (decisão do dono): nenhum empurra o outro
   para fora. Um controle que não cabe cede ao texto, nunca o contrário.
 - **As marcas da modeline** são segmentos `brain:<módulo>/<marca>`, só enquanto um módulo publica
-  uma; a cor é a do tom (`Watching` é a cor dos gestos), a dica é a chave do módulo com a contagem,
+  uma; a cor é a do tom (`Watching` é o teal `modeline.following`, o mesmo das vigias na página; a
+  câmera fica com o rosa), a dica é a chave do módulo com a contagem,
   e o clique roda a ação da marca (`brain-act <módulo> <ação>`) ou abre a página do módulo
   (`brain-open <módulo>`, que abre a janela já na página dele). Um id de segmento é `&'static str`:
   cada nome distinto vira estático uma vez, com teto (`brain::NAMES_KEPT`).
@@ -13052,7 +13055,9 @@ Fluent escolher o plural).
   não só o anúncio — um aviso que aparece sozinho redesenha e pede a altura.
 - **A página do cérebro** tem um bloco de avisos (três de cada vez, com barra), o registro de
   atividade **agrupado** (`journal::grouped`: registros seguidos que dizem a mesma coisa são uma
-  linha, com o triângulo, a contagem e um `Último:` discreto antes da data; `RET` abre os membros)
+  linha, com o triângulo e a contagem; `RET` abre os membros, só as datas, no cinza frio
+  `text.folded`), com o alcance e a contagem ao lado do título; o dia de toda data vem acima do
+  resto dela, e o de hoje no `text.today` (o host corta a data em `stamp`)
   e, numa vigia, "vigiando" no lugar de uma data. A página de uma tarefa só mostra cadência e
   janela quando ela tem calendário; depois vêm as ações do módulo e a **tela do módulo** — seções
   de linhas de dados que o host pede (`Ask::Screen`) quando a geração anda e empurra por
@@ -25462,7 +25467,7 @@ daemon e DESENHA a resposta. Por isso o brain virou dois pacotes:
 - **`ronoctua-brain`** (a biblioteca, em `crates/ronoctua-brain`): o que atravessa o soquete e o
   que um módulo declara, e nada que rode. O fio (`wire`, `client`), a mente com cada linha dela
   (`mind`, `task`, `prefs`, `pulse`, `tail`), os números e a dobra do log de atividade
-  (`journal::{HISTORY, RECENT, ACTIVITY, schedules, grouped}`), o vocabulário de um módulo (o
+  (`journal::{ACTIVITY_DAYS, RECENT_DAYS, KEPT_DAYS, HISTORY, schedules, grouped}`), o vocabulário de um módulo (o
   `Manifest` e o que ele nomeia, o `Face`, marcas, avisos, itens, a página — `module`), `moment`,
   `systemd` (partir uma unidade pelo caminho no store), `registry::SYSTEM_OFF` e `compiled`: os
   manifestos dos módulos DA DISTRO e a metade compartilhada dos que um `namedBy` lê. Nenhum

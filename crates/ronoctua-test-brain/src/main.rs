@@ -165,6 +165,11 @@ fn named(mind: &mut Mind, words: &std::collections::HashMap<String, String>) {
     let say = |key: &str| words.get(key).cloned().unwrap_or_else(|| key.to_owned());
     for t in &mut mind.tasks {
         t.name_text = say(&t.name_key);
+        t.why_text = if t.why_key.is_empty() {
+            String::new()
+        } else {
+            say(&t.why_key)
+        };
         t.last.task_text = say(&t.last.task_key);
         for r in &mut t.history {
             r.task_text = say(&r.task_key);
@@ -186,6 +191,12 @@ fn a_run(task: &str, outcome: OutcomeKind, at: &str, why: &str) -> RunRecord {
         began: NOW - 7200,
         ended: NOW - 7000,
         when_text: "2026-08-23 13:00".to_owned(),
+        when_stamp: ronoctua_protocol::Stamp {
+            lead: "2026-08-".to_owned(),
+            day: "23".to_owned(),
+            tail: " 13:00".to_owned(),
+            today: true,
+        },
         outcome,
         at: at.to_owned(),
         why: why.to_owned(),
@@ -273,6 +284,8 @@ fn task(id: &str, standing: Standing, hold: HoldKind, why_not: &str, ran: bool) 
         } else {
             format!("brain-why-{why_not}")
         },
+        // FILLED BY `named`, in the driver's language, as `mind_wire` does.
+        why_text: String::new(),
         screen_generation: 1,
         // ONE THING ITS MODULE OFFERS ON ITS PAGE, by a label the texts have,
         // so the page's `Actions` block is drawn and measured.
@@ -388,10 +401,10 @@ fn mind(ids: &[String], one: TaskState, announcement: Announcement, said: bool) 
         Vec::new()
     };
     Mind {
-        // The journal's own cap, so the activity block's title can say what
-        // its window is onto.
-        remembers: 100,
-        recent: 10,
+        // The journal's own reaches, so the activity block's title and the
+        // history's heading can say what their window is onto.
+        activity_reach: "last 15 days".to_owned(),
+        history_reach: "last 20 days".to_owned(),
         now: NOW,
         pulse: Pulse {
             at: NOW,

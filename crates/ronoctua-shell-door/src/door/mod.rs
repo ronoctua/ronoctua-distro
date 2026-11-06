@@ -2156,6 +2156,11 @@ pub struct Door<C: Content> {
     /// The state last told to the footer (`Content::state`), so it is told
     /// once per change and not once per turn.
     state_told: Option<(&'static str, ronoctua_protocol::Tone)>,
+    /// WHAT THE POINTER RESTS ON, as last told to the footer's minibuffer
+    /// (`Hinted::pointed`), and how many times it was told — the footer keeps
+    /// only the latest of one window's reports, which cross on threads of
+    /// their own and may arrive out of order ([`pointed_order`]).
+    pointed_told: (Option<String>, u64),
     /// The shortcut set published on this window's per-PID socket, shared with
     /// the listener thread (`serve_shortcuts`) — `None` for a window that
     /// serves its own socket (a buffer, `Content::serves_own_socket`).
@@ -2175,6 +2180,19 @@ pub struct Door<C: Content> {
 #[must_use]
 pub fn state_order(pid: u32, id: &str, tone: ronoctua_protocol::Tone) -> String {
     format!("state {pid} {id} {}", crate::ipc::tone_word(tone))
+}
+
+/// The report of what the pointer rests on in a window with no header — the
+/// line `leader` parses as `pointed <pid> <seq> [sentence]`: the sentence the
+/// footer's minibuffer says, or nothing, which takes it off. On ONE line: a
+/// sentence a module wrote may carry a line break, and the socket's orders
+/// are one a line.
+#[must_use]
+pub fn pointed_order(pid: u32, seq: u64, said: Option<&str>) -> String {
+    let said = said
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    format!("pointed {pid} {seq} {said}").trim_end().to_owned()
 }
 
 /// THE ONE-SHOT TIMER OF A SENTENCE SAID ([`Ui::say`]), hung on the door's
@@ -2360,6 +2378,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
         selection: None,
         _watches: watches,
         state_told: None,
+        pointed_told: (None, 0),
         shortcuts_socket,
         shortcuts_told: Vec::new(),
         qh: qh.clone(),
@@ -2892,6 +2911,21 @@ impl<C: Content> Door<C> {
                     self.take_the_size();
                 }
                 self.paint();
+            }
+            // WHAT THE POINTER RESTS ON, in a window with no header, told to
+            // the footer's minibuffer when it CHANGES — the line the header's
+            // keys went to, and the only place left to say it (the owner's
+            // ask: *"as informações devem aparecer no minibuffer"*). Quietly,
+            // as the state is: a report nobody asked for.
+            let pointed = self.ui.hinted.pointed().map(str::to_owned);
+            if pointed != self.pointed_told.0 {
+                let seq = self.pointed_told.1 + 1;
+                Self::report_to_the_footer(pointed_order(
+                    std::process::id(),
+                    seq,
+                    pointed.as_deref(),
+                ));
+                self.pointed_told = (pointed, seq);
             }
         }
         // THE FIELD AN INPUT METHOD COMPOSES IN, after the frame: a cursor
@@ -3988,6 +4022,18 @@ mod tests {
 
     fn key(notation: &str) -> Key {
         Key::parse(notation).expect(notation)
+    }
+
+    /// FAILS IF: what the pointer rests on does not cross on one line —
+    /// a module's sentence may carry a break, and the footer's orders are one
+    /// a line — or nothing is not an order that takes it off.
+    #[test]
+    fn what_the_pointer_rests_on_crosses_on_one_line() {
+        assert_eq!(
+            pointed_order(41, 3, Some("Two lines\nof  a module")),
+            "pointed 41 3 Two lines of a module"
+        );
+        assert_eq!(pointed_order(41, 4, None), "pointed 41 4");
     }
 
     /// EVERY KEY IS THE LINE'S while it asks, and the answer leaves the line

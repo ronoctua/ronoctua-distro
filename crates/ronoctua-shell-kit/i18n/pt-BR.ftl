@@ -359,6 +359,12 @@ echo-brain-not-offered = O aviso não oferece isso
 echo-brain-dismissed = Dispensado
 echo-brain-taken = O cérebro aceitou
 echo-brain-refused = O cérebro recusou: { $why }
+# HOW FAR BACK THE BRAIN'S TWO LISTS REACH, beside their titles: the activity
+# log's and a task's own history (`ronoctua_brain::journal`).
+brain-reach-days = { $days ->
+        [one] último dia
+       *[other] últimos { $days } dias
+    }
 # THE LEADER'S SETS AND THE BARS' MODES (2026-09-30): the leader pressed again
 # walks the sets, and a tap of Ctrl at the root walks the bars' three modes.
 leader-set-default = padrão

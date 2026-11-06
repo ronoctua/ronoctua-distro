@@ -183,7 +183,7 @@ pub use phrases::Phrases;
 #[cfg(feature = "host")]
 pub use rails::Frame;
 pub use region::{Region, Slice, split};
-pub use screen::{Ink, Run, Screen, Taught};
+pub use screen::{Ink, Pointed, Run, Screen, Taught};
 pub use scroll::Scroll;
 pub use sheet::{SHEET_LABEL, Sheet, sheet_split};
 pub use table::{Column, Field, Layout, Row, Table, Width};
@@ -390,10 +390,37 @@ pub enum Role {
     /// apart, the rule the shell's own windows keep (`ronoctua_shell_kit::seats`).
     HoverOf(u16),
     /// SOMETHING IS BEING FOLLOWED — a brain module that listens, and the
-    /// rows and marks it tones `watching`. The gestures' glyph colour, the one
-    /// the modeline already marks a watch with (`modeline.watching`), so a
+    /// rows and marks it tones `watching`: the teal every brain mark toned
+    /// `watching` wears on the modeline too (`modeline.following`), so a
     /// person who has read the mark has read the row.
+    ///
+    /// It was the camera's pink (`modeline.watching`), and the owner read it
+    /// on the brain's list as an alarm — a watch, and an agent at work, in
+    /// the colour that says something is wrong. The camera keeps its pink:
+    /// a camera looking is a thing to be told about; a watch is not.
     Watching,
+    /// HOW A THING STANDS, OR HOW IT ENDED, said discreetly in the hue of the
+    /// news — the brain's last column, and the outcome of each record of a
+    /// history (`text.status.*`): it went well.
+    StatusGood,
+    /// A turn being waited for, or a place in a queue: news with little
+    /// meaning, in a quiet purple.
+    StatusIdle,
+    /// It went wrong.
+    StatusBad,
+    /// It waited for the machine — and each reason the machine gave.
+    StatusHeld,
+    /// It did not happen, because somebody put it off.
+    StatusSkipped,
+    /// It is under way, or a watch wrote down what it heard.
+    StatusBusy,
+    /// A record a folded row OPENED into — another discreet tone than the
+    /// row's own, a cool grey (`text.folded`): the row stands for it, and it
+    /// is read after.
+    Folded,
+    /// TODAY'S DAY in a date (`text.today`): the day of every date is louder
+    /// than the rest of it, and today's takes a hue of its own.
+    Today,
     /// ONE KEYBOARD'S SELECTION, in its cursor's colour — `cursor.selection.*`,
     /// the band a buffer paints under each [`crate::Carets`] caret when more
     /// than one keyboard types into it. Built through [`Role::selection_of`].
@@ -563,7 +590,16 @@ impl Palette for Tokens {
             Role::Danger => "state-error",
             Role::Warning => "state-warning",
             Role::Once => "text-once",
-            Role::Watching => "modeline-watching",
+            Role::Watching => "modeline-following",
+            // HOW A THING STANDS, in the hue of the news.
+            Role::StatusGood => "text-status-good",
+            Role::StatusIdle => "text-status-idle",
+            Role::StatusBad => "text-status-bad",
+            Role::StatusHeld => "text-status-held",
+            Role::StatusSkipped => "text-status-skipped",
+            Role::StatusBusy => "text-status-busy",
+            Role::Folded => "text-folded",
+            Role::Today => "text-today",
             Role::Hover => "surface-hover",
             // ONE CURSOR'S HOVER, by its colour number — eight colours, and a
             // ninth cursor wears the first's (`HoverOf` reduces it first).

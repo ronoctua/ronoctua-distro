@@ -361,6 +361,12 @@ echo-brain-not-offered = The notice does not offer that
 echo-brain-dismissed = Put away
 echo-brain-taken = The brain took it
 echo-brain-refused = The brain would not: { $why }
+# HOW FAR BACK THE BRAIN'S TWO LISTS REACH, beside their titles: the activity
+# log's and a task's own history (`ronoctua_brain::journal`).
+brain-reach-days = { $days ->
+        [one] last day
+       *[other] last { $days } days
+    }
 # THE LEADER'S SETS AND THE BARS' MODES (2026-09-30): the leader pressed again
 # walks the sets, and a tap of Ctrl at the root walks the bars' three modes.
 leader-set-default = default

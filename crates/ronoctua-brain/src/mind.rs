@@ -298,9 +298,9 @@ pub struct Mind {
     /// about deltas, one level up.
     ///
     /// It is a COPY and not the journal itself: the journal belongs to the
-    /// runner's thread and this is read by every screen. The ceiling is
-    /// [`crate::journal::ACTIVITY`], so the copy is bounded however long the
-    /// machine has been running.
+    /// runner's thread and this is read by every screen. It reaches
+    /// [`crate::journal::ACTIVITY_DAYS`] back from now, so the copy is
+    /// bounded however long the machine has been running.
     pub journal: Vec<crate::task::RunRecord>,
     /// Every notice every module raised, in the order the strip ranks them:
     /// something the brain wants said, without anybody having asked.

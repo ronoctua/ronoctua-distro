@@ -134,6 +134,17 @@
       text-chroma = 0.5;
       text-shift = 0;
     };
+    # WHAT THE BRAIN IS FOLLOWING (`modeline.following`): a watch's rows on
+    # its page, an agent at work, a container up — something being followed,
+    # and nothing wrong with it. A TEAL, the owner's ask: the camera's pink
+    # above said "something is wrong" about all of them. Told from the
+    # tunnel's green and the drawer's on the same line, and from the one-shot
+    # task's `alternate` in the same list, by the gates.
+    follow = {
+      hue = 192;
+      text-chroma = 0.65;
+      text-shift = 0;
+    };
     # THE DRAWER'S MARK (`modeline.drawer`): a faded green, the device blue's
     # quietness in another hue — a place windows are kept, not an alarm.
     drawer = {

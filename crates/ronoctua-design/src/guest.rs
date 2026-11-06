@@ -49,7 +49,15 @@ impl Palette for Wit {
             Role::Danger => wit::Color::StateError,
             Role::Warning => wit::Color::StateWarning,
             Role::Once => wit::Color::TextOnce,
-            Role::Watching => wit::Color::ModelineWatching,
+            Role::Watching => wit::Color::ModelineFollowing,
+            Role::StatusGood => wit::Color::TextStatusGood,
+            Role::StatusIdle => wit::Color::TextStatusIdle,
+            Role::StatusBad => wit::Color::TextStatusBad,
+            Role::StatusHeld => wit::Color::TextStatusHeld,
+            Role::StatusSkipped => wit::Color::TextStatusSkipped,
+            Role::StatusBusy => wit::Color::TextStatusBusy,
+            Role::Folded => wit::Color::TextFolded,
+            Role::Today => wit::Color::TextToday,
             Role::Hover => wit::Color::SurfaceHover,
             Role::HoverOf(0) => wit::Color::CursorHoverOne,
             Role::HoverOf(1) => wit::Color::CursorHoverTwo,
@@ -191,10 +199,20 @@ impl<P: Palette<Color = wit::Color, Icon = wit::Icon>> Screen<P> {
                 control: t.control,
             })
         });
+        // AND WHAT THE POINTER RESTS ON, in a sentence (`Screen::point`).
+        let pointed = self.pointed().map(|p| {
+            wit::Command::Pointed(wit::PointedCommand {
+                about: match p {
+                    crate::screen::Pointed::Key(k) => wit::Text::Key(k.clone()),
+                    crate::screen::Pointed::Datum(d) => wit::Text::Data(d.clone()),
+                },
+            })
+        });
         anchor
             .into_iter()
             .chain(heading)
             .chain(taught)
+            .chain(pointed)
             .chain(self.parts().map(|part| match part {
                 Frame::Ran(line, run) => wit::Command::Text(wit::TextCommand {
                     line,

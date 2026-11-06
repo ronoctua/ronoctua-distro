@@ -8,11 +8,12 @@
 //!
 //! # Why it is rewritten whole
 //!
-//! Because there are a few dozen records of a few hundred bytes, written when
-//! something happens — which on this machine is once a week. An append-only log
-//! would need a second stream for the records that CHANGE (a run ends, and the
-//! record of it grows a result), and rebuilding the state would mean replaying
-//! it. Rewriting is a few kilobytes and no second format.
+//! Because there are at most a few thousand records of a few hundred bytes —
+//! twenty days of them ([`KEPT_DAYS`]), under a ceiling ([`HISTORY`]) — written
+//! when something happens. An append-only log would need a second stream for
+//! the records that CHANGE (a run ends, and the record of it grows a result),
+//! and rebuilding the state would mean replaying it. Rewriting is a few
+//! hundred kilobytes at worst and no second format.
 //!
 //! # Why a failed run — and a postponement — still move the schedule
 //!
@@ -56,8 +57,9 @@ pub const JOURNAL_FILE: &str = "brain.json";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Journal {
-    /// Oldest first, so appending is a push and the ceiling drops from the
-    /// front — which is the order a person reads a history in anyway.
+    /// Oldest first, so appending is a push and what goes past the reach
+    /// goes from the front — which is the order a person reads a history in
+    /// anyway.
     pub runs: Vec<RunRecord>,
 }
 
@@ -110,82 +112,95 @@ impl Journal {
         self.runs.iter().rev().find(|r| r.task == task)
     }
 
-    /// The last few records of this task, NEWEST FIRST.
+    /// This task's records since `since`, NEWEST FIRST — what its own page
+    /// lists as its history ([`RECENT_DAYS`] back from now).
     ///
     /// # Why a task's own history and not the journal's
     ///
-    /// Because the journal is one list for every task, capped at
-    /// [`HISTORY`] — so on a machine where one task runs ten times a week and
-    /// another once a month, the second one's last run falls off the end while
-    /// its row still has to show it. Asking per task is what makes "the last
-    /// five of THIS" a question with an answer.
-    ///
-    /// The owner asked for five, and the number is the caller's: what this
-    /// knows is how to answer the question.
+    /// Because the journal is one list for every task, and a screen asks
+    /// about one of them: "the last twenty days of THIS". How far back is the
+    /// caller's: what this knows is how to answer the question.
     #[must_use]
-    pub fn recent(&self, task: &str, most: usize) -> Vec<RunRecord> {
+    pub fn recent(&self, task: &str, since: Moment) -> Vec<RunRecord> {
         self.runs
             .iter()
             .rev()
-            .filter(|r| r.task == task)
-            .take(most)
+            .filter(|r| r.task == task && r.began >= since)
             .cloned()
             .collect()
     }
 
-    /// Writes one down, and drops the oldest past the ceiling — unless
-    /// dropping it would take a task's last few with it.
+    /// Every record that began since `since`, in the journal's order — the
+    /// activity log's window ([`ACTIVITY_DAYS`] back from now).
     ///
-    /// # Why the ceiling has a floor under it
+    /// A FILTER AND NOT A CUT: a record is written when its run ENDS, so a
+    /// long run that began before a short one is written after it, and the
+    /// list is in the order things finished.
+    #[must_use]
+    pub fn since(&self, since: Moment) -> Vec<RunRecord> {
+        self.runs
+            .iter()
+            .filter(|r| r.began >= since)
+            .cloned()
+            .collect()
+    }
+
+    /// Writes one down, and lets go of what is past the reach — never a
+    /// task's last record, nor the last run its schedule counts from.
     ///
-    /// Because a flat ceiling on one shared list is a ceiling that empties the
-    /// rare tasks first. The update runs weekly, the sweep every ten days, the
-    /// trash every four, and a watch every five minutes — and the watch would
-    /// fill the whole list inside a day, taking the update's last run with it.
-    /// The row that shows it would then say "never", about a task that ran on
-    /// Tuesday.
+    /// # How far back
     ///
-    /// So the oldest record is dropped only while its own task still has more
-    /// than [`RECENT`] left. Every task keeps its last few for as long as it
-    /// exists, and everything above that is first-in-first-out. The list can
-    /// therefore be longer than [`HISTORY`] — by at most `RECENT` per task,
-    /// which is a handful of records and the price of the row being honest.
+    /// [`KEPT_DAYS`], the longer of the two reaches a screen promises — the
+    /// activity log's fifteen days and a task's own twenty — counted back
+    /// from the NEWEST record and not from a clock: this is called as things
+    /// happen, so the newest record is now, and the journal needs no clock of
+    /// its own to be tested. A screen cuts its window from the mind's `now`.
     ///
-    /// # And a task's last RUN is never dropped
+    /// # And what is never let go
     ///
-    /// Because the floor counts records of every kind, and a watcher's notes
-    /// are records: a module that runs weekly and notes what it hears would
-    /// have its run pushed out by its own eleventh note, and [`Self::last`]
-    /// would answer "never" — a module that comes due as if it had never run.
-    /// The newest record the schedule counts from stays, whatever is above it.
+    /// A task's LAST RECORD, which its row shows, and its last RUN, which its
+    /// schedule counts from ([`Self::last`]). The update runs weekly and the
+    /// sweep every ten days — a reach in days would otherwise take a monthly
+    /// task's only record, and its row would say "never" about a task that
+    /// ran, and it would come due as if it had never run. The same pair is
+    /// what [`HISTORY`]'s ceiling leaves alone: a module that writes far more
+    /// than anybody planned for loses its oldest records first, and nobody's
+    /// last one.
     pub fn put(&mut self, record: RunRecord) {
         self.runs.push(record);
+        let newest = self.runs.iter().map(|r| r.began).max().unwrap_or(0);
+        let reach = since(newest, KEPT_DAYS);
+        let kept = self.never_let_go();
+        let mut n = 0;
+        self.runs.retain(|r| {
+            let keep = r.began >= reach || kept.contains(&n);
+            n += 1;
+            keep
+        });
         while self.runs.len() > HISTORY {
-            // THE OLDEST THAT CAN GO. Walking from the front, the first record
-            // whose task would still have more than `RECENT` left behind it,
-            // and which is not that task's last run.
-            let at = {
-                let mut count: std::collections::HashMap<&str, usize> =
-                    std::collections::HashMap::new();
-                let mut last_run: std::collections::HashMap<&str, usize> =
-                    std::collections::HashMap::new();
-                for (i, r) in self.runs.iter().enumerate() {
-                    *count.entry(r.task.as_str()).or_default() += 1;
-                    if schedules(r) {
-                        last_run.insert(r.task.as_str(), i);
-                    }
-                }
-                self.runs.iter().enumerate().position(|(i, r)| {
-                    count[r.task.as_str()] > RECENT && last_run.get(r.task.as_str()) != Some(&i)
-                })
-            };
-            let Some(at) = at else {
-                // Every task is down to its floor. The list stays longer than
+            // THE OLDEST THAT CAN GO, from the front.
+            let kept = self.never_let_go();
+            let Some(at) = (0..self.runs.len()).find(|n| !kept.contains(n)) else {
+                // Every record is somebody's last: the list stays longer than
                 // the ceiling, which is the trade this floor exists to make.
                 break;
             };
             self.runs.remove(at);
         }
+    }
+
+    /// The positions of the records that are never let go: each task's last
+    /// record, and each task's last run.
+    fn never_let_go(&self) -> std::collections::BTreeSet<usize> {
+        let mut last: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut last_run: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, r) in self.runs.iter().enumerate() {
+            last.insert(r.task.as_str(), i);
+            if schedules(r) {
+                last_run.insert(r.task.as_str(), i);
+            }
+        }
+        last.into_values().chain(last_run.into_values()).collect()
     }
 
     /// Reads the journal from an explicit directory.
@@ -313,7 +328,7 @@ mod tests {
         // eleventh note, and came due as if it had never run.
         let mut j = Journal::fresh();
         j.put(ran("watcher", 100, OutcomeKind::Done));
-        for n in 0..(HISTORY + RECENT + 5) {
+        for n in 0..(HISTORY + 5) {
             j.put(ran("watcher", 200 + n as Moment, OutcomeKind::Noted));
         }
         assert_eq!(j.last("watcher"), Some(100), "the run was pruned");
@@ -328,6 +343,58 @@ mod tests {
         }
         assert_eq!(j.last("watcher"), Some(100));
         assert!(!j.runs.iter().any(|r| r.began == 50));
+    }
+
+    #[test]
+    fn what_is_past_the_reach_goes_and_every_tasks_last_record_stays() {
+        // TWENTY DAYS, from the newest record: a run older than that goes —
+        // unless it is its task's last record, or the last run its schedule
+        // counts from, which a monthly task's row and calendar still need.
+        let day = ronoctua_brain::moment::DAY;
+        let mut j = Journal::fresh();
+        j.put(ran("monthly", 0, OutcomeKind::Done));
+        j.put(ran("busy", day, OutcomeKind::Done));
+        j.put(ran("busy", 2 * day, OutcomeKind::Noted));
+        j.put(ran("busy", 3 * day, OutcomeKind::Done));
+        j.put(ran("busy", 30 * day, OutcomeKind::Noted));
+        let kept: Vec<(&str, Moment)> = j.runs.iter().map(|r| (r.task.as_str(), r.began)).collect();
+        assert_eq!(
+            kept,
+            [("monthly", 0), ("busy", 3 * day), ("busy", 30 * day)],
+            "the reach kept too much, or took somebody's last"
+        );
+        assert_eq!(j.last("monthly"), Some(0));
+        assert_eq!(
+            j.last("busy"),
+            Some(3 * day),
+            "the last run went with the reach"
+        );
+        // AND THE TWO WINDOWS A SCREEN ASKS FOR, cut by when each began.
+        let now = 30 * day;
+        assert_eq!(j.since(since(now, ACTIVITY_DAYS)).len(), 1);
+        assert_eq!(j.recent("busy", since(now, RECENT_DAYS)).len(), 1);
+        assert!(j.recent("monthly", since(now, RECENT_DAYS)).is_empty());
+    }
+
+    #[test]
+    fn a_long_run_written_late_is_kept_where_it_ended_and_cut_by_when_it_began() {
+        // A RECORD IS WRITTEN WHEN ITS RUN ENDS, so a rebuild that began
+        // before a note is written after it — it stays in the order things
+        // finished, and a window is asked of when each began.
+        let mut j = Journal::fresh();
+        j.put(ran("note", 200, OutcomeKind::Noted));
+        j.put(ran("rebuild", 100, OutcomeKind::Done));
+        assert_eq!(
+            j.runs.iter().map(|r| r.began).collect::<Vec<_>>(),
+            [200, 100]
+        );
+        assert_eq!(
+            j.since(150)
+                .iter()
+                .map(|r| r.task.as_str())
+                .collect::<Vec<_>>(),
+            ["note"]
+        );
     }
 
     #[test]

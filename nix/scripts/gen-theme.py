@@ -548,7 +548,7 @@ class Theme:
         if absent:
             raise Refusal(f"{source}: the recipes need the families {absent}, and the seed does not define them")
 
-        self._memo: dict[tuple[str, str, float], Swatch] = {}
+        self._memo: dict[tuple[str, str, float, float], Swatch] = {}
         #: The base palette this one is a PAGE of, and which desk is its page
         #: — `None` and `"chrome"` for the base itself (`on_page`).
         self.base: Theme | None = None
@@ -698,18 +698,24 @@ class Theme:
 
     # -- primitives --------------------------------------------------------
 
-    def primitive(self, family: str, step: str, scale: float = 1.0) -> Swatch:
+    def primitive(self, family: str, step: str, scale: float = 1.0, shift: float = 0.0) -> Swatch:
         """The solved colour of `family.step`, with the step's relative chroma
-        multiplied by `scale` (a recipe's `chroma`)."""
-        key = (family, step, scale)
+        multiplied by `scale` (a recipe's `chroma`) and, for a step solved to
+        a contrast, its Lc target moved by `shift` (a recipe's `shift`)."""
+        key = (family, step, scale, shift)
         if key in self._memo:
             return self._memo[key]
+        if shift != 0.0 and (family == "neutral" or family in PICTURE_FAMILIES):
+            raise Refusal(
+                f"{self.source}: `{family}.{step}` cannot take a shift — only a chromatic family's "
+                "solid and text steps are solved to a contrast a shift can move"
+            )
         if family == "neutral":
             swatch = self._neutral(step, scale)
         elif family in PICTURE_FAMILIES:
             swatch = self._picture(family, step, scale)
         else:
-            swatch = self._chromatic(family, step, scale)
+            swatch = self._chromatic(family, step, scale, shift)
         self._memo[key] = swatch
         return swatch
 
@@ -820,25 +826,31 @@ class Theme:
         lch, rgb8 = cs.screen_colour(near, hue, rel)
         return Swatch(lch, rgb8, f"{desk_step} × {FAINT_RATIO} in luminance", shortfall)
 
-    def _chromatic(self, family: str, step: str, scale: float) -> Swatch:
+    def _chromatic(self, family: str, step: str, scale: float, shift: float = 0.0) -> Swatch:
         if family not in self.families:
             raise Refusal(f"{self.source}: no family {family!r} in the seed")
         fam = self.families[family]
         hue = fam["hue"]
         for name, delta, rel in PAINT_STEPS:
             if name == step:
+                # A PAINT STEP IS A DISTANCE OF LIGHT FROM THE CHROME, not a
+                # contrast: there is no Lc for a shift to move.
+                if shift != 0.0:
+                    raise Refusal(f"{self.source}: `{family}.{step}` is a paint step, and a shift moves a contrast")
                 # The torsion turns the PAINT steps only: a ground is not a solid.
                 turned = (hue + fam["torsion"]) % 360.0
                 return self._paint(turned, self._rel(rel * fam["paint-chroma"], scale), delta, f"chrome {self._toward(delta):+}, h {turned:.0f}")
         for name, lc, rel in SOLID_STEPS:
             if name == step:
-                target = lc + fam["shift"]
+                target = lc + fam["shift"] + shift
                 return self._solve_text(hue, self._rel(fam["chroma"] if rel is None else rel, scale), target, f"Lc {target:g} on chrome")
         for name, lc in TEXT_STEPS:
             if name == step:
-                target = lc + fam["text-shift"]
+                target = lc + fam["text-shift"] + shift
                 return self._solve_text(hue, self._rel(fam["text-chroma"], scale), target, f"Lc {target:g} on chrome")
         if step == "on-solid":
+            if shift != 0.0:
+                raise Refusal(f"{self.source}: `{family}.on-solid` is chosen, not solved, and takes no shift")
             solid = self.primitive(family, "solid")
             ground = self.primitive("neutral", "ground")
             if cs.apca_magnitude(ground.rgb, solid.rgb) >= ON_SOLID_FLOOR:
@@ -907,7 +919,7 @@ def resolve_recipe(theme: Theme, key: str, recipe, where: str) -> Resolved:
         recipe = {"of": recipe}
     if not isinstance(recipe, dict) or "of" not in recipe:
         raise Refusal(f"{where}: the recipe of `{key}` must be \"family.step\" or {{ of = …; }}, got {recipe!r}")
-    unknown = set(recipe) - {"of", "alpha", "chroma"}
+    unknown = set(recipe) - {"of", "alpha", "chroma", "shift"}
     if unknown:
         raise Refusal(f"{where}: the recipe of `{key}` has unknown field(s) {sorted(unknown)}")
     of = recipe["of"]
@@ -916,8 +928,15 @@ def resolve_recipe(theme: Theme, key: str, recipe, where: str) -> Resolved:
     family, step = of.split(".", 1)
     scale = _number(recipe.get("chroma", 1.0), f"{where}: `{key}` chroma", 0.0, 4.0)
     alpha = _number(recipe.get("alpha", 1.0), f"{where}: `{key}` alpha", 0.0, 1.0)
-    swatch = theme.primitive(family, step, scale)
-    return Resolved(swatch, int(math.floor(alpha * 255.0 + 0.5)), of if scale == 1.0 else f"{of} × chroma {scale}")
+    # A STEP OF THE LADDER, MOVED: the same hue and chroma solved to another
+    # contrast — a tone between two rungs, which a family's own `text-shift`
+    # cannot give one token without moving every other token of the family.
+    shift = _number(recipe.get("shift", 0.0), f"{where}: `{key}` shift", -60.0, 60.0)
+    swatch = theme.primitive(family, step, scale, shift)
+    source = of if scale == 1.0 else f"{of} × chroma {scale}"
+    if shift != 0.0:
+        source = f"{source}, Lc {shift:+g}"
+    return Resolved(swatch, int(math.floor(alpha * 255.0 + 0.5)), source)
 
 
 def check_key(key: str, where: str) -> None:
@@ -1431,11 +1450,22 @@ CONTRAST_GATES = (
     ("modeline.device", ("modeline.background",), 40, 45),
     # AND THE CAMERA'S, at the same rung.
     ("modeline.watching", ("modeline.background",), 40, 45),
-    # AND ON A WINDOW'S GROUNDS, where the brain's page draws a watch in the
-    # colour the modeline marks one with — its rows, a module's row toned
-    # `watching` — on the page, under the cursor's band and the pointer's, and
-    # on the two raised grounds the page is framed in.
-    ("modeline.watching", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
+    # WHAT THE BRAIN FOLLOWS, at the marks' rung on the modeline — and on a
+    # window's grounds, where the brain's page draws a watch in the colour the
+    # modeline marks one with — its rows, a module's row toned `watching` — on
+    # the page, under the cursor's band and the pointer's, and on the two
+    # raised grounds the page is framed in.
+    ("modeline.following", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 45),
+    # HOW A TASK STANDS AND HOW A RUN ENDED, one discreet rung, on every
+    # ground the brain's page draws it on: the list, the history and the
+    # activity log's container, under the cursor's band and the pointer's,
+    # and the page's footer. Measured 31.4 at the lowest (the selection).
+    *((f"text.status.{s}", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 28, 30) for s in ("good", "idle", "bad", "held", "skipped", "busy")),
+    # THE FOLDED RECORDS' DATES, in the activity log's container: quieter
+    # than the status, and still read. Measured 27.5 at the lowest.
+    ("text.folded", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 24, 27),
+    # TODAY'S DAY, louder than the day beside it, on the same grounds.
+    ("text.today", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 45, 50),
     # THE TONES A BRAIN MODULE GIVES A MARK, on the modeline's own band, and
     # the levels of its notices on the brain's page — the page, the cursor's
     # band and the pointer's. `text.secondary`, the quiet one, already is.
@@ -1453,7 +1483,7 @@ CONTRAST_GATES = (
     # AND ON THE SETS' GROUNDS, every tone a mark wears there, at the rungs
     # it reads at on the modeline's own band.
     ("text.secondary", MARK_SET_GROUNDS, 43, 45),
-    ("modeline.watching", MARK_SET_GROUNDS, 40, 45),
+    ("modeline.following", MARK_SET_GROUNDS, 40, 45),
     ("state.caution", MARK_SET_GROUNDS, 45, 50),
     ("state.error", MARK_SET_GROUNDS, 45, 50),
     ("state.accent", MARK_SET_GROUNDS, 45, 50),
@@ -1747,6 +1777,37 @@ DISTANCE_GATES = (
     ("modeline.drawer", "modeline.device", 0.06, 0.08),
     ("modeline.drawer", "modeline.watching", 0.06, 0.08),
     ("modeline.drawer", "modeline.selection", 0.04, 0.05),
+    # WHAT THE BRAIN FOLLOWS — an agent at work, a container up — beside every
+    # other mark on the line: their quiet tone, the accent, the camera's pink
+    # it used to be, the tunnel's green and the drawer's it sits nearest, the
+    # device blue, and the caution and the danger the same module's marks
+    # wear when something IS wrong. And the one-shot task's `alternate`, in
+    # the brain's list. The light pages are where the greens close in
+    # (measured 0.035 at the lowest, flashbang's desk): a warn there, a fail
+    # under 0.03.
+    ("modeline.following", "text.secondary", 0.04, 0.05),
+    ("modeline.following", "state.accent", 0.04, 0.05),
+    ("modeline.following", "modeline.watching", 0.06, 0.08),
+    ("modeline.following", "modeline.tunnel", 0.03, 0.05),
+    ("modeline.following", "modeline.drawer", 0.03, 0.05),
+    ("modeline.following", "modeline.device", 0.03, 0.05),
+    ("modeline.following", "text.once", 0.03, 0.05),
+    ("modeline.following", "state.caution", 0.06, 0.08),
+    ("modeline.following", "state.error", 0.06, 0.08),
+    # THE STATES, side by side in one column: each told from every other, and
+    # from the grey the column wore before — a hue that cannot be told from
+    # the ramp is not a hue. Measured 0.043 at the lowest (cyber's purple
+    # against the put-off grey-blue).
+    *((f"text.status.{a}", f"text.status.{b}", 0.035, 0.05) for i, a in enumerate(("good", "idle", "bad", "held", "skipped", "busy")) for b in ("good", "idle", "bad", "held", "skipped", "busy")[i + 1:]),
+    *((f"text.status.{a}", b, 0.04, 0.05) for a in ("good", "idle", "bad", "held", "skipped", "busy") for b in ("text.secondary", "text.dim")),
+    # THE FOLDED RECORDS' TONE is ANOTHER discreet tone than the dates above
+    # it, and never the row's own.
+    ("text.folded", "text.dim", 0.025, 0.04),
+    ("text.folded", "text.secondary", 0.04, 0.05),
+    # AND TODAY'S DAY stands out from the day of every other date, and from
+    # the amber of a hold, a step quieter on the same hue.
+    ("text.today", "text.secondary", 0.05, 0.06),
+    ("text.today", "text.status.held", 0.06, 0.08),
     # A MARK'S ORANGE WARNING (owner, 2026-11-02), beside everything warm on
     # the modeline: the band's amber it used to be, the dev build's amber and
     # the answer's gold the owner could not tell it from, the danger red a

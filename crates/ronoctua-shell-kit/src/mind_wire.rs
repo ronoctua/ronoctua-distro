@@ -87,12 +87,21 @@ pub fn mind_of(
             .into_iter()
             .map(|n| notice_of(n, mind, zone, texts))
             .collect(),
-        // THE SAME CONSTANT THAT DID THE CUTTING, one line above. The screen
-        // says what its window is onto, and a number typed into the two
-        // translations would be a third place for it to disagree with itself.
-        remembers: u32::try_from(ronoctua_brain::journal::ACTIVITY).unwrap_or(u32::MAX),
-        recent: u32::try_from(ronoctua_brain::journal::RECENT).unwrap_or(u32::MAX),
+        // THE SAME CONSTANTS THAT DID THE CUTTING, in the person's words. The
+        // screen says what its window is onto, and a number typed into the
+        // two translations would be a third place for it to disagree with
+        // itself.
+        activity_reach: reach(ronoctua_brain::journal::ACTIVITY_DAYS, texts),
+        history_reach: reach(ronoctua_brain::journal::RECENT_DAYS, texts),
     }
+}
+
+/// How far back a list reaches, in the person's words: `last 15 days`.
+fn reach(days: u16, texts: &ronoctua_i18n::Texts) -> String {
+    texts.t_args(
+        crate::key::BRAIN_REACH_DAYS,
+        &[("days", ronoctua_i18n::Arg::Number(i64::from(days)))],
+    )
 }
 
 /// The daemon's own log, as the WIT carries it, oldest first.
@@ -270,6 +279,16 @@ fn task_of(
         },
         name_key,
         why_key: why_key_of(&t.why_not, Some(t)),
+        // AND THE REASON IN WORDS, resolved here for the reason the name is:
+        // the component measures the column it sits in.
+        why_text: {
+            let key = why_key_of(&t.why_not, Some(t));
+            if key.is_empty() {
+                String::new()
+            } else {
+                named(&key, texts)
+            }
+        },
         screen_generation: t.screen_generation,
         actions: t.actions.iter().map(action_of).collect(),
     }
@@ -310,6 +329,7 @@ fn run_of(
         began: u64::try_from(r.began).unwrap_or(0),
         ended: u64::try_from(r.ended).unwrap_or(0),
         when_text: iso(r.began, zone),
+        when_stamp: stamp(r.began, mind.now, zone),
         outcome: match r.kind {
             ronoctua_brain::OutcomeKind::Skipped => ronoctua_protocol::OutcomeKind::Skipped,
             ronoctua_brain::OutcomeKind::Done => ronoctua_protocol::OutcomeKind::Done,
@@ -361,20 +381,23 @@ fn step_of(s: &ronoctua_brain::StepState) -> ronoctua_protocol::TaskStep {
 ///
 /// The journal keeps it oldest-first because that is the order it is appended
 /// in; the screen opens on "what has just happened". The cut is the brain's
-/// own ceiling on RECORDS (`journal::ACTIVITY`), taken before folding, so the
-/// window the title names is the same hundred records whatever folds; and the
-/// fold is the brain's own (`journal::grouped`) — one rule for what "says the
-/// same thing" means, in the crate that writes the records.
+/// own reach (`journal::ACTIVITY_DAYS` back from the mind's `now`), taken
+/// before folding, so the window the title names is the same days whatever
+/// folds; and the fold is the brain's own (`journal::grouped`) — one rule for
+/// what "says the same thing" means, in the crate that writes the records.
 fn activity_of(
     mind: &Mind,
     zone: &ronoctua_files::when::Zone,
     texts: &ronoctua_i18n::Texts,
 ) -> Vec<ronoctua_protocol::ActivityRow> {
-    let kept = mind
+    let since = ronoctua_brain::journal::since(mind.now, ronoctua_brain::journal::ACTIVITY_DAYS);
+    let kept: Vec<ronoctua_brain::RunRecord> = mind
         .journal
-        .len()
-        .saturating_sub(ronoctua_brain::journal::ACTIVITY);
-    ronoctua_brain::journal::grouped(&mind.journal[kept..])
+        .iter()
+        .filter(|r| r.began >= since)
+        .cloned()
+        .collect();
+    ronoctua_brain::journal::grouped(&kept)
         .into_iter()
         .map(|g| ronoctua_protocol::ActivityRow {
             last_text: iso(g.newest.began, zone),
@@ -669,6 +692,20 @@ pub const fn part_back(p: ronoctua_protocol::DayPart) -> ronoctua_brain::PartOfD
     }
 }
 
+/// The same moment as [`iso`], cut where its day is, and whether that day is
+/// the day `now` falls on — in the machine's zone, which the component does
+/// not have. The three pieces put together ARE [`iso`]'s text.
+fn stamp(at: i64, now: i64, zone: &ronoctua_files::when::Zone) -> ronoctua_protocol::Stamp {
+    let c = ronoctua_files::when::civil(at, zone);
+    let today = ronoctua_files::when::civil(now, zone);
+    ronoctua_protocol::Stamp {
+        lead: format!("{:04}-{:02}-", c.year, c.month),
+        day: format!("{:02}", c.day),
+        tail: format!(" {:02}:{:02}", c.hour, c.minute),
+        today: (c.year, c.month, c.day) == (today.year, today.month, today.day),
+    }
+}
+
 /// A moment as the component draws it: ISO, in the machine's own zone.
 ///
 /// `ronoctua_files::when::civil` and not a second calendar — it is the one this
@@ -811,10 +848,10 @@ mod tests {
     }
 
     /// FAILS IF: the activity crosses unfolded, folds records that do not say
-    /// the same thing, or cuts by ROWS instead of by the brain's ceiling on
-    /// RECORDS — the window the page's title names.
+    /// the same thing, or cuts by anything but the brain's reach in DAYS —
+    /// the window the page's title names, and says.
     #[test]
-    fn the_activity_crosses_folded_and_cut_by_records() {
+    fn the_activity_crosses_folded_and_cut_by_days() {
         use ronoctua_brain::OutcomeKind as K;
         let mut mind = Mind::default();
         mind.tasks.push(a_task("fixture"));
@@ -845,16 +882,58 @@ mod tests {
         // module has not sent its own.
         assert_eq!(held.newest.task_key, "brain-task-fixture");
 
-        // AND THE CEILING IS ON RECORDS: past it, the oldest go before folding.
-        let many = ronoctua_brain::journal::ACTIVITY + 5;
-        mind.journal = (0..many)
-            .map(|n| a_record("fixture", i64::try_from(n).unwrap(), K::Held))
+        // AND THE REACH IS IN DAYS, counted back from the mind's `now`: a
+        // hold a day older than fifteen goes before folding, however few
+        // records there are.
+        let day = ronoctua_brain::moment::DAY;
+        let days = i64::from(ronoctua_brain::journal::ACTIVITY_DAYS);
+        mind.now = 40 * day;
+        mind.journal = (0..30)
+            .map(|n| a_record("fixture", (10 + n) * day, K::Held))
             .collect();
         let over = mind_of(&mind, &utc(), &texts());
         assert_eq!(over.activity_rows.len(), 1);
         assert_eq!(
-            over.activity_rows[0].repeats as usize,
-            ronoctua_brain::journal::ACTIVITY
+            i64::from(over.activity_rows[0].repeats),
+            days,
+            "the activity is not the last fifteen days"
+        );
+        // AND THE TITLE SAYS SO, in the person's words.
+        assert_eq!(over.activity_reach, "last 15 days");
+        assert_eq!(over.history_reach, "last 20 days");
+    }
+
+    /// FAILS IF: a record's moment does not cross cut where its day is — the
+    /// three pieces are not its ISO text — or today is not today in the
+    /// machine's zone.
+    #[test]
+    fn a_moment_crosses_cut_where_its_day_is() {
+        use ronoctua_brain::OutcomeKind as K;
+        let day = ronoctua_brain::moment::DAY;
+        let mut mind = Mind::default();
+        mind.tasks.push(a_task("fixture"));
+        mind.now = 20_000 * day + 3_600;
+        // TWO THAT DO NOT FOLD — a fold would make them one row.
+        mind.journal = vec![
+            a_record("fixture", 20_000 * day - 60, K::Failed),
+            a_record("fixture", 20_000 * day + 60, K::Done),
+        ];
+        let over = mind_of(&mind, &utc(), &texts());
+        let yesterday = &over.activity_rows[1].newest;
+        let today = &over.activity_rows[0].newest;
+        let whole = |r: &ronoctua_protocol::RunRecord| {
+            format!(
+                "{}{}{}",
+                r.when_stamp.lead, r.when_stamp.day, r.when_stamp.tail
+            )
+        };
+        assert_eq!(whole(today), today.when_text);
+        assert_eq!(whole(yesterday), yesterday.when_text);
+        assert_eq!(today.when_stamp.day.len(), 2);
+        assert!(today.when_stamp.today, "a run of today is not today");
+        assert!(
+            !yesterday.when_stamp.today,
+            "a run a minute before midnight is today"
         );
     }
 

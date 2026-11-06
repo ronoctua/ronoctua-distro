@@ -308,7 +308,7 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// The component does not export `ronoctua:buffer/view@0.2.0` with the three
+    /// The component does not export `ronoctua:buffer/view@0.3.0` with the three
     /// functions — which is a contract refusal, and not a detail: a buffer with no
     /// `event` would accept keys and never react.
     pub fn open(&self, component: &wasmtime::component::Component) -> Result<Instance> {
@@ -319,8 +319,8 @@ impl Runtime {
             .context("could not instantiate the component")?;
 
         let vision = instance
-            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.2.0")
-            .context("the component does not export `ronoctua:buffer/view@0.2.0`")?;
+            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.3.0")
+            .context("the component does not export `ronoctua:buffer/view@0.3.0`")?;
         let export = |store: &mut wasmtime::Store<State>, name: &str| {
             instance
                 .get_export_index(store, Some(&vision), name)
@@ -684,6 +684,17 @@ fn run_val(r: &ronoctua_protocol::RunRecord) -> wasmtime::component::Val {
         ("began".into(), Val::U64(r.began)),
         ("ended".into(), Val::U64(r.ended)),
         ("when-text".into(), Val::String(r.when_text.clone())),
+        // THE SAME MOMENT, CUT WHERE ITS DAY IS — the host's, because the
+        // component has no zone to find the day with.
+        (
+            "when-stamp".into(),
+            Val::Record(vec![
+                ("lead".into(), Val::String(r.when_stamp.lead.clone())),
+                ("day".into(), Val::String(r.when_stamp.day.clone())),
+                ("tail".into(), Val::String(r.when_stamp.tail.clone())),
+                ("today".into(), Val::Bool(r.when_stamp.today)),
+            ]),
+        ),
         (
             "outcome".into(),
             Val::Enum(outcome_kind_name(r.outcome).to_owned()),
@@ -1364,6 +1375,7 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                 ("name-key".into(), Val::String(t.name_key.clone())),
                 ("does-key".into(), Val::String(t.does_key.clone())),
                 ("why-key".into(), Val::String(t.why_key.clone())),
+                ("why-text".into(), Val::String(t.why_text.clone())),
                 ("screen-generation".into(), Val::U64(t.screen_generation)),
                 (
                     "actions".into(),
@@ -1426,10 +1438,14 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
             "activity-rows".into(),
             Val::List(m.activity_rows.iter().map(activity_row_val).collect()),
         ),
-        // HOW MANY THAT LIST KEEPS. It crosses for the reason `cadence` does:
-        // it is the daemon's policy and the screen's title names it.
-        ("remembers".into(), Val::U32(m.remembers)),
-        ("recent".into(), Val::U32(m.recent)),
+        // HOW FAR BACK THE TWO LISTS REACH, in the person's words. They cross
+        // for the reason `cadence` does: the daemon's policy, which the
+        // screen's titles name.
+        (
+            "activity-reach".into(),
+            Val::String(m.activity_reach.clone()),
+        ),
+        ("history-reach".into(), Val::String(m.history_reach.clone())),
         // EVERY NOTICE, in the order the strip ranks them.
         (
             "notices".into(),
@@ -2015,6 +2031,19 @@ fn display_list_from(v: &wasmtime::component::Val) -> Result<ronoctua_protocol::
                     control: matches!(field("control"), Some(Val::Bool(true))),
                 });
             }
+            // WHAT THE POINTER RESTS ON, in a sentence — said by the host on
+            // line 0 or the footer's minibuffer. See `prot::Command::Pointed`.
+            "pointed" => {
+                let about = match field("about") {
+                    Some(Val::Variant(case, inside)) => match (case.as_str(), inside.as_deref()) {
+                        ("key", Some(Val::String(s))) => prot::Text::key(s.clone()),
+                        ("data", Some(Val::String(s))) => prot::Text::datum(s.clone()),
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+                list.push(prot::Command::Pointed { about });
+            }
             otherwise => {
                 tracing::warn!(
                     command = otherwise,
@@ -2521,8 +2550,8 @@ mod tests {
         // lowers CLEANLY and comes out on screen as a task that is off when it
         // is on, or a failure attributed to the wrong step.
         let m = ronoctua_protocol::Mind {
-            remembers: 100,
-            recent: 10,
+            activity_reach: "last 15 days".to_owned(),
+            history_reach: "last 20 days".to_owned(),
             // ONE OF EACH of the modules' lists, so their shapes are walked
             // below and not merely declared.
             activity_rows: vec![ronoctua_protocol::ActivityRow {
@@ -2637,6 +2666,7 @@ mod tests {
                 name_key: "brain-task-update".to_owned(),
                 does_key: "brain-task-update-does".to_owned(),
                 why_key: String::new(),
+                why_text: String::new(),
                 screen_generation: 4,
                 actions: vec![ronoctua_protocol::ModuleAction {
                     id: "keep".to_owned(),
@@ -2676,8 +2706,8 @@ mod tests {
                 "gate",
                 "cadence",
                 "activity-rows",
-                "remembers",
-                "recent",
+                "activity-reach",
+                "history-reach",
                 "notices"
             ]
         );
@@ -2776,6 +2806,7 @@ mod tests {
                 "name-key",
                 "does-key",
                 "why-key",
+                "why-text",
                 "screen-generation",
                 "actions"
             ]
@@ -2811,6 +2842,7 @@ mod tests {
             "began",
             "ended",
             "when-text",
+            "when-stamp",
             "outcome",
             "at",
             "why",

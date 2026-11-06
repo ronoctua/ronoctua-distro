@@ -5794,26 +5794,43 @@ let
     # Now every assignment is found, in both directions, and the count is
     # floored: a `confirm` that stopped changing the page at all would be the
     # same silence.
+    #
+    # AND IN THE METHODS IT CALLS. Opening a task's page became one method
+    # (`open_task`), which `RET` on a task, a notice and a record share with
+    # the footer's click — and a check that read only `confirm`'s own text
+    # found no move at all and went red about a page that still moved. So a
+    # method `confirm` calls that moves the page is read as part of it, and
+    # each call to one counts as an arm that moves it.
     brain = code_of((root / "buffers" / "brain" / "src" / "lib.rs").read_text())
     confirm = must(body_of(brain, "confirm"), "the brain's `confirm`")
-    moves = [m.start() for m in re.finditer(r"self\.page\s*=\s*Page::", confirm)]
-    floor(len(moves), 2, "arms of `confirm` that move the page")
-    for at in moves:
-        # THE REST OF THE ARM, to its own closing brace — counted, not guessed.
-        depth, after = 0, confirm[at:]
-        end = len(after)
-        for k, ch in enumerate(after):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                if depth == 0:
-                    end = k
-                    break
-                depth -= 1
-        if "Effect::Redraw" not in after[:end]:
-            line = confirm.count("\n", 0, at) + 1
-            gaps.append("an arm of `confirm` (its line " + str(line)
-                        + ") moves the page and asks for no frame")
+    move = r"self\.page\s*=\s*Page::"
+    helpers = {}
+    for name in sorted(set(re.findall(r"self\.(\w+)\(", confirm))):
+        body = body_of(brain, name)
+        if body is not None and re.search(move, body):
+            helpers[name] = body
+    reaches = len(re.findall(move, confirm)) + sum(
+        len(re.findall(r"self\." + name + r"\(", confirm)) for name in helpers
+    )
+    floor(reaches, 2, "arms of `confirm` that move the page")
+    for where, text in [("confirm", confirm)] + sorted(helpers.items()):
+        for m in re.finditer(move, text):
+            # THE REST OF THE ARM, to its own closing brace — counted, not
+            # guessed.
+            depth, after = 0, text[m.start():]
+            end = len(after)
+            for k, ch in enumerate(after):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    if depth == 0:
+                        end = k
+                        break
+                    depth -= 1
+            if "Effect::Redraw" not in after[:end]:
+                line = text.count("\n", 0, m.start()) + 1
+                gaps.append("an arm of `" + where + "` (its line " + str(line)
+                            + ") moves the page and asks for no frame")
 
     if gaps:
         print("ERROR: a buffer can change what the modeline says without changing the screen.", file=sys.stderr)
@@ -16737,6 +16754,11 @@ let
       || { echo "ERROR: the pointer rested on a row and nothing lit under it." >&2; exit 1; }
     grep -q 'surface-selection' hovered.txt \
       || { echo "ERROR: the cursor's own band went away with the hover." >&2; exit 1; }
+    # AND THE ROW SAYS WHAT IT IS — its task's own description, declared for
+    # the host (`Screen::point`), which says it on the header's line or, with
+    # the header hidden, on the footer's minibuffer.
+    grep -q 'Pointed { about: Key("about-brain-log") }' hovered.txt \
+      || { echo "ERROR: the pointer rested on a task and nothing said what the task is." >&2; exit 1; }
 
     python3 - <<'END'
     import pathlib, struct, sys, zlib
@@ -16767,6 +16789,11 @@ let
     # HOW MANY RUNS THE FRAME HAD. An empty brain draws about sixteen — the
     # host's header and one sentence. This fixture draws over forty.
     FLOOR = 30
+    # AND WITH THE POINTER ON A ROW, under thirty: the header's line says what
+    # the row is in one sentence where its twenty-odd keys were (`Command::
+    # Pointed`) — what that row's page draws is the same, and its own floor
+    # still sits well over an empty screen's sixteen.
+    HOVER_FLOOR = 24
 
     seen = {}
     for language in "${lib.concatStringsSep " " languages}".split():
@@ -16783,7 +16810,7 @@ let
             continue
         drew += 1
         drawn = int(line.split(" runs,")[0].split()[-1])
-        if drawn < FLOOR:
+        if drawn < (HOVER_FLOOR if "-hover.png" in line else FLOOR):
             sys.exit(
                 "ERROR: a page drew only " + str(drawn) + " runs (" + line.strip() + "). "
                 "The brain drew its empty screen, which is what `--mind` exists to stop."

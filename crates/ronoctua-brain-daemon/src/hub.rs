@@ -62,7 +62,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::journal::{ACTIVITY, Journal, RECENT};
+use crate::journal::{ACTIVITY_DAYS, Journal, RECENT_DAYS, since};
 use crate::mind::{ActionState, Posted, SAID_KEPT, Said, Shared, Standing, StepState, TaskState};
 use crate::module::{Act, Acted, Ctx, Event, Face, Look, Module, Noted, Screen, Sink};
 use crate::moment::{Clock, Moment};
@@ -340,7 +340,7 @@ impl Core {
         // reading: a `Set` arriving in the middle must not produce a screen
         // where two rows disagree about what the person chose.
         let prefs = self.shared.snapshot().0.prefs;
-        let (log, histories) = self.journal_copy();
+        let (log, recorded) = self.journal_copy(now);
         // WHEN EACH LAST RAN, from the whole journal and not from the few
         // records a row shows: a module held ten times in a row has its last
         // run further back than those ten, and a row computed from them would
@@ -352,7 +352,7 @@ impl Core {
                 .map(|id| (id, journal.last(id)))
                 .collect()
         };
-        let faces = self.faces_now(now, &pulse, &prefs, &histories);
+        let faces = self.faces_now(now, &pulse, &prefs, &recorded);
         let rows: Vec<(&dyn Module, TaskPrefs, Option<Due>)> = self
             .modules
             .all()
@@ -392,7 +392,7 @@ impl Core {
                         &running,
                         &queued,
                         was.and_then(|t| t.hold),
-                        histories.get(id).cloned().unwrap_or_default(),
+                        recorded.get(id).cloned().unwrap_or_default(),
                         faces.get(id).map_or(0, |f| f.screen),
                     )
                 })
@@ -415,8 +415,8 @@ impl Core {
         }
         let now = self.now();
         let (mind, _) = self.shared.snapshot();
-        let (log, histories) = self.journal_copy();
-        let faces = self.faces_now(now, &mind.pulse, &mind.prefs, &histories);
+        let (log, recorded) = self.journal_copy(now);
+        let faces = self.faces_now(now, &mind.pulse, &mind.prefs, &recorded);
         let posted = self.posted(now, &mind.prefs, &faces);
         self.shared.change(|m| {
             if written {
@@ -424,9 +424,9 @@ impl Core {
             }
             for row in &mut m.tasks {
                 if written {
-                    let history = histories.get(row.id.as_str()).cloned().unwrap_or_default();
-                    row.last = history.first().cloned();
-                    row.history = history;
+                    let kept = recorded.get(row.id.as_str()).cloned().unwrap_or_default();
+                    row.last = kept.last;
+                    row.history = kept.history;
                 }
                 if let Some(f) = faces.get(row.id.as_str()) {
                     row.screen_generation = f.screen;
@@ -436,25 +436,32 @@ impl Core {
         });
     }
 
-    /// The activity log the mind carries, and each module's own last few —
+    /// The activity log the mind carries, and each module's own records —
     /// copied out of the journal's lock, so no module is ever called under
     /// it.
-    fn journal_copy(&self) -> (Vec<RunRecord>, BTreeMap<&'static str, Vec<RunRecord>>) {
+    fn journal_copy(&self, now: Moment) -> (Vec<RunRecord>, BTreeMap<&'static str, Recorded>) {
         let journal = self.journal();
-        // BOUNDED HERE, by `ACTIVITY`, and not on the way out: what a screen
-        // is told and what the socket carries are the same list.
-        let all = journal.all();
-        let log = all[all.len().saturating_sub(ACTIVITY)..].to_vec();
-        // AND THE LAST FEW OF EACH MODULE, asked per module: the journal is
-        // one list, so on a machine where one runs weekly and another every
-        // few hours the first one's records fall off the end of a shared
-        // window while its own row still has to show them.
-        let histories = self
+        // BOUNDED HERE, by `ACTIVITY_DAYS`, and not on the way out: what a
+        // screen is told and what the socket carries are the same list.
+        let log = journal.since(since(now, ACTIVITY_DAYS));
+        // AND EACH MODULE'S OWN, asked per module: its last record, however
+        // long ago — what its row shows, and what its face is told — and its
+        // last twenty days, which its page lists. A module that runs monthly
+        // has the first and none of the second.
+        let recorded = self
             .modules
             .ids()
-            .map(|id| (id, journal.recent(id, RECENT)))
+            .map(|id| {
+                (
+                    id,
+                    Recorded {
+                        last: journal.latest(id).cloned(),
+                        history: journal.recent(id, since(now, RECENT_DAYS)),
+                    },
+                )
+            })
             .collect();
-        (log, histories)
+        (log, recorded)
     }
 
     /// Every module's face, computed now, and remembered unfiltered.
@@ -463,7 +470,7 @@ impl Core {
         now: Moment,
         pulse: &Pulse,
         prefs: &Prefs,
-        histories: &BTreeMap<&'static str, Vec<RunRecord>>,
+        recorded: &BTreeMap<&'static str, Recorded>,
     ) -> BTreeMap<&'static str, Face> {
         let faces: BTreeMap<&'static str, Face> = self
             .modules
@@ -480,7 +487,7 @@ impl Core {
                     now,
                     pulse,
                     mine: &mine,
-                    last: histories.get(id).and_then(|h| h.first()),
+                    last: recorded.get(id).and_then(|r| r.last.as_ref()),
                 };
                 (id, m.face(&look))
             })
@@ -915,6 +922,15 @@ pub fn why_key(m: &dyn Module, word: &str) -> String {
         .map_or_else(|| format!("brain-why-{word}"), str::to_owned)
 }
 
+/// One module's records, as its row and its face are told them: the last
+/// thing that happened to it, however long ago, and its history — the last
+/// [`RECENT_DAYS`] days of it, newest first.
+#[derive(Debug, Clone, Default)]
+struct Recorded {
+    last: Option<RunRecord>,
+    history: Vec<RunRecord>,
+}
+
 /// One module's row, as everybody draws it.
 #[allow(clippy::too_many_arguments)]
 fn row_of(
@@ -925,7 +941,7 @@ fn row_of(
     running: &str,
     queued: &[String],
     held_by: Option<Hold>,
-    history: Vec<RunRecord>,
+    recorded: Recorded,
     screen_generation: u64,
 ) -> TaskState {
     let manifest = m.manifest();
@@ -968,8 +984,8 @@ fn row_of(
         next,
         hold,
         why_not: why_not.to_owned(),
-        last: history.first().cloned(),
-        history,
+        last: recorded.last,
+        history: recorded.history,
         steps: m
             .steps()
             .iter()
@@ -1817,7 +1833,7 @@ mod tests {
             501,
             crate::task::Outcome::Done(Vec::new()),
         ));
-        for n in 0..(crate::journal::RECENT as i64 + 2) {
+        for n in 0..12 {
             core.put(RunRecord {
                 kind: crate::task::OutcomeKind::Held,
                 ..RunRecord::of(
@@ -1902,7 +1918,7 @@ mod tests {
         core.save_journal_if_due(Instant::now());
         assert_eq!(on_disk(), 1, "written before its moment");
         core.save_journal_if_due(due);
-        assert_eq!(on_disk(), crate::journal::HISTORY);
+        assert_eq!(on_disk(), 500);
         assert_eq!(core.journal_due(), None);
         // A RUN NEVER WAITS: it is the memory of when the module last ran.
         core.put(note(500));

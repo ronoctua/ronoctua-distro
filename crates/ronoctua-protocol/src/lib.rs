@@ -1348,6 +1348,26 @@ pub struct StepOutcome {
     pub trouble: String,
 }
 
+/// A MOMENT IN THE THREE PIECES A ROW DRAWS IT IN — `2026-11-`, `06` and
+/// ` 02:07` — and whether its day is today.
+///
+/// The day of a date is drawn above the rest of it, and today's in a hue of
+/// its own (the owner's ask). The component cannot find the day in a
+/// formatted text — no field crosses for it to take apart — nor knows which
+/// day is today (invariant 11), so the host cuts the moment where it formats
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Stamp {
+    /// What comes before the day: `2026-11-`.
+    pub lead: String,
+    /// The day: `06`.
+    pub day: String,
+    /// What comes after it: ` 02:07`.
+    pub tail: String,
+    /// Whether that day is today, on the machine's clock and in its zone.
+    pub today: bool,
+}
+
 /// One run, as the journal keeps it.
 ///
 /// `RunRecord` and NOT `Run`: the layout vocabulary every component now imports
@@ -1375,6 +1395,8 @@ pub struct RunRecord {
     /// is for the arithmetic this side does and the text is for the date it
     /// cannot compute.
     pub when_text: String,
+    /// The same moment, cut where its day is ([`Stamp`]).
+    pub when_stamp: Stamp,
     /// How it ended.
     pub outcome: OutcomeKind,
     /// The step it failed at, by id. Empty when there is none.
@@ -1508,6 +1530,9 @@ pub struct TaskState {
     pub does_key: String,
     /// The key of [`TaskState::why_not`]. Empty when that is.
     pub why_key: String,
+    /// The same reason, ALREADY TRANSLATED, for measuring — the rule
+    /// [`TaskState::name_text`] follows. Empty when `why_key` is.
+    pub why_text: String,
     /// THE MODULE'S PAGE MOVED when this does: a page that shows the module's
     /// screen asks for it again ([`Request::WatchScreen`]), and never on a
     /// clock. The screen itself is not in the mind.
@@ -1585,23 +1610,20 @@ pub struct Mind {
     ///
     /// A task's own `history` answers *how has this one been going*; this
     /// answers *what has this machine been doing*, which is the question the
-    /// page is opened with. Two lists and not one view of one: the per-task
-    /// one has a FLOOR (a monthly task keeps its last ten however much else
-    /// happens) and this one has a CEILING. Neither can be cut out of the
-    /// other.
+    /// page is opened with. Two lists and not one view of one: they reach
+    /// back differently — a task's twenty days, the machine's fifteen — and
+    /// neither is cut out of the other.
     pub activity_rows: Vec<ActivityRow>,
-    /// How many records that list folds at most — not how many it holds today.
+    /// How far back that list reaches, said in the person's language — `last
+    /// 15 days` — for the activity block's title.
     ///
-    /// A policy of the daemon's, crossing for the same reason `cadence` does.
-    /// The activity block's title is a window onto this number, and a screen
-    /// that guessed it would drift from the one doing the cutting.
-    pub remembers: u32,
-    /// How many of its OWN runs a task keeps, which its `history` is all of.
-    ///
-    /// The same argument as `remembers`, one list down: a task's `History`
-    /// heading is a window onto this number and the owner asked it to say so.
-    /// It is `journal::RECENT`, the brain's floor on pruning.
-    pub recent: u32,
+    /// A policy of the daemon's (`journal::ACTIVITY_DAYS`), crossing for the
+    /// same reason `cadence` does, and as a SENTENCE: its number sits inside
+    /// words the component cannot put together.
+    pub activity_reach: String,
+    /// And how far back a task's own `history` reaches (`journal::RECENT_DAYS`),
+    /// said the same way, for its `History` heading.
+    pub history_reach: String,
     /// EVERY NOTICE every module raised, in the order the strip ranks them:
     /// an alarm first, then danger, warn and info, the newest first among
     /// equals. Empty is a machine with nothing to say.
@@ -2440,6 +2462,18 @@ pub enum Command {
         /// control is drawn inert.
         control: bool,
     },
+    /// WHAT THE THING UNDER THE POINTER IS, in a sentence — a task's own
+    /// description under its row, what a glyph means under the glyph — from
+    /// the buffer that holds the pointer's cell. At most one a frame
+    /// ([`DisplayList::validate`]).
+    ///
+    /// Like [`Command::Heading`], a fact about the frame: the HOST says it
+    /// where every window says what the row under the pointer adds — line 0,
+    /// or, with the header hidden, the footer's minibuffer.
+    Pointed {
+        /// A text key, or data the buffer holds (a module's sentence).
+        about: Text,
+    },
 }
 
 /// How many pairs a buffer may teach in one frame: a header is a line and a
@@ -2461,7 +2495,7 @@ impl Command {
             // The line it anchors FROM, which is the only line it knows.
             Self::Anchor { foot_from } => *foot_from,
             // THE HOST'S HEADER, above every row of the buffer's.
-            Self::Heading { .. } | Self::Taught { .. } => 0,
+            Self::Heading { .. } | Self::Taught { .. } | Self::Pointed { .. } => 0,
         }
     }
 
@@ -2503,6 +2537,7 @@ impl Command {
             | Self::Anchor { .. }
             | Self::Heading { .. }
             | Self::Taught { .. }
+            | Self::Pointed { .. }
             | Self::Paragraph { .. } => None,
         }
     }
@@ -2560,6 +2595,17 @@ impl DisplayList {
         if headings > 1 {
             return Err(format!(
                 "the buffer gave its window {headings} titles in one frame"
+            ));
+        }
+        // ONE POINTER'S SENTENCE: the line that says it is one line.
+        let pointed = self
+            .commands
+            .iter()
+            .filter(|c| matches!(c, Command::Pointed { .. }))
+            .count();
+        if pointed > 1 {
+            return Err(format!(
+                "the buffer said {pointed} things about the pointer in one frame"
             ));
         }
         if taught > TAUGHT_MOST {
@@ -2679,7 +2725,7 @@ impl DisplayList {
             Command::Anchor { foot_from } => (*foot_from, 0),
             // NOR DOES WHAT THE HOST'S HEADER CARRIES: it is drawn above the
             // buffer's rows, never in them.
-            Command::Heading { .. } | Command::Taught { .. } => (0, 0),
+            Command::Heading { .. } | Command::Taught { .. } | Command::Pointed { .. } => (0, 0),
         }
     }
 
@@ -2751,7 +2797,10 @@ impl DisplayList {
                 },
             ),
             Command::Bar { column, .. } => (*column, 1),
-            Command::Anchor { .. } | Command::Heading { .. } | Command::Taught { .. } => (0, 0),
+            Command::Anchor { .. }
+            | Command::Heading { .. }
+            | Command::Taught { .. }
+            | Command::Pointed { .. } => (0, 0),
             Command::Paragraph {
                 column,
                 columns: wide,
@@ -2813,6 +2862,7 @@ impl DisplayList {
             }
             Command::Heading { icon, .. } => format!("the window's title, by `{icon}`"),
             Command::Taught { keys, says, .. } => format!("`{keys}` taught as `{says}`"),
+            Command::Pointed { .. } => "what the pointer rests on, in a sentence".to_owned(),
         }
     }
 
@@ -2847,6 +2897,7 @@ impl DisplayList {
             | Command::Anchor { .. }
             | Command::Heading { .. }
             | Command::Taught { .. }
+            | Command::Pointed { .. }
             | Command::Bar { .. } => false,
         }
     }
@@ -2989,7 +3040,10 @@ impl DisplayList {
                 // AN ANCHOR HAS NO INK, so it has no colour to check. Named
                 // rather than swept into a `_`: a primitive that DOES paint
                 // may not be added without this list being read.
-                Command::Anchor { .. } | Command::Heading { .. } | Command::Taught { .. } => None,
+                Command::Anchor { .. }
+                | Command::Heading { .. }
+                | Command::Taught { .. }
+                | Command::Pointed { .. } => None,
             })
             .collect();
         v.sort_unstable();
