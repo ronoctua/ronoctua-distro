@@ -229,6 +229,18 @@ brain-flake-owned = No flake
 brain-changed = Alterado por você
 # OS CAMPOS DO RODAPÉ.
 brain-last-run = Última vez
+# WHAT THE FOOTER SAYS ABOUT A RECORD of a task's history: the question the
+# sentence under it answers (never the outcome's word, which the row says),
+# the step it stopped at, and what it says when it kept no reason.
+brain-record-done = Como foi
+brain-record-failed = Por que falhou
+brain-record-held = Por que esperou
+brain-record-skipped = Por que não rodou
+brain-record-noted = O que percebeu
+brain-record-at = Na etapa
+brain-record-went-well = Rodou até o fim, e nada nela falhou.
+brain-record-unsaid = Ela não disse por quê.
+brain-record-unsaid-failure = Ela não disse por quê. O que os programas dela escreveram está no diário do sistema.
 # THE CLICK AT THE END OF THE FOOTER'S LAST ROW, and what it does.
 brain-open-page = Abrir a página
 about-brain-open-page = Abre a página da tarefa de que isto fala: a agenda, os passos e o histórico.

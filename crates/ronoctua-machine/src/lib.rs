@@ -146,7 +146,7 @@ pub const APPLIED_LOCK: &str = "applied.lock";
 pub const LAST_GOOD_LOCK: &str = "last-good.lock";
 
 /// Why a verb did not do what it was asked, as a closed set
-/// (`machine-refused-<id>` on screen).
+/// (`system-update-machine-refused-<id>` on screen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Why {

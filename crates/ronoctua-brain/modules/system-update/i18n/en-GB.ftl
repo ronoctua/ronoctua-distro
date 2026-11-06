@@ -181,6 +181,24 @@ notif-system-update-restart-body = The update built a new system and set it for 
 notif-system-update-restart-unguarded-summary = Restart to use the new system
 notif-system-update-restart-unguarded-body = The update built a new system and set it for the next restart: nothing that runs now was stopped. Until you restart, this machine runs the one it ran; that restart has no way back but the boot menu: if the new one does not start, choose the previous one there.
 
+# WHY THE MACHINE'S OWN PROGRAM (`ronoctua-machine`) DID NOT DO WHAT IT WAS
+# ASKED — an apply, a migration, a bless or a hold: on the step under the
+# cursor in both doors, in the gestures of the view, and as the reason of a
+# run of this task that stopped at one of its steps.
+system-update-machine-refused-not-root = Only root changes the machine: nothing was done.
+system-update-machine-refused-busy = Another change to this machine is running: try again when it ends.
+system-update-machine-refused-nothing-to-migrate = This machine already has its own flake: there is nothing to migrate.
+system-update-machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again. A download it could not fetch is named on the parts' page, with the ways to bring it in.
+system-update-machine-refused-switch-failed = The switch to the new system failed. The next start tries it once, and comes back to the last good system if it does not start.
+system-update-machine-refused-next-boot-failed = Setting the new system for the next restart failed. Nothing that runs changed; the boot menu may not list the new system, and the next restart may start the one this machine runs.
+system-update-machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives, or you ask on this page to try it again.
+system-update-machine-refused-last-good-would-fall-out = One more system would push the last good one out of the boot menu. Restart first, so the system on trial can be confirmed.
+system-update-machine-refused-held = The machine is held at another revision than the one its folder names: nothing was built.
+system-update-machine-refused-no-failed-trial = No system failed its boot trial on this machine now: there is nothing to try again.
+system-update-machine-refused-checkout-moved = The distro would have moved to another revision of a local checkout — this machine's flake names one its lock does not. The lock was put back: only the sudo door moves it.
+system-update-machine-refused-unreadable = A file of the machine's folder cannot be read.
+system-update-machine-refused-failed = A program the machine needed failed; the journal says which.
+
 # ROOT'S APPLIER REFUSED YOUR DECLARATIONS: its reason, as a sentence — on the
 # step under the cursor, in both doors, and in the run's notification.
 notif-system-update-declarations-refused-summary = Your declarations did not reach this machine

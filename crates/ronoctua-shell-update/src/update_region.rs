@@ -1220,7 +1220,10 @@ mod tests {
         let mut heard = way();
         open.woken(&mut heard);
         assert!(
-            says(&heard, crate::key::MACHINE_REFUSED_BUSY),
+            says(
+                &heard,
+                module::machine_refusal_said(module::MachineRefusal::Busy)
+            ),
             "{:?}",
             heard.owed
         );

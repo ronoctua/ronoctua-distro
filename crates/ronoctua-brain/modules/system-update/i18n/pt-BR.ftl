@@ -181,6 +181,24 @@ notif-system-update-restart-body = A atualização montou um sistema novo e o de
 notif-system-update-restart-unguarded-summary = Reinicie para usar o sistema novo
 notif-system-update-restart-unguarded-body = A atualização montou um sistema novo e o deixou para o próximo reinício: nada do que roda agora foi parado. Até você reiniciar, esta máquina roda o mesmo de antes; esse reinício não tem volta além do menu de boot: se o novo não subir, escolha lá o anterior.
 
+# WHY THE MACHINE'S OWN PROGRAM (`ronoctua-machine`) DID NOT DO WHAT IT WAS
+# ASKED — an apply, a migration, a bless or a hold: on the step under the
+# cursor in both doors, in the gestures of the view, and as the reason of a
+# run of this task that stopped at one of its steps.
+system-update-machine-refused-not-root = Só root muda a máquina: nada foi feito.
+system-update-machine-refused-busy = Outra mudança nesta máquina está em andamento: tente de novo quando ela acabar.
+system-update-machine-refused-nothing-to-migrate = Esta máquina já tem o próprio flake: não há o que migrar.
+system-update-machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso. Um download que ele não conseguiu baixar aparece na página das partes, com os jeitos de trazê-lo.
+system-update-machine-refused-switch-failed = A troca para o sistema novo falhou. A próxima partida o tenta uma vez, e volta ao último sistema bom se ele não subir.
+system-update-machine-refused-next-boot-failed = Não deu para deixar o sistema novo para o próximo reinício. Nada do que roda mudou; o menu de boot pode não listar o sistema novo, e o próximo reinício pode subir o que esta máquina roda.
+system-update-machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro, ou até você pedir nesta página para tentá-lo de novo.
+system-update-machine-refused-last-good-would-fall-out = Mais um sistema tiraria o último bom do menu de boot. Reinicie antes, para o sistema em teste ser confirmado.
+system-update-machine-refused-held = A máquina está retida numa revisão diferente da que a pasta dela nomeia: nada foi construído.
+system-update-machine-refused-no-failed-trial = Nenhum sistema falhou no ensaio de boot desta máquina agora: não há o que tentar de novo.
+system-update-machine-refused-checkout-moved = A distro iria para outra revisão de um checkout local — o flake desta máquina nomeia um que o lock não nomeia. O lock voltou como estava: só a porta do sudo o move.
+system-update-machine-refused-unreadable = Um arquivo da pasta da máquina não pode ser lido.
+system-update-machine-refused-failed = Um programa de que a máquina precisava falhou; o diário diz qual.
+
 # ROOT'S APPLIER REFUSED YOUR DECLARATIONS: its reason, as a sentence — on the
 # step under the cursor, in both doors, and in the run's notification.
 notif-system-update-declarations-refused-summary = Suas declarações não chegaram a esta máquina

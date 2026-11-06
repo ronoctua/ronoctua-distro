@@ -123,6 +123,54 @@ pub fn refuses(id: &str) -> Option<Refuses> {
     declared::STEPS.iter().find(|s| s.id == id)?.refuses
 }
 
+/// The sentence of the step `step`'s refusal `word`, in the vocabulary its
+/// declaration names (`refuses` in `steps.nix`): the machine's
+/// ([`machine_refusal_key`]) or root's applier's of the person's
+/// declarations ([`applier_refusal_key`]). `None` for a step whose program's
+/// words are not known, and for a word that is not its program's.
+///
+/// One answer for the view, which says it on the step under the cursor, and
+/// for the brain, which keeps it as the reason of a run that stopped there.
+#[must_use]
+pub fn refused_key(step: &str, word: &str) -> Option<&'static str> {
+    match refuses(step)? {
+        Refuses::Machine => machine_refusal_key(word),
+        Refuses::Applier => applier_refusal_key(word),
+    }
+}
+
+/// The machine's own sentence for a refusal of its program
+/// (`ronoctua-machine`'s `refused <word>`), or `None` for a word that is not
+/// one of the machine's: a silent fallback would say a reason the program
+/// never gave.
+#[must_use]
+pub fn machine_refusal_key(word: &str) -> Option<&'static str> {
+    MachineRefusal::of_id(word).map(machine_refusal_said)
+}
+
+/// The machine's own sentence for the refusal `why`.
+#[must_use]
+pub const fn machine_refusal_said(why: MachineRefusal) -> &'static str {
+    use super::key;
+    match why {
+        MachineRefusal::NotRoot => key::SYSTEM_UPDATE_MACHINE_REFUSED_NOT_ROOT,
+        MachineRefusal::Busy => key::SYSTEM_UPDATE_MACHINE_REFUSED_BUSY,
+        MachineRefusal::NothingToMigrate => key::SYSTEM_UPDATE_MACHINE_REFUSED_NOTHING_TO_MIGRATE,
+        MachineRefusal::BuildFailed => key::SYSTEM_UPDATE_MACHINE_REFUSED_BUILD_FAILED,
+        MachineRefusal::SwitchFailed => key::SYSTEM_UPDATE_MACHINE_REFUSED_SWITCH_FAILED,
+        MachineRefusal::NextBootFailed => key::SYSTEM_UPDATE_MACHINE_REFUSED_NEXT_BOOT_FAILED,
+        MachineRefusal::DidNotBoot => key::SYSTEM_UPDATE_MACHINE_REFUSED_DID_NOT_BOOT,
+        MachineRefusal::LastGoodWouldFallOut => {
+            key::SYSTEM_UPDATE_MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT
+        }
+        MachineRefusal::Held => key::SYSTEM_UPDATE_MACHINE_REFUSED_HELD,
+        MachineRefusal::NoFailedTrial => key::SYSTEM_UPDATE_MACHINE_REFUSED_NO_FAILED_TRIAL,
+        MachineRefusal::CheckoutMoved => key::SYSTEM_UPDATE_MACHINE_REFUSED_CHECKOUT_MOVED,
+        MachineRefusal::Unreadable => key::SYSTEM_UPDATE_MACHINE_REFUSED_UNREADABLE,
+        MachineRefusal::Failed => key::SYSTEM_UPDATE_MACHINE_REFUSED_FAILED,
+    }
+}
+
 /// The sentence of root's applier of the person's declarations for a
 /// staging it refused with `word` ([`ronoctua_person::tree::TreeWhy`]) —
 /// `None` for a word that is not one of its refusals of a staging: a file

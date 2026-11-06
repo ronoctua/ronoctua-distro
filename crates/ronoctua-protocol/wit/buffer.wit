@@ -1393,10 +1393,11 @@ interface types {
         at-key: string,
         // The key of `why`. Empty when `why` is.
         why-key: string,
-        // What a `noted` record says, as a key, and the sentence the host
-        // made of it with its values — the component cannot format a size or
-        // a moment, and a key with holes in it is not something it can draw.
-        // Both empty for every other kind.
+        // What a `noted` record says, or why a `failed` one stopped in its
+        // module's own words, as a key, and the sentence the host made of it
+        // with its values — the component cannot format a size or a moment,
+        // and a key with holes in it is not something it can draw. Both
+        // empty otherwise.
         says: string,
         says-text: string,
     }

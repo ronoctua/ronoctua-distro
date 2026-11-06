@@ -62,7 +62,7 @@ use std::sync::Arc;
 // THE SHARED HALF (`shared.rs`, compiled into the library beside the
 // manifest): what the update's doors read of the same machine and table.
 use super::{Charge, HOLD_METERED, steps};
-use crate::module::{Arg, Birth, Event, Manifest, Module, Run, Scheduled};
+use crate::module::{Arg, Birth, Event, Manifest, Module, Noted, Run, Scheduled};
 use crate::moment::{Moment, Offset};
 use crate::prefs::{TaskPrefs, Where};
 use crate::pulse::Pulse;
@@ -245,6 +245,20 @@ impl Scheduled for SystemUpdate {
 /// A finished run, as its own report describes it.
 fn ended(steps: Vec<StepOutcome>, trouble: &str) -> Outcome {
     if let Some(bad) = steps.iter().find(|s| !s.ok) {
+        // A REFUSAL WHOSE WORD THE STEP'S PROGRAM SPEAKS is said in its own
+        // sentence — "one more system would push the last good one out of
+        // the boot menu" — and not as a step that failed for no reason the
+        // history could give. The root half's steps are in this report too
+        // when it stopped (`gen-updates.py`), so this reaches the rebuild.
+        if bad.trouble.is_empty()
+            && let Some(word) = bad.verdict.strip_prefix("failed-")
+            && let Some(says) = super::refused_key(&bad.id, word)
+        {
+            return Outcome::Refused {
+                at: bad.id.clone(),
+                says: Noted::of(says),
+            };
+        }
         return Outcome::Failed {
             at: bad.id.clone(),
             // What the step said, when it said anything; the unit's own summary
@@ -662,6 +676,65 @@ mod tests {
         match ended(sheet.steps, &sheet.trouble) {
             Outcome::Failed { at, .. } => assert_eq!(at, "the-step-that-failed"),
             other => panic!("a step that failed is a run that failed: {other:?}"),
+        }
+    }
+
+    /// FAILS IF: a run that stopped at a step whose program refused with a
+    /// word it speaks — the rebuild, refused because the last good system
+    /// would fall out of the boot menu — keeps anything but that step and the
+    /// program's sentence for the word; or a word the program does not speak,
+    /// or a step whose program's words are not known, is given a sentence.
+    #[test]
+    fn a_refusal_the_program_speaks_is_kept_with_its_sentence() {
+        let speaking = |whose| {
+            steps()
+                .iter()
+                .find(|s| super::super::refuses(s.id) == Some(whose))
+                .expect("a step that speaks it")
+                .id
+        };
+        let machine = speaking(super::super::Refuses::Machine);
+        let step = |id: &str, verdict: &str| StepOutcome {
+            id: id.to_owned(),
+            ok: !verdict.starts_with("failed"),
+            seconds: 3,
+            trouble: String::new(),
+            verdict: verdict.to_owned(),
+        };
+        // THE ROOT HALF'S LINES, then the person's half's own word for it.
+        let run = vec![
+            step("first-step", "ran"),
+            step(machine, "failed-last-good-would-fall-out"),
+            step("system-half", "failed"),
+        ];
+        match ended(run, "") {
+            Outcome::Refused { at, says } => {
+                assert_eq!(at, machine);
+                assert_eq!(
+                    says.says,
+                    super::super::machine_refusal_said(
+                        super::super::MachineRefusal::LastGoodWouldFallOut
+                    )
+                );
+                assert!(says.args.is_empty());
+            }
+            other => panic!("a refusal the machine speaks keeps its sentence: {other:?}"),
+        }
+        // A WORD IT DOES NOT SPEAK, and a step with no vocabulary: a failure
+        // at the step, with no reason invented.
+        let mute = steps()
+            .iter()
+            .find(|s| super::super::refuses(s.id).is_none())
+            .expect("a step with no vocabulary")
+            .id;
+        for (id, verdict) in [(machine, "failed-nonsense"), (mute, "failed-build-failed")] {
+            match ended(vec![step(id, verdict)], "") {
+                Outcome::Failed { at, why } => {
+                    assert_eq!(at, id);
+                    assert!(why.is_empty(), "{why}");
+                }
+                other => panic!("{id} {verdict}: {other:?}"),
+            }
         }
     }
 

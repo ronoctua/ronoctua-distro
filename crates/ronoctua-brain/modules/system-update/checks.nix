@@ -176,6 +176,15 @@ let
           case "$2" in
             ${units.system})
               [ -z "''${FIXTURE_ROOT_FAILS:-}" ] || exit 1
+              # A ROOT HALF THAT RAN AND WAS REFUSED: its own report, as its
+              # `record` writes it, in the state directory of the wiring.
+              if [ -n "''${FIXTURE_ROOT_REFUSES:-}" ]; then
+                mkdir -p state
+                printf '%s\t%s\t%s\n' ${moveStep.id} ran 2 \
+                  ${applyStep.id} failed-last-good-would-fall-out 40 \
+                  sequence stopped 0 > state/system.report
+                exit 1
+              fi
               exec "$FIXTURE_ROOT_HALF" --execute </dev/null
               ;;
             ${units.system-rehearsal})
@@ -241,6 +250,9 @@ let
         "nix"
       ]
   );
+  # The two steps a refused root half reports, as the fixture plants them.
+  moveStep = stepThat "move the inputs" (s: s.does == "move-inputs");
+  applyStep = stepThat "apply the configuration" (s: s.does == "apply-configuration");
   functionOf = step: "step_" + builtins.replaceStrings [ "-" ] [ "_" ] step.id;
 
   # THE SCANNER OF FLAGS THAT DELETE GENERATIONS, the one
@@ -1427,6 +1439,37 @@ in
               wrong.append(f"the stopped root half is not in the report: {report!r}")
           if root_at is None or calls[root_at + 1:] != [line_of(s, s["run"]) for s in publishing]:
               wrong.append(f"after a root half that stopped, the run does not publish — and only that: {calls}")
+          # AND A REPORT THE ROOT HALF LEFT BEFORE is not this run's: one it
+          # never emptied (it could not take its lock) stays out.
+          home = room("stale")
+          (home / "work/state").mkdir()
+          (home / "work/state/system.report").write_text("${applyStep.id}\tfailed-busy\t1\n")
+          r, calls = run(home, "--execute", FIXTURE_ROOT_FAILS="1")
+          report = (home / "runtime/ronoctua-update/user.report").read_text()
+          if "${applyStep.id}" in report or "system-half\tfailed" not in report:
+              wrong.append(f"a report the root half left from another run was taken as this one's: {report!r}")
+
+          # 2b. A ROOT HALF THAT RAN AND WAS REFUSED: its steps are in this
+          #     report, before the person's half's own word for it — and in
+          #     the sheet the brain reads, with the refusal's word, so the
+          #     record says where it stopped and why. Not its `sequence`.
+          home = room("refused")
+          (home / "work/state").mkdir()
+          (home / "work/state/system.report").write_text("${applyStep.id}\tran\t9\n")
+          r, calls = run(home, "--execute", FIXTURE_ROOT_REFUSES="1")
+          report = (home / "runtime/ronoctua-update/user.report").read_text()
+          refused = "${applyStep.id}\tfailed-last-good-would-fall-out\t40"
+          if r.returncode == 0:
+              wrong.append("a run whose root half was refused ended as if it had not")
+          if refused not in report or "system-half\tfailed" not in report \
+                  or report.index(refused) > report.index("system-half\tfailed"):
+              wrong.append(f"the root half's refusal is not in the report before its own word: {report!r}")
+          if "sequence\t" in report:
+              wrong.append(f"the root half's `sequence` line was taken as a step: {report!r}")
+          sheet = json.loads((home / "runtime/ronoctua-brain/${id}.json").read_text())
+          said = [(st["id"], st["ok"], st["verdict"]) for st in sheet["steps"]]
+          if ("${applyStep.id}", False, "failed-last-good-would-fall-out") not in said or not sheet["ended"]:
+              wrong.append(f"the sheet the brain reads does not carry the refusal: {said}")
 
           # 3. A REHEARSAL: a step with a rehearsal of its own runs it, and every other
           #    step runs nothing.

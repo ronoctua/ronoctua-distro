@@ -16,22 +16,6 @@ brain-needs-root = Roda como root
 # in that module's folder.
 group-update = atualização
 
-## The machine's life (`ronoctua-machine`): why an apply, a migration, a bless or a hold did not do what it was asked (`machine-refused-<why>`).
-
-machine-refused-not-root = Só root muda a máquina: nada foi feito.
-machine-refused-busy = Outra mudança nesta máquina está em andamento: tente de novo quando ela acabar.
-machine-refused-nothing-to-migrate = Esta máquina já tem o próprio flake: não há o que migrar.
-machine-refused-build-failed = O sistema novo não foi construído. Nada mudou: a máquina roda o que rodava, e a pasta dela volta a dizer isso. Um download que ele não conseguiu baixar aparece na página das partes, com os jeitos de trazê-lo.
-machine-refused-switch-failed = A troca para o sistema novo falhou. A próxima partida o tenta uma vez, e volta ao último sistema bom se ele não subir.
-machine-refused-next-boot-failed = Não deu para deixar o sistema novo para o próximo reinício. Nada do que roda mudou; o menu de boot pode não listar o sistema novo, e o próximo reinício pode subir o que esta máquina roda.
-machine-refused-did-not-boot = Este é o sistema que não subiu quando foi tentado, ou que foi desfeito. A máquina fica no que roda até chegar uma revisão mais nova da distro, ou até você pedir nesta página para tentá-lo de novo.
-machine-refused-last-good-would-fall-out = Mais um sistema tiraria o último bom do menu de boot. Reinicie antes, para o sistema em teste ser confirmado.
-machine-refused-held = A máquina está retida numa revisão diferente da que a pasta dela nomeia: nada foi construído.
-machine-refused-no-failed-trial = Nenhum sistema falhou no ensaio de boot desta máquina agora: não há o que tentar de novo.
-machine-refused-checkout-moved = A distro iria para outra revisão de um checkout local — o flake desta máquina nomeia um que o lock não nomeia. O lock voltou como estava: só a porta do sudo o move.
-machine-refused-unreadable = Um arquivo da pasta da máquina não pode ser lido.
-machine-refused-failed = Um programa de que a máquina precisava falhou; o diário diz qual.
-
 ## How the boot trial stands (`machine-trial-<outcome>`).
 
 machine-trial-pending = O sistema novo sobe pela primeira vez no próximo reinício. Se ele não subir, a máquina volta sozinha ao último sistema bom.

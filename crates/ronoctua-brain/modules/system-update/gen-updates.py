@@ -1934,9 +1934,31 @@ def emit_runner(
             "else",
             f"  privileged={shlex.quote(wiring['system-unit-rehearsal'])}",
             "fi",
+            # WHAT ITS REPORT HELD BEFORE IT RAN, to tell this run's lines
+            # from the last one's below — a root half that could not even take
+            # its lock never empties the file.
+            f"root_report={shlex.quote(wiring['state-dir'] + '/system.report')}",
+            # Bash's own read, and not `cat`: the runner's PATH is the
+            # wiring's store paths and nothing else.
+            "root_before=",
+            'if [ -r "$root_report" ]; then root_before=$(<"$root_report"); fi',
             'say "== $privileged"',
             f"if ! {shlex.quote(wiring['systemctl'])} start \"$privileged\"; then",
             '  say "!! the privileged half stopped; see: journalctl -u $privileged"',
+            "  # WHERE IT STOPPED AND WHY, from its own report: its steps' lines",
+            "  # go into this one, so the brain's record names the step that",
+            "  # failed and keeps its word (`failed-<word>`) — \"the rebuild was",
+            "  # refused, restart first\" instead of \"the privileged half",
+            "  # failed\". Only lines this run wrote, and not the sequence's own",
+            "  # `stopped`. The view reads both reports into one map by step,",
+            "  # so a line it reads twice says the same thing twice.",
+            "  root_after=",
+            '  if [ -r "$root_report" ]; then root_after=$(<"$root_report"); fi',
+            '  if [ -n "$root_after" ] && [ "$root_after" != "$root_before" ]; then',
+            "    while read -r id verdict seconds; do",
+            '      [ "$id" = sequence ] || printf \'%s\\t%s\\t%s\\n\' "$id" "$verdict" "$seconds" >> "$report"',
+            '    done <<< "$root_after"',
+            "  fi",
             "  record system-half failed 0",
             *(["  publish_anyway"] if publishing else []),
             "  finish",

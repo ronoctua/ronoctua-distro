@@ -14,7 +14,8 @@
 //! passwordless window answers it. What came of it is said in the door that
 //! asked ([`Came`]): done, the door's refusal (cancelled, a wrong password,
 //! no footer), or the machine's own sentence for why it refused
-//! (`machine-refused-<word>`), carried back by the helper as a progress word.
+//! (`system-update-machine-refused-<word>`, the update module's), carried
+//! back by the helper as a progress word.
 //!
 //! # No word of the person's reaches root
 //!
@@ -27,6 +28,7 @@ use ronoctua_security::verb::{RootVerb, Said};
 use ronoctua_shell_kit::aim::Aim;
 
 use crate::key;
+use ronoctua_brain::compiled::system_update as module;
 
 /// A gesture of the machine's the update's records offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -197,7 +199,7 @@ pub fn run(what: Gesture, mut gesture: crate::sudo::Gesture) -> Came {
 pub fn said(came: &Came, texts: &ronoctua_i18n::Texts) -> String {
     match came {
         Came::Done(what) => texts.t(what.done_key()),
-        Came::Refused(word) => texts.t(crate::update_window::refusal_key(word).unwrap_or(
+        Came::Refused(word) => texts.t(module::machine_refusal_key(word).unwrap_or(
             crate::security_words::refusal(ronoctua_security::Why::Failed),
         )),
         Came::Door(why) => texts.t(crate::security_words::refusal(*why)),
@@ -254,11 +256,13 @@ mod tests {
             }
             assert_eq!(
                 said(&Came::Refused("busy".to_owned()), &t),
-                t.t(key::MACHINE_REFUSED_BUSY)
+                t.t(module::machine_refusal_said(module::MachineRefusal::Busy))
             );
             assert_eq!(
                 said(&Came::Refused("no-failed-trial".to_owned()), &t),
-                t.t(key::MACHINE_REFUSED_NO_FAILED_TRIAL)
+                t.t(module::machine_refusal_said(
+                    module::MachineRefusal::NoFailedTrial
+                ))
             );
             assert_eq!(
                 said(

@@ -231,6 +231,18 @@ brain-flake-owned = In the flake
 brain-changed = Changed by you
 # THE FOOTER'S FIELDS.
 brain-last-run = Last run
+# WHAT THE FOOTER SAYS ABOUT A RECORD of a task's history: the question the
+# sentence under it answers (never the outcome's word, which the row says),
+# the step it stopped at, and what it says when it kept no reason.
+brain-record-done = How it went
+brain-record-failed = Why it failed
+brain-record-held = Why it waited
+brain-record-skipped = Why it did not run
+brain-record-noted = What it noticed
+brain-record-at = At the step
+brain-record-went-well = It ran to the end, and nothing in it failed.
+brain-record-unsaid = It did not say why.
+brain-record-unsaid-failure = It did not say why. What its programs printed is in the system's journal.
 # THE CLICK AT THE END OF THE FOOTER'S LAST ROW, and what it does.
 brain-open-page = Open its page
 about-brain-open-page = Open the page of the task this is about: its schedule, its steps and its history.

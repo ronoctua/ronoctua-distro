@@ -155,6 +155,10 @@
     # And the mark the footer draws while a run is under way, with the door
     # a click on it opens: a leaf under the view and the footer.
     "crates/ronoctua-shell-update-words/src/update_mark.rs" = "*";
+    # And the machine's own gestures on the update's page, which say the
+    # machine's refusal in this module's sentences — the ones the brain's
+    # record of a refused run says too.
+    "crates/ronoctua-shell-update/src/machine_gesture.rs" = "*";
     "tests/checks.nix" = [ "system-update" ];
     # And the VM test that follows a distro AppImage's release end to end:
     # it runs the `person-pins` step with the arguments the table declares,

@@ -1522,8 +1522,9 @@ pub struct RunRecord {
     pub at_key: String,
     /// The key of [`RunRecord::why`]. Empty when `why` is.
     pub why_key: String,
-    /// What a [`OutcomeKind::Noted`] record says, as a key. Empty for every
-    /// other kind.
+    /// What a [`OutcomeKind::Noted`] record says, or why a
+    /// [`OutcomeKind::Failed`] one stopped in its module's own words (a
+    /// refusal the module knows), as a key. Empty otherwise.
     pub says: String,
     /// The sentence the host made of it with its values — the component
     /// cannot format a size or a moment.

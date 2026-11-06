@@ -177,6 +177,16 @@ pub enum Outcome {
         /// screen tells them apart because the word never contains a space.
         why: String,
     },
+    /// It stopped at a step whose program REFUSED, and the module knows the
+    /// refusal: the reason is a sentence of the module's own texts, with its
+    /// values — what [`Outcome::Failed`] could only carry as a word of the
+    /// brain's or as the machine's English.
+    Refused {
+        /// The step it stopped at, by id.
+        at: String,
+        /// Why, in the module's words.
+        says: crate::module::Noted,
+    },
     /// It did not run, and this says why.
     Skipped {
         /// A word of ours: `off`, `held`, `postponed`.
@@ -255,7 +265,9 @@ pub struct RunRecord {
     pub trouble: String,
     /// What each step did.
     pub steps: Vec<StepOutcome>,
-    /// What a `Noted` record says, as a text key. Empty for every other kind.
+    /// What a `Noted` record says, or why a `Failed` one stopped in its
+    /// module's own words ([`Outcome::Refused`]), as a text key. Empty
+    /// otherwise.
     pub says: String,
     /// The values of that sentence, formatted by whoever draws it.
     pub args: crate::module::Args,
@@ -301,6 +313,12 @@ impl RunRecord {
                 } else {
                     me.why = why;
                 }
+            }
+            Outcome::Refused { at, says } => {
+                me.kind = OutcomeKind::Failed;
+                me.at = at;
+                me.says = says.says.into_owned();
+                me.args = says.args;
             }
             Outcome::Skipped { why } => {
                 me.kind = OutcomeKind::Skipped;
@@ -388,5 +406,25 @@ mod tests {
         assert!(theirs.why.is_empty());
         assert_eq!(theirs.at, "build");
         assert_eq!(theirs.trouble, "error: build of drv failed");
+    }
+
+    #[test]
+    fn a_refusal_the_module_knows_is_a_failure_that_says_why_in_its_words() {
+        let refused = RunRecord::of(
+            "made-up",
+            1,
+            2,
+            Outcome::Refused {
+                at: "build".to_owned(),
+                says: crate::module::Noted::of("made-up-refused-full")
+                    .with("free", crate::module::Arg::Bytes(5)),
+            },
+        );
+        assert_eq!(refused.kind, OutcomeKind::Failed);
+        assert_eq!(refused.at, "build");
+        assert_eq!(refused.says, "made-up-refused-full");
+        assert_eq!(refused.args.len(), 1);
+        // NEITHER of the other two: the sentence is the reason, whole.
+        assert!(refused.why.is_empty() && refused.trouble.is_empty());
     }
 }

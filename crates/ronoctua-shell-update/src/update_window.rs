@@ -398,7 +398,7 @@ pub enum Verdict {
     Failed,
     /// It ran, and its program REFUSED with this word (`failed-<word>`): a
     /// failure, with the reason the program gave — the machine's sentence
-    /// for it, when the word is the machine's ([`refusal_key`]).
+    /// for it, when the word is the machine's ([`module::machine_refusal_key`]).
     Refused(String),
     /// This machine has it switched off, in `/etc/ronoctua/updates.conf`.
     Off,
@@ -983,7 +983,7 @@ pub fn cursor_explains(
     // step declares (`refuses`) — and a word that is not that program's
     // says nothing more than the row's *failed*.
     if let Verdict::Refused(word) = verdict
-        && let Some(why) = refused_key(step.id, word)
+        && let Some(why) = module::refused_key(step.id, word)
     {
         said.push(' ');
         said.push_str(&texts.t(why));
@@ -2410,9 +2410,9 @@ impl View {
         use crate::machine_gesture::Gesture;
         let r = &self.records;
         match what {
-            Gesture::TryAgain if r.trial != Some(module::TrialOutcome::Failed) => {
-                Some(key::MACHINE_REFUSED_NO_FAILED_TRIAL)
-            }
+            Gesture::TryAgain if r.trial != Some(module::TrialOutcome::Failed) => Some(
+                module::machine_refusal_said(module::MachineRefusal::NoFailedTrial),
+            ),
             Gesture::TryAgain if r.again => Some(key::MACHINE_SAID_TRY_AGAIN),
             Gesture::Hold if r.hold.is_some() => Some(key::MACHINE_SAID_HELD_ALREADY),
             Gesture::Hold if r.revision.is_none() => Some(key::MACHINE_SAID_NOTHING_TO_HOLD),
@@ -3468,43 +3468,6 @@ fn view_key_of(command: &str) -> String {
 
 /// How many hex digits of a held revision are drawn — git's own short form.
 const REV_SHOWN: usize = 7;
-
-/// The machine's own sentence for a refusal of its program
-/// (`ronoctua-machine`'s `refused <word>`), or `None` for a word that is not
-/// one of the machine's: a silent fallback would say a reason the program
-/// never gave.
-#[must_use]
-pub fn refusal_key(word: &str) -> Option<&'static str> {
-    use module::MachineRefusal as Why;
-    Some(match Why::of_id(word)? {
-        Why::NotRoot => key::MACHINE_REFUSED_NOT_ROOT,
-        Why::Busy => key::MACHINE_REFUSED_BUSY,
-        Why::NothingToMigrate => key::MACHINE_REFUSED_NOTHING_TO_MIGRATE,
-        Why::BuildFailed => key::MACHINE_REFUSED_BUILD_FAILED,
-        Why::SwitchFailed => key::MACHINE_REFUSED_SWITCH_FAILED,
-        Why::NextBootFailed => key::MACHINE_REFUSED_NEXT_BOOT_FAILED,
-        Why::DidNotBoot => key::MACHINE_REFUSED_DID_NOT_BOOT,
-        Why::LastGoodWouldFallOut => key::MACHINE_REFUSED_LAST_GOOD_WOULD_FALL_OUT,
-        Why::Held => key::MACHINE_REFUSED_HELD,
-        Why::NoFailedTrial => key::MACHINE_REFUSED_NO_FAILED_TRIAL,
-        Why::CheckoutMoved => key::MACHINE_REFUSED_CHECKOUT_MOVED,
-        Why::Unreadable => key::MACHINE_REFUSED_UNREADABLE,
-        Why::Failed => key::MACHINE_REFUSED_FAILED,
-    })
-}
-
-/// The sentence of the step `step`'s refusal `word`, in the vocabulary its
-/// declaration names (`refuses` in `steps.nix`): the machine's
-/// ([`refusal_key`]) or root's applier's of the person's declarations
-/// ([`module::applier_refusal_key`]). `None` for a step whose program's
-/// words are not known, and for a word that is not its program's.
-#[must_use]
-pub fn refused_key(step: &str, word: &str) -> Option<&'static str> {
-    match module::refuses(step)? {
-        module::Refuses::Machine => refusal_key(word),
-        module::Refuses::Applier => module::applier_refusal_key(word),
-    }
-}
 
 /// The machine's own sentence of a boot trial's outcome.
 const fn trial_key(outcome: module::TrialOutcome) -> &'static str {
@@ -6078,10 +6041,14 @@ mod tests {
     fn a_refusal_says_the_machines_reason() {
         let t = texts();
         for why in module::MachineRefusal::ALL {
-            let k = refusal_key(why.id()).expect("every reason of the machine has a sentence");
+            let k = module::machine_refusal_key(why.id())
+                .expect("every reason of the machine has a sentence");
             assert!(!t.t(k).starts_with('['), "{k}");
         }
-        assert_eq!(refusal_key("a-word-the-machine-never-says"), None);
+        assert_eq!(
+            module::machine_refusal_key("a-word-the-machine-never-says"),
+            None
+        );
         let speaking = |whose| {
             module::steps()
                 .iter()
@@ -6091,7 +6058,9 @@ mod tests {
         let step = speaking(module::Refuses::Machine);
         let said = cursor_explains(step, &Verdict::Refused("build-failed".to_owned()), &t);
         assert!(
-            said.contains(&t.t(key::MACHINE_REFUSED_BUILD_FAILED)),
+            said.contains(&t.t(module::machine_refusal_said(
+                module::MachineRefusal::BuildFailed
+            ))),
             "{said}"
         );
         let plain = cursor_explains(step, &Verdict::Refused("nonsense".to_owned()), &t);
@@ -6109,14 +6078,14 @@ mod tests {
             let said = cursor_explains(stage, &Verdict::Refused(why.id().to_owned()), &t);
             assert!(said.contains(&t.t(k)), "{said}");
         }
-        assert_eq!(refused_key(stage.id, "build-failed"), None);
+        assert_eq!(module::refused_key(stage.id, "build-failed"), None);
         // A STEP WHOSE PROGRAM'S WORDS ARE NOT KNOWN says only that it
         // failed, whatever the word.
         let mute = module::steps()
             .iter()
             .find(|s| module::refuses(s.id).is_none())
             .expect("a step with no vocabulary");
-        assert_eq!(refused_key(mute.id, "build-failed"), None);
+        assert_eq!(module::refused_key(mute.id, "build-failed"), None);
     }
 
     /// WHAT STARTING IT HERE SAID is its own sentence — on battery, on this
@@ -6800,7 +6769,9 @@ mod tests {
         let mut quiet = a_view();
         assert_eq!(
             quiet.ask_gesture(Gesture::TryAgain),
-            Errand::Say(key::MACHINE_REFUSED_NO_FAILED_TRIAL)
+            Errand::Say(module::machine_refusal_said(
+                module::MachineRefusal::NoFailedTrial
+            ))
         );
         assert_eq!(
             quiet.ask_gesture(Gesture::Hold),

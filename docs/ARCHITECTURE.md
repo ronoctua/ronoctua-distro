@@ -17015,7 +17015,7 @@ a unidade a manda para um arquivo de root na pasta da atualização (`StandardOu
 <unidade>.said`, os passos seguem para o diário), que o ajudante apaga antes de iniciar (uma unidade
 que nem rodou não deixa veredito velho) e lê depois, dizendo a palavra como progresso (`step
 machine-refused-<palavra>`, `Said::machine_refused`) antes do seu `refused failed`. A porta que
-perguntou diz a frase da máquina (`refusal_key`); uma palavra que a máquina não diz vira o `failed` da
+perguntou diz a frase da máquina (`machine_refusal_key`); uma palavra que a máquina não diz vira o `failed` da
 porta, nunca um motivo inventado. Na página, cada gesto mora onde mora a frase dele: sob o ensaio que
 falhou, "tentar de novo na próxima atualização" (e, pedido, a frase de que ele é tentado, com a
 tecla que atualiza agora); a frase da retenção é ela mesma o controle que solta, com a linha de
@@ -19968,9 +19968,12 @@ antes da espera, para que as portas não mostrem os vereditos da execução ante
 
 **Uma recusa guarda a palavra.** A última linha `refused <palavra>` de um programa da máquina vira
 `declined-<palavra>` (notícia, a sequência segue) quando o passo a declara, e `failed-<palavra>`
-quando não: a vista diz a frase da máquina para ela (`machine-refused-<palavra>`, do L05), e o sheet
-do cérebro conta `failed-*` como falha. Assim "o rebuild falhou" vira "o sistema novo não construiu,
-nada mudou" sem que o roteiro leia log nenhum.
+quando não: a vista diz a frase da máquina para ela (`system-update-machine-refused-<palavra>`, do
+módulo, `refused_key`), e o sheet do cérebro conta `failed-*` como falha. Assim "o rebuild falhou"
+vira "o sistema novo não construiu, nada mudou" sem que o roteiro leia log nenhum. O registro do
+cérebro guarda a mesma frase (`Outcome::Refused`): a metade da pessoa, quando a root para, copia as
+linhas do relatório dela (só se mudaram nesta execução), e o histórico diz em que passo parou e por
+quê.
 
 <!-- anchor: L20 -->
 

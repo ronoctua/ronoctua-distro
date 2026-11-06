@@ -16,22 +16,6 @@ brain-needs-root = Runs as root
 # in that module's folder.
 group-update = update
 
-## The machine's life (`ronoctua-machine`): why an apply, a migration, a bless or a hold did not do what it was asked (`machine-refused-<why>`).
-
-machine-refused-not-root = Only root changes the machine: nothing was done.
-machine-refused-busy = Another change to this machine is running: try again when it ends.
-machine-refused-nothing-to-migrate = This machine already has its own flake: there is nothing to migrate.
-machine-refused-build-failed = The new system did not build. Nothing changed: the machine runs what it ran, and its folder says so again. A download it could not fetch is named on the parts' page, with the ways to bring it in.
-machine-refused-switch-failed = The switch to the new system failed. The next start tries it once, and comes back to the last good system if it does not start.
-machine-refused-next-boot-failed = Setting the new system for the next restart failed. Nothing that runs changed; the boot menu may not list the new system, and the next restart may start the one this machine runs.
-machine-refused-did-not-boot = This is the system that did not start when it was tried, or that was rolled back. The machine stays on the one it runs until a newer revision of the distro arrives, or you ask on this page to try it again.
-machine-refused-last-good-would-fall-out = One more system would push the last good one out of the boot menu. Restart first, so the system on trial can be confirmed.
-machine-refused-held = The machine is held at another revision than the one its folder names: nothing was built.
-machine-refused-no-failed-trial = No system failed its boot trial on this machine now: there is nothing to try again.
-machine-refused-checkout-moved = The distro would have moved to another revision of a local checkout — this machine's flake names one its lock does not. The lock was put back: only the sudo door moves it.
-machine-refused-unreadable = A file of the machine's folder cannot be read.
-machine-refused-failed = A program the machine needed failed; the journal says which.
-
 ## How the boot trial stands (`machine-trial-<outcome>`).
 
 machine-trial-pending = The new system starts for the first time at the next restart. If it does not start, the machine comes back to the last good one by itself.

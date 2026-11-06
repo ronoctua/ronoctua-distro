@@ -137,6 +137,21 @@ mod key {
 
     // ---- the footer ---------------------------------------------------
     pub const LAST_RUN: &str = "brain-last-run";
+    /// The label of the step a record stopped at, beside the step's name.
+    pub const AT_STEP: &str = "brain-record-at";
+    /// What a record says when it ran to the end: no reason to give.
+    pub const WENT_WELL: &str = "brain-record-went-well";
+    /// What it says when it did not run and kept no reason.
+    pub const UNSAID: &str = "brain-record-unsaid";
+    /// And when it failed and kept none: where its programs' words went.
+    pub const UNSAID_FAILURE: &str = "brain-record-unsaid-failure";
+    /// What the footer says above a record of a task's own history, one per
+    /// outcome — see `record_heading_key`.
+    pub const RECORD_DONE: &str = "brain-record-done";
+    pub const RECORD_FAILED: &str = "brain-record-failed";
+    pub const RECORD_HELD: &str = "brain-record-held";
+    pub const RECORD_SKIPPED: &str = "brain-record-skipped";
+    pub const RECORD_NOTED: &str = "brain-record-noted";
     pub const NO_ACTIVITY: &str = "brain-no-activity";
     /// The click at the end of the footer's last row that opens the page of
     /// the task the footer is about.
@@ -765,6 +780,21 @@ fn outcome_key(o: OutcomeKind) -> String {
     format!("brain-outcome-{}", outcome_word(o))
 }
 
+/// What the footer says above a record of a task's own history: the question
+/// the sentence under it answers — *why it failed*, *why it waited* — and
+/// never the outcome's word, which the row it is about already says. The
+/// owner, of a footer that read `Failed` over `Failed`: *"o título e conteúdo
+/// do histórico são apenas uma repetição do status, não servindo para nada"*.
+const fn record_heading_key(o: OutcomeKind) -> &'static str {
+    match o {
+        OutcomeKind::Done => key::RECORD_DONE,
+        OutcomeKind::Failed => key::RECORD_FAILED,
+        OutcomeKind::Held => key::RECORD_HELD,
+        OutcomeKind::Skipped => key::RECORD_SKIPPED,
+        OutcomeKind::Noted => key::RECORD_NOTED,
+    }
+}
+
 /// THE TONE OF A RUN'S OUTCOME — discreet, in the hue of the news (the
 /// owner's ask: *"o worked … um tom positivo, como é a cor verde"*). One table
 /// for the list's last column, a task's history and the activity log, so a
@@ -1047,6 +1077,7 @@ const PARTS: [ronoctua_design::types::DayPart; 5] = [
 fn every_phrase() -> Vec<String> {
     let mut out: Vec<String> = [
         key::LAST_RUN,
+        key::AT_STEP,
         key::NEEDS_ROOT,
         key::FLAKE_OWNED,
         key::CHANGED,
@@ -1299,6 +1330,9 @@ impl State {
 struct Told {
     /// The name of the thing, as a key.
     name: Option<String>,
+    /// The step a record stopped at, by its name's key: said on the line
+    /// under the name, after its label, where `said` would go.
+    at_step: Option<String>,
     /// One line of text the buffer is holding — a command, a path, a number.
     ///
     /// Its own line and not a fact, because what goes here is the longest
@@ -1333,6 +1367,7 @@ impl Told {
         let part = |it: &Option<String>| it.clone().unwrap_or_default();
         [
             part(&self.name),
+            part(&self.at_step),
             part(&self.said),
             part(&self.about),
             part(&self.trouble),
@@ -1426,6 +1461,23 @@ impl State {
             && from < values_at
         {
             pen.put(from, Run::datum(said).playing(Role::Body));
+            from += 1;
+        } else if let Some(step) = &told.at_step
+            && from < values_at
+        {
+            // WHERE A RECORD STOPPED, on the same line: the label in the
+            // figures' discreet tone, the step's own name after it. Measured
+            // from what the host said the label is, like every figure here.
+            let label = self.cells_of(key::AT_STEP, FACT_CELLS);
+            let step_at = label + ronoctua_design::GAP;
+            pen.put(from, Run::label(key::AT_STEP).dim().within(label));
+            pen.put(
+                from,
+                Run::label(step)
+                    .playing(Role::Body)
+                    .at(step_at)
+                    .within(wide.saturating_sub(step_at)),
+            );
             from += 1;
         }
         // THE SENTENCE TAKES EVERYTHING THAT IS LEFT: the error when there is
@@ -3882,30 +3934,41 @@ impl State {
     }
 
     /// The most useful sentence about one record, and the order is the order
-    /// somebody wants it in: what a note says, what got in the way, where it
-    /// stopped, and how it ended. `Waited` as a paragraph under a row that
-    /// already says `Waited` is a paragraph that says nothing, and a key built
-    /// here out of an id is a sentence on screen — the keys are the host's.
+    /// somebody wants it in: what a note says, what the module said stopped
+    /// it, what the machine said, the brain's reason — and where it stopped,
+    /// on a line of its own. `Waited` as a paragraph under a row that already
+    /// says `Waited` is a paragraph that says nothing, and a key built here
+    /// out of an id is a sentence on screen — the keys are the host's.
+    ///
+    /// WITH NOTHING KEPT, it says THAT, and where to look: a failure's words
+    /// went to the system's journal. Never the outcome again.
     fn told_about_record(run: &RunRecord, name: Option<String>) -> Told {
-        let noted = (run.outcome == OutcomeKind::Noted && !run.says_text.is_empty())
-            .then(|| (run.says_text.clone(), Role::Body));
-        let about = if noted.is_some() {
-            None
-        } else {
-            Some(
-                key_of(&run.why_key)
-                    .or_else(|| key_of(&run.at_key))
-                    .unwrap_or_else(|| outcome_key(run.outcome)),
-            )
-        };
-        Told {
+        let mut told = Told {
             name,
-            about,
-            logged: noted,
-            trouble: (!run.trouble.is_empty()).then(|| run.trouble.clone()),
-            facts: vec![(key::LAST_RUN.to_owned(), run.when_text.clone())],
+            at_step: key_of(&run.at_key),
             ..Told::default()
+        };
+        let failed = run.outcome == OutcomeKind::Failed;
+        if run.outcome == OutcomeKind::Noted && !run.says_text.is_empty() {
+            told.logged = Some((run.says_text.clone(), Role::Body));
+        } else if failed && !run.says_text.is_empty() {
+            // A REFUSAL ITS MODULE KNOWS, in the module's own sentence —
+            // "one more system would push the last good one out of the boot
+            // menu" — in the tone of what the machine says went wrong.
+            told.logged = Some((run.says_text.clone(), Role::Danger));
+        } else if !run.trouble.is_empty() {
+            told.trouble = Some(run.trouble.clone());
+        } else {
+            told.about = Some(key_of(&run.why_key).unwrap_or_else(|| {
+                match run.outcome {
+                    OutcomeKind::Done => key::WENT_WELL,
+                    OutcomeKind::Failed => key::UNSAID_FAILURE,
+                    OutcomeKind::Held | OutcomeKind::Skipped | OutcomeKind::Noted => key::UNSAID,
+                }
+                .to_owned()
+            }));
         }
+        told
     }
 
     /// One line of the activity log: a record, or a folded row — and a folded
@@ -3918,6 +3981,7 @@ impl State {
             return Told::default();
         };
         let mut told = Self::told_about_record(run, key_of(&run.task_key));
+        told.facts = vec![(key::LAST_RUN.to_owned(), run.when_text.clone())];
         // A RECORD IS OF A TASK, and the click at the end of the last row
         // opens that task's page — on a folded row too, whose `RET` opens the
         // fold instead.
@@ -3970,7 +4034,7 @@ impl State {
                 // NEVER the task's own description, which this page already
                 // opens with three rows up — the same paragraph printed twice
                 // on one screen is what the owner photographed.
-                Self::told_about_record(run, Some(outcome_key(run.outcome)))
+                Self::told_about_record(run, Some(record_heading_key(run.outcome).to_owned()))
             }
             Some(Spot::Action(n)) => {
                 let Some(action) = task.actions.get(n) else {
@@ -4173,7 +4237,9 @@ impl State {
     /// the step it stopped at — and, for a run that simply worked, what its
     /// task does, since `Worked` beside it already says how it went.
     fn said_of_record(&self, run: &RunRecord) -> Option<Pointed> {
-        if run.outcome == OutcomeKind::Noted && !run.says_text.is_empty() {
+        if matches!(run.outcome, OutcomeKind::Noted | OutcomeKind::Failed)
+            && !run.says_text.is_empty()
+        {
             return Some(Pointed::Datum(run.says_text.clone()));
         }
         if !run.trouble.is_empty() {
@@ -6165,19 +6231,25 @@ mod tests {
         s.log = 1;
         assert_eq!(s.told().about.as_deref(), Some("brain-why-ram"));
 
-        // A failure that named a step: the step's own key, and never the id.
+        // A record that named a step: the step's own key, and never the id —
+        // on its own line, so the sentence is still the reason.
         let row = &mut s.mind.activity_rows[1].newest;
         row.why.clear();
         row.why_key.clear();
         row.at = "a-step".to_owned();
         row.at_key = "fixture-step-a-step".to_owned();
-        assert_eq!(s.told().about.as_deref(), Some("fixture-step-a-step"));
+        let told = s.told();
+        assert_eq!(told.at_step.as_deref(), Some("fixture-step-a-step"));
+        assert_eq!(told.about.as_deref(), Some(key::UNSAID));
 
-        // And with neither, the outcome is all there is to say.
+        // And with neither, it says it kept no reason — never the outcome
+        // again, which the row already reads.
         let row = &mut s.mind.activity_rows[1].newest;
         row.at.clear();
         row.at_key.clear();
-        assert_eq!(s.told().about.as_deref(), Some("brain-outcome-held"));
+        let told = s.told();
+        assert_eq!(told.at_step, None);
+        assert_eq!(told.about.as_deref(), Some(key::UNSAID));
 
         // WHAT THE MACHINE SAID goes through verbatim, as a datum.
         s.mind.activity_rows[1].newest.trouble = "error: builder failed".to_owned();
@@ -6195,6 +6267,88 @@ mod tests {
             told.logged.map(|(t, _)| t).as_deref(),
             Some("A process was killed for memory")
         );
+    }
+
+    /// FAILS IF: a record of a task's history is told by its outcome's word —
+    /// the footer that read `Failed` over `Failed`, the owner's *"o título e
+    /// conteúdo do histórico são apenas uma repetição do status, não servindo
+    /// para nada"* — or a refusal its module knows loses the step it stopped
+    /// at or the module's sentence for it, or that step is not drawn under
+    /// the heading, after its label.
+    #[test]
+    fn a_record_is_told_by_what_stopped_it_and_never_by_its_status() {
+        let mut s = a_state();
+        s.page = Page::Task;
+        let task = s.task;
+        let failed = s.mind.tasks[task]
+            .history
+            .iter()
+            .position(|r| r.outcome == OutcomeKind::Failed)
+            .expect("the fixture's task has a failed run");
+        s.spot = s
+            .spots()
+            .iter()
+            .position(|it| *it == Spot::Ran(failed))
+            .expect("the page draws the run");
+
+        // A FAILURE THAT KEPT NOTHING says so, and where its words went.
+        let told = s.told();
+        assert_eq!(told.name.as_deref(), Some(key::RECORD_FAILED));
+        assert_eq!(told.at_step, None);
+        assert_eq!(told.about.as_deref(), Some(key::UNSAID_FAILURE));
+
+        // A REFUSAL ITS MODULE KNOWS: the step, and the module's sentence,
+        // as data — the host made it — in the tone of what went wrong.
+        let refusal = "One more system would push the last good one out of the boot menu.";
+        let run = &mut s.mind.tasks[task].history[failed];
+        run.at = "fixture-rebuild".to_owned();
+        run.at_key = "fixture-step-rebuild".to_owned();
+        run.says = "fixture-refused".to_owned();
+        run.says_text = refusal.to_owned();
+        let told = s.told();
+        assert_eq!(told.name.as_deref(), Some(key::RECORD_FAILED));
+        assert_eq!(told.at_step.as_deref(), Some("fixture-step-rebuild"));
+        assert_eq!(told.logged, Some((refusal.to_owned(), Role::Danger)));
+        assert_eq!(told.about, None);
+        // NOR THE DATE AGAIN: the row reads it, and "last run" was false of
+        // every run but the newest.
+        assert!(told.facts.is_empty(), "{:?}", told.facts);
+        // AND THE POINTER ON THE ROW SAYS THE SAME SENTENCE.
+        assert_eq!(
+            s.said_of_record(&s.mind.tasks[task].history[failed]),
+            Some(Pointed::Datum(refusal.to_owned()))
+        );
+
+        // DRAWN: the step on the line under the heading, after its label.
+        let screen = drawn(&mut s, 30, 100);
+        let seen = runs(&screen);
+        let label = seen
+            .iter()
+            .find(|(t, ..)| t == key::AT_STEP)
+            .expect("the step's label is drawn");
+        // ON THAT LINE: the history's row draws the step too, in its note.
+        let step = seen
+            .iter()
+            .find(|(t, _, line, _)| t == "fixture-step-rebuild" && *line == label.2)
+            .expect("the step is not on its label's line");
+        assert!(step.3 > label.3, "the step is not after its label");
+        assert!(
+            seen.iter()
+                .any(|(t, _, line, _)| t == key::RECORD_FAILED && *line + 1 == label.2),
+            "the step is not on the line under the heading: {seen:?}"
+        );
+
+        // EVERY OUTCOME: neither the heading nor the sentence is its word.
+        for outcome in OUTCOMES {
+            let run = &mut s.mind.tasks[task].history[failed];
+            run.outcome = outcome;
+            run.says_text.clear();
+            run.at_key.clear();
+            let told = s.told();
+            let word = outcome_key(outcome);
+            assert_ne!(told.name.as_deref(), Some(word.as_str()), "{outcome:?}");
+            assert_ne!(told.about.as_deref(), Some(word.as_str()), "{outcome:?}");
+        }
     }
 
     /// THE TASK'S PAGE DOES NOT PRINT ITS DESCRIPTION TWICE.
