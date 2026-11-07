@@ -460,7 +460,11 @@ pkgs.testers.runNixOSTest {
         return set(re.findall(r"loading component '([^']+)'", said))
 
     def camera_component(name):
-        return any(word in name for word in ("v4l2", "libcamera", "video-capture"))
+        # `monitor.camera.` since WirePlumber 0.5.19: the cameras' seat
+        # monitoring (`monitor.camera.seat-monitoring`), a virtual component
+        # only the v4l2 and libcamera monitors want — the cameras' own, as
+        # `monitor.bluez.seat-monitoring` is Bluetooth's.
+        return any(word in name for word in ("v4l2", "libcamera", "video-capture", "monitor.camera."))
 
     def start_wireplumber(verb):
         # What the session's first audio client does: PipeWire is socket
