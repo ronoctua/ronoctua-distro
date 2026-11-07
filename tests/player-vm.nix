@@ -554,8 +554,8 @@ pkgs.testers.runNixOSTest {
             said = machine.succeed(
                 "journalctl -u window --no-pager -o cat | grep 'configured' || true"
             )
-            # THE LOG IS COLOURED even into the journal: the escapes go first.
-            said = re.sub(r"\x1b\[[0-9;]*m", "", said)
+            # The log reaches the journal plain (`ronoctua_log`), so a field
+            # reads the way it is written.
             return [int(w) for w in re.findall(r"width=(\d+) height=\d+ door=Window", said)]
         # PAUSED, and nothing touched: the owner's screen. A playing video
         # repaints the window every frame and hid the defect in this test —
@@ -613,7 +613,6 @@ pkgs.testers.runNixOSTest {
         said = machine.succeed(
             f"journalctl -u {unit} --no-pager -o cat | grep 'configured' || true"
         )
-        said = re.sub(r"\x1b\[[0-9;]*m", "", said)
         return [int(w) for w in re.findall(r"width=(\d+) height=\d+ door=Window", said)]
 
     def room_is(name, width, why):

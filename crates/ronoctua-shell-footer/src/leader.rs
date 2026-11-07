@@ -1085,6 +1085,13 @@ pub const BASE: Contribution = Contribution {
             id: "monitor-btop",
             label: key::CMD_MONITOR_BTOP,
         },
+        // THE JOURNAL, FOLLOWED LIVE, as the system's tool beside the two
+        // monitors: `LEADER :` reaches it by name. A module's option opens the
+        // same thing (`Action::opens`, `Footer::opened`).
+        Command {
+            id: "journal-follow",
+            label: key::CMD_JOURNAL_FOLLOW,
+        },
         // THE RESCUE CONSOLE — `Ctrl+Alt+Del`, outside the leader.
         //
         // It has no sequence, and that is deliberate: the leader depends on
@@ -1873,6 +1880,10 @@ pub const BASE: Contribution = Contribution {
         "selection-open",
         "brain-abort",
         "brain-proceed",
+        // THE JOURNAL FOLLOWED LIVE is mostly opened from the page about the
+        // journal's errors, by its option: a key of its own would be one more
+        // to learn for what `LEADER :` already reaches by name.
+        "journal-follow",
         // THE LAUNCHER'S LAST ROW: `RET` or a click on "search to install" runs
         // it, and a key of its own would be a second way to the row it already is.
         "apps-search-to-install",
@@ -2122,6 +2133,9 @@ pub fn module_action(id: &str) -> Option<crate::brainlink::Acting> {
             action: action.id.clone(),
             command: id.to_owned(),
             asks: action.asks.clone(),
+            row: action.row,
+            opens: action.opens.clone(),
+            starts: String::new(),
         })
 }
 
@@ -2149,8 +2163,20 @@ mod module_action_tests {
             assert_eq!(found.action, action.id);
             assert_eq!(found.command, action.command);
             assert_eq!(found.asks, action.asks);
+            assert_eq!(found.row, action.row);
+            assert_eq!(found.opens, action.opens);
             assert!(super::a_module_action(&action.command));
         }
+        assert!(
+            catalogue
+                .actions()
+                .any(|(_, action)| action.opens.is_some()),
+            "no module opens a command, and this proved nothing of `opens`"
+        );
+        assert!(
+            catalogue.actions().any(|(_, action)| action.row),
+            "no module acts on a row, and this proved nothing of `row`"
+        );
         assert!(super::module_action("files-open").is_none());
         assert!(!super::a_module_action("files-open"));
     }

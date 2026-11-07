@@ -1648,6 +1648,9 @@ pub struct TaskState {
     pub screen_generation: u64,
     /// What a person can ask of it by name, in the manifest's order.
     pub actions: Vec<ModuleAction>,
+    /// The sections of its page the person opened or shut, by id; the others
+    /// fold as the page says.
+    pub folds: Vec<SectionState>,
 }
 
 /// The warning that something is about to happen.
@@ -1834,15 +1837,22 @@ pub enum BrainTone {
     Accent,
     /// Under way, and nothing wrong with it — an agent at work.
     Working,
+    /// Past [`BrainTone::Danger`]: something was lost, or is about to be.
+    Critical,
+    /// Worth keeping and not worth a look.
+    Minor,
 }
 
-/// A moment: the number for the arithmetic, the text for the date.
+/// A moment: the number for the arithmetic, the text for the date, and the
+/// same date cut where its day is.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Timed {
     /// Epoch seconds.
     pub at: u64,
     /// Already formatted, in the machine's zone.
     pub text: String,
+    /// That text in the three pieces a row draws it in.
+    pub stamp: Stamp,
 }
 
 /// A size: the number for the arithmetic, the text in the person's units and
@@ -1883,7 +1893,7 @@ pub struct ModuleRow {
     pub label: ScreenCell,
     /// Its value.
     pub value: ScreenCell,
-    /// A quieter line about it.
+    /// A quieter word beside the value, in a column of its own.
     pub note: ScreenCell,
     /// Its colour, by meaning.
     pub tone: BrainTone,
@@ -1892,6 +1902,34 @@ pub struct ModuleRow {
     /// The id of its SECOND action, on a key of its own; empty when it has
     /// none.
     pub also: String,
+    /// A line under it that is still the row; [`ScreenCell::Empty`] is one
+    /// line.
+    pub below: ScreenCell,
+    /// What the page's footer says of it while the cursor is on it.
+    pub foot: Vec<RowFact>,
+}
+
+/// One fact of a row, for the footer of the page.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RowFact {
+    /// What it is, as a key.
+    pub label: String,
+    /// Its value.
+    pub value: ScreenCell,
+    /// Its colour, by meaning.
+    pub tone: BrainTone,
+}
+
+/// Whether a section folds, and how it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionFold {
+    /// A plain title.
+    #[default]
+    Never,
+    /// It folds, and starts open.
+    Open,
+    /// It folds, and starts shut.
+    Shut,
 }
 
 /// One titled block of a module's page.
@@ -1901,6 +1939,36 @@ pub struct ModuleSection {
     pub heading: String,
     /// Its rows.
     pub rows: Vec<ModuleRow>,
+    /// Its id inside the module, what a [`SectionState`] names.
+    pub id: String,
+    /// What the pointer says on its title, as a key; empty says nothing of
+    /// its own.
+    pub about: String,
+    /// Whether it folds, and how it starts.
+    pub fold: SectionFold,
+    /// The number its title shows; [`ScreenCell::Empty`] shows how many rows
+    /// it holds.
+    pub tally: ScreenCell,
+}
+
+/// One colour of a page's legend, and what it stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LegendSwatch {
+    /// The colour, by meaning.
+    pub tone: BrainTone,
+    /// The word, as a key, drawn in that colour.
+    pub says: String,
+    /// What the pointer says on it, as a key.
+    pub about: String,
+}
+
+/// One section of a page, open or shut, by the id the page gave.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SectionState {
+    /// Which section.
+    pub id: String,
+    /// Whether it is open.
+    pub open: bool,
 }
 
 /// A module's own page.
@@ -1915,6 +1983,12 @@ pub struct ModuleScreen {
     /// Why there is no page, as a sentence the host made — the brain refused
     /// it, or did not answer. Empty when the page came.
     pub refused: String,
+    /// The colours of its rows, explained; empty draws no legend.
+    pub legend: Vec<LegendSwatch>,
+    /// The keys the page draws, already translated, for the component to
+    /// MEASURE: they arrive with the page and were never in
+    /// [`Descriptor::phrases`]. It still draws the key.
+    pub phrases: Vec<Phrase>,
 }
 
 impl ModuleScreen {
@@ -1949,6 +2023,8 @@ pub enum Knob {
     ///
     /// It carries nothing: there is one default and it is the flake's.
     ResetSteps,
+    /// One section of its page, open or shut.
+    Fold(SectionState),
 }
 
 /// A preference the person changed.

@@ -29,6 +29,12 @@
 //! `most` as the entries go by, so memory is what the matches asked for and
 //! never the window.
 //!
+//! **A pass can also be asked for**: a module switched off hears nothing and
+//! the follower moves on without it, so what it missed is read for it alone,
+//! from where it stopped, by a journalctl that ends
+//! ([`catch_up_arguments`]). It shares the arithmetic ([`Shares`]), and what
+//! its rings could not hold is counted ([`Shares::lost`]).
+//!
 //! **The window is every window asked for, joined** ([`widest`]): this boot,
 //! the longest `since`, or — when both are asked — from whichever began first,
 //! which needs to know when this boot began ([`probe_arguments`]). Each match
@@ -45,9 +51,9 @@
 //! # Pure where it can be
 //!
 //! [`Entry::parse`], [`Match::accepts`], [`follow_arguments`],
-//! [`pass_arguments`], [`probe_arguments`], [`loosest`], [`widest`],
-//! [`Shares`] and [`read_entry`] read nothing: a test hands them lines and
-//! values.
+//! [`pass_arguments`], [`catch_up_arguments`], [`probe_arguments`],
+//! [`loosest`], [`widest`], [`Shares`] and [`read_entry`] read nothing: a test
+//! hands them lines and values.
 
 #![forbid(unsafe_code)]
 
@@ -255,6 +261,10 @@ pub struct Match {
     /// Only entries at this priority or worse (a smaller number). An entry
     /// without `PRIORITY` counts as [`INFO`].
     pub max_priority: Option<Priority>,
+    /// Only entries at this priority or milder (a larger number), with the
+    /// same reading of an entry without `PRIORITY`: with [`Match::max_priority`]
+    /// it makes a band, and a match on [`WARNING`] alone never hears an error.
+    pub min_priority: Option<Priority>,
     /// Fields that must be present with one of their values (AND across
     /// fields, OR within one).
     pub fields: Vec<Field>,
@@ -268,9 +278,9 @@ impl Match {
     /// Whether this entry is one the module wants. Pure.
     #[must_use]
     pub fn accepts(&self, entry: &Entry) -> bool {
-        let priority_fits = self
-            .max_priority
-            .is_none_or(|most| entry.priority.unwrap_or(INFO) <= most);
+        let priority = entry.priority.unwrap_or(INFO);
+        let priority_fits = self.max_priority.is_none_or(|most| priority <= most)
+            && self.min_priority.is_none_or(|least| priority >= least);
         let fields_fit = self.fields.iter().all(|field| {
             entry.fields.get(&field.name).is_some_and(|value| {
                 field.any_of.is_empty() || field.any_of.iter().any(|v| v == value)
@@ -290,8 +300,10 @@ impl Match {
 /// so what the follower must read the moment one such match exists. The
 /// filter in process ([`Match::accepts`]) is what narrows it back down per
 /// module; journalctl's `--priority` only keeps the pipe from carrying lines
-/// nobody wants. An empty set of matches is also `None`, but nobody starts a
-/// follower for no match.
+/// nobody wants. So only the mild end of a band counts here: a match on
+/// warnings alone reads the follower at warnings, and what it leaves out above
+/// them is its own filter's to drop. An empty set of matches is also `None`,
+/// but nobody starts a follower for no match.
 #[must_use]
 pub fn loosest<'a>(matches: impl IntoIterator<Item = &'a Match>) -> Option<Priority> {
     let mut out: Option<Priority> = Some(0);
@@ -355,7 +367,8 @@ pub enum Refusal {
     Unstartable,
     /// journalctl ran and gave up before a single entry: it could not open
     /// the journal, or it refused what it was asked (a cursor it no longer
-    /// knows). What it said is [`Follow::said`].
+    /// knows). For a pass, also one it gave up partway ([`Follow::failed`]).
+    /// What it said is [`Follow::said`].
     Unreadable,
     /// journalctl ended (or its output could not be read) after it had been
     /// following.
@@ -463,6 +476,23 @@ pub fn pass_arguments(
     args
 }
 
+/// The arguments of a pass ASKED FOR — a journalctl that ends, for one module
+/// that was not listening. Pure.
+///
+/// What came after `after`, every line of it (a `--lines` would be counted
+/// before the module's match, as in [`pass_arguments`]); with no cursor, this
+/// boot. `priority` is the loosest of that module's own matches, not the
+/// follower's: nothing goes on from where this one ends.
+#[must_use]
+pub fn catch_up_arguments(after: Option<&Cursor>, priority: Option<Priority>) -> Vec<String> {
+    let mut args = common(priority);
+    args.push(after.map_or_else(
+        || "--boot".to_owned(),
+        |cursor| format!("--after-cursor={}", cursor.0),
+    ));
+    args
+}
+
 /// The arguments that read when this boot began: its first entry, whatever
 /// its priority. The caller reads ONE entry and drops the stream, which stops
 /// journalctl. Pure.
@@ -480,6 +510,7 @@ pub fn probe_arguments() -> Vec<String> {
 pub struct Shares {
     wanted: Vec<Match>,
     kept: Vec<VecDeque<Entry>>,
+    lost: Vec<u64>,
     began_us: u64,
     boot: Option<String>,
     last: Option<Cursor>,
@@ -491,9 +522,11 @@ impl Shares {
     #[must_use]
     pub fn new(wanted: Vec<Match>, began_us: u64, boot: Option<String>) -> Self {
         let kept = wanted.iter().map(|_| VecDeque::new()).collect();
+        let lost = vec![0; wanted.len()];
         Self {
             wanted,
             kept,
+            lost,
             began_us,
             boot,
             last: None,
@@ -502,7 +535,7 @@ impl Shares {
 
     /// One entry of the pass, offered to every match.
     pub fn offer(&mut self, entry: &Entry) {
-        for (m, kept) in self.wanted.iter().zip(&mut self.kept) {
+        for ((m, kept), lost) in self.wanted.iter().zip(&mut self.kept).zip(&mut self.lost) {
             let most = m.backfill.most();
             if most == 0
                 || !m
@@ -514,10 +547,25 @@ impl Shares {
             }
             if kept.len() == most {
                 kept.pop_front();
+                *lost += 1;
             }
             kept.push_back(entry.clone());
         }
         self.last = Some(entry.cursor.clone());
+    }
+
+    /// The cursor of the last entry read so far, taken or not.
+    #[must_use]
+    pub const fn last(&self) -> Option<&Cursor> {
+        self.last.as_ref()
+    }
+
+    /// How many entries each match accepted and could not keep, in the order
+    /// the matches were given: what its ring pushed out. Ask before
+    /// [`Shares::taken`].
+    #[must_use]
+    pub fn lost(&self) -> Vec<u64> {
+        self.lost.clone()
     }
 
     /// Each match's share, in the order the matches were given, oldest
@@ -572,6 +620,9 @@ pub struct Follow {
     /// Whether an entry has come out of it yet — what tells "it could not
     /// read the journal" from "it read, and then it ended".
     heard: bool,
+    /// Whether it exited with a failure, once [`Follow::next_entry`] saw it
+    /// end.
+    failed: bool,
 }
 
 impl Follow {
@@ -637,6 +688,7 @@ impl Follow {
             lines: BufReader::new(out),
             said,
             heard: false,
+            failed: false,
         })
     }
 
@@ -648,7 +700,8 @@ impl Follow {
     ///
     /// At the end of journalctl's output: [`Refusal::Unreadable`] when it
     /// gave no entry at all and exited with a failure, [`Refusal::Ended`]
-    /// otherwise — which for a PASS is simply its end.
+    /// otherwise — which for a PASS is its end, unless [`Follow::failed`]
+    /// says it stopped short of it.
     pub fn next_entry(&mut self) -> Result<Entry, Refusal> {
         match read_entry(&mut self.lines) {
             Ok(Some(entry)) => {
@@ -656,14 +709,23 @@ impl Follow {
                 Ok(entry)
             }
             Ok(None) | Err(_) => {
-                let failed = self.child.wait().is_ok_and(|status| !status.success());
-                Err(if failed && !self.heard {
+                self.failed = self.child.wait().is_ok_and(|status| !status.success());
+                Err(if self.failed && !self.heard {
                     Refusal::Unreadable
                 } else {
                     Refusal::Ended
                 })
             }
         }
+    }
+
+    /// Whether journalctl exited with a failure, known once
+    /// [`Follow::next_entry`] saw it end. One that had given an entry ends in
+    /// [`Refusal::Ended`] all the same: a follower goes on from its cursor and
+    /// has missed nothing, while a pass stopped short of the journal's end.
+    #[must_use]
+    pub const fn failed(&self) -> bool {
+        self.failed
     }
 
     /// The last thing journalctl said on its standard error, if anything —
@@ -919,6 +981,50 @@ mod tests {
     }
 
     #[test]
+    fn a_band_of_priorities_is_both_its_ends() {
+        // THE DEFECT THIS CATCHES: a module with one match for its errors and
+        // one for its warnings heard every error twice, because "warnings"
+        // could only be said as "warnings or worse".
+        let at = |p: Option<Priority>| Entry {
+            priority: p,
+            ..Entry::default()
+        };
+        let warnings = Match {
+            max_priority: Some(WARNING),
+            min_priority: Some(WARNING),
+            ..Match::default()
+        };
+        assert!(warnings.accepts(&at(Some(WARNING))));
+        assert!(
+            !warnings.accepts(&at(Some(ERR))),
+            "an error is not a warning"
+        );
+        assert!(!warnings.accepts(&at(Some(INFO))), "info is not a warning");
+        let errors = Match {
+            max_priority: Some(ERR),
+            ..Match::default()
+        };
+        assert!(errors.accepts(&at(Some(ERR))) && errors.accepts(&at(Some(0))));
+        assert!(
+            !errors.accepts(&at(Some(WARNING))),
+            "a module that asked for errors heard a warning"
+        );
+        // NO `PRIORITY` COUNTS AS INFO at this end too, and this end alone is
+        // a band that is open at the mild end.
+        let quiet = Match {
+            min_priority: Some(INFO),
+            ..Match::default()
+        };
+        assert!(quiet.accepts(&at(None)));
+        assert!(!quiet.accepts(&at(Some(ERR))));
+        assert!(!warnings.accepts(&at(None)));
+        // AND THE ONE FOLLOWER READS FAR ENOUGH for the band to reach it,
+        // whoever else asks for less.
+        assert_eq!(loosest(&[errors, warnings]), Some(WARNING));
+        assert_eq!(loosest(&[quiet]), None, "open at its mild end: everything");
+    }
+
+    #[test]
     fn the_follower_starts_where_it_was_left() {
         let cursor = Cursor("s=abc;i=9".to_owned());
         let args = follow_arguments(Some(&cursor), Some(ERR), Backfill::ThisBoot { most: 50 });
@@ -997,6 +1103,28 @@ mod tests {
         );
         // The probe reads this boot from its start, at every priority.
         assert_eq!(probe_arguments(), ["--output=json", "--no-pager", "--boot"]);
+    }
+
+    #[test]
+    fn a_pass_asked_for_ends_and_goes_on_from_where_the_module_stopped() {
+        let cursor = Cursor("s=abc;i=9".to_owned());
+        // EVERY LINE AFTER THE CURSOR, and it ENDS: no `--follow`, and no
+        // `--lines` for journalctl to count before the module's match.
+        assert_eq!(
+            catch_up_arguments(Some(&cursor), Some(WARNING)),
+            [
+                "--output=json",
+                "--no-pager",
+                "--priority=0..4",
+                "--after-cursor=s=abc;i=9"
+            ]
+        );
+        // WITH NO CURSOR it never heard a line: this boot, at every priority
+        // when that is what was asked.
+        assert_eq!(
+            catch_up_arguments(None, None),
+            ["--output=json", "--no-pager", "--boot"]
+        );
     }
 
     #[test]
@@ -1124,6 +1252,31 @@ mod tests {
     }
 
     #[test]
+    fn what_a_ring_could_not_hold_is_counted() {
+        let line = |n: u64, message: &str| Entry {
+            message: message.to_owned(),
+            cursor: Cursor(format!("i={n}")),
+            ..Entry::default()
+        };
+        let wants = |text: &str, most: usize| Match {
+            message_contains: Some(text.to_owned()),
+            backfill: Backfill::ThisBoot { most },
+            ..Match::default()
+        };
+        let mut shares = Shares::new(vec![wants("a", 2), wants("b", 2), wants("c", 0)], 0, None);
+        for (n, text) in ["a", "b", "a", "a", "a", "b", "c"].iter().enumerate() {
+            shares.offer(&line(n as u64, text));
+        }
+        // ONLY WHAT THE RING PUSHED OUT: four lines of `a` over a ring of
+        // two is one lost per line past it, a ring that held all its lines
+        // lost none, and a match that asked for no past lost nothing it asked.
+        assert_eq!(shares.lost(), [2, 0, 0]);
+        let (taken, _) = shares.taken();
+        assert_eq!(taken[0].len(), 2, "the newest two");
+        assert_eq!(taken[0][1].cursor, Cursor("i=4".to_owned()));
+    }
+
+    #[test]
     fn a_stream_skips_what_is_not_an_entry_and_what_is_too_long() {
         let long = format!(
             r#"{{"__CURSOR":"s=x;i=3","MESSAGE":"{}"}}"#,
@@ -1165,6 +1318,16 @@ mod tests {
         assert_eq!(f.next_entry().expect("first").priority, Some(4));
         assert_eq!(f.next_entry().expect("second").priority, Some(3));
         assert_eq!(f.next_entry(), Err(Refusal::Ended));
+        assert!(!f.failed(), "it ended well");
+
+        // IT SPEAKS, THEN IT FAILS: the same end to a follower, which goes on
+        // from its cursor, and the failure kept for a pass to ask about.
+        let cut = a_journalctl(&dir, "cut", &format!("printf '%s\\n' '{UNIT}'\nexit 1"));
+        let mut f = Follow::spawn(&cut, &[]).expect("start");
+        assert_eq!(f.next_entry().expect("the line").priority, Some(3));
+        assert!(!f.failed(), "it has not ended yet");
+        assert_eq!(f.next_entry(), Err(Refusal::Ended));
+        assert!(f.failed(), "a failure after a line went unsaid");
 
         // IT CANNOT READ: nothing on its output, a failure, and a sentence on
         // its error — the refusal is `Unreadable` and the sentence is kept.
@@ -1175,6 +1338,7 @@ mod tests {
         );
         let mut f = Follow::start(&blind, None, Some(ERR), Backfill::Nothing).expect("start");
         assert_eq!(f.next_entry(), Err(Refusal::Unreadable));
+        assert!(f.failed());
         // The drain thread may still be finishing; the pipe is closed, so it
         // will — wait for it rather than guess.
         let until = Instant::now() + Duration::from_secs(5);

@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             ))
             .unwrap_or_else(|_| "ronoctua_brain=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(ronoctua_log::layer())
         .with(ronoctua_brain_daemon::tail::Copier)
         .init();
 

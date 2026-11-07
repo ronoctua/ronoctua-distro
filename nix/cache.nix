@@ -110,6 +110,13 @@ assert lib.assertMsg (declared.systemGenerations >= 2)
 # not spend what it has left on a relief every heartbeat.
 assert lib.assertMsg (declared.reliefGapMinutes >= 60)
   "assets/cache.nix: `reliefGapMinutes` (${toString declared.reliefGapMinutes}) must be at least 60";
+# THE JOURNAL'S LIMITS (`nix/modules/store.nix`). A file that spans the whole
+# retention outlives it: systemd removes archived files only, and whole.
+assert positive "journalMaxGiB" declared.journalMaxGiB;
+assert positive "journalDays" declared.journalDays;
+assert positive "journalFileDays" declared.journalFileDays;
+assert lib.assertMsg (declared.journalFileDays < declared.journalDays)
+  "assets/cache.nix: `journalFileDays` (${toString declared.journalFileDays}) must be smaller than `journalDays` (${toString declared.journalDays})";
 # THE "NEARLY FULL" LINE, UNDER THE FLOOR — and its cap under the floor's. At
 # or above the floor, the modeline's mark would come up every time the relief
 # starts and go away every time it works: a mark about something the machine

@@ -1277,6 +1277,9 @@
         # a machine boots on, with no line of error — the ISO's module too.
         (import ./nix/modules/console.nix { tool = rust.consoleFont; })
         ./nix/modules/scroll.nix
+        # D-Bus with each name listed once: the broker stops writing a line of
+        # error for every package `system-path` already carries.
+        ./nix/modules/dbus.nix
         ./nix/modules/keyboard.nix
         # Independent keyboards: keyd's replacement when every keyboard is its
         # own, beside the module that sets keyd up.

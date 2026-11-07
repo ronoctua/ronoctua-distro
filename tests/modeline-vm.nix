@@ -270,7 +270,7 @@ pkgs.testers.runNixOSTest {
     def footer_log():
         # `--all`: a segment's line carries its glyphs, and journalctl
         # abbreviates a message it does not call printable to "[… blob data]".
-        return _re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed("journalctl -u footer --no-pager -o cat --all"))
+        return machine.succeed("journalctl -u footer --no-pager -o cat --all")
 
     def last_layout():
         """The last layout the footer resolved, and the segments placed in it."""
@@ -334,9 +334,8 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("ls /run/user/0 | grep -q player.sock", timeout=timedelta(seconds=30))
         said = player({"ask": "put", "what": ["${media}/tone.flac", "${media}/film.mp4"], "replace": True})
         assert said["say"] == "done", said
-        # READ AS `last_layout` READS IT — the colours stripped, every field in
-        # full — and not with a `grep` of its own, which a coloured field name
-        # or an abbreviated line would never answer.
+        # READ AS `last_layout` READS IT — every field in full — and not with a
+        # `grep` of its own, which an abbreviated line would never answer.
         settles(lambda: "player" in last_layout()[3], True, "the pair never came to the modeline", seconds=60)
 
     with subtest("the left button on play/pause pauses, and plays again"):

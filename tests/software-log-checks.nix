@@ -45,19 +45,20 @@
             elif not statements(body) or statements(body)[0] != "install_log()":
                 wrong.append("cli.rs's `main` does something before `install_log();`, which goes unlogged")
             log = body_of(code, "install_log")
-            if log is None or "set_global_default" not in log or "stderr" not in log:
+            if log is None or "set_global_default" not in log or "ronoctua_log::Stderr::detect()" not in log:
                 wrong.append("`install_log` no longer installs the global subscriber on standard error")
             return wrong
 
         # 1) THE RULE, ASKED OF PLANTED SOURCES FIRST.
         PROGRAM = "fn main() -> std::process::ExitCode {\n    ronoctua_software::cli::main()\n}\n"
-        LOG = "fn install_log() {\n    let log = log_of(None, std::io::stderr);\n    tracing::subscriber::set_global_default(log);\n}\n"
+        LOG = "fn install_log() {\n    let log = log_of(None, ronoctua_log::Stderr::detect());\n    tracing::subscriber::set_global_default(log);\n}\n"
         RIGHT = LOG + "pub fn main() -> ExitCode {\n    install_log();\n    let args = parse();\n    run(args)\n}\n"
         PLANTED = {
             "late": (PROGRAM, LOG + "pub fn main() -> ExitCode {\n    let args = parse();\n    install_log();\n    run(args)\n}\n"),
             "never": (PROGRAM, LOG + "pub fn main() -> ExitCode {\n    let args = parse();\n    run(args)\n}\n"),
             "nowhere": (PROGRAM, "fn install_log() {}\npub fn main() -> ExitCode {\n    install_log();\n    run()\n}\n"),
             "early": ("fn main() -> std::process::ExitCode {\n    work();\n    ronoctua_software::cli::main()\n}\n", RIGHT),
+            "elsewhere": (PROGRAM, RIGHT.replace("ronoctua_log::Stderr::detect()", "std::io::stdout")),
             "right": (PROGRAM, RIGHT),
         }
         for case, (program, library) in PLANTED.items():

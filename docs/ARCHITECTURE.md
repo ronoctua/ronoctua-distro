@@ -12805,6 +12805,9 @@ diz com quem cada um fala):
   texto de um documento e do `ronoctua-video-metrics` para o catálogo, nunca o contrário.
 - **`ronoctua-journal`.** O seguidor único do journal que o brain reparte entre os módulos; só o
   brain o usa.
+- **`ronoctua-log`.** O `tracing` de todo programa nosso, que no journal abre cada linha com a
+  prioridade do nível (`<N>`). Não está no `ronoctua-journal`, que só o brain linka e que lê o journal
+  em vez de escrever nele, nem no `ronoctua-xdg`, que é de caminhos e não sabe de `tracing`.
 - **`ronoctua-iconset`** e **`ronoctua-calc`.** Bibliotecas de uma vista com dois chamadores dentro
   do shell (o app e o fast-access): as três tabelas de ícones e uma busca; o motor exato da
   calculadora, puro, mais as taxas do BCE (`rates.rs`).
@@ -13966,21 +13969,12 @@ Dois módulos do cérebro sobre o seguidor único do journal que o núcleo roda 
   (`Queue::amend`) em vez de levantar outra, casando um a um: uma chegada só se junta a uma morte
   que só o outro lado contou, a mais próxima no tempo. O que foi dito fica em disco por pid, cgroup ou
   unidade com o segundo, e a linha relida depois de um reinício não é outra morte. O seguidor lê até
-  `notice`, nunca `info`, e a passada do núcleo sobre o passado (pedida pelo `journal-errors`) lê na
-  prioridade do seguidor: ele segue do fim dela, e nada de antes chega a quem não pediu passado.
-- **`journal-errors`** ouve tudo em `err` ou pior (e os últimos 200 desta inicialização pela
-  passada única do núcleo, só se já estiver ligado na primeira partida do cérebro, sem cursor; vem
-  desligado, e ligado depois ouve dali em diante — `docs/PENDING.md`) e agrupa por quem disse e pelo
-  modelo da mensagem, com números e ids dobrados. A página lista os tipos em quatro seções — não vistos desta inicialização,
-  não vistos de uma anterior, vistos e ignorados —; o aperto de uma linha marca visto, ignora o tipo
-  ou volta a ouvir, e uma linha não vista também ignora o tipo pela segunda ação (`Row::also`, a
-  tecla `, v` da página, ensinada só sobre uma linha que a tem), sem passar pelos vistos. O rodapé
-  do buffer mostra a mensagem inteira, quebrada, que a linha corta. A marca `Watching` conta os
-  tipos não vistos e some quando tudo foi visto. A lista é estado (`errors.json`, com as contagens
-  dos ignorados), o que se ignora é escolha da pessoa (`ignored.json`, no diretório de configuração
-  do módulo, pelo `ronoctua-store`): só muda num gesto dela, é relido com `parsed` antes, e um
-  arquivo que não é lido fica como está, com a recusa dita. Uma rajada vira uma escrita da lista
-  cinco segundos depois, e um gesto é escrito na hora.
+  `notice`, nunca `info`; a passada do núcleo (a leitura de um módulo desligado) lê na prioridade
+  do próprio módulo e não move o cursor do seguidor, então nada de antes chega a quem não pediu.
+- **`journal-errors`** ouve `err` ou pior e, à parte e fora da marca, os `warning`; agrupa por quem
+  disse e pelo modelo da mensagem, dá a cada tipo uma gravidade (crítico, erro, merece atenção,
+  aviso), conta os filtros só nesta inicialização e, desligado, lê à mão o que passou desde onde
+  parou. O porquê de cada escolha mora no `why.md` dele.
 - O teste de VM `brain-modules-vm` não nomeia módulo: cada pasta que precisa de uma máquina traz
   `vm.nix` (`node` e `script`), e o arquivo roda todos numa VM com o rodapé e o cérebro que ele acorda.
 

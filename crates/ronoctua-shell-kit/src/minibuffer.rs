@@ -219,20 +219,12 @@ impl Minibuffer {
         self.cursor = 0;
     }
 
-    /// The same, the question in the words of its own key — a brain module's
-    /// action, whose key its module declared (`crate::line::Line::asking`).
-    pub fn request_asking(&mut self, id: &'static str, asks: &'static str) {
-        self.request_with(id, false, None);
-        if let Some(line) = self.asking.as_mut() {
-            line.asks = Some(asks);
-        }
-    }
-
     /// The same, with the whole line a view built — a SECRET in the words of
-    /// its own key included, which neither of the two above can ask: the
-    /// three steps of a new passphrase are one command, hidden, each with its
-    /// own question (`belongings::Ask::line`). What the line holds already is
-    /// taken as one line, as [`Minibuffer::request_with`] takes it.
+    /// its own key included, which the ones above cannot ask: the three steps
+    /// of a new passphrase are one command, hidden, each with its own question
+    /// (`belongings::Ask::line`); and a brain module's action, in the words its
+    /// module declared. What the line holds already is taken as one line, as
+    /// [`Minibuffer::request_with`] takes it.
     pub fn request_line(&mut self, line: crate::line::Line) {
         self.request_with(
             line.id,

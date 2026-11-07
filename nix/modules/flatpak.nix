@@ -46,6 +46,7 @@
 {
   config,
   lib,
+  pkgs,
   inputs,
   ...
 }:
@@ -59,6 +60,12 @@ let
     name = "flathub";
     location = "${../../assets/flatpak/flathub.flatpakrepo}";
   };
+
+  # THE PERSON'S UNITS THAT REACH FLATHUB: the one of each start and the timer's.
+  personUnits = [
+    "flatpak-managed-install"
+    "flatpak-managed-install-timer"
+  ];
 
   # WHAT BOTH INSTALLATIONS SHARE, and every line of it is a decision.
   common = {
@@ -103,14 +110,14 @@ in
       packages = [ ];
     };
 
-    # THE REMOTE'S METADATA NEEDS THE NETWORK. nix-flatpak orders its system
-    # unit after `multi-user.target` alone, so on a cold boot it runs before
-    # DNS, cannot reach Flathub for the remote's summary, and logs a failed
-    # start a minute before its `Restart=on-failure` retry succeeds. The
-    # vendored `.flatpakrepo` makes `remote-add` itself offline (see the
-    # header); only the metadata fetch waits. Order it after the network so
-    # the first try is the one that works (`after`/`wants` merge into the
-    # generated unit; they do not replace it).
+    # THE SYSTEM UNIT ASKS FLATHUB FOR METADATA AND NOTHING ELSE. It declares no
+    # app, and the vendored `.flatpakrepo` makes `remote-add` offline (see the
+    # header), so with no network it warns and ends with success
+    # (`tests/software-vm.nix`); the unit that has to reach Flathub is the
+    # person's, below. nix-flatpak orders this one after `multi-user.target`
+    # alone; ordering it after the network gives the metadata its first try
+    # with DNS (`after`/`wants` merge into the generated unit; they do not
+    # replace it).
     systemd.services.flatpak-managed-install = {
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
@@ -124,39 +131,93 @@ in
     # made to skip rather than fail before its image exists
     # (`nix/modules/android.nix`).
     home-manager.sharedModules = [ inputs.nix-flatpak.homeManagerModules.nix-flatpak ];
-    home-manager.users.${user}.services.flatpak = common // {
-      packages = [
-        # The dark theme for GTK 3 apps (see the header). The branch is named:
-        # the extension is a runtime, and its only branch is `3.22`.
-        {
-          appId = "org.gtk.Gtk3theme.Adwaita-dark//3.22";
+    home-manager.users.${user} = {
+      services.flatpak = common // {
+        packages = [
+          # The dark theme for GTK 3 apps (see the header). The branch is named:
+          # the extension is a runtime, and its only branch is `3.22`.
+          {
+            appId = "org.gtk.Gtk3theme.Adwaita-dark//3.22";
+            origin = flathub.name;
+          }
+        ]
+        ++ map (id: {
+          appId = id;
           origin = flathub.name;
-        }
-      ]
-      ++ map (id: {
-        appId = id;
-        origin = flathub.name;
-      }) cfg.declaredFlatpaks
-      # AND THE DISTRO'S OWN (`assets/distro-apps.nix`), the ones this
-      # machine carries and its person did not decline. Leaving this list
-      # is what uninstalls one (see `declaredFlatpaks`), so a decline
-      # reaches an app that is already installed.
-      ++ config.ronoctua.distroApps.flatpaks;
-      # The Qt variables the session exports are the HOST's plugins; inside a
-      # sandbox they name nothing and turn a dark Qt app light (see the header).
-      # Written as `flatpak override --user --unset-env` writes them — the file
-      # the experiment measured.
-      overrides.global = {
-        Context."unset-environment" = [
-          "QT_QPA_PLATFORMTHEME"
-          "QT_STYLE_OVERRIDE"
-        ];
-        Environment = {
-          QT_QPA_PLATFORMTHEME = "";
-          QT_STYLE_OVERRIDE = "";
+        }) cfg.declaredFlatpaks
+        # AND THE DISTRO'S OWN (`assets/distro-apps.nix`), the ones this
+        # machine carries and its person did not decline. Leaving this list
+        # is what uninstalls one (see `declaredFlatpaks`), so a decline
+        # reaches an app that is already installed.
+        ++ config.ronoctua.distroApps.flatpaks;
+        # The Qt variables the session exports are the HOST's plugins; inside a
+        # sandbox they name nothing and turn a dark Qt app light (see the header).
+        # Written as `flatpak override --user --unset-env` writes them — the file
+        # the experiment measured.
+        overrides.global = {
+          Context."unset-environment" = [
+            "QT_QPA_PLATFORMTHEME"
+            "QT_STYLE_OVERRIDE"
+          ];
+          Environment = {
+            QT_QPA_PLATFORMTHEME = "";
+            QT_STYLE_OVERRIDE = "";
+          };
         };
       };
+
+      # ITS UNITS ARE THE ONES THAT REACH FLATHUB, and at a cold boot they
+      # started before DNS: `Could not resolve hostname`, a failed start on
+      # every boot, three seconds before the network came up. A user manager
+      # has no `network-online.target` to be ordered after, so they ask:
+      # `nm-online` waits up to thirty seconds and its "no" is a skip and not a
+      # failure, which keeps an offline machine silent (and a switch offline
+      # waits those thirty seconds). No `-x`: it would answer before
+      # NetworkManager's autoconnect did. `Restart=on-failure` stays, for a DNS
+      # that fails later; a skip never reaches it (see the dispatcher below).
+      systemd.user.services = lib.mkMerge [
+        (lib.genAttrs personUnits (_: {
+          Service.ExecCondition = "${pkgs.networkmanager}/bin/nm-online -q";
+        }))
+        # ONE AT A TIME: a network that comes owes both at once, and a
+        # persistent timer fires beside the login's run. Two together race on
+        # a repository neither has made yet (`opendir(objects)`).
+        { flatpak-managed-install-timer.Unit.After = [ "flatpak-managed-install.service" ]; }
+      ];
     };
+
+    # A RUN THE NETWORK SKIPPED IS OWED ONE WHEN THE NETWORK COMES. A skip is
+    # not a failure, so nothing else would bring it back before the next login,
+    # and a weekly run that fired offline would lose its week. Only a skipped
+    # run is started: every other `up` asks Flathub nothing, so a network that
+    # comes and goes costs no traffic. As the person, because a user manager's
+    # socket answers its own uid (`setpriv`, with no PAM session for a network
+    # event). No manager means nothing is owed: the next one starts these by
+    # itself.
+    networking.networkmanager.dispatcherScripts = lib.mkIf config.networking.networkmanager.enable [
+      {
+        type = "basic";
+        source = pkgs.writeShellScript "ronoctua-flatpak-network" ''
+          case "$2" in
+            up | connectivity-change) ;;
+            *) exit 0 ;;
+          esac
+          XDG_RUNTIME_DIR=/run/user/$(${pkgs.coreutils}/bin/id -u ${user})
+          export XDG_RUNTIME_DIR
+          [ -S "$XDG_RUNTIME_DIR/systemd/private" ] || exit 0
+          person() {
+            ${pkgs.util-linux}/bin/setpriv --reuid=${user} \
+              --regid=${config.users.users.${user}.group} --init-groups \
+              ${config.systemd.package}/bin/systemctl --user "$@"
+          }
+          for unit in ${lib.concatStringsSep " " personUnits}; do
+            if [ "$(person show -p Result --value "$unit.service")" = exec-condition ]; then
+              person start --no-block "$unit.service"
+            fi
+          done
+        '';
+      }
+    ];
 
     # `/var/lib/flatpak` survives the root wipe through `nix/modules/persist.nix`,
     # which holds the whole list; a second list here would be a second place

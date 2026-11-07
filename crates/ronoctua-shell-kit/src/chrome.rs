@@ -1555,6 +1555,12 @@ pub fn stays_direct(key: &ronoctua_keymap::Key) -> bool {
     }
 }
 
+/// WHAT A BUFFER'S `, g`, `, v` AND `, y` ARE, as [`leader_alt_key`] exceptions:
+/// the window keeps `C-g`, `C-v` and `C-y` direct, and `taught_pieces` spells
+/// `, v` as `C-v` only to have a key to press. The shortcut is the buffer's, and
+/// without these the header drew it as the paste key it is not.
+pub const OF_A_BUFFER: &[(&str, &str)] = &[("C-g", "g"), ("C-v", "v"), ("C-y", "y")];
+
 /// Whether a key that came from a KEYBOARD is barred from a window whose
 /// shortcuts are `published` (their direct keys, [`shortcut_keys`]).
 ///
@@ -1745,7 +1751,13 @@ fn published(
         let Some(Act::Key(direct)) = p.press else {
             continue;
         };
-        if !p.is_a_key() || stays_direct(&direct) || out.iter().any(|s| s.id == id) {
+        // WHAT STAYS DIRECT IS NEVER OFFERED, but for a key the window itself
+        // says is a shortcut of its own.
+        let named = exceptions
+            .iter()
+            .flat_map(|t| t.iter())
+            .any(|(from, _)| ronoctua_keymap::Key::parse(from).is_ok_and(|k| k == direct));
+        if !p.is_a_key() || (stays_direct(&direct) && !named) || out.iter().any(|s| s.id == id) {
             continue;
         }
         match leader_alt_key(&direct, exceptions) {
@@ -6756,6 +6768,7 @@ mod tests {
                 teaching(", r", Some("power-window"), "power-window", true),
                 teaching(", e", Some("audio-window"), "audio-window", false),
                 teaching(", SPC", Some("bluetooth-window"), "bluetooth-window", true),
+                teaching(", v", Some("display-window"), "display-window", true),
                 // A KEY THIS NOTATION CANNOT READ is left out, and nothing else.
                 teaching("Tab", None, "files-window", true),
             ],
@@ -6773,9 +6786,17 @@ mod tests {
         assert!(!pieces.iter().any(|p| p.id == Some("files-window")));
         let ret = ronoctua_keymap::Key::parse("RET").expect("parses");
         assert_eq!(key_of(&pieces, "network-window").press, Some(Act::Key(ret)));
-        // EACH LOCAL SEQUENCE IS `⌥` AND ITS ONE KEY, by the one rule.
-        let (drawn, glyphed) = leader_alt_pieces(&pieces, &[], None);
-        assert_eq!(glyphed, ["power-window", "bluetooth-window"]);
+        // EACH LOCAL SEQUENCE IS `⌥` AND ITS ONE KEY, by the one rule — the
+        // one that spells a key the window keeps too, which is no paste here.
+        let (drawn, glyphed) = leader_alt_pieces(&pieces, &[super::OF_A_BUFFER], None);
+        assert_eq!(
+            glyphed,
+            ["power-window", "bluetooth-window", "display-window"]
+        );
+        assert_eq!(
+            key_of(&drawn, "display-window").text,
+            format!("{}v", tokens::icon::LEADER_ALT)
+        );
         assert_eq!(
             key_of(&drawn, "power-window").text,
             format!("{}r", tokens::icon::LEADER_ALT)

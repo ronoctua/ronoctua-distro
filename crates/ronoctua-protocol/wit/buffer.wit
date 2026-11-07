@@ -4,7 +4,7 @@
 // that every future buffer gets to use, and invariant 11 lives
 // precisely off what is NOT here: there is no Wayland import, no access to
 // tokens by value, no translation.
-package ronoctua:buffer@0.4.0;
+package ronoctua:buffer@0.5.0;
 
 interface types {
     // THE COLOUR ENUM IS GENERATED, and comes from `assets/tokens/colors.nix`.
@@ -1520,6 +1520,10 @@ interface types {
         screen-generation: u64,
         // What a person can ask of it by name, in the manifest's order.
         actions: list<module-action>,
+        // THE SECTIONS OF ITS PAGE THE PERSON OPENED OR SHUT, by id; the
+        // others fold as the page says. Here and not on the page because a
+        // preference moves no page generation: the mind is what redraws.
+        folds: list<section-state>,
     }
 
     // The warning that something is about to happen.
@@ -1678,6 +1682,9 @@ interface types {
         // Every step back to what the distro ships. It carries nothing: there
         // is one default and it is the flake's.
         reset-steps,
+        // One section of its page, open or shut. The state the screen wants
+        // and never a toggle, like `step`.
+        fold(section-state),
     }
 
     // A preference the person changed.
@@ -1714,12 +1721,20 @@ interface types {
         // Under way, and nothing wrong with it — an agent at work: the teal,
         // never `watching`'s colour, which reads as trouble.
         working,
+        // Past `danger`: something was lost, or is about to be.
+        critical,
+        // Worth keeping and not worth a look: the quiet end of a list that
+        // sorts by gravity.
+        minor,
     }
 
-    // A moment: the number for the arithmetic, the text for the date.
+    // A moment: the number for the arithmetic, the text for the date, and the
+    // same date cut where its day is, because the component has no zone to
+    // find the day with (the rule `when-stamp` follows).
     record timed {
         at: u64,
         text: string,
+        stamp: stamp,
     }
 
     // A size: the number for the arithmetic, the text in the person's units
@@ -1754,12 +1769,60 @@ interface types {
         // The id of its SECOND action, on a key of its own; empty when it
         // has none.
         also: string,
+        // A LINE UNDER IT that is still the row: the cursor and the band
+        // cover it, and a click on it selects the row. `empty` is one line.
+        below: screen-cell,
+        // What the page's own footer says of it while the cursor is on it,
+        // and the row does not show; empty adds nothing to the footer.
+        foot: list<row-fact>,
+    }
+
+    // WHETHER A SECTION FOLDS, and how it starts. `never` is a plain title;
+    // the other two a title that opens and shuts, and what the person chose
+    // (`task-state.folds`) wins over them. The host sends `never` for a
+    // section with no id, since nothing could name the choice.
+    enum section-fold {
+        never,
+        open,
+        shut,
+    }
+
+    // One fact of a row, for the footer of the page.
+    record row-fact {
+        // What it is, as a key.
+        label: string,
+        value: screen-cell,
+        tone: brain-tone,
     }
 
     record module-section {
         // Its title, as a key.
         heading: string,
         rows: list<module-row>,
+        // Its id inside the module, what `section-state` names. DATA.
+        id: string,
+        // What the pointer says on its title, as a key; empty says nothing
+        // of its own.
+        about: string,
+        fold: section-fold,
+        // THE NUMBER ITS TITLE SHOWS, when the rows' count is not the one
+        // worth reading. `empty` shows how many rows it holds.
+        tally: screen-cell,
+    }
+
+    // One colour of a page's legend, and what it stands for.
+    record legend-swatch {
+        tone: brain-tone,
+        // The word, as a key, drawn in the colour it explains.
+        says: string,
+        // What the pointer says on it, as a key.
+        about: string,
+    }
+
+    // One section of a page, open or shut, by the id the page gave.
+    record section-state {
+        id: string,
+        open: bool,
     }
 
     record module-screen {
@@ -1772,6 +1835,13 @@ interface types {
         // it, or did not answer. Empty when the page came. A page with nothing
         // on it and a page refused must not look the same.
         refused: string,
+        // The colours of its rows, explained; empty draws no legend.
+        legend: list<legend-swatch>,
+        // THE KEYS THE PAGE DRAWS, ALREADY TRANSLATED, and they are for
+        // MEASURING — the rule `name-text` follows, for keys that arrive with
+        // the page and so were never in `descriptor.phrases`. The component
+        // still draws the key. A key that is not here is measured blind.
+        phrases: list<phrase>,
     }
 
     record binding {
@@ -2175,7 +2245,7 @@ interface view {
         // And the modules' — reachable only from inside `mind` and `input`.
         module-action, notice, notice-level, notice-arg, activity-row,
         brain-tone, timed, measured, screen-cell, module-row, module-section,
-        module-screen,
+        module-screen, section-fold, row-fact, legend-swatch, section-state,
         // And the independent keyboards', reachable only from inside `boards`
         // and `effect`.
         keyboard-mode, unit-board, layout-word, unit-setting, unit-change

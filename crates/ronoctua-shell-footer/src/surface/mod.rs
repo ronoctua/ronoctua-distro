@@ -165,6 +165,9 @@ const BTOP_PATH: Option<&str> = option_env!("RONOCTUA_BTOP");
 /// The other one — `LEADER+S-Esc`. Same contract.
 const BOTTOM_PATH: Option<&str> = option_env!("RONOCTUA_BOTTOM");
 
+/// What a terminal follows the journal with, by its store path too.
+const JOURNALCTL: Option<&str> = option_env!("RONOCTUA_JOURNALCTL");
+
 /// Who holds the keyboard, as far as the requests and the answers say.
 ///
 /// # The pair, measured
@@ -8954,6 +8957,7 @@ impl Footer {
             "footer-hide-push" => self.toggle_the_bars(crate::adapt::Hidden::Push),
             "footer-hide-cover" => self.toggle_the_bars(crate::adapt::Hidden::Cover),
             "format-open" => self.open_buffer("RONOCTUA_BUFFER_FORMAT"),
+            "journal-follow" => self.opened(id),
 
             // THE STRIP'S THREE ABOUT THE LOUDEST NOTICE — its buttons, its
             // keys inside the brain and `LEADER :` all land here.
@@ -11232,7 +11236,10 @@ impl Footer {
     /// a question first — the question on the minibuffer's line, under the
     /// action's own name and in the words of the key its module declared,
     /// whose answer comes back to `run_with` as that name's argument and is
-    /// sent with it.
+    /// sent with it. One that is only the way to something else opens that
+    /// ([`Self::opened`]), and the brain never hears of it; and one that acts
+    /// on a row is refused, since this door has none to give, before its
+    /// question is put.
     fn brain_act(
         &mut self,
         acting: Result<crate::brainlink::Acting, &'static str>,
@@ -11246,11 +11253,16 @@ impl Footer {
                 return;
             }
         };
-        if acting.asks.is_some() && answer.is_none() {
-            match crate::brainlink::question_of(&acting) {
-                Some((id, asks)) => {
+        match crate::brainlink::asked(&acting, false, answer.is_some()) {
+            crate::brainlink::Asked::Opens(opens) => self.opened(opens),
+            crate::brainlink::Asked::NoRow => {
+                let m = self.texts.t(crate::key::ECHO_BRAIN_CHOOSE_A_ROW);
+                self.echo_message(m);
+            }
+            crate::brainlink::Asked::Question => match crate::brainlink::question_of(&acting) {
+                Some(line) => {
                     self.the_line_moves_on();
-                    self.mx.request_asking(id, asks);
+                    self.mx.request_line(line);
                     self.apply_geometry(KeyboardInteractivity::Exclusive);
                     self.draw_and_paint();
                 }
@@ -11258,11 +11270,47 @@ impl Footer {
                     let m = self.texts.t(crate::key::ECHO_BRAIN_NO_ACTION);
                     self.echo_message(m);
                 }
+            },
+            crate::brainlink::Asked::Send => {
+                let ask = crate::brainlink::act_ask(&acting, answer);
+                self.brain_put(ask, crate::key::ECHO_BRAIN_TAKEN);
             }
-            return;
         }
-        let ask = crate::brainlink::act_ask(&acting, answer);
-        self.brain_put(ask, crate::key::ECHO_BRAIN_TAKEN);
+    }
+
+    /// What a module's action is only the way to, at either door — the
+    /// window tells this footer the action by its own name — and `run_with`'s
+    /// arm for the command of the same name: a leaf, because `brain_act`
+    /// asking `run_with` would be a ring back through the arm that called it.
+    /// One nothing here opens is said, as an action no module offers is.
+    fn opened(&mut self, id: &str) {
+        match crate::brain::opening(id) {
+            Some(crate::brain::Opening::TheJournal) => self.follow_the_journal(),
+            None => {
+                tracing::warn!(id, "an action opens what nothing here opens");
+                let m = self.texts.t(crate::key::ECHO_BRAIN_NO_ACTION);
+                self.echo_message(m);
+            }
+        }
+    }
+
+    /// The whole journal, followed live in a terminal of its own.
+    ///
+    /// In the window's own process (`--here`), as a manual page is: a
+    /// following is closed with its window, and never left in the background.
+    fn follow_the_journal(&mut self) {
+        let Some(journalctl) = JOURNALCTL else {
+            tracing::error!("journalctl was not set at build time");
+            let m = self
+                .texts
+                .t_with(crate::key::ECHO_NO_OPENED, &[("program", "journalctl")]);
+            self.echo_message(m);
+            return;
+        };
+        match std::env::current_exe() {
+            Ok(me) => self.open_foreign(&me.to_string_lossy(), &follow_args(journalctl), None),
+            Err(e) => tracing::error!(error = %e, "I do not know my own binary"),
+        }
     }
 
     /// Asks the brain for a change off the loop; `taken` is what the line
@@ -19562,6 +19610,22 @@ const fn last_page_start(total: usize, per_page: usize) -> usize {
     (total - 1) / per_page * per_page
 }
 
+/// This program's arguments for a terminal following the whole journal: every
+/// unit and every priority, since what it is opened for is what happened
+/// around a line, from the last two hundred on.
+fn follow_args(journalctl: &str) -> Vec<String> {
+    [
+        "terminal",
+        "--here",
+        "--",
+        journalctl,
+        "--follow",
+        "--lines=200",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 /// The new offset after scrolling `step` lines.
 ///
 /// It saturates at the extremes, and **does not wrap around**: going back to
@@ -22057,6 +22121,24 @@ mod tests {
         ] {
             assert!(app.is_an_app(), "{app:?}");
         }
+    }
+
+    /// FAILS IF: the terminal outlives its window or reads the journal by a
+    /// name, or the path lands anywhere but after the `--` that ends this
+    /// program's own flags.
+    #[test]
+    fn the_journal_is_followed_by_its_store_path_in_a_window_of_its_own() {
+        assert_eq!(
+            super::follow_args("/store/journalctl"),
+            [
+                "terminal",
+                "--here",
+                "--",
+                "/store/journalctl",
+                "--follow",
+                "--lines=200"
+            ]
+        );
     }
 
     /// FAILS IF: two rows' worth of lines is not the pixels the footer has

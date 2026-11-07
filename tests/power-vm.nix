@@ -17,6 +17,9 @@
 # 4. The polkit policies the module relies on say `yes` — read off the
 #    installed files, so a nixpkgs bump that changed them fails here.
 # 5. The udev rule for the thresholds is installed and parses.
+# 6. The footer reads logind's manager one property at a time, and nothing asks
+#    it for all of them — the read that makes logind reparse every boot entry
+#    and warn about each.
 #
 # WHAT CANNOT BE PROVED HERE: a battery's glyph, its number, its danger colour,
 # a threshold actually written. QEMU has no ACPI battery. Those are proved on
@@ -77,6 +80,7 @@ pkgs.testers.runNixOSTest {
     ''
       ${xvfb.prelude}
 
+      import json
       import re
       from datetime import timedelta
 
@@ -156,6 +160,22 @@ pkgs.testers.runNixOSTest {
           # NotAuthorized. Never a hang.
           assert "NotAuthorized" in out or "interactive authentication" in out.lower(), out
 
+      with subtest("a monitor hears the calls to logind's manager, from before the footer's first read"):
+          # BY PATH AND NOT BY `destination`: the broker takes a well-known name
+          # there and lets every call on the bus through.
+          machine.succeed(
+              "systemd-run --unit=logind-calls busctl --system --json=short monitor "
+              "--match=\"type='method_call',path='/org/freedesktop/login1'\""
+          )
+          # `systemd-run` comes back with the process started and the monitor
+          # maybe not on the bus yet, so a call of ours says when it hears.
+          machine.wait_until_succeeds(
+              "busctl --system call org.freedesktop.login1 /org/freedesktop/login1 "
+              "org.freedesktop.login1.Manager ListInhibitors > /dev/null "
+              "&& journalctl -u logind-calls --no-pager | grep ListInhibitors > /dev/null",
+              timeout=timedelta(seconds=30),
+          )
+
       with subtest("the footer, asked for performance, applies balanced and says so once"):
           # SOMETHING TO FALL BACK FROM: the daemon starts on `balanced`, which
           # is the top it offers, so the footer would find its target already
@@ -210,6 +230,23 @@ pkgs.testers.runNixOSTest {
               "a profile mark at the machine's top profile:\n" + settled
           )
           machine.succeed("systemctl stop footer")
+
+      with subtest("the footer reads logind's manager one property at a time, and nothing asks for them all"):
+          # THE POSITIVE CONTROL: with no `Get` of a property the footer reads,
+          # a quiet monitor would prove only that the footer never read.
+          machine.wait_until_succeeds(
+              "journalctl -u logind-calls --no-pager | grep LidClosed > /dev/null",
+              timeout=timedelta(minutes=1),
+          )
+          machine.succeed("systemctl stop logind-calls")
+          lines = machine.succeed("journalctl -u logind-calls -o cat --no-pager").splitlines()
+          calls = [json.loads(line) for line in lines if line.startswith("{")]
+          manager = "org.freedesktop.login1.Manager"
+          read = [c for c in calls if c["member"] == "Get" and c["payload"]["data"] == [manager, "LidClosed"]]
+          assert read, "the monitor heard no `Get` of LidClosed:\n" + "\n".join(lines)
+          # AN EMPTY INTERFACE IS EVERY INTERFACE, this one with them.
+          flood = [c for c in calls if c["member"] == "GetAll" and c["payload"]["data"][0] in (manager, "")]
+          assert not flood, f"somebody read every property of logind's manager: {flood}"
 
       with subtest("asked for power-saver, the footer applies it and the profile mark appears"):
           machine.succeed("rm -f /run/user/0/ronoctua-*.sock")

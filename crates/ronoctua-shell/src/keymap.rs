@@ -1144,6 +1144,7 @@ mod tests {
             "screen-capture",
             "lock-screen",
             "monitor-btop",
+            "journal-follow",
             "rescue-open",
             "monitor-bottom",
             "keyboard-open",

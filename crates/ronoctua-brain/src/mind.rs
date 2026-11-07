@@ -19,6 +19,8 @@
 //! itself*, which is exactly the kind of wrongness nobody double-checks. The
 //! whole thing is a few short records.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::moment::Moment;
@@ -95,6 +97,9 @@ pub struct ActionState {
     pub row: bool,
     /// The key of the question it asks first, when it asks one.
     pub asks: Option<String>,
+    /// What it is only the way to, for an action that is: the footer opens
+    /// it, and the WIT never hears of it.
+    pub opens: Option<String>,
 }
 
 impl From<&crate::module::Action> for ActionState {
@@ -104,6 +109,7 @@ impl From<&crate::module::Action> for ActionState {
             label: a.label.to_owned(),
             row: a.row,
             asks: a.asks.map(str::to_owned),
+            opens: a.opens.map(str::to_owned),
         }
     }
 }
@@ -210,9 +216,15 @@ pub struct TaskState {
     /// a page that shows the screen asks for it again (`Ask::Screen`).
     #[serde(default)]
     pub screen_generation: u64,
-    /// What a person can ask of it by name, in the manifest's order.
+    /// What a person can ask of it by name, in the manifest's order. What
+    /// only a module switched off offers is left out while it is on: a page
+    /// asks by index in this list, and this list is the one everybody counts.
     #[serde(default)]
     pub actions: Vec<ActionState>,
+    /// The sections of its page the person opened or shut, by id
+    /// (`Prefs::folds`); the others fold as the page says.
+    #[serde(default)]
+    pub folds: BTreeMap<String, bool>,
 }
 
 /// What `calendar` is when a mind did not say: every task before modules

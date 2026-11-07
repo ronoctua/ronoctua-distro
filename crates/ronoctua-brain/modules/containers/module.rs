@@ -203,7 +203,9 @@ impl Module for Containers {
             sections: vec![Section {
                 heading: super::key::CONTAINERS_HEADING_RUNNING.into(),
                 rows: rows_of(&self.kept()),
+                ..Section::default()
             }],
+            ..Screen::default()
         }
     }
 }

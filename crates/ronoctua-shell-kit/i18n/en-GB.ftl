@@ -353,6 +353,7 @@ brain-why-quiet = Only when asked
 brain-why-unknown = It does not know how to do that
 brain-why-refused = The machine refused it
 brain-why-rehearsing = This brain only rehearses: it changes nothing on the machine
+brain-why-listening = It is on, and hears everything as it happens
 brain-journal-why-no-program = This brain was not given the journal to read
 brain-journal-why-unstartable = The journal's reader could not be started
 brain-journal-why-unreadable = The journal could not be read

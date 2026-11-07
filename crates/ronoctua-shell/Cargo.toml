@@ -83,7 +83,7 @@ ronoctua-private = { path = "../ronoctua-private" }
 
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+ronoctua-log = { path = "../ronoctua-log" }
 
 [dev-dependencies]
 # WHAT THE FOUNDATION KEEPS FOR TESTS, in these tests too (`test-support`):

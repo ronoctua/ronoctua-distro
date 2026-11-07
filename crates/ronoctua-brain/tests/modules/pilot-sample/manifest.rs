@@ -74,6 +74,9 @@ pub mod action {
         label: super::key::CMD_PILOT_SAMPLE_FORGET,
         row: true,
         asks: None,
+        opens: None,
+        optional: false,
+        while_off: false,
     };
 }
 

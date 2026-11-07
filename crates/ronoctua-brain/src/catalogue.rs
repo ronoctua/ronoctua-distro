@@ -6,12 +6,12 @@
 //! For each module the build compiled — the distro's and the person's — its
 //! marks (each with the TOKEN of its glyph and the key of its hint), its
 //! notices, the actions a person may ask of it by name (the command, the
-//! label's key, whether it acts on a row, the question it asks first), the
-//! events it may tell (each with the notification it raises, as the
-//! notification book reads one — `ronoctua_notify` merges those itself), its
-//! reasons, its text prefixes and every text key it needs; and the GLYPHS
-//! its marks are drawn with, measured against the real face (the codepoint,
-//! the size beside the text, the ink across). Nix writes it
+//! label's key, whether it acts on a row, the question it asks first, what
+//! it opens), the events it may tell (each with the notification it
+//! raises, as the notification book reads one — `ronoctua_notify` merges those
+//! itself), its reasons, its text prefixes and every text key it needs; and
+//! the GLYPHS its marks are drawn with, measured against the real face (the
+//! codepoint, the size beside the text, the ink across). Nix writes it
 //! (`nix/brain-catalogue.nix`), out of the same folders the daemon compiles;
 //! the wrappers point [`ENV`] at it.
 //!
@@ -163,6 +163,10 @@ pub struct Action {
     pub row: bool,
     /// The key of the question it asks first, if it asks one.
     pub asks: Option<String>,
+    /// What it is only the way to, if it is — a name the footer opens, and
+    /// what the footer needs with no mind to read it from.
+    #[serde(default)]
+    pub opens: Option<String>,
 }
 
 /// Something a module may tell the footer, as declared.
@@ -412,6 +416,7 @@ impl Declared {
                     label: a.label.to_owned(),
                     row: a.row,
                     asks: a.asks.map(str::to_owned),
+                    opens: a.opens.map(str::to_owned),
                 })
                 .collect(),
             events: m
@@ -689,6 +694,25 @@ mod tests {
 
     fn of(v: &serde_json::Value) -> Result<Catalogue, String> {
         Catalogue::of_json(&v.to_string())
+    }
+
+    /// FAILS IF: the footer, which has no mind to ask, cannot tell which
+    /// command an action opens — or a catalogue that does not say refuses
+    /// itself, with every field of this record denied but the ones it knows.
+    #[test]
+    fn an_action_says_the_command_it_opens_when_it_opens_one() {
+        let mut v = sample();
+        assert_eq!(
+            of(&v)
+                .expect("no action opens anything")
+                .action("made-up-clean")
+                .map(|(_, a)| a.opens.clone()),
+            Some(None)
+        );
+        v["modules"][0]["actions"][0]["opens"] = serde_json::json!("some-command");
+        let c = of(&v).expect("the sample reads");
+        let (_, a) = c.action("made-up-clean").expect("the action");
+        assert_eq!(a.opens.as_deref(), Some("some-command"));
     }
 
     /// FAILS IF: a catalogue of this format is not read whole, or reading it

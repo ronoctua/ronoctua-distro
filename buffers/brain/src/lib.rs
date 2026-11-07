@@ -48,9 +48,10 @@ use ronoctua_design::guest::Wit;
 use ronoctua_design::screen::Pen;
 use ronoctua_design::types::{
     ActivityRow, Binding, BrainTone, BufferState, Capability, Column, Context, Demand, Descriptor,
-    Effect, Guest, HoldKind, Icon, Input, Knob, Layout, LogLevel, LogLine, Mind, ModuleRow,
-    ModuleScreen, Notice, NoticeLevel, OutcomeKind, Request, Role, Run, RunRecord, Screen,
-    ScreenCell, Scroll, Setting, Standing, StepSwitch, Table, TaskKind, TaskState, Tone,
+    Effect, Guest, HoldKind, Icon, Input, Knob, Layout, LegendSwatch, LogLevel, LogLine, Mind,
+    ModuleRow, ModuleScreen, ModuleSection, Notice, NoticeLevel, OutcomeKind, Request, Role,
+    RowFact, Run, RunRecord, Screen, ScreenCell, Scroll, SectionFold, SectionState, Setting,
+    Standing, StepSwitch, Table, TaskKind, TaskState, Timed, Tone,
 };
 use ronoctua_design::{Phrases, Pointed, Region, Slice};
 use std::cell::RefCell;
@@ -77,16 +78,14 @@ mod key {
     pub const TASKS: &str = "brain-tasks";
     /// The log of everything it has done.
     pub const ACTIVITY: &str = "brain-activity";
-    /// When a task may run.
-    pub const SCHEDULE: &str = "brain-schedule";
+    /// When a task may run, and what its module offers on its page.
+    pub const OPTIONS: &str = "brain-options";
     /// What a task runs, step by step.
     pub const STEPS: &str = "brain-steps";
     /// How the last few went.
     pub const HISTORY: &str = "brain-history";
     /// What every module wants said, on the home page.
     pub const NOTICES: &str = "brain-notices";
-    /// What a task's module offers on its page.
-    pub const ACTIONS: &str = "brain-actions";
     /// What a module that only listens says instead of a date.
     pub const WATCHING: &str = "brain-watching";
     /// The footer's two other facts about a folded row.
@@ -97,8 +96,13 @@ mod key {
 
     // ---- the schedule's rows ------------------------------------------
     pub const ENABLED: &str = "brain-enabled";
+    pub const ENABLED_WATCH: &str = "brain-enabled-watch";
+    /// What the switch on that row is for, beside its answer.
+    pub const ENABLED_HINT: &str = "brain-enabled-hint";
+    pub const ENABLED_HINT_WATCH: &str = "brain-enabled-hint-watch";
     pub const ON: &str = "brain-on";
     pub const OFF: &str = "brain-off";
+    pub const OFF_WATCH: &str = "brain-off-watch";
     pub const EVERY: &str = "brain-every";
     pub const DAYS: &str = "brain-days";
     pub const PART: &str = "brain-part";
@@ -201,11 +205,12 @@ mod key {
     pub const ABOUT_TASKS: &str = "about-brain-tasks";
     pub const ABOUT_NOTICES: &str = "about-brain-notices";
     pub const ABOUT_ACTIVITY: &str = "about-brain-activity";
-    pub const ABOUT_SCHEDULE: &str = "about-brain-schedule";
-    pub const ABOUT_ACTIONS: &str = "about-brain-actions";
+    pub const ABOUT_OPTIONS: &str = "about-brain-options";
     pub const ABOUT_STEPS: &str = "about-brain-steps";
     pub const ABOUT_HISTORY: &str = "about-brain-history";
     pub const ABOUT_SECTION: &str = "about-brain-section";
+    /// — the triangle of a section that folds —
+    pub const ABOUT_SECTION_FOLD: &str = "about-brain-section-fold";
     /// — the figures beside a title: how far back and how many, and how
     /// many steps are on —
     pub const ABOUT_REACH: &str = "about-brain-reach";
@@ -406,6 +411,14 @@ const WHEN_CELLS: u16 = 17;
 /// And a status's, for the same reason: the longest translation's, with air.
 const NOTE_CELLS: u16 = 20;
 
+/// And a page's schedule labels: the longest translation's —
+/// `brain-enabled-watch`, in English.
+const SCHEDULE_LABEL_CELLS: u16 = 22;
+
+/// And the switch's answer while it is off: the longest translation's —
+/// `brain-off`, in Portuguese.
+const SWITCH_CELLS: u16 = 25;
+
 /// How wide the name in the header may be.
 ///
 /// Fixed, because it is a KEY and a blind one: the descriptor asks the host for
@@ -503,13 +516,100 @@ enum Spot {
     /// One of the things its module offers on its page, by its index in
     /// `TaskState::actions`. `RET` asks for it.
     Action(usize),
-    /// One row of the module's own page, counted across its sections — the
-    /// index an `act-row` names. `RET` does the row's action, when it has one.
+    /// The title of a section of the module's page that folds, by its index
+    /// in the page's sections. `RET` opens it or shuts it.
+    Section(usize),
+    /// One row of the module's own page, counted across its sections, shut
+    /// ones too — the index an `act-row` names. `RET` does the row's action,
+    /// when it has one.
     Screen(usize),
     /// One of its steps. `RET` flips it, unless the flake owns it.
     Step(usize),
     /// One of its last runs. Nothing to do; the footer says what happened.
     Ran(usize),
+}
+
+/// What the cursor is on, by what names it across two versions of the page —
+/// the rule every list that reorders keeps, and this one reorders each time a
+/// person acts on a row.
+///
+/// # Why the section is part of a row's name
+///
+/// Because a row of a module's page travels. Marked seen, an error leaves the
+/// section it was in for another, with the same id: a cursor that followed it
+/// would be thrown down the page by the press that was meant to clear the next
+/// row. What it stays with is the place it was in, and the row after it comes
+/// up to take it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Held {
+    /// A spot the module's page has no hand in.
+    Spot(Spot),
+    /// One of the page's own actions, by its id: the module's switch reshapes
+    /// the list it is counted in (what only a module switched off offers
+    /// leaves it while it is on), and kept by its index the cursor would land
+    /// on another action, which `RET` would then ask for.
+    Action {
+        /// Its id.
+        id: String,
+        /// How far down the page's actions it stood, for when it is gone.
+        place: usize,
+    },
+    /// The title of a section, by the section.
+    Title(String),
+    /// A row of the module's page.
+    Row {
+        /// Its section.
+        section: String,
+        /// Which of the sections of that name: one with no id is named by
+        /// its title, and a module may title several alike.
+        twin: usize,
+        /// Its id.
+        id: String,
+        /// How far down its section it stood.
+        place: usize,
+        /// Where its section began among the spots, for when it is gone.
+        stood: usize,
+    },
+}
+
+/// What names a section of a module's page: the id it folds by, or, for one
+/// that declared none, its title.
+fn section_name(section: &ModuleSection) -> &str {
+    if section.id.is_empty() {
+        &section.heading
+    } else {
+        &section.id
+    }
+}
+
+/// Whether a section that folds is open: the person's word on it, or else how
+/// its module ships it.
+fn section_open(task: &TaskState, section: &ModuleSection) -> bool {
+    task.folds
+        .iter()
+        .find(|f| f.id == section.id)
+        .map_or(matches!(section.fold, SectionFold::Open), |f| f.open)
+}
+
+/// One section of a module's page as it is walked: what the list of spots
+/// and the list of rows both read ([`State::shown_sections`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Shown {
+    /// Its index in the page's sections.
+    section: usize,
+    /// The index of its first row, counted across every section.
+    ///
+    /// SHUT ONES INCLUDED, and that is the trap: this is the number an
+    /// `act-row` names, and the host counts the page it was sent. A count of
+    /// what is drawn would make `RET` act on the wrong row of every section
+    /// under a shut one.
+    from: usize,
+    /// How many rows it holds.
+    rows: usize,
+    /// Whether its title folds it.
+    folds: bool,
+    /// Whether its rows are drawn.
+    open: bool,
 }
 
 /// Everything this buffer remembers between calls.
@@ -593,6 +693,11 @@ struct State {
     /// and the owner read the result as shortcuts with enormous gaps between
     /// them.
     phrases: Phrases,
+    /// The same for the keys of the module's page in front, which came with
+    /// it (`module-screen::phrases`): this side cannot ask for them at load,
+    /// because the set of modules is not known then. Empty is a host that
+    /// said none of them, and the page is then laid out blind.
+    page_phrases: Phrases,
     /// Which cell the pointer is resting on, if it is in the window.
     hover: ronoctua_design::Hovers,
     /// The daemon's own log, as the host last delivered it, oldest first.
@@ -625,6 +730,29 @@ struct State {
     /// inside the body's block, and the cell the host answers its bar from —
     /// so a drag or a wheel on it scrolls the paragraph, never the page.
     about_at: Option<(u16, u16)>,
+    /// WHERE THE LINES UNDER THE MODULE'S ROWS WERE DRAWN in the last frame —
+    /// the first row inside the body's block, the cell the host answers a bar
+    /// from, and the row's id — for the same reason.
+    below_at: Vec<(u16, u16, String)>,
+    /// How far the lines under one row are scrolled: its id and the first
+    /// wrapped row, the host's number as [`State::foot_scroll`] is. Only a
+    /// text past [`BELOW_MOST`] has a bar at all.
+    below_scroll: (String, u16),
+    /// WHERE THE PAGE'S ROWS STOPPED in the last frame, inside the body's
+    /// block, when the window cut one: a row that does not fit is drawn as its
+    /// first line alone, and the lines under that line are nobody's — the
+    /// pointer lights none of them, says nothing there and takes nothing.
+    page_cut: Option<u16>,
+    /// WHERE THE FOOTER DREW WHAT A ROW SAYS UNDER ITSELF in the last frame —
+    /// its first row inside the footer's block and the cell the host answers
+    /// its bar from — and how far it is scrolled. A paragraph of its own
+    /// beside the row's last fact, so a bar of its own: moving one never moves
+    /// the other.
+    foot_below_at: Option<(u16, u16)>,
+    foot_below_scroll: u16,
+    /// WHERE THE FOOTER DREW THE ROW'S OTHER ACTION in the last frame — its
+    /// row inside the footer's block and its cells.
+    also_at: Option<(u16, u16, u16)>,
     /// WHERE THE PAGE'S OWN NAME WAS DRAWN atop the list of tasks in the last
     /// frame — its first cell — while the window wears no header.
     title_from: Option<u16>,
@@ -633,6 +761,10 @@ struct State {
     /// for the rest of it.
     foot_spots: Vec<FootSpot>,
     foot_drawn: bool,
+    /// WHERE EACH SWATCH OF THE LEGEND WAS DRAWN in the last frame, on its row
+    /// inside the body's block, with what it says under the pointer: only
+    /// the ones that fitted are here.
+    legend_at: Vec<FootSpot>,
     /// THE COLUMNS THE LAST FRAME LAID the list of tasks and the activity
     /// log out in — what the pointer is asked against ([`State::pointed`]),
     /// so a glyph is explained where it was drawn.
@@ -640,8 +772,8 @@ struct State {
     log_layout: Layout,
 }
 
-/// A piece of the footer as the last frame drew it — its row inside the
-/// footer's block, its cells — and the sentence it says under the pointer.
+/// A piece of a block as the last frame drew it — its row inside the block,
+/// its cells — and the sentence it says under the pointer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FootSpot {
     row: u16,
@@ -716,6 +848,7 @@ impl State {
             columns: 80,
             headed: true,
             phrases: Phrases::empty(),
+            page_phrases: Phrases::empty(),
             hover: ronoctua_design::Hovers::new(),
             tail: Vec::new(),
             tail_at: 0,
@@ -724,9 +857,16 @@ impl State {
             open_at: None,
             back_at: None,
             about_at: None,
+            below_at: Vec::new(),
+            below_scroll: (String::new(), 0),
+            page_cut: None,
+            foot_below_at: None,
+            foot_below_scroll: 0,
+            also_at: None,
             title_from: None,
             foot_spots: Vec::new(),
             foot_drawn: false,
+            legend_at: Vec::new(),
             task_layout: Layout::default(),
             log_layout: Layout::default(),
         }
@@ -930,7 +1070,8 @@ const fn level_tone(l: NoticeLevel) -> Role {
 
 /// The tone of a module's row, by MEANING — one role each, and `watching` is
 /// the gestures' glyph colour, the one the modeline marks a watch with (the
-/// journal's errors wear it); `working` is the teal of a thing under way.
+/// journal's errors wear it); `working` is the teal of a thing under way, and
+/// `minor` the row's own quiet, the bottom of a list sorted by gravity.
 const fn tone_role(t: BrainTone) -> Role {
     match t {
         BrainTone::Quiet => Role::Quiet,
@@ -938,7 +1079,21 @@ const fn tone_role(t: BrainTone) -> Role {
         BrainTone::Working => Role::Following,
         BrainTone::Warning => Role::Warning,
         BrainTone::Danger => Role::Danger,
+        BrainTone::Critical => Role::Critical,
+        BrainTone::Minor => Role::Quiet,
         BrainTone::Accent => Role::Accent,
+    }
+}
+
+/// What the rest of a date takes when it is a row's value: the dim of every
+/// date, and for a row its module gave a tone, that tone. It is the only
+/// colour such a row has — a refused sudo among used ones, a reminder ringing
+/// — so the page does not spend it on looking like the log. The day stays the
+/// day's ([`put_stamp`]).
+const fn dated_value_role(tone: BrainTone) -> Role {
+    match tone {
+        BrainTone::Quiet => Role::Dim,
+        toned => tone_role(toned),
     }
 }
 
@@ -956,6 +1111,16 @@ fn cell_run(c: &ScreenCell) -> Option<Run<Icon>> {
         ScreenCell::Moment(t) => Some(Run::datum(&t.text)),
         ScreenCell::Count(n) => Some(Run::datum(&n.to_string())),
         ScreenCell::Bytes(m) => Some(Run::datum(&m.text)),
+    }
+}
+
+/// The moment in a cell of a module's row, when the host cut it where its day
+/// is: it goes through [`put_stamp`], like every other date of this buffer,
+/// and not through [`cell_run`] as one run in one tone.
+const fn stamped(c: &ScreenCell) -> Option<&Timed> {
+    match c {
+        ScreenCell::Moment(t) if !t.stamp.day.is_empty() => Some(t),
+        _ => None,
     }
 }
 
@@ -1046,6 +1211,32 @@ const fn kind_role(k: TaskKind) -> Role {
         TaskKind::Routine => Role::Body,
         TaskKind::Once => Role::Once,
         TaskKind::Watch => Role::Listening,
+    }
+}
+
+/// What the row of a task's switch is called. A watch runs nothing, so it does
+/// not say it runs: `kind_about` draws the same line between the kinds.
+const fn enabled_key(k: TaskKind) -> &'static str {
+    match k {
+        TaskKind::Routine | TaskKind::Once => key::ENABLED,
+        TaskKind::Watch => key::ENABLED_WATCH,
+    }
+}
+
+/// What that row answers while the person has it off: a watch has no run to
+/// ask for by hand, so "only when you ask" would promise one.
+const fn off_key(k: TaskKind) -> &'static str {
+    match k {
+        TaskKind::Routine | TaskKind::Once => key::OFF,
+        TaskKind::Watch => key::OFF_WATCH,
+    }
+}
+
+/// And what its switch is for, in the words of each kind.
+const fn enabled_hint_key(k: TaskKind) -> &'static str {
+    match k {
+        TaskKind::Routine | TaskKind::Once => key::ENABLED_HINT,
+        TaskKind::Watch => key::ENABLED_HINT_WATCH,
     }
 }
 
@@ -1145,8 +1336,12 @@ fn every_phrase() -> Vec<String> {
         key::WATCHING,
         key::NEVER,
         key::ENABLED,
+        key::ENABLED_WATCH,
+        key::ENABLED_HINT,
+        key::ENABLED_HINT_WATCH,
         key::ON,
         key::OFF,
+        key::OFF_WATCH,
         key::EVERY,
         key::PART,
         key::NEXT,
@@ -1414,6 +1609,17 @@ struct Told {
     /// its index in `mind.tasks` — the task this footer is about, when it is
     /// about one and that page is not the page in front.
     opens: Option<usize>,
+    /// The name of the thing when it is data and no key: a row of a module's
+    /// page, named by its own words.
+    headline: Option<String>,
+    /// What a row of a module's page says under itself.
+    below: Option<ScreenCell>,
+    /// What its module says of it under the cursor, a row each, in the tones
+    /// the module gave. With any, there is no sentence: the last takes the
+    /// rows left ([`State::foot_lines`]).
+    lines: Vec<RowFact>,
+    /// The key of what its other action is called on this row.
+    also: Option<String>,
 }
 
 impl Told {
@@ -1427,8 +1633,17 @@ impl Told {
         // JOINED BY A SEPARATOR NOTHING CAN CONTAIN, so two different footers
         // cannot spell the same subject between them.
         let part = |it: &Option<String>| it.clone().unwrap_or_default();
+        let lines: Vec<String> = self
+            .lines
+            .iter()
+            .map(|l| format!("{} {}", l.label, cell_word(&l.value)))
+            .collect();
         [
             part(&self.name),
+            part(&self.headline),
+            self.below.as_ref().map(cell_word).unwrap_or_default(),
+            lines.join("\u{1e}"),
+            part(&self.also),
             part(&self.at_step),
             part(&self.said),
             part(&self.about),
@@ -1456,6 +1671,8 @@ impl State {
     fn foot(&mut self, screen: &mut Screen<Wit>, told: &Told) {
         self.foot_spots.clear();
         self.foot_drawn = false;
+        self.also_at = None;
+        self.foot_below_at = None;
         // THE OFFSET BELONGS TO THE SENTENCE, and this is where it is
         // forgotten: the cursor moving to another row is another sentence, and
         // one left scrolled would open past its own end.
@@ -1463,6 +1680,7 @@ impl State {
         if self.foot_of != of {
             self.foot_of = of;
             self.foot_scroll = 0;
+            self.foot_below_scroll = 0;
         }
         let mut pen = screen.region(self.blocks.foot);
         if pen.empty() {
@@ -1482,8 +1700,11 @@ impl State {
         //   0        the name of the thing
         //   1        the line this side is holding — a command, a path — when
         //            there is one, and the sentence starts here when there is not
+        //   ..       what a module's row says under itself, when it says
+        //            anything: two rows at most
         //   ..last-1 the SENTENCE, taking everything that is left
-        //   last-1   the values, when there are any
+        //   last-1   the values, when there are any, and a click at its end:
+        //            the page a task opens, or the row's other action
         //
         // Six rows, always [`FOOT_LINES`], and every row means the same thing
         // every time. Three things the owner reported come out of exactly this.
@@ -1511,6 +1732,18 @@ impl State {
         // against the border with nothing under it and at another it was not
         // there at all. *"Para facilitar e simplificar o visual, pode remover
         // a linha por completo."*
+        //
+        // A ROW OF A MODULE'S PAGE THAT SAYS FACTS OF ITSELF is the one other
+        // arrangement, and it has no sentence and no values' row — its facts
+        // are both ([`State::foot_lines`]):
+        //
+        //   0        its name, or its headline when it has none
+        //   1..      what it says under itself, two rows at most
+        //   ..       one fact a row, its label dim and its value in its tone
+        //   ..last   the last fact, taking every row left
+        //
+        // with the row's other action beside the first fact, or on a last row
+        // of its own where that does not leave it room.
         let values_at = last.saturating_sub(1);
 
         if let Some(name) = &told.name {
@@ -1524,6 +1757,8 @@ impl State {
                     .clone()
                     .unwrap_or_else(|| key::ABOUT_FOOT.to_owned()),
             });
+        } else if let Some(headline) = &told.headline {
+            pen.put(0, Run::datum(headline).title().within(wide));
         }
         // EVERYTHING ELSE IT DRAWS says what the footer is, under the pointer.
         self.foot_drawn =
@@ -1570,11 +1805,39 @@ impl State {
             });
             from += 1;
         }
+        // WHAT THE ROW SAYS UNDER ITSELF, in the tone it wears there, leaving
+        // every fact a row. The page has all of it under the row; what is
+        // cut here moves by a bar of its own, as it does on the page.
+        if let Some(below) = &told.below {
+            let left = last.saturating_sub(from);
+            let facts = u16::try_from(told.lines.len()).unwrap_or(u16::MAX);
+            let rows = self
+                .wraps_to(below, wide, BELOW_FOOT)
+                .min(left.saturating_sub(facts))
+                .max(1)
+                .min(left);
+            if rows > 0
+                && let Some(run) = cell_run(below)
+            {
+                let run = run.playing(Role::Folded).within(wide);
+                pen.paragraph_from(from, rows, self.foot_below_scroll, run);
+                self.foot_below_at = Some((from, wide.saturating_sub(1)));
+                from += rows;
+            }
+        }
+        // A ROW THE MODULE SAID MORE OF has its facts for a sentence.
+        let also = told
+            .also
+            .as_deref()
+            .filter(|also| self.also_cells(also) < wide);
+        if !told.lines.is_empty() {
+            self.foot_lines(&mut pen, told, also, from, last);
+            return;
+        }
         // THE SENTENCE TAKES EVERYTHING THAT IS LEFT: the error when there is
         // one, the description when there is not. Only the values' row is held
-        // back, and only when there are values — or the click that opens the
-        // page — to put in it.
-        let until = if told.facts.is_empty() && told.opens.is_none() {
+        // back, and only when there are values — or a click — to put in it.
+        let until = if told.facts.is_empty() && told.opens.is_none() && also.is_none() {
             last
         } else {
             values_at
@@ -1620,6 +1883,9 @@ impl State {
                     Run::label(about).quiet().within(box_wide),
                 );
             }
+        }
+        if let Some(also) = also {
+            self.foot_also(&mut pen, also, values_at);
         }
         // AND THE FIGURES ONLY WHERE THERE IS A ROW FOR THEM THAT IS NOT THE
         // NAME'S. Six is the height this is written for and `min(left)` is the
@@ -1785,6 +2051,152 @@ impl State {
             });
         }
     }
+
+    /// WHAT A MODULE SAYS OF A ROW, from `from` down: each fact a row, its
+    /// label dim in a column as wide as the widest and its value in the tone
+    /// the module gave, so nothing here reads as one block. The last takes
+    /// every row left, and scrolls: it is what a row cuts.
+    ///
+    /// The row's other action sits beside the first fact, whose value is
+    /// short, and on a row of its own where that does not leave it room.
+    fn foot_lines(
+        &mut self,
+        pen: &mut Pen<'_, Wit>,
+        told: &Told,
+        also: Option<&str>,
+        from: u16,
+        last: u16,
+    ) {
+        use ronoctua_design::GAP;
+        let Some((closing, early)) = told.lines.split_last() else {
+            return;
+        };
+        let wide = pen.columns();
+        let labels = told
+            .lines
+            .iter()
+            .map(|fact| self.cells_of(&fact.label, FACT_CELLS))
+            .fold(0, u16::max)
+            .min(wide / 2);
+        let at = labels + GAP;
+        let cells = wide.saturating_sub(at);
+        let beside = also.filter(|also| {
+            from + 1 < last
+                && early.first().is_some_and(|first| {
+                    let value = at + self.cell_cells(&first.value, FACT_CELLS);
+                    value + FACT_AIR + self.also_cells(also) <= wide
+                })
+        });
+        let until = if also.is_some() && beside.is_none() {
+            last.saturating_sub(1)
+        } else {
+            last
+        };
+        let mut row = from;
+        for fact in early {
+            // THE LAST ROW IS THE LAST FACT'S, however few there are.
+            if row + 1 >= until {
+                break;
+            }
+            pen.put(row, Run::label(&fact.label).dim().within(labels));
+            put_fact(pen, row, (at, cells), fact);
+            row += 1;
+        }
+        if row < until {
+            pen.put(row, Run::label(&closing.label).dim().within(labels));
+            if stamped(&closing.value).is_some() {
+                put_fact(pen, row, (at, cells), closing);
+            } else if let Some(run) = cell_run(&closing.value) {
+                let run = run.playing(tone_role(closing.tone));
+                pen.paragraph_from(row, until - row, self.foot_scroll, run.at(at).within(cells));
+            }
+        }
+        match (beside, also) {
+            (Some(also), _) => self.foot_also(pen, also, from),
+            (None, Some(also)) if until > from => self.foot_also(pen, also, until),
+            _ => {}
+        }
+    }
+
+    /// How wide the row's other action comes out: its key at rest and its
+    /// name, `key` being the key of the name.
+    fn also_cells(&self, key: &str) -> u16 {
+        let keys = key_of_command("brain-row-also").unwrap_or_default();
+        let spelling = self.phrases.or(Phrases::LEADER_ALT, "");
+        ronoctua_design::leader_alt::cells(&spelling, keys, false)
+            + ronoctua_design::GAP
+            + self.cells_of(key, FACT_CELLS)
+    }
+
+    /// THE ROW'S OTHER ACTION, by what it does on this row, flush right on
+    /// `row`: the one key changes its meaning from row to row, and what the
+    /// key is called can only say so. A click takes it, at once, like the one
+    /// that opens a page: with no header on the window this is the only place
+    /// the pointer finds it.
+    fn foot_also(&mut self, pen: &mut Pen<'_, Wit>, label: &str, row: u16) {
+        let Some(keys) = key_of_command("brain-row-also") else {
+            return;
+        };
+        // NEVER ON THE NAME'S ROW, in a footer too short for any other.
+        if row == 0 || row >= pen.lines() {
+            return;
+        }
+        let wide = pen.columns();
+        let name = self.cells_of(label, FACT_CELLS);
+        let spelling = self.phrases.or(Phrases::LEADER_ALT, "");
+        let from = wide.saturating_sub(self.also_cells(label));
+        let columns = |spelt| {
+            Table::across(wide)
+                .with(Column::fill("rest", 1))
+                .with(Column::fixed(
+                    "keys",
+                    ronoctua_design::leader_alt::cells(&spelling, keys, spelt),
+                    2,
+                ))
+                .with(Column::fixed("name", name, 2))
+                .resolve()
+        };
+        // SPELT while the pointer rests where the glyph is at rest, so the
+        // spelling stays under the hand that asked for it.
+        let spelt = !spelling.is_empty() && self.hovering(self.blocks.foot, row, from);
+        let layout = columns(spelt);
+        let first = layout.field("keys").map_or(from, |f| f.at);
+        if let Some(seat) = self.pointed_in(self.blocks.foot, row, first, wide) {
+            pen.ground_under(row, first, wide - first, Role::hover_of(seat));
+        }
+        let Some(mut cells) = pen.row_of(row, &layout) else {
+            return;
+        };
+        let _ = cells.put_shortcut(
+            "keys",
+            Icon::LeaderAlt,
+            &spelling,
+            keys,
+            spelt,
+            Role::Accent,
+        );
+        cells.put("name", Run::label(label).accent());
+        self.also_at = Some((row, first, wide));
+        self.foot_spots.push(FootSpot {
+            row,
+            from: first,
+            to: wide,
+            about: key::ABOUT_ROW_ALSO.to_owned(),
+        });
+    }
+}
+
+/// What a fact of a row says, in `room`: `(its first cell, how many)`. A date
+/// in its pieces, like every date of this buffer, and all a row may change of
+/// it is what its tone says of a value.
+fn put_fact(pen: &mut Pen<'_, Wit>, row: u16, room: (u16, u16), fact: &RowFact) {
+    if let Some(moment) = stamped(&fact.value) {
+        let rest = dated_value_role(fact.tone);
+        put_stamp(pen, row, room, &moment.text, &moment.stamp, rest);
+    } else if let Some(run) = cell_run(&fact.value) {
+        let run = run.playing(tone_role(fact.tone));
+        pen.put(row, run.at(room.0).within(room.1));
+    }
 }
 
 /// THE AIR BETWEEN THE FACTS AND THE CLICK they sit against: *"separado por
@@ -1810,8 +2222,7 @@ fn fact_about(label: &str) -> &'static str {
 /// under it are.
 fn heading_about(heading: &str) -> &'static str {
     match heading {
-        key::SCHEDULE => key::ABOUT_SCHEDULE,
-        key::ACTIONS => key::ABOUT_ACTIONS,
+        key::OPTIONS => key::ABOUT_OPTIONS,
         key::STEPS => key::ABOUT_STEPS,
         _ => key::ABOUT_HISTORY,
     }
@@ -2710,11 +3121,87 @@ impl State {
     /// How many cells `key` comes out in, in the person's language — or
     /// `blind`, the reservation, while the host has not said.
     fn cells_of(&self, key: &str, blind: u16) -> u16 {
-        let said = self.phrases.or(key, "");
+        let said = self.said_of(key);
         if said.is_empty() {
             blind
         } else {
             ronoctua_design::wide(&said)
+        }
+    }
+
+    /// What `key` comes out as, to measure and never to draw: empty while the
+    /// host has not said.
+    fn said_of(&self, key: &str) -> String {
+        let said = self.phrases.or(key, "");
+        if said.is_empty() {
+            self.page_phrases.or(key, "")
+        } else {
+            said
+        }
+    }
+
+    /// How many rows, up to `most`, a cell wraps to `cells` wide — counted
+    /// with the host's own wrap, and one for a key the host has not said.
+    fn wraps_to(&self, cell: &ScreenCell, cells: u16, most: u16) -> u16 {
+        let text = match cell {
+            ScreenCell::Key(k) => self.said_of(k),
+            other => cell_word(other),
+        };
+        let wraps = ronoctua_design::wrap(&text, cells.max(1), usize::from(most)).len();
+        u16::try_from(wraps).unwrap_or(most).clamp(1, most.max(1))
+    }
+
+    /// How many cells a cell of a module's page comes out in — none for an
+    /// empty one, and `blind` for a key the host has not said.
+    fn cell_cells(&self, cell: &ScreenCell, blind: u16) -> u16 {
+        match cell {
+            ScreenCell::Empty => 0,
+            ScreenCell::Key(k) if k.is_empty() => 0,
+            ScreenCell::Key(k) => self.cells_of(k, blind),
+            ScreenCell::Data(d) => ronoctua_design::wide(d),
+            ScreenCell::Moment(t) => ronoctua_design::wide(&t.text),
+            ScreenCell::Count(n) => ronoctua_design::wide(&n.to_string()),
+            ScreenCell::Bytes(m) => ronoctua_design::wide(&m.text),
+        }
+    }
+
+    /// How many lines a row of a module's page takes under itself.
+    fn below_lines(&self, row: &ModuleRow, columns: u16) -> u16 {
+        if says_nothing(&row.below) {
+            0
+        } else {
+            self.wraps_to(&row.below, below_cells(columns), BELOW_MOST)
+        }
+    }
+
+    /// How wide a section's columns come out: the widest of each among its
+    /// rows. The label of a row with no value does not sit in the column
+    /// ([`sentence_columns`]): it takes the value's room, and counts as one.
+    fn section_cells(&self, section: &ModuleSection) -> ScreenCells {
+        ScreenCells {
+            label: section
+                .rows
+                .iter()
+                .filter(|r| !says_nothing(&r.value))
+                .map(|r| self.cell_cells(&r.label, LABEL_BLIND))
+                .fold(0, u16::max),
+            value: section
+                .rows
+                .iter()
+                .map(|r| {
+                    let held = if says_nothing(&r.value) {
+                        &r.label
+                    } else {
+                        &r.value
+                    };
+                    self.cell_cells(held, VALUE_BLIND)
+                })
+                .fold(0, u16::max),
+            note: section
+                .rows
+                .iter()
+                .map(|r| self.cell_cells(&r.note, NOTE_BLIND))
+                .fold(0, u16::max),
         }
     }
 }
@@ -2818,29 +3305,148 @@ fn key_of_command(id: &str) -> Option<&'static str> {
         .and_then(|(keys, _)| ronoctua_design::frame::local_key(keys))
 }
 
-/// The columns of one of the module's page actions: what it is, and the key
-/// that asks for it — `RET`, which is the row's own.
-fn action_columns(columns: u16) -> Layout {
+/// What asks for one of the module's page actions: the row's own key.
+const RET: &str = "RET";
+
+/// How wide the column of the keys of the options is: `⌥` against its one key
+/// (`label` is how that spells), and `RET`, which shares it so the eye reads
+/// one column down the list.
+fn key_cells(label: &str) -> u16 {
+    ronoctua_design::leader_alt::cells(label, "x", false).max(ronoctua_design::wide(RET))
+}
+
+/// The columns of one of the module's page actions: what it is, and [`RET`]
+/// in the column of the keys ([`key_cells`]) of the rows above it.
+///
+/// ITS LABEL IS NOT THE FIELDS': one that long in their column would push
+/// their values out, with nothing between `Runs on its own` and its `Yes`.
+/// So it fills, up to the key.
+fn action_columns(columns: u16, keys: u16) -> Layout {
     Table::across(columns.saturating_sub(1))
         .with(Column::fill("label", 10))
-        .with(Column::fixed("keys", 5, 3))
+        .with(Column::fixed("keys", keys, 3))
         .resolve()
 }
+
+/// What a label is given before anybody has said how wide its words come out
+/// — the schedule's own reservation plus the air — and what a section with
+/// longer labels may still count on when the row is short of room.
+const LABEL_BLIND: u16 = 24;
+
+/// And a note, by the same reasoning: what it counts on beside a value that
+/// may want the whole row.
+const NOTE_BLIND: u16 = 20;
+
+/// The widest a measured label is given: past it the row is about the label.
+const LABEL_MOST: u16 = 40;
+
+/// What a value keeps of a row before a label past [`LABEL_BLIND`] may take
+/// any more.
+const VALUE_KEPT: u16 = 26;
+
+/// The narrowest a value is drawn: short of it, the columns beside it give way.
+const VALUE_LEAST: u16 = 10;
+
+/// What a value is worth while the host has not said its words: all there is,
+/// which leaves a note the reservation it always had.
+const VALUE_BLIND: u16 = u16::MAX;
+
+/// How wide the two measured columns of a section of a module's page come out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScreenCells {
+    /// The widest label; `0` when no row of the section has one.
+    label: u16,
+    /// The widest value, or [`VALUE_BLIND`].
+    value: u16,
+    /// The widest note; `0` when no row of the section has one.
+    note: u16,
+}
+
+/// A section laid out by the reservations, as a page with no words is.
+const SCREEN_BLIND: ScreenCells = ScreenCells {
+    label: LABEL_BLIND,
+    value: VALUE_BLIND,
+    note: NOTE_BLIND,
+};
 
 /// The columns of a row of the module's own page: what it is, its value, and
 /// a quieter note.
 ///
-/// THE LABEL IS RESERVED, not measured: a module's key is not one this side
-/// can ask the host for at load, because the set of modules is not known
-/// then. Twenty-four is the schedule's own reservation plus the air, and the
-/// host elides what does not fit. The note gives way first; it is also in the
-/// footer, whole.
-fn screen_columns(columns: u16) -> Layout {
-    Table::across(columns.saturating_sub(1))
-        .with(Column::fixed("label", 24, 2))
-        .with(Column::fill("value", 10))
-        .with(Column::fixed("note", 20, 3))
-        .resolve()
+/// # Every column as wide as what it holds, and the value takes the rest
+///
+/// A label of twenty-four and a note of twenty were RESERVED for every row of
+/// every module, because a module's key is not one this side can ask the host
+/// for at load. A journal's row is a date of sixteen and a count of four, so
+/// twenty-four cells of a seventy-three-column window held nothing, and the
+/// message beside them stopped at twenty-six. They are measured now, a section
+/// at a time ([`State::section_cells`]) — a long line in one section squeezes
+/// no other — and the reservations are what nothing measured is worth.
+///
+/// A measured label goes past [`LABEL_BLIND`] only while the value keeps
+/// [`VALUE_KEPT`], and a note goes past [`NOTE_BLIND`] only into what the
+/// widest value leaves empty. No column of the reservations goes missing at
+/// any width, but the value is not always as wide as it was: a long label
+/// takes cells from it, and so does a short note, which now stays at widths
+/// where the reservation made it give way. A column with nothing in it is left
+/// out. The note gives way first; it is also in the footer, whole.
+fn screen_columns(columns: u16, cells: ScreenCells) -> Layout {
+    use ronoctua_design::GAP;
+    let usable = columns.saturating_sub(1);
+    let note = cells.note.min(NOTE_BLIND);
+    let room = usable.saturating_sub(note + 2 * GAP + VALUE_KEPT);
+    let label = cells.label.min(LABEL_MOST).min(room.max(LABEL_BLIND));
+    let taken = (label + 2 * GAP).saturating_add(cells.value.max(VALUE_LEAST));
+    let note = cells.note.min(usable.saturating_sub(taken).max(note));
+    let mut table = Table::across(usable);
+    if label > 0 {
+        table = table.with(Column::fixed("label", label, 2));
+    }
+    table = table.with(Column::fill("value", VALUE_LEAST));
+    if note > 0 {
+        table = table.with(Column::fixed("note", note, 3));
+    }
+    table.resolve()
+}
+
+/// The columns of a row with no value: its label takes the line up to the
+/// note, `note` cells wide and `0` when it has none. In the columns of the
+/// rows around it the label would be cut with the value's room blank beside
+/// it — a section that has nothing to list says so in a whole sentence, and a
+/// filter that caught nothing is a long snippet with nothing to show.
+fn sentence_columns(columns: u16, note: u16) -> Layout {
+    let mut table = Table::across(columns.saturating_sub(1)).with(Column::fill("label", 10));
+    if note > 0 {
+        table = table.with(Column::fixed("note", note, 3));
+    }
+    table.resolve()
+}
+
+/// Whether a cell of a module's row says nothing: a module fills a cell from
+/// what it holds, and what it holds can be an empty text.
+fn says_nothing(cell: &ScreenCell) -> bool {
+    match cell {
+        ScreenCell::Empty => true,
+        ScreenCell::Key(text) | ScreenCell::Data(text) => text.is_empty(),
+        ScreenCell::Moment(_) | ScreenCell::Count(_) | ScreenCell::Bytes(_) => false,
+    }
+}
+
+/// Where the lines under a row of a module's page begin: under its label, in
+/// by what a row of a list is in from its glyph.
+const BELOW_AT: u16 = ronoctua_design::ICON + ronoctua_design::GAP;
+
+/// The most lines those are given on the page. A text past it is the
+/// person's own, and has a bar of its own ([`State::below_at`]).
+const BELOW_MOST: u16 = 4;
+
+/// And in the footer, whose rows the row's facts need too. The page has the
+/// whole of it, right under the row.
+const BELOW_FOOT: u16 = 2;
+
+/// How wide those lines are in a window `columns` wide: what the page's bar
+/// and [`BELOW_AT`] leave, the width the host wraps them at.
+const fn below_cells(columns: u16) -> u16 {
+    columns.saturating_sub(1).saturating_sub(BELOW_AT)
 }
 
 /// The columns of a step.
@@ -2881,7 +3487,14 @@ impl State {
         };
         let mut out = Self::schedule_of(task);
         out.extend(Self::page_actions(task).map(Spot::Action));
-        out.extend((0..self.screen_rows(task).len()).map(Spot::Screen));
+        for shown in self.shown_sections(task) {
+            if shown.folds {
+                out.push(Spot::Section(shown.section));
+            }
+            if shown.open {
+                out.extend((shown.from..shown.from + shown.rows).map(Spot::Screen));
+            }
+        }
         out.extend((0..steps_shown(task)).map(Spot::Step));
         out.extend((0..task.history.len()).map(Spot::Ran));
         out
@@ -2927,14 +3540,75 @@ impl State {
             .map(|(n, _)| n)
     }
 
+    /// The module's page, when the one held is THIS task's.
+    fn page_of(&self, task: &TaskState) -> Option<&ModuleScreen> {
+        self.screen.as_ref().filter(|sc| sc.module == task.id)
+    }
+
     /// The rows of the module's own page for THIS task, counted across its
     /// sections — none while the host has not pushed one for it.
     fn screen_rows(&self, task: &TaskState) -> Vec<&ModuleRow> {
-        self.screen
-            .as_ref()
-            .filter(|sc| sc.module == task.id)
+        self.page_of(task)
             .map(|sc| sc.sections.iter().flat_map(|s| s.rows.iter()).collect())
             .unwrap_or_default()
+    }
+
+    /// The sections of the module's page that have rows, in order: the ONE
+    /// walk [`Self::spots`] and [`Self::rows_of`] both read, so the cursor
+    /// cannot come to rest on a row a shut section does not draw. A section
+    /// with no rows is a heading over nothing, and is left out.
+    fn shown_sections(&self, task: &TaskState) -> Vec<Shown> {
+        let mut out = Vec::new();
+        let mut from = 0;
+        let Some(page) = self.page_of(task) else {
+            return out;
+        };
+        for (n, section) in page.sections.iter().enumerate() {
+            let rows = section.rows.len();
+            if rows > 0 {
+                let folds = !matches!(section.fold, SectionFold::Never);
+                out.push(Shown {
+                    section: n,
+                    from,
+                    rows,
+                    folds,
+                    open: !folds || section_open(task, section),
+                });
+            }
+            from += rows;
+        }
+        out
+    }
+
+    /// The columns each row of the module's page is drawn in, by its index
+    /// across the page's sections.
+    fn screen_layouts(&self, task: &TaskState, columns: u16) -> Vec<Layout> {
+        let sections = self.page_of(task).map_or(&[][..], |sc| &sc.sections);
+        // A PAGE THAT CAME WITH NO WORDS is laid out as it always was: a host
+        // that sends none draws the page it drew before they crossed.
+        let blind = self.page_phrases.is_empty();
+        let mut out = Vec::new();
+        for section in sections {
+            let cells = if blind {
+                SCREEN_BLIND
+            } else {
+                self.section_cells(section)
+            };
+            let layout = screen_columns(columns, cells);
+            let note = layout
+                .field("note")
+                .map_or(cells.note.min(NOTE_BLIND), |f| f.width);
+            out.extend(section.rows.iter().map(|row| {
+                if blind || !says_nothing(&row.value) {
+                    layout.clone()
+                } else if says_nothing(&row.note) {
+                    sentence_columns(columns, 0)
+                } else {
+                    sentence_columns(columns, note)
+                }
+            }));
+        }
+        out
     }
 
     /// The row of the module's page under the cursor, by its index across
@@ -2976,6 +3650,13 @@ enum Row {
     /// A section of the module's own page, by its index: its heading is the
     /// module's key, which this side does not hold as a constant.
     Section(usize),
+    /// The same for a section that folds: a title the cursor stops on, its
+    /// triangle and how many it holds.
+    Fold(usize),
+    /// What the colours of the rows below stand for, one line, when the
+    /// module said. It only tells, so the cursor does not stop on it and the
+    /// pointer lights nothing.
+    Legend,
     /// The description, which the host wraps. The number is how many rows it
     /// was given.
     About(String, u16),
@@ -2985,8 +3666,9 @@ enum Row {
     Field(Spot),
     /// One of the module's page actions, by its index in its `actions`.
     Action(usize),
-    /// One row of the module's own page, counted across its sections.
-    Screen(usize),
+    /// One row of the module's own page, counted across its sections, and
+    /// how many lines it takes with what it says under itself.
+    Screen(usize, u16),
     Step(usize),
     Ran(usize),
 }
@@ -2995,7 +3677,12 @@ enum Row {
 const fn is_a_spot(row: &Row) -> bool {
     matches!(
         row,
-        Row::Field(_) | Row::Action(_) | Row::Screen(_) | Row::Step(_) | Row::Ran(_)
+        Row::Field(_)
+            | Row::Action(_)
+            | Row::Fold(_)
+            | Row::Screen(_, _)
+            | Row::Step(_)
+            | Row::Ran(_)
     )
 }
 
@@ -3013,14 +3700,15 @@ const fn is_a_spot(row: &Row) -> bool {
 /// the window, the follow, the scrollbar and the click.
 const fn row_lines(row: &Row) -> u16 {
     match row {
-        Row::About(_, want) | Row::Refused(want) => *want,
+        Row::About(_, want) | Row::Refused(want) | Row::Screen(_, want) => *want,
         Row::Blank
         | Row::Title
         | Row::Heading(_)
         | Row::Section(_)
+        | Row::Fold(_)
+        | Row::Legend
         | Row::Field(_)
         | Row::Action(_)
-        | Row::Screen(_)
         | Row::Step(_)
         | Row::Ran(_) => 1,
     }
@@ -3121,35 +3809,43 @@ impl State {
             out.push(Row::About(does, self.about_lines(&task.does_text, columns)));
             out.push(Row::Blank);
         }
-        out.push(Row::Heading(key::SCHEDULE));
+        // ONE TITLE AND ONE LIST: what can be set about a task and what its
+        // module offers are both rows `RET` acts on, and a title over each
+        // was two lists of a row or two.
+        out.push(Row::Heading(key::OPTIONS));
         out.extend(Self::schedule_of(task).into_iter().map(Row::Field));
-        // WHAT ITS MODULE OFFERS ON ITS PAGE, each a row `RET` asks for.
-        let offered: Vec<usize> = Self::page_actions(task).collect();
-        if !offered.is_empty() {
-            out.push(Row::Blank);
-            out.push(Row::Heading(key::ACTIONS));
-            out.extend(offered.into_iter().map(Row::Action));
-        }
+        out.extend(Self::page_actions(task).map(Row::Action));
         // AND THE MODULE'S OWN PAGE, section by section, as the host last
         // pushed it: rows of DATA every module's page is drawn with the same
-        // way. A section with no rows is a heading over nothing, and is left
-        // out.
-        if let Some(sc) = self.screen.as_ref().filter(|sc| sc.module == task.id) {
+        // way.
+        if let Some(sc) = self.page_of(task) {
             // A PAGE THE BRAIN WOULD NOT GIVE SAYS SO where its rows would
             // be: a refused page and an empty one must not look the same.
             if !sc.refused.is_empty() {
                 out.push(Row::Blank);
                 out.push(Row::Refused(self.about_lines(&sc.refused, columns)));
             }
-            let mut k = 0;
-            for (n, section) in sc.sections.iter().enumerate() {
-                if section.rows.is_empty() {
-                    continue;
-                }
+            let shown = self.shown_sections(task);
+            // WHAT THE COLOURS MEAN, above the first list that wears them,
+            // and nothing at all with no colours to explain or no list.
+            if !sc.legend.is_empty() && !shown.is_empty() {
                 out.push(Row::Blank);
-                out.push(Row::Section(n));
-                out.extend((k..k + section.rows.len()).map(Row::Screen));
-                k += section.rows.len();
+                out.push(Row::Legend);
+            }
+            let rows = self.screen_rows(task);
+            for section in shown {
+                out.push(Row::Blank);
+                out.push(if section.folds {
+                    Row::Fold(section.section)
+                } else {
+                    Row::Section(section.section)
+                });
+                if section.open {
+                    out.extend((section.from..section.from + section.rows).map(|n| {
+                        let under = rows.get(n).map_or(0, |r| self.below_lines(r, columns));
+                        Row::Screen(n, 1 + under)
+                    }));
+                }
             }
         }
         // THE HEADING ONLY WHEN THERE IS SOMETHING UNDER IT. Two of the four
@@ -3200,13 +3896,15 @@ impl State {
         rows.iter().position(|r| match r {
             Row::Field(s) => *s == spot,
             Row::Action(n) => spot == Spot::Action(*n),
-            Row::Screen(n) => spot == Spot::Screen(*n),
+            Row::Fold(n) => spot == Spot::Section(*n),
+            Row::Screen(n, _) => spot == Spot::Screen(*n),
             Row::Step(n) => spot == Spot::Step(*n),
             Row::Ran(n) => spot == Spot::Ran(*n),
             Row::Blank
             | Row::Title
             | Row::Heading(_)
             | Row::Section(_)
+            | Row::Legend
             | Row::About(_, _)
             | Row::Refused(_) => false,
         })
@@ -3231,6 +3929,7 @@ impl State {
     /// A task's page, drawn in the body's block.
     fn task_page(&mut self, screen: &mut Screen<Wit>) {
         let block = self.blocks.body;
+        self.page_cut = None;
         let Some(task) = self.here().cloned() else {
             let mut pen = screen.region(block);
             if !pen.empty() {
@@ -3260,7 +3959,7 @@ impl State {
             // the rows are not the same height: subtracting a count of rows
             // from the cursor's index is an arithmetic that only works where
             // every row is one line.
-            while at >= self.body_from + fit_from(&rows, self.body_from, height) {
+            while at >= self.body_from + fit_from(&rows, self.body_from, height).max(1) {
                 self.body_from += 1;
             }
         }
@@ -3293,21 +3992,17 @@ impl State {
                 .filter(|r| is_a_spot(r))
                 .count()
         });
-        let actions = action_columns(columns);
-        let screen_layout = screen_columns(columns);
+        let actions = action_columns(
+            columns,
+            key_cells(&self.phrases.or(Phrases::LEADER_ALT, "")),
+        );
+        let screen_layouts = self.screen_layouts(&task, columns);
         let screen_rows: Vec<ModuleRow> = self.screen_rows(&task).into_iter().cloned().collect();
-        let headings: Vec<String> = self
-            .screen
-            .as_ref()
-            .filter(|sc| sc.module == task.id)
-            .map(|sc| sc.sections.iter().map(|s| s.heading.clone()).collect())
-            .unwrap_or_default();
-        let refused: String = self
-            .screen
-            .as_ref()
-            .filter(|sc| sc.module == task.id)
-            .map(|sc| sc.refused.clone())
-            .unwrap_or_default();
+        let sections_shown = self.shown_sections(&task);
+        let page = self.page_of(&task).cloned();
+        let sections = page.as_ref().map_or(&[][..], |sc| &sc.sections);
+        let legend = page.as_ref().map_or(&[][..], |sc| &sc.legend);
+        let refused = page.as_ref().map_or("", |sc| &sc.refused);
         for row in rows.iter().skip(self.body_from) {
             if line >= last {
                 break;
@@ -3371,9 +4066,26 @@ impl State {
                     line += 1;
                 }
                 Row::Section(n) => {
-                    if let Some(heading) = headings.get(*n).and_then(|h| key_of(h)) {
+                    if let Some(heading) = sections.get(*n).and_then(|s| key_of(&s.heading)) {
                         pen.put(line, Run::label(&heading).title().within(body));
                     }
+                    line += 1;
+                }
+                Row::Fold(n) => {
+                    let at = At {
+                        row: line,
+                        spot: spot_n,
+                        hovered: seat_on(&hovered, line),
+                    };
+                    let open = sections_shown.iter().any(|s| s.section == *n && s.open);
+                    if let Some(section) = sections.get(*n) {
+                        self.fold_title(&mut pen, section, &at, open, body);
+                    }
+                    spot_n += 1;
+                    line += 1;
+                }
+                Row::Legend => {
+                    self.draw_legend(&mut pen, legend, line, body);
                     line += 1;
                 }
                 // THE DESCRIPTION, from the row its own bar was left at: in a
@@ -3401,7 +4113,7 @@ impl State {
                         pen.paragraph(
                             line,
                             room,
-                            Run::datum(&refused).playing(Role::Body).within(body),
+                            Run::datum(refused).playing(Role::Body).within(body),
                         );
                     }
                     line += room;
@@ -3416,17 +4128,29 @@ impl State {
                     spot_n += 1;
                     line += 1;
                 }
-                Row::Screen(n) => {
+                // A ROW GOES WHOLE: with the window ending under its first
+                // line, what it says under itself is not begun — and what is
+                // left of the window under that line is nobody's.
+                Row::Screen(n, want) => {
+                    let lines = if line + want <= last { *want } else { 1 };
+                    if lines < *want {
+                        self.page_cut = Some(line + lines);
+                    }
                     let at = At {
                         row: line,
                         spot: spot_n,
-                        hovered: seat_on(&hovered, line),
+                        hovered: (line..line + lines).find_map(|l| seat_on(&hovered, l)),
                     };
-                    if let Some(row) = screen_rows.get(*n) {
-                        self.screen_row(&mut pen, row, &at, &screen_layout);
+                    if let (Some(row), Some(layout)) = (screen_rows.get(*n), screen_layouts.get(*n))
+                    {
+                        self.screen_row(&mut pen, row, &at, layout, lines);
+                        if lines > 1 {
+                            let cell = body.saturating_sub(1);
+                            self.below_at.push((line + 1, cell, row.id.clone()));
+                        }
                     }
                     spot_n += 1;
-                    line += 1;
+                    line += *want;
                 }
                 Row::Field(spot) => {
                     let at = At {
@@ -3613,11 +4337,7 @@ impl State {
         // asked for it — and the column that fills gives the room up.
         let label = self.phrases.or(Phrases::LEADER_ALT, "");
         let cells = self.field_cells(task, columns);
-        let rest = field_columns(
-            columns,
-            ronoctua_design::leader_alt::cells(&label, "x", false),
-            cells,
-        );
+        let rest = field_columns(columns, key_cells(&label), cells);
         let spelt = !label.is_empty()
             && rest
                 .field("keys")
@@ -3634,12 +4354,30 @@ impl State {
         let Some(mut row) = pen.row_of(line, &layout) else {
             return;
         };
-        let mut after_unit: Option<(u16, u16)> = None;
+        // WHAT SITS AGAINST THE VALUE, which comes in `value` cells: where it
+        // begins, and how far it may go.
+        let against = |value: u16| {
+            layout.field("value").map(|f| {
+                let at = f.at + value.min(f.width) + ronoctua_design::GAP;
+                // AND IT STOPS BEFORE THE KEY — its glyph first. A run placed by hand
+                // inherits no budget, and with none it reaches the edge —
+                // straight through the column that says which key changes
+                // this row, and then through the bar beyond it.
+                let until = layout
+                    .field("alt")
+                    .or_else(|| layout.field("keys"))
+                    .map_or_else(|| layout.ends(), |k| k.at)
+                    .saturating_sub(ronoctua_design::GAP);
+                (at, until.saturating_sub(at).max(1))
+            })
+        };
+        let mut after: Option<(&'static str, Role, (u16, u16))> = None;
+        let mut held = None;
         match spot {
             Spot::Enabled => {
                 // A SETTING: its label wears the tone of a thing that can be
                 // changed (`Role::LabelSetting`) — the four standards of a row.
-                row.put("label", Run::label(key::ENABLED).names(true));
+                row.put("label", Run::label(enabled_key(task.kind)).names(true));
                 // OFF FOR A REASON THAT IS NOT THE PERSON'S — the system's
                 // configuration switched the module off — is said with that
                 // reason and offers no key: the brain refuses the switch, and
@@ -3647,15 +4385,31 @@ impl State {
                 if let Some(why) = off_not_by_you(task) {
                     row.put("value", Run::label(&why).quiet());
                 } else {
-                    row.put(
-                        "value",
-                        if task.enabled {
-                            Run::label(key::ON).quiet()
-                        } else {
-                            Run::label(key::OFF).accent()
-                        },
-                    );
+                    let (answer, run) = if task.enabled {
+                        (key::ON, Run::label(key::ON).quiet())
+                    } else {
+                        let off = off_key(task.kind);
+                        (off, Run::label(off).accent())
+                    };
                     self.taught_in(&mut row, "brain-switch", &label, spelt);
+                    // AND WHAT THE SWITCH IS FOR, against the answer: it goes
+                    // whole or not at all, because half of a sentence in
+                    // brackets says less than none of it.
+                    let hint = enabled_hint_key(task.kind);
+                    let said = self.cells_of(answer, cells.1);
+                    after = against(said)
+                        .filter(|(_, room)| self.cells_of(hint, *room) <= *room)
+                        .map(|place| (hint, Role::Dim, place));
+                    // THE ANSWER IS HELD TO ITS OWN WIDTH while the hint sits
+                    // against it. The column would hand it the hint's cells
+                    // too, and the host cuts a key at the width it is given,
+                    // never at its ink: a longer word would run under the hint.
+                    match (after, layout.field("value")) {
+                        (Some(_), Some(f)) => held = Some((run, f.at, said.min(f.width))),
+                        _ => {
+                            row.put("value", run);
+                        }
+                    }
                 }
             }
             Spot::Interval => {
@@ -3674,21 +4428,8 @@ impl State {
                 // This side CAN do this because a number is a DATUM: its
                 // length is a thing this side holds. The label beside it is a
                 // key, and its length is not.
-                after_unit = layout.field("value").map(|f| {
-                    let at = f.at
-                        + u16::try_from(days.chars().count()).unwrap_or(1)
-                        + ronoctua_design::GAP;
-                    // AND IT STOPS BEFORE THE KEY — its glyph first. A run placed by hand
-                    // inherits no budget, and with none it reaches the edge —
-                    // straight through the column that says which key changes
-                    // this row, and then through the bar beyond it.
-                    let until = layout
-                        .field("alt")
-                        .or_else(|| layout.field("keys"))
-                        .map_or_else(|| layout.ends(), |k| k.at)
-                        .saturating_sub(ronoctua_design::GAP);
-                    (at, until.saturating_sub(at).max(1))
-                });
+                after = against(u16::try_from(days.chars().count()).unwrap_or(1))
+                    .map(|place| (key::DAYS, Role::Quiet, place));
             }
             Spot::Window => {
                 row.put("label", Run::label(key::PART).names(true));
@@ -3728,14 +4469,18 @@ impl State {
                 row.put("label", Run::label(key::REHEARSE).names(true));
                 self.taught_in(&mut row, "brain-rehearse", &label, spelt);
             }
-            Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {}
+            Spot::Action(_) | Spot::Section(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {
+            }
         }
         // The row's borrow of the screen ends at its last use above, which is
         // what lets the unit be placed against what it is a unit OF. There is
         // no `drop` here: `Row` owns nothing to drop, so calling it would only
         // hold the borrow OPEN to this line rather than closing it.
-        if let Some((at, room)) = after_unit {
-            pen.put(line, Run::label(key::DAYS).quiet().at(at).within(room));
+        if let Some((run, at, room)) = held {
+            pen.put(line, run.at(at).within(room));
+        }
+        if let Some((said, role, (at, room))) = after {
+            pen.put(line, Run::label(said).playing(role).at(at).within(room));
         }
     }
 
@@ -3748,7 +4493,7 @@ impl State {
         for spot in Self::schedule_of(task) {
             let (labels, values): (Vec<&str>, Vec<u16>) = match spot {
                 Spot::Enabled => (
-                    vec![key::ENABLED],
+                    vec![enabled_key(task.kind)],
                     if off_not_by_you(task).is_some() {
                         vec![if task.why_text.is_empty() {
                             WHEN_CELLS
@@ -3756,7 +4501,10 @@ impl State {
                             ronoctua_design::wide(&task.why_text)
                         }]
                     } else {
-                        vec![self.cells_of(key::ON, 4), self.cells_of(key::OFF, 20)]
+                        vec![
+                            self.cells_of(key::ON, 4),
+                            self.cells_of(off_key(task.kind), SWITCH_CELLS),
+                        ]
                     },
                 ),
                 Spot::Interval => (
@@ -3781,12 +4529,14 @@ impl State {
                     ],
                 ),
                 Spot::Rehearse => (vec![key::REHEARSE], Vec::new()),
-                Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => {
-                    (Vec::new(), Vec::new())
-                }
+                Spot::Action(_)
+                | Spot::Section(_)
+                | Spot::Screen(_)
+                | Spot::Step(_)
+                | Spot::Ran(_) => (Vec::new(), Vec::new()),
             };
             for l in labels {
-                label = label.max(self.cells_of(l, 20));
+                label = label.max(self.cells_of(l, SCHEDULE_LABEL_CELLS));
             }
             value = values.into_iter().fold(value, u16::max);
         }
@@ -3956,17 +4706,127 @@ impl State {
         if let Some(label) = key_of(&action.label_key) {
             row.put("label", Run::label(&label).names(true));
         }
-        row.put("keys", Run::datum("RET").accent());
+        row.put("keys", Run::datum(RET).accent());
     }
 
-    /// One row of the module's own page: its label, its value in the tone the
-    /// module gave it, and the note beside it.
-    fn screen_row(&self, pen: &mut Pen<'_, Wit>, row: &ModuleRow, at: &At, layout: &Layout) {
+    /// THE TITLE OF A SECTION THAT FOLDS, which is a row like any other: the
+    /// band, the hover and the two clicks are a row's. Its triangle points at
+    /// what it holds, the way a folded row of the log does, and the count
+    /// stands at the edge with the counts of the rows under it — the module's
+    /// number, or how many rows there are.
+    fn fold_title(
+        &self,
+        pen: &mut Pen<'_, Wit>,
+        section: &ModuleSection,
+        at: &At,
+        open: bool,
+        body: u16,
+    ) {
+        use ronoctua_design::{GAP, ICON};
         let line = at.row;
         if self.spot == at.spot {
             pen.band(line);
         } else if let Some(seat) = at.under_pointer() {
             pen.ground(line, Role::hover_of(seat));
+        }
+        let glyph = if open {
+            Icon::BrainGroupOpen
+        } else {
+            Icon::BrainGroup
+        };
+        pen.put(line, Run::glyph(glyph).quiet());
+        let held = ScreenCell::Count(section.rows.len() as u64);
+        let tally = match section.tally {
+            ScreenCell::Empty => &held,
+            _ => &section.tally,
+        };
+        let cells = self.cell_cells(tally, FACT_CELLS).min(body);
+        let count_at = body.saturating_sub(cells);
+        if let Some(count) = cell_run(tally) {
+            pen.put(line, count.quiet().at(count_at).within(cells));
+        }
+        // AND THE TITLE, which stops where the count begins.
+        let title_at = ICON + GAP;
+        let room = count_at.saturating_sub(title_at + GAP);
+        if room > 0
+            && let Some(heading) = key_of(&section.heading)
+        {
+            pen.put(line, Run::label(&heading).title().at(title_at).within(room));
+        }
+    }
+
+    /// THE LEGEND: each colour the module's rows wear, as a swatch and the
+    /// word, both in that colour — the word in colour is an honest sample of
+    /// how a row reads, and the glyph has the area that tells the two reds
+    /// apart. No numbers: what a section counts is on its title.
+    ///
+    /// A SWATCH GOES WHOLE OR NOT AT ALL: half of a word explains nothing, so
+    /// what does not fit is not drawn, and neither is what comes after it.
+    fn draw_legend(
+        &mut self,
+        pen: &mut Pen<'_, Wit>,
+        swatches: &[LegendSwatch],
+        line: u16,
+        body: u16,
+    ) {
+        use ronoctua_design::ICON;
+        let mut x = 0;
+        for swatch in swatches {
+            let word = self.cells_of(&swatch.says, FACT_CELLS);
+            let to = x + ICON + word;
+            if to > body {
+                break;
+            }
+            let role = tone_role(swatch.tone);
+            pen.put(line, Run::glyph(Icon::BrainSwatch).playing(role).at(x));
+            pen.put(
+                line,
+                Run::label(&swatch.says)
+                    .playing(role)
+                    .at(x + ICON)
+                    .within(word),
+            );
+            self.legend_at.push(FootSpot {
+                row: line,
+                from: x,
+                to,
+                about: swatch.about.clone(),
+            });
+            x = to + FACT_SPACING;
+        }
+    }
+
+    /// One row of the module's own page, `lines` tall: its label, its value in
+    /// the tone the module gave it, the note beside it, and what it says under
+    /// itself, which the band and the hover cover like the rest of the row.
+    fn screen_row(
+        &self,
+        pen: &mut Pen<'_, Wit>,
+        row: &ModuleRow,
+        at: &At,
+        layout: &Layout,
+        lines: u16,
+    ) {
+        let line = at.row;
+        for line in line..line + lines {
+            if self.spot == at.spot {
+                pen.band(line);
+            } else if let Some(seat) = at.under_pointer() {
+                pen.ground(line, Role::hover_of(seat));
+            }
+        }
+        if lines > 1
+            && let Some(run) = cell_run(&row.below)
+        {
+            let scroll = (self.below_scroll.0 == row.id).then_some(self.below_scroll.1);
+            pen.paragraph_from(
+                line + 1,
+                lines - 1,
+                scroll.unwrap_or(0),
+                run.playing(Role::Folded)
+                    .at(BELOW_AT)
+                    .within(below_cells(self.columns)),
+            );
         }
         let Some(mut cells) = pen.row_of(line, layout) else {
             return;
@@ -3974,10 +4834,17 @@ impl State {
         // A ROW THAT ACTS is labelled as one, and a row that only tells as a
         // fact — the four standards of a row, from what the row does.
         let acts = !row.act.is_empty();
-        if let Some(label) = cell_run(&row.label) {
+        let plain = |c| {
+            if stamped(c).is_some() {
+                None
+            } else {
+                cell_run(c)
+            }
+        };
+        if let Some(label) = plain(&row.label) {
             cells.put("label", label.names(acts));
         }
-        if let Some(value) = cell_run(&row.value) {
+        if let Some(value) = plain(&row.value) {
             // THE TONE IS THE MODULE'S MEANING — watching, warning, danger —
             // and quiet is the value's own standard tone.
             let value = if row.tone == BrainTone::Quiet {
@@ -3987,8 +4854,40 @@ impl State {
             };
             cells.put("value", value);
         }
-        if let Some(note) = cell_run(&row.note) {
+        // A COUNT STANDS AT THE EDGE, in the tone of a count, so a column of
+        // them reads down by their last digits; it is placed below, once the
+        // row has given the pen back.
+        if !matches!(row.note, ScreenCell::Count(_))
+            && let Some(note) = plain(&row.note)
+        {
             cells.put("note", note.dim());
+        }
+        if let (ScreenCell::Count(count), Some(field)) = (&row.note, layout.field("note")) {
+            let count = count.to_string();
+            let wide = ronoctua_design::wide(&count).min(field.width);
+            let from = field.at + field.width - wide;
+            pen.put(line, Run::datum(&count).quiet().at(from).within(wide));
+        }
+        // AND ITS DATES, in their three pieces: placed after the row's last
+        // use, since a moment is three runs in one column. One date looks the
+        // same on every page, the activity log's and a task's history's
+        // among them, and all a row may change of it is what the module's
+        // tone says of a value.
+        for (id, cell, rest) in [
+            ("label", &row.label, Role::Dim),
+            ("value", &row.value, dated_value_role(row.tone)),
+            ("note", &row.note, Role::Dim),
+        ] {
+            if let (Some(moment), Some(field)) = (stamped(cell), layout.field(id)) {
+                put_stamp(
+                    pen,
+                    line,
+                    (field.at, field.width),
+                    &moment.text,
+                    &moment.stamp,
+                    rest,
+                );
+            }
         }
     }
 }
@@ -4199,49 +5098,27 @@ impl State {
                     ..Told::default()
                 }
             }
+            // A SECTION'S TITLE: what it is, and what is in it, whole — the
+            // same sentence the pointer finds on the title.
+            Some(Spot::Section(n)) => {
+                let Some(section) = self.page_of(task).and_then(|sc| sc.sections.get(n)) else {
+                    return Told::default();
+                };
+                Told {
+                    name: key_of(&section.heading),
+                    about: key_of(&section.about),
+                    ..Told::default()
+                }
+            }
             Some(Spot::Screen(n)) => {
                 let rows = self.screen_rows(task);
                 let Some(row) = rows.get(n) else {
                     return Told::default();
                 };
-                let text = |c: &ScreenCell| match c {
-                    ScreenCell::Data(d) => Some(d.clone()),
-                    ScreenCell::Moment(t) => Some(t.text.clone()),
-                    ScreenCell::Count(v) => Some(v.to_string()),
-                    ScreenCell::Bytes(m) => Some(m.text.clone()),
-                    ScreenCell::Empty | ScreenCell::Key(_) => None,
-                };
-                let key = |c: &ScreenCell| match c {
-                    ScreenCell::Key(k) => key_of(k),
-                    _ => None,
-                };
-                // THE ROW, WHOLE: its label as the name when it is a key and
-                // as the held line when it is data; the VALUE whole and
-                // wrapped when it is data the row had to cut (a journal's
-                // message), in the row's tone, with the note on the held line
-                // after the label — and otherwise the note as the sentence.
-                let label = text(&row.label);
-                let value = text(&row.value).filter(|_| label.is_some());
-                let note = text(&row.note);
-                let (said, logged) = match value {
-                    Some(v) => (
-                        Some(match (&label, &note) {
-                            (Some(l), Some(n)) => format!("{l}  {n}"),
-                            _ => label.clone().unwrap_or_default(),
-                        }),
-                        Some((v, tone_role(row.tone))),
-                    ),
-                    None => (
-                        label.or_else(|| text(&row.value)),
-                        note.map(|t| (t, tone_role(row.tone))),
-                    ),
-                };
-                Told {
-                    name: key(&row.label).or_else(|| key(&row.value)),
-                    said,
-                    about: key(&row.note),
-                    logged,
-                    ..Told::default()
+                if row.foot.is_empty() && says_nothing(&row.below) {
+                    Self::told_of_row(row)
+                } else {
+                    self.told_of_foot(task, row)
                 }
             }
             // EVERY OTHER SPOT IS ABOUT THE TASK, which is what the page is
@@ -4265,6 +5142,82 @@ impl State {
 }
 
 impl State {
+    /// A row of a module's page, from its cells.
+    fn told_of_row(row: &ModuleRow) -> Told {
+        let key = |c: &ScreenCell| match c {
+            ScreenCell::Key(k) => key_of(k),
+            _ => None,
+        };
+        // THE ROW, WHOLE: its label as the name when it is a key and as the
+        // held line when it is data; the VALUE whole and wrapped when it is
+        // data the row had to cut (a journal's message), in the row's tone,
+        // with the note on the held line after the label — and otherwise the
+        // note as the sentence.
+        let label = cell_text(&row.label);
+        let value = cell_text(&row.value).filter(|_| label.is_some());
+        let note = cell_text(&row.note);
+        let (said, logged) = match value {
+            Some(v) => (
+                Some(match (&label, &note) {
+                    (Some(l), Some(n)) => format!("{l}  {n}"),
+                    _ => label.clone().unwrap_or_default(),
+                }),
+                Some((v, tone_role(row.tone))),
+            ),
+            None => (
+                label.or_else(|| cell_text(&row.value)),
+                note.map(|t| (t, tone_role(row.tone))),
+            ),
+        };
+        Told {
+            name: key(&row.label).or_else(|| key(&row.value)),
+            said,
+            about: key(&row.note),
+            logged,
+            ..Told::default()
+        }
+    }
+
+    /// A row of a module's page that says more of itself than its cells: its
+    /// name, what it says under itself and each fact, each in its own colour —
+    /// the owner's *"tudo está na mesma cor"* — and what its other action is
+    /// called here.
+    ///
+    /// ITS NAME IS WHAT IT IS CALLED, and a date in the label's place calls
+    /// it nothing: the row says when, and its value says what.
+    fn told_of_foot(&self, task: &TaskState, row: &ModuleRow) -> Told {
+        let below = (!says_nothing(&row.below)).then(|| row.below.clone());
+        let also = self
+            .also_here()
+            .and_then(|_| task.actions.iter().find(|a| a.id == row.also))
+            .and_then(|a| key_of(&a.label_key));
+        // WITH NO FACTS, what its cells say is all the footer has to go on.
+        if row.foot.is_empty() {
+            return Told {
+                below,
+                also,
+                ..Self::told_of_row(row)
+            };
+        }
+        let named = match &row.label {
+            ScreenCell::Moment(_) | ScreenCell::Count(_) | ScreenCell::Bytes(_) => &row.value,
+            label if says_nothing(label) => &row.value,
+            label => label,
+        };
+        let (name, headline) = match named {
+            ScreenCell::Key(k) => (key_of(k), None),
+            other => (None, cell_text(other)),
+        };
+        Told {
+            name,
+            headline,
+            below,
+            lines: row.foot.clone(),
+            also,
+            ..Told::default()
+        }
+    }
+
     /// WHAT THE THING UNDER THE POINTER IS, in a sentence — declared for the
     /// host (`Screen::point`), which says it where every window says what its
     /// row under the pointer adds: the header's line, or, with the header
@@ -4407,6 +5360,10 @@ impl State {
                     .map(Pointed::Key)
             }
             Page::Task => {
+                // UNDER A ROW THE WINDOW CUT, nothing was drawn to say.
+                if self.page_cut.is_some_and(|cut| row >= cut) {
+                    return None;
+                }
                 let task = self.here()?;
                 let rows = self.page_rows();
                 let n = row_at_line(&rows, self.body_from, row)?;
@@ -4420,10 +5377,18 @@ impl State {
                             .or_else(|| key_of(&action.label_key))
                             .map(Pointed::Key)
                     }
-                    Row::Screen(k) => {
-                        let rows = self.screen_rows(task);
-                        let cell = rows.get(*k)?;
-                        said_of_cell(&cell.note).or_else(|| said_of_cell(&cell.value))
+                    Row::Screen(k, _) => {
+                        let cells = self.screen_rows(task);
+                        let cell = cells.get(*k)?;
+                        // THE LINES UNDER IT say what they say; on the row
+                        // itself the note, and what the row has left to say.
+                        let first = lines_before(&rows, n) - lines_before(&rows, self.body_from);
+                        if row > first {
+                            return said_of_cell(&cell.below);
+                        }
+                        said_of_cell(&cell.note)
+                            .or_else(|| said_of_cell(&cell.value))
+                            .or_else(|| said_of_cell(&cell.label))
                     }
                     // THE PAGE'S OWN TITLE says what the task is, in one line,
                     // and so does its description, which says it at length.
@@ -4444,12 +5409,24 @@ impl State {
                             .into(),
                         ))
                     }
-                    Row::Section(_) => Some(Pointed::Key(key::ABOUT_SECTION.into())),
+                    // A SECTION SAYS WHAT IS IN IT, in its module's words, and
+                    // its count says the same: what the number counts is the
+                    // one thing that changes from section to section. Only
+                    // the triangle says what a click on it is for.
+                    Row::Section(n) => Some(Pointed::Key(self.section_about(task, *n))),
+                    Row::Fold(_) if column < ronoctua_design::ICON => {
+                        Some(Pointed::Key(key::ABOUT_SECTION_FOLD.into()))
+                    }
+                    Row::Fold(n) => Some(Pointed::Key(self.section_about(task, *n))),
+                    Row::Legend => self
+                        .legend_at
+                        .iter()
+                        .find(|s| s.row == row && (s.from..s.to).contains(&column))
+                        .and_then(|s| key_of(&s.about))
+                        .map(Pointed::Key),
                     // WHY THE MODULE'S PAGE IS NOT HERE, whole.
                     Row::Refused(_) => self
-                        .screen
-                        .as_ref()
-                        .filter(|sc| sc.module == task.id)
+                        .page_of(task)
                         .map(|sc| Pointed::Datum(sc.refused.clone())),
                     Row::Blank => None,
                 }
@@ -4465,6 +5442,15 @@ impl State {
                     .map(|l| Pointed::Datum(l.text.clone()))
             }
         }
+    }
+
+    /// What a section of the module's page says under the pointer: what its
+    /// module says of it, or that it is its module's at all.
+    fn section_about(&self, task: &TaskState, n: usize) -> String {
+        self.page_of(task)
+            .and_then(|sc| sc.sections.get(n))
+            .and_then(|s| key_of(&s.about))
+            .unwrap_or_else(|| key::ABOUT_SECTION.to_owned())
     }
 
     /// The most useful sentence about a record, under the pointer: what a
@@ -4559,7 +5545,28 @@ const fn spot_about(spot: Spot) -> Option<&'static str> {
         Spot::Next => Some(key::ABOUT_NEXT),
         Spot::RunNow => Some(key::ABOUT_RUN),
         Spot::Rehearse => Some(key::ABOUT_REHEARSE),
-        Spot::Action(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => None,
+        Spot::Action(_) | Spot::Section(_) | Spot::Screen(_) | Spot::Step(_) | Spot::Ran(_) => None,
+    }
+}
+
+/// The text of a cell of a module's row, when it holds any this side can read:
+/// a key is only the host's to say.
+fn cell_text(c: &ScreenCell) -> Option<String> {
+    match c {
+        ScreenCell::Data(d) => Some(d.clone()),
+        ScreenCell::Moment(t) => Some(t.text.clone()),
+        ScreenCell::Count(v) => Some(v.to_string()),
+        ScreenCell::Bytes(m) => Some(m.text.clone()),
+        ScreenCell::Empty | ScreenCell::Key(_) => None,
+    }
+}
+
+/// The same, with a key as its own name: what tells two cells apart and how
+/// long what is held comes out.
+fn cell_word(c: &ScreenCell) -> String {
+    match c {
+        ScreenCell::Key(k) => k.clone(),
+        other => cell_text(other).unwrap_or_default(),
     }
 }
 
@@ -4674,6 +5681,30 @@ impl State {
         self.tune(Knob::Step(StepSwitch {
             id: step.id.clone(),
             on: !step.on,
+        }))
+    }
+
+    /// Folding the section `n` the other way from how it is drawn, by the road
+    /// a step's switch takes: the mind brings the answer back, and the page is
+    /// drawn from the mind, so it comes out the same in every window.
+    fn flip_section(&self, n: usize) -> Vec<Effect> {
+        let Some(task) = self.here() else {
+            return Vec::new();
+        };
+        let shown = self.shown_sections(task);
+        let Some(open) = shown
+            .iter()
+            .find(|s| s.section == n && s.folds)
+            .map(|s| s.open)
+        else {
+            return Vec::new();
+        };
+        let Some(section) = self.page_of(task).and_then(|sc| sc.sections.get(n)) else {
+            return Vec::new();
+        };
+        self.tune(Knob::Fold(SectionState {
+            id: section.id.clone(),
+            open: !open,
         }))
     }
 
@@ -4822,6 +5853,7 @@ impl State {
                 Some(Spot::RunNow) => self.command("brain-run"),
                 Some(Spot::Rehearse) => self.command("brain-rehearse"),
                 Some(Spot::Step(_)) => self.flip_step(),
+                Some(Spot::Section(n)) => self.flip_section(n),
                 // ONE OF THE MODULE'S OWN: the host asks the question first
                 // when the action has one, and sends the answer with it.
                 Some(Spot::Action(n)) => vec![Effect::Ask(Demand {
@@ -4930,10 +5962,125 @@ impl State {
         {
             return Vec::new();
         }
+        let held = self.held();
+        self.page_phrases = Phrases::of(
+            screen
+                .phrases
+                .iter()
+                .map(|p| (p.key.clone(), p.text.clone()))
+                .collect(),
+        );
         self.screen = Some(screen);
-        let spots = self.spots().len();
-        self.spot = self.spot.min(spots.saturating_sub(1));
+        self.put_back(held.as_ref());
         vec![Effect::Redraw]
+    }
+
+    /// What the cursor is on, by what names it.
+    fn held(&self) -> Option<Held> {
+        let spot = self.spot_here()?;
+        let task = self.here()?;
+        let sections = self.page_of(task).map_or(&[][..], |sc| &sc.sections);
+        Some(match spot {
+            Spot::Section(n) => Held::Title(section_name(sections.get(n)?).to_owned()),
+            Spot::Screen(k) => {
+                let shown = self
+                    .shown_sections(task)
+                    .into_iter()
+                    .find(|s| (s.from..s.from + s.rows).contains(&k))?;
+                let section = sections.get(shown.section)?;
+                let name = section_name(section);
+                let place = k - shown.from;
+                Held::Row {
+                    section: name.to_owned(),
+                    twin: sections[..shown.section]
+                        .iter()
+                        .filter(|s| section_name(s) == name)
+                        .count(),
+                    id: section.rows.get(place)?.id.clone(),
+                    place,
+                    stood: self.spot.saturating_sub(place + usize::from(shown.folds)),
+                }
+            }
+            Spot::Action(n) => Held::Action {
+                id: task.actions.get(n)?.id.clone(),
+                place: Self::page_actions(task).position(|m| m == n)?,
+            },
+            other => Held::Spot(other),
+        })
+    }
+
+    /// The spot that stands for `held` on the page as it is now, if any does.
+    ///
+    /// Within its section, its row wherever it went, and when it left, the
+    /// row that took its place. A section the person has shut in another
+    /// window keeps the cursor on its title.
+    ///
+    /// AMONG SECTIONS OF ONE NAME, the one that holds the row, and with the
+    /// row gone the one at its place among them. The first of that name would
+    /// put the cursor on another thing's row, and `RET` would act on it.
+    fn spot_of(&self, held: &Held) -> Option<Spot> {
+        let task = self.here()?;
+        let sections = self.page_of(task).map_or(&[][..], |sc| &sc.sections);
+        let named = |name: &str| sections.iter().position(|s| section_name(s) == name);
+        match held {
+            Held::Spot(spot) => Some(*spot),
+            // THE ACTION WHEREVER THE LIST PUT IT, and with it gone, the one
+            // at its place among the page's actions — never what stands at
+            // its old index among the spots, a section's title or a row.
+            Held::Action { id, place } => {
+                let page: Vec<usize> = Self::page_actions(task).collect();
+                page.iter()
+                    .copied()
+                    .find(|&n| task.actions[n].id == *id)
+                    .or_else(|| page.get((*place).min(page.len().checked_sub(1)?)).copied())
+                    .map(Spot::Action)
+            }
+            Held::Title(name) => named(name).map(Spot::Section),
+            Held::Row {
+                section,
+                twin,
+                id,
+                place,
+                ..
+            } => {
+                let alike = || {
+                    let of_it = |(_, s): &(usize, &ModuleSection)| section_name(s) == section;
+                    sections.iter().enumerate().filter(of_it)
+                };
+                let (n, _) = alike()
+                    .find(|(_, s)| s.rows.iter().any(|r| r.id == *id))
+                    .or_else(|| alike().nth(*twin))?;
+                let shown = self
+                    .shown_sections(task)
+                    .into_iter()
+                    .find(|s| s.section == n)?;
+                if !shown.open {
+                    return Some(Spot::Section(n));
+                }
+                let rows = &sections.get(n)?.rows;
+                let at = rows
+                    .iter()
+                    .position(|r| r.id == *id)
+                    .unwrap_or_else(|| (*place).min(shown.rows - 1));
+                Some(Spot::Screen(shown.from + at))
+            }
+        }
+    }
+
+    /// The cursor, back on what it was on — or, with that gone, at its row,
+    /// inside the list; and a row whose whole section left, at what stands
+    /// where the section stood.
+    fn put_back(&mut self, held: Option<&Held>) {
+        let spots = self.spots();
+        let gone = match held {
+            Some(Held::Row { stood, .. }) => *stood,
+            _ => self.spot,
+        };
+        self.spot = held
+            .and_then(|h| self.spot_of(h))
+            .and_then(|wanted| spots.iter().position(|s| *s == wanted))
+            .unwrap_or(gone)
+            .min(spots.len().saturating_sub(1));
     }
 
     /// How many things the cursor can walk in the place it is.
@@ -4972,6 +6119,7 @@ impl State {
             .activity_lines()
             .get(self.log)
             .and_then(|l| self.line_key(*l));
+        let held = self.held();
         let first = !self.heard;
         self.heard = true;
         self.mind = mind;
@@ -5011,8 +6159,7 @@ impl State {
         // of open ones is bounded by the log itself.
         let folds: Vec<(String, u64)> = self.mind.activity_rows.iter().map(Self::fold_of).collect();
         self.opened.retain(|f| folds.contains(f));
-        let spots = self.spots().len();
-        self.spot = self.spot.min(spots.saturating_sub(1));
+        self.put_back(held.as_ref());
         vec![Effect::Redraw]
     }
 
@@ -5026,6 +6173,13 @@ impl State {
             && (open.from..open.to).contains(&column)
         {
             return self.open_task(open.task);
+        }
+        // AND THE ROW'S OTHER ACTION, drawn in the same place and the same way.
+        if let Some((row, from, to)) = self.also_at
+            && self.blocks.foot.row_at(line) == Some(row)
+            && (from..to).contains(&column)
+        {
+            return self.command("brain-row-also");
         }
         // THE WAY BACK atop a task's page, one click like the header's `ESC`.
         if let Some((at, from, to)) = self.back_at
@@ -5079,8 +6233,11 @@ impl State {
                     // THE SAME LIST OF ROWS THE DRAWING WALKED, so the band
                     // and the click cannot land on two different things: the
                     // description is three rows of screen and one row of list.
+                    // And under a row the window cut it lands on nothing,
+                    // which is what is drawn there.
                     let rows = self.page_rows();
-                    if let Some(n) = row_at_line(&rows, self.body_from, row)
+                    if self.page_cut.is_none_or(|cut| row < cut)
+                        && let Some(n) = row_at_line(&rows, self.body_from, row)
                         && let Some(spot) = Self::spot_of_row(&rows, n)
                     {
                         return self.reach(spot, self.spot == spot, |s, n| s.spot = n);
@@ -5145,9 +6302,15 @@ impl State {
         // THE FOOTER'S SENTENCE FIRST, because its bar is drawn inside the
         // footer's block and a line there belongs to no list. The number is
         // the HOST's — it wrapped the sentence and clamped the offset — so it
-        // is taken as it comes.
-        if self.blocks.foot.holds(line) {
-            self.foot_scroll = u16::try_from(first).unwrap_or(u16::MAX);
+        // is taken as it comes. What a row says under itself is a paragraph
+        // of its own there, told apart by its own row and cell.
+        if let Some(row) = self.blocks.foot.row_at(line) {
+            let first = u16::try_from(first).unwrap_or(u16::MAX);
+            if self.foot_below_at == Some((row, column)) {
+                self.foot_below_scroll = first;
+            } else {
+                self.foot_scroll = first;
+            }
             return vec![Effect::Redraw];
         }
         // AND A TASK'S DESCRIPTION, by its own row AND cell: the page's bar
@@ -5162,6 +6325,16 @@ impl State {
             && column == cell
         {
             self.about_scroll = u16::try_from(first).unwrap_or(u16::MAX);
+            return vec![Effect::Redraw];
+        }
+        // AND THE LINES UNDER A ROW, past what the page gives them.
+        if self.page == Page::Task
+            && let Some((_, _, id)) = self
+                .below_at
+                .iter()
+                .find(|(at, cell, _)| self.blocks.body.row_at(line) == Some(*at) && column == *cell)
+        {
+            self.below_scroll = (id.clone(), u16::try_from(first).unwrap_or(u16::MAX));
             return vec![Effect::Redraw];
         }
         match self.page {
@@ -5462,6 +6635,8 @@ impl State {
             // draws them now says where they are.
             s.back_at = None;
             s.about_at = None;
+            s.below_at.clear();
+            s.legend_at.clear();
             s.declare(&mut screen);
             s.warning(&mut screen);
             s.draw_notices(&mut screen);
@@ -5723,6 +6898,7 @@ mod tests {
             why_text: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
+            folds: Vec::new(),
         }
     }
 
@@ -7093,6 +8269,101 @@ mod tests {
         );
     }
 
+    /// FAILS IF: a module's date is not the date the log draws — the rest of
+    /// it dim, its day quiet, today's in its own hue — in whichever column it
+    /// is, or a date whose day the host did not cut is not drawn at all.
+    #[test]
+    fn a_modules_date_is_the_date_every_page_draws() {
+        let stamp = |day: &str, today| ronoctua_design::types::Stamp {
+            lead: "2026-08-".to_owned(),
+            day: day.to_owned(),
+            tail: " 14:02".to_owned(),
+            today,
+        };
+        let moment = |stamp| {
+            ScreenCell::Moment(Timed {
+                at: 5,
+                text: "2026-08-23 14:02".to_owned(),
+                stamp,
+            })
+        };
+        let mut s = a_state();
+        let _ = s.act(Input::Confirm);
+        let _ = s.watch_asks();
+        let mut page = a_screen("fixture-routine", 2);
+        let rows = &mut page.sections[0].rows;
+        rows[0].label = moment(stamp("23", false));
+        rows[0].value = ScreenCell::Data("a line the row holds".to_owned());
+        rows[0].note = moment(stamp("24", true));
+        let cut_by_nobody = ronoctua_design::types::Stamp {
+            lead: String::new(),
+            day: String::new(),
+            tail: String::new(),
+            today: false,
+        };
+        page.sections[1].rows[0].value = ScreenCell::Moment(Timed {
+            at: 5,
+            text: "a date in one piece".to_owned(),
+            stamp: cut_by_nobody,
+        });
+        s.act(Input::ModuleScreen(page));
+        let seen = runs(&drawn(&mut s, 40, 120));
+        for (said, wanted) in [
+            ("2026-08-", "text-dim"),
+            ("23", "text-secondary"),
+            (" 14:02", "text-dim"),
+            ("24", "text-today"),
+        ] {
+            assert_eq!(colour_of(&seen, said).as_deref(), Some(wanted), "`{said}`");
+        }
+        assert!(
+            colour_of(&seen, "2026-08-23 14:02").is_none(),
+            "a date was drawn whole beside its pieces"
+        );
+        assert!(
+            colour_of(&seen, "a date in one piece").is_some(),
+            "a date the host did not cut is not drawn"
+        );
+    }
+
+    /// FAILS IF: a row whose date is its value loses the tone its module gave
+    /// it, the only colour such a row has, or the day of that date stops being
+    /// the day's, or a row with no tone draws its date in anything but the dim
+    /// of every date.
+    #[test]
+    fn a_dated_value_keeps_the_tone_of_its_row() {
+        let stamp = ronoctua_design::types::Stamp {
+            lead: "2026-08-".to_owned(),
+            day: "23".to_owned(),
+            tail: " 14:02".to_owned(),
+            today: false,
+        };
+        let date = ScreenCell::Moment(Timed {
+            at: 5,
+            text: "2026-08-23 14:02".to_owned(),
+            stamp,
+        });
+        let mut s = a_state();
+        for (generation, tone, rest) in [
+            (2, BrainTone::Warning, "state-warning"),
+            (3, BrainTone::Danger, "state-error"),
+            (4, BrainTone::Quiet, "text-dim"),
+        ] {
+            let mut page = a_screen("fixture-routine", generation);
+            page.sections[0].rows[0].value = date.clone();
+            page.sections[0].rows[0].tone = tone;
+            on_the_page(&mut s, page);
+            let seen = runs(&drawn(&mut s, 40, 120));
+            for (said, wanted) in [
+                ("2026-08-", rest),
+                ("23", "text-secondary"),
+                (" 14:02", rest),
+            ] {
+                assert_eq!(colour_of(&seen, said).as_deref(), Some(wanted), "`{said}`");
+            }
+        }
+    }
+
     /// FAILS IF: what the pointer rests on is not declared for the host — a
     /// task's ONE LINE under its row (never its whole description, the
     /// footer's paragraph run along the minibuffer), what its glyph means
@@ -7323,7 +8594,7 @@ mod tests {
                     .and_then(|(_, a)| a.clone())
             };
             for (heading, about) in [
-                (key::SCHEDULE, key::ABOUT_SCHEDULE),
+                (key::OPTIONS, key::ABOUT_OPTIONS),
                 (key::STEPS, key::ABOUT_STEPS),
                 (key::HISTORY, key::ABOUT_HISTORY),
             ] {
@@ -7331,6 +8602,27 @@ mod tests {
             }
         }
         assert!(!s.mind.tasks[task].steps.is_empty());
+        // AND A MODULE'S PAGE WITH ITS OWN TITLES: a swatch, a triangle, a
+        // title and the count at the edge of it.
+        s.watched = Some(s.mind.tasks[task].id.clone());
+        let mut page = a_folding_page(2);
+        page.sections[0].about = "fixture-about-first".to_owned();
+        page.legend = a_legend();
+        s.act(Input::ModuleScreen(page));
+        let told = every(&mut s, false, "a module's page");
+        let of = |k: &str| {
+            told.iter()
+                .find(|(w, _)| w == k)
+                .and_then(|(_, a)| a.clone())
+        };
+        assert_eq!(
+            of("fixture-heading-first"),
+            Some(Text::Key("fixture-about-first".into()))
+        );
+        assert_eq!(
+            of("fixture-worst"),
+            Some(Text::Key("fixture-worst-about".into()))
+        );
         s.page = Page::Log;
         let _ = every(&mut s, false, "the daemon's log");
     }
@@ -7758,6 +9050,159 @@ mod tests {
         );
     }
 
+    /// FAILS IF: the options are two lists again — a title over the fields
+    /// and another over the actions, or a blank between them — on a task of
+    /// any kind, or the two kinds of row keep their keys in two columns, or an
+    /// action's long label pushes the fields' values out.
+    #[test]
+    fn the_options_are_one_list_with_one_column_of_keys() {
+        let mut s = a_state();
+        s.phrases = Phrases::of(vec![
+            (Phrases::LEADER_ALT.to_owned(), "SUPER ALT".to_owned()),
+            (key::ENABLED.to_owned(), "Runs on its own".to_owned()),
+            (key::ON.to_owned(), "Yes".to_owned()),
+        ]);
+        s.mind.tasks[0].actions = vec![ronoctua_design::types::ModuleAction {
+            id: "new".to_owned(),
+            label_key: "cmd-fixture-new".to_owned(),
+            row: false,
+            asks_key: String::new(),
+        }];
+        s.page = Page::Task;
+        for kind in [TaskKind::Routine, TaskKind::Once, TaskKind::Watch] {
+            s.mind.tasks[0].kind = kind;
+            let task = s.mind.tasks[0].clone();
+            let rows = s.rows_of(&task, 100);
+            let from = rows
+                .iter()
+                .position(|r| matches!(r, Row::Heading(k) if *k == key::OPTIONS))
+                .expect("the options have no title");
+            let list = &rows[from + 1..];
+            let many = list
+                .iter()
+                .take_while(|r| matches!(r, Row::Field(_) | Row::Action(_)))
+                .count();
+            let wanted = State::schedule_of(&task).len() + State::page_actions(&task).count();
+            assert_eq!(many, wanted, "{kind:?}");
+            assert!(
+                list[..many].iter().any(|r| matches!(r, Row::Action(_))),
+                "{kind:?}"
+            );
+        }
+        s.mind.tasks[0].kind = TaskKind::Routine;
+        let seen = runs(&drawn(&mut s, 40, 100));
+        let cell_of = |what: &str| {
+            seen.iter()
+                .find(|(t, ..)| t == what)
+                .map(|(.., column)| *column)
+        };
+        // THE `⌥` AND THE `RET` BEGIN ON THE SAME CELL, in a column that holds
+        // the wider of the two.
+        let alt = seen
+            .iter()
+            .find(|(t, ..)| t.contains("LeaderAlt"))
+            .map(|(.., column)| *column);
+        assert_eq!(cell_of(RET), alt, "{seen:?}");
+        let keys = action_columns(100, key_cells("SUPER ALT"));
+        assert_eq!(
+            keys.field("keys").map(|f| f.width),
+            Some(ronoctua_design::wide(RET))
+        );
+        // AND AN ACTION'S LABEL, however long, moves no field's value.
+        s.phrases = Phrases::of(vec![(
+            "cmd-fixture-new".to_owned(),
+            "an action with a very long label indeed".to_owned(),
+        )]);
+        let longer = runs(&drawn(&mut s, 40, 100));
+        let moved = longer
+            .iter()
+            .find(|(t, ..)| t == key::ON)
+            .map(|(.., column)| *column);
+        s.mind.tasks[0].actions.clear();
+        let none = runs(&drawn(&mut s, 40, 100));
+        let bare = none
+            .iter()
+            .find(|(t, ..)| t == key::ON)
+            .map(|(.., column)| *column);
+        assert!(moved.is_some(), "{longer:?}");
+        assert_eq!(moved, bare, "an action's label moved the fields' values");
+    }
+
+    /// FAILS IF: a watch is said to run, or told it runs "only when you ask"
+    /// — it runs nothing, and that row's switch is about watching — or the
+    /// switch's hint is not against its answer, dim, on either kind; or one
+    /// that does not fit is cut; or a switch the system holds says what it
+    /// is for and offers nothing.
+    #[test]
+    fn a_task_says_what_its_switch_is_for_in_its_own_words() {
+        let mut s = a_state();
+        s.page = Page::Task;
+        s.phrases = Phrases::of(vec![
+            (key::OFF.to_owned(), "No".to_owned()),
+            (key::OFF_WATCH.to_owned(), "Not at all".to_owned()),
+            (key::ON.to_owned(), "Yes".to_owned()),
+            (key::ENABLED.to_owned(), "Runs".to_owned()),
+            (key::ENABLED_WATCH.to_owned(), "Watches".to_owned()),
+            (key::ENABLED_HINT.to_owned(), "(the schedule)".to_owned()),
+            (
+                key::ENABLED_HINT_WATCH.to_owned(),
+                "(monitoring)".to_owned(),
+            ),
+        ]);
+        let drew = |s: &mut State, columns| runs(&drawn(s, 40, columns));
+        let seen = drew(&mut s, 100);
+        assert_eq!(
+            colour_of(&seen, key::ENABLED_HINT).as_deref(),
+            Some("text-dim")
+        );
+        assert!(colour_of(&seen, key::ENABLED).is_some());
+        assert!(colour_of(&seen, key::ENABLED_WATCH).is_none());
+        // RIGHT AFTER THE ANSWER, whichever column the row's widest word left.
+        let at = |seen: &[(String, String, u16, u16)], what| {
+            seen.iter()
+                .find(|(t, ..)| t == what)
+                .map(|(.., column)| *column)
+        };
+        let yes = at(&seen, key::ON).expect("the answer");
+        assert_eq!(at(&seen, key::ENABLED_HINT), Some(yes + 3 + 1));
+        // AND THE ANSWER RESERVES NO MORE THAN ITS WORD: the host cuts a key
+        // at the width it was given, so a column-wide answer reaches under the
+        // hint beside it (`brain-driven` measures every key the same way).
+        for columns in [80, 100] {
+            drawn(&mut s, 40, columns)
+                .check()
+                .unwrap_or_else(|e| panic!("at {columns} columns: {e}"));
+        }
+
+        s.mind.tasks[0].kind = TaskKind::Watch;
+        s.mind.tasks[0].enabled = false;
+        s.spot = 0;
+        let seen = drew(&mut s, 100);
+        for said in [key::ENABLED_WATCH, key::OFF_WATCH, key::ENABLED_HINT_WATCH] {
+            assert!(colour_of(&seen, said).is_some(), "`{said}`");
+        }
+        for not in [key::ENABLED, key::OFF, key::ENABLED_HINT] {
+            assert!(colour_of(&seen, not).is_none(), "`{not}`");
+        }
+        let off = at(&seen, key::OFF_WATCH).expect("the answer");
+        assert_eq!(at(&seen, key::ENABLED_HINT_WATCH), Some(off + 10 + 1));
+
+        // NOT WHOLE, NOT AT ALL.
+        let seen = drew(&mut s, 34);
+        assert!(colour_of(&seen, key::OFF_WATCH).is_some(), "{seen:?}");
+        assert!(
+            colour_of(&seen, key::ENABLED_HINT_WATCH).is_none(),
+            "a hint with no room was cut: {seen:?}"
+        );
+
+        // AND A SWITCH THE SYSTEM HOLDS is no switch to explain.
+        s.mind.tasks[0].why_not = "system-off".to_owned();
+        s.mind.tasks[0].why_key = "fixture-why-system".to_owned();
+        let seen = drew(&mut s, 100);
+        assert!(colour_of(&seen, "fixture-why-system").is_some());
+        assert!(colour_of(&seen, key::ENABLED_HINT_WATCH).is_none());
+    }
+
     /// A module's page, of two sections, one row acting and one telling.
     fn a_screen(module: &str, generation: u64) -> ModuleScreen {
         let row = |id: &str, act: &str| ModuleRow {
@@ -7772,22 +9217,982 @@ mod tests {
             } else {
                 "ignore".to_owned()
             },
+            below: ScreenCell::Empty,
+            foot: Vec::new(),
+        };
+        let section = |heading: &str, rows| ronoctua_design::types::ModuleSection {
+            heading: heading.to_owned(),
+            rows,
+            id: String::new(),
+            about: String::new(),
+            fold: ronoctua_design::types::SectionFold::Never,
+            tally: ScreenCell::Empty,
         };
         ModuleScreen {
             module: module.to_owned(),
             generation,
             sections: vec![
-                ronoctua_design::types::ModuleSection {
-                    heading: "fixture-heading-one".to_owned(),
-                    rows: vec![row("a", "forget")],
-                },
-                ronoctua_design::types::ModuleSection {
-                    heading: "fixture-heading-two".to_owned(),
-                    rows: vec![row("b", "")],
-                },
+                section("fixture-heading-one", vec![row("a", "forget")]),
+                section("fixture-heading-two", vec![row("b", "")]),
             ],
             refused: String::new(),
+            legend: Vec::new(),
+            phrases: Vec::new(),
         }
+    }
+
+    /// A row of the journal's shape: a date, a line of data and a count.
+    fn a_dated_row(id: &str, line: &str, count: u64) -> ModuleRow {
+        ModuleRow {
+            id: id.to_owned(),
+            label: ScreenCell::Moment(Timed {
+                at: 5,
+                text: "2026-08-23 14:02".to_owned(),
+                stamp: ronoctua_design::types::Stamp {
+                    lead: "2026-08-".to_owned(),
+                    day: "23".to_owned(),
+                    tail: " 14:02".to_owned(),
+                    today: false,
+                },
+            }),
+            value: ScreenCell::Data(line.to_owned()),
+            note: ScreenCell::Count(count),
+            tone: BrainTone::Danger,
+            act: "forget".to_owned(),
+            also: String::new(),
+            below: ScreenCell::Empty,
+            foot: Vec::new(),
+        }
+    }
+
+    /// The words a page came with, as the host resolved them: every key of
+    /// `said`, spelt as `text`.
+    fn with_words(mut page: ModuleScreen, said: &[(&str, &str)]) -> ModuleScreen {
+        page.phrases = said
+            .iter()
+            .map(|(key, text)| ronoctua_design::types::Phrase {
+                key: (*key).to_owned(),
+                text: (*text).to_owned(),
+            })
+            .collect();
+        page
+    }
+
+    /// The page in front, `page`, laid out for `s`.
+    fn on_the_page(s: &mut State, page: ModuleScreen) {
+        if s.page != Page::Task {
+            let _ = s.act(Input::Confirm);
+            let _ = s.watch_asks();
+        }
+        s.act(Input::ModuleScreen(page));
+    }
+
+    /// FAILS IF: a message stops at the twenty-six cells the reservations
+    /// leave it at seventy-three columns, one section's width squeezes
+    /// another's rows, or a count does not stand at the edge in a count's
+    /// tone while every other note stays dim.
+    #[test]
+    fn a_rows_columns_are_as_wide_as_what_they_hold() {
+        let mut s = a_state();
+        let mut page = a_screen("fixture-routine", 2);
+        page.sections[0].rows = vec![a_dated_row("a", "a line", 3536), a_dated_row("b", "a", 9)];
+        page.sections[1].rows[0].label = ScreenCell::Data("x".repeat(30));
+        on_the_page(&mut s, with_words(page, &[("fixture-heading-one", "One")]));
+        let layouts = s.screen_layouts(&s.mind.tasks[0].clone(), 73);
+        for (columns, wanted) in [(73, 50), (90, 67), (100, 77)] {
+            let layouts = s.screen_layouts(&s.mind.tasks[0].clone(), columns);
+            assert_eq!(layouts[0].field("value").map(|f| f.width), Some(wanted));
+        }
+        assert_eq!(layouts[0].field("label").map(|f| f.width), Some(16));
+        assert_eq!(layouts[0].field("note").map(|f| f.width), Some(4));
+        // THE OTHER SECTION is laid out by its own rows — and its long label
+        // takes nothing from a value that still needs it.
+        assert_eq!(layouts[2].field("label").map(|f| f.width), Some(24));
+        let wide = s.screen_layouts(&s.mind.tasks[0].clone(), 100);
+        assert_eq!(wide[2].field("label").map(|f| f.width), Some(30));
+        let seen = runs(&drawn(&mut s, 40, 73));
+        let at = |what: &str| {
+            seen.iter()
+                .find(|(t, ..)| t == what)
+                .map(|(_, c, _, x)| (c.as_str(), *x))
+        };
+        // THE LAST DIGIT OF EITHER, on the row's last cell.
+        assert_eq!(at("3536"), Some(("text-secondary", 68)));
+        assert_eq!(at("9"), Some(("text-secondary", 71)));
+        // AND A NOTE THAT IS NO COUNT stays where it starts, and dim.
+        assert_eq!(
+            colour_of(&seen, "a note the module wrote").as_deref(),
+            Some("text-dim")
+        );
+    }
+
+    /// FAILS IF: a label with nothing beside it is cut at a column the rows
+    /// around it need, or widens that column for them, or a count beside it
+    /// leaves the edge the other rows' stand at — an empty text is nothing
+    /// too — or a column nothing in the section fills is kept empty, its
+    /// width taken from the value.
+    #[test]
+    fn a_sentence_takes_the_line_and_an_empty_column_is_left_out() {
+        let mut s = a_state();
+        let mut page = a_screen("fixture-routine", 2);
+        let sentence = "a sentence of fifty cells that a column would cut";
+        page.sections[0].rows = vec![
+            ModuleRow {
+                label: ScreenCell::Key("fixture-sentence".to_owned()),
+                value: ScreenCell::Empty,
+                note: ScreenCell::Empty,
+                ..a_dated_row("a", "", 0)
+            },
+            ModuleRow {
+                note: ScreenCell::Empty,
+                ..a_dated_row("b", "a line with no note", 0)
+            },
+        ];
+        page.sections[1].rows = vec![
+            ModuleRow {
+                label: ScreenCell::Key("fixture-sentence".to_owned()),
+                value: ScreenCell::Data(String::new()),
+                note: ScreenCell::Count(12),
+                ..a_dated_row("c", "", 0)
+            },
+            a_dated_row("d", "a line beside a count", 12_345),
+        ];
+        on_the_page(&mut s, with_words(page, &[("fixture-sentence", sentence)]));
+        let layouts = s.screen_layouts(&s.mind.tasks[0].clone(), 100);
+        assert_eq!(layouts[0].fields().len(), 1, "{:?}", layouts[0]);
+        assert_eq!(layouts[0].field("label").map(|f| f.width), Some(99));
+        assert_eq!(layouts[1].field("label").map(|f| f.width), Some(16));
+        assert!(!layouts[1].has("note"), "an empty column was kept");
+        assert_eq!(layouts[1].field("value").map(|f| f.width), Some(82));
+        // A LABEL WITH NO VALUE takes the line up to the note, and the note
+        // stands where the section's others do.
+        assert_eq!(layouts[2].field("label").map(|f| f.width), Some(93));
+        assert_eq!(layouts[2].field("note"), layouts[3].field("note"));
+        assert_eq!(layouts[3].field("label").map(|f| f.width), Some(16));
+    }
+
+    /// FAILS IF: at some width a column that today's page has is gone from
+    /// a measured section, whatever its cells hold, or a label past the
+    /// reservation or a note beside a short value costs the value what it
+    /// was promised — or a host that sends no words draws anything but the
+    /// columns it always had.
+    #[test]
+    fn no_column_of_today_goes_missing_at_any_width() {
+        fn todays(columns: u16) -> Layout {
+            Table::across(columns.saturating_sub(1))
+                .with(Column::fixed("label", 24, 2))
+                .with(Column::fill("value", 10))
+                .with(Column::fixed("note", 20, 3))
+                .resolve()
+        }
+        let mut s = a_state();
+        let mut compared = 0;
+        let long_line = "v".repeat(200);
+        for line in ["a line", long_line.as_str()] {
+            for label in [1_usize, 16, 24, 25, 39, 40, 60] {
+                for note in [1_usize, 4, 19, 20, 30] {
+                    let mut page = a_screen("fixture-routine", 2);
+                    let mut row = a_dated_row("a", line, 0);
+                    row.label = ScreenCell::Key("fixture-label".to_owned());
+                    row.note = ScreenCell::Key("fixture-note".to_owned());
+                    page.sections[0].rows = vec![row];
+                    let (spelt_label, spelt_note) = ("l".repeat(label), "n".repeat(note));
+                    on_the_page(
+                        &mut s,
+                        with_words(
+                            page,
+                            &[
+                                ("fixture-label", &spelt_label),
+                                ("fixture-note", &spelt_note),
+                            ],
+                        ),
+                    );
+                    for columns in 30..=160 {
+                        let task = s.mind.tasks[0].clone();
+                        let layout = &s.screen_layouts(&task, columns)[0];
+                        for field in todays(columns).fields() {
+                            assert!(
+                                layout.has(field.id),
+                                "`{}` went missing at {columns}: {label}, {note}",
+                                field.id
+                            );
+                            compared += 1;
+                        }
+                        assert!(layout.ends() < columns, "{layout:?} leaks at {columns}");
+                        // A LABEL PAST THE RESERVATION leaves the value what
+                        // it keeps, or what it holds when that is less.
+                        let width = |id| layout.field(id).map_or(0, |f| f.width);
+                        if width("label") > LABEL_BLIND {
+                            let holds = ronoctua_design::wide(line).max(VALUE_LEAST);
+                            assert!(
+                                width("value") >= VALUE_KEPT.min(holds),
+                                "{layout:?} at {columns}: the label took the value"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        floor_of(compared, 6_000, "columns compared with today's");
+        // A SHORT NOTE STAYS where the reservation gave way, and pays with
+        // cells of the value: nineteen today at this width, with no note.
+        let mut page = a_screen("fixture-routine", 2);
+        let mut row = a_dated_row("a", &long_line, 0);
+        row.label = ScreenCell::Key("fixture-label".to_owned());
+        row.note = ScreenCell::Count(1_000);
+        page.sections[0].rows = vec![row];
+        on_the_page(
+            &mut s,
+            with_words(page, &[("fixture-label", &"l".repeat(24))]),
+        );
+        let layout = &s.screen_layouts(&s.mind.tasks[0].clone(), 45)[0];
+        assert_eq!(layout.field("value").map(|f| f.width), Some(14));
+        assert_eq!(layout.field("note").map(|f| f.width), Some(4));
+        // AND A HOST THAT SAID NOTHING HAS TODAY'S PAGE, EXACTLY.
+        let mut page = a_screen("fixture-routine", 2);
+        page.sections[0].rows = vec![a_dated_row("a", "a line", 3)];
+        on_the_page(&mut s, page);
+        for columns in 30..=160 {
+            let task = s.mind.tasks[0].clone();
+            assert_eq!(s.screen_layouts(&task, columns)[0], todays(columns));
+        }
+    }
+
+    /// FAILS IF: a note stops at its reservation with the rest of the row
+    /// empty beside a value that is known to be short, or takes a cell a value
+    /// needs, or leaves it under its floor so the note gives way, or a value
+    /// whose words nobody said stops holding the row, or a sentence in the
+    /// value's room is squeezed — or its note leaves the section's column.
+    #[test]
+    fn a_note_takes_what_the_value_leaves() {
+        let date = a_dated_row("a", "", 0).label;
+        let long_note = "n".repeat(60);
+        let row = |id: &str, value: ScreenCell| ModuleRow {
+            label: ScreenCell::Key("fixture-label".to_owned()),
+            value,
+            note: ScreenCell::Data(long_note.clone()),
+            ..a_dated_row(id, "", 0)
+        };
+        let label = "l".repeat(20);
+        let sentence = "s".repeat(50);
+        let said: &[(&str, &str)] = &[("fixture-label", &label), ("fixture-sentence", &sentence)];
+        let mut s = a_state();
+        let width = |s: &mut State, rows: Vec<ModuleRow>, columns: u16, id: &str| {
+            let mut page = a_screen("fixture-routine", 2);
+            page.sections[0].rows = rows;
+            on_the_page(s, with_words(page, said));
+            let layouts = s.screen_layouts(&s.mind.tasks[0].clone(), columns);
+            layouts.first().and_then(|l| l.field(id)).map(|f| f.width)
+        };
+        // A DATE BESIDE A LINE OF THE MODULE'S: the note has the row.
+        let dated = vec![row("a", date.clone())];
+        assert_eq!(width(&mut s, dated.clone(), 100, "note"), Some(60));
+        // WITH NOT ENOUGH FOR IT, what the date leaves, and the date is whole.
+        assert_eq!(width(&mut s, dated.clone(), 73, "note"), Some(34));
+        assert_eq!(width(&mut s, dated, 73, "value"), Some(16));
+        // A VALUE SHORTER THAN ITS FLOOR is not given less than the floor.
+        let counted = vec![row("a", ScreenCell::Count(3))];
+        assert_eq!(width(&mut s, counted.clone(), 60, "note"), Some(27));
+        assert_eq!(width(&mut s, counted, 60, "value"), Some(10));
+        // A LINE AS LONG AS THE ROW leaves it the reservation, as today.
+        let line = ScreenCell::Data("v".repeat(200));
+        assert_eq!(width(&mut s, vec![row("a", line)], 100, "note"), Some(20));
+        // AND SO DOES A KEY THE HOST DID NOT SAY.
+        let unsaid = ScreenCell::Key("fixture-unsaid".to_owned());
+        assert_eq!(width(&mut s, vec![row("a", unsaid)], 100, "note"), Some(20));
+        // A SENTENCE IS THE VALUE'S ROOM: its note stands in the column of
+        // the rows around it, and it is not cut for it.
+        let sentence_row = ModuleRow {
+            label: ScreenCell::Key("fixture-sentence".to_owned()),
+            ..row("b", ScreenCell::Empty)
+        };
+        let mut page = a_screen("fixture-routine", 2);
+        page.sections[0].rows = vec![row("a", date), sentence_row];
+        on_the_page(&mut s, with_words(page, said));
+        let layouts = s.screen_layouts(&s.mind.tasks[0].clone(), 100);
+        assert_eq!(layouts[0].field("note"), layouts[1].field("note"));
+        assert_eq!(layouts[0].field("note").map(|f| f.width), Some(27));
+        assert_eq!(layouts[1].field("label").map(|f| f.width), Some(71));
+    }
+
+    /// A page of four sections, three of which fold: the first open, the
+    /// second shut and with the module's own number, the third open — and one
+    /// that does not fold at the end, as every other module's do. Each row
+    /// acts, by its section's letter and its place in it.
+    fn a_folding_page(generation: u64) -> ModuleScreen {
+        use ronoctua_design::types::SectionFold::{Never, Open, Shut};
+        let section = |id: &str, fold, rows: usize| ModuleSection {
+            heading: format!("fixture-heading-{id}"),
+            rows: (0..rows)
+                .map(|n| a_dated_row(&format!("{id}-{n}"), "a line", 3))
+                .collect(),
+            id: id.to_owned(),
+            about: format!("fixture-about-{id}"),
+            fold,
+            tally: ScreenCell::Empty,
+        };
+        let mut page = a_screen("fixture-routine", generation);
+        page.sections = vec![
+            section("first", Open, 3),
+            ModuleSection {
+                tally: ScreenCell::Count(1_234),
+                ..section("second", Shut, 2)
+            },
+            section("third", Open, 1),
+            section("fourth", Never, 1),
+        ];
+        page
+    }
+
+    /// Two swatches, the second a word nobody could fit beside the first in
+    /// a narrow window.
+    fn a_legend() -> Vec<LegendSwatch> {
+        vec![
+            LegendSwatch {
+                tone: BrainTone::Critical,
+                says: "fixture-worst".to_owned(),
+                about: "fixture-worst-about".to_owned(),
+            },
+            LegendSwatch {
+                tone: BrainTone::Minor,
+                says: "fixture-least".to_owned(),
+                about: "fixture-least-about".to_owned(),
+            },
+        ]
+    }
+
+    /// The fold a click or a press asked for: which section, and which way.
+    fn fold_asked(out: &[Effect]) -> Option<(String, bool)> {
+        out.iter().find_map(|e| match e {
+            Effect::Tune(Setting {
+                knob: Knob::Fold(section),
+                ..
+            }) => Some((section.id.clone(), section.open)),
+            _ => None,
+        })
+    }
+
+    /// The row of the page in front that a spot is on.
+    fn on_spot(s: &mut State, wanted: Spot) {
+        s.spot = s
+            .spots()
+            .iter()
+            .position(|sp| *sp == wanted)
+            .unwrap_or_else(|| panic!("the page has no {wanted:?}"));
+    }
+
+    /// What names the spot under the cursor, to read a test by.
+    fn cursor_on(s: &State) -> Option<(String, String)> {
+        let task = s.here()?;
+        let shown = s.shown_sections(task);
+        let sections = &s.page_of(task)?.sections;
+        match s.spot_here()? {
+            Spot::Section(n) => Some((sections[n].id.clone(), String::new())),
+            Spot::Screen(k) => {
+                let at = shown
+                    .iter()
+                    .find(|sh| (sh.from..sh.from + sh.rows).contains(&k))?;
+                let section = &sections[at.section];
+                Some((section.id.clone(), section.rows[k - at.from].id.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// THE TRAP OF THIS PAGE. FAILS IF: a shut section is not counted in the
+    /// index an `act-row` names — the host counts the page it was sent, so
+    /// `RET` on the row after it would act on a row nobody can see.
+    #[test]
+    fn a_shut_section_keeps_the_index_of_the_rows_after_it() {
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        let spots = s.spots();
+        // THE ROWS OF THE SHUT SECTION ARE NOT ON THE PAGE.
+        for gone in [Spot::Screen(3), Spot::Screen(4)] {
+            assert!(!spots.contains(&gone), "{gone:?} is under a shut title");
+        }
+        // AND THE ROW AFTER THEM IS STILL THE SIXTH OF WHAT THE HOST HOLDS.
+        on_spot(&mut s, Spot::Screen(5));
+        assert_eq!(cursor_on(&s).map(|(_, id)| id).as_deref(), Some("third-0"));
+        let asks = |out: &[Effect]| {
+            out.iter().find_map(|e| match e {
+                Effect::Ask(d) => Some((d.what, d.target)),
+                _ => None,
+            })
+        };
+        assert_eq!(asks(&s.confirm()), Some((Request::ActRow, 6)));
+        assert_eq!(
+            asks(&s.command("brain-row-also")),
+            None,
+            "a row with no second action asked for one"
+        );
+        let mut page = a_folding_page(3);
+        page.sections[2].rows[0].also = "ignore".to_owned();
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(
+            asks(&s.command("brain-row-also")),
+            Some((Request::ActRowAlso, 6))
+        );
+        // OPEN, ITS ROWS TAKE THE SAME NUMBERS THEY ALWAYS HAD.
+        s.mind.tasks[0].folds = vec![SectionState {
+            id: "second".to_owned(),
+            open: true,
+        }];
+        on_spot(&mut s, Spot::Screen(4));
+        assert_eq!(asks(&s.confirm()), Some((Request::ActRow, 5)));
+        on_spot(&mut s, Spot::Screen(5));
+        assert_eq!(asks(&s.confirm()), Some((Request::ActRow, 6)));
+    }
+
+    /// FAILS IF: a heading and a row disagree about where a spot is drawn,
+    /// whichever way the sections are folded, or a section that does not fold
+    /// gains a spot — the sixteen modules that fold nothing keep their page.
+    #[test]
+    fn the_spots_and_the_rows_stay_parallel_however_it_is_folded() {
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        for (first, second, third) in [
+            (true, true, true),
+            (false, true, true),
+            (true, false, false),
+            (false, false, false),
+        ] {
+            let word = |id: &str, open| SectionState {
+                id: id.to_owned(),
+                open,
+            };
+            s.mind.tasks[0].folds = vec![
+                word("first", first),
+                word("second", second),
+                word("third", third),
+            ];
+            let task = s.mind.tasks[0].clone();
+            let rows = s.rows_of(&task, 100);
+            let spots = s.spots();
+            assert_eq!(
+                rows.iter().filter(|r| is_a_spot(r)).count(),
+                spots.len(),
+                "the two lists have different lengths"
+            );
+            for (n, spot) in spots.iter().enumerate() {
+                let row = State::row_of_spot(&rows, *spot)
+                    .unwrap_or_else(|| panic!("{spot:?} is drawn on no row"));
+                assert_eq!(State::spot_of_row(&rows, row), Some(n), "{spot:?}");
+            }
+            let titles = spots
+                .iter()
+                .filter(|sp| matches!(sp, Spot::Section(_)))
+                .count();
+            assert_eq!(titles, 3, "a title lost its spot, or a plain one won one");
+            assert!(
+                rows.iter().any(|r| matches!(r, Row::Section(3))),
+                "the section that does not fold is not a plain title"
+            );
+        }
+    }
+
+    /// FAILS IF: a title folds on the first click — inv. 19: the first
+    /// selects, and the footer has to be able to say what it is — or the
+    /// second does not, or `RET` differs from it, or what is asked for is not
+    /// the other way from how the section is DRAWN: the person's word first,
+    /// and only then how the module ships it.
+    #[test]
+    fn a_title_selects_first_and_folds_on_the_second_click() {
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        let seen = runs(&drawn(&mut s, 70, 100));
+        let (.., line, column) = seen
+            .iter()
+            .find(|(t, ..)| t == "fixture-heading-second")
+            .cloned()
+            .expect("the shut section's title");
+        let first = s.clicked(column, line);
+        assert_eq!(fold_asked(&first), None, "the first click folded it");
+        assert_eq!(s.spot_here(), Some(Spot::Section(1)));
+        let second = s.clicked(column, line);
+        assert_eq!(fold_asked(&second), Some(("second".to_owned(), true)));
+        assert_eq!(fold_asked(&s.confirm()), Some(("second".to_owned(), true)));
+        // THE MIND'S WORD WINS, in both directions.
+        s.mind.tasks[0].folds = vec![SectionState {
+            id: "second".to_owned(),
+            open: true,
+        }];
+        assert_eq!(fold_asked(&s.confirm()), Some(("second".to_owned(), false)));
+        on_spot(&mut s, Spot::Section(0));
+        assert_eq!(fold_asked(&s.confirm()), Some(("first".to_owned(), false)));
+        // AND IT DRAWS WHAT THE MIND SAYS: the rows it holds are on the page.
+        let task = s.mind.tasks[0].clone();
+        let rows = s.rows_of(&task, 100);
+        assert!(rows.iter().any(|r| matches!(r, Row::Screen(3, 1))));
+    }
+
+    /// FAILS IF: a title does not say whether it is open by its triangle, how
+    /// many by its count at the row's edge — the module's number when it
+    /// gave one, the rows when not — or its band and hover are not a row's,
+    /// or it is not told in the footer and under the pointer: the triangle
+    /// what a click does, everything else what the section is, the count too.
+    #[test]
+    fn a_title_says_what_it_holds_and_how_it_folds() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        on_spot(&mut s, Spot::Section(1));
+        let screen = drawn(&mut s, 70, 100);
+        let seen = runs(&screen);
+        let at = |what: &str| {
+            seen.iter()
+                .find(|(t, ..)| t == what)
+                .map(|(_, c, line, column)| (c.clone(), *line, *column))
+                .unwrap_or_else(|| panic!("`{what}` is not drawn"))
+        };
+        let (_, shut, _) = at("fixture-heading-second");
+        let (_, open, _) = at("fixture-heading-first");
+        let glyph = |line: u16| {
+            seen.iter()
+                .find(|(t, _, l, c)| *l == line && *c == 0 && t.contains("BrainGroup"))
+                .map(|(t, c, ..)| (t.clone(), c.clone()))
+                .expect("a title has no triangle")
+        };
+        assert!(glyph(shut).0.ends_with("BrainGroup"), "{:?}", glyph(shut));
+        assert!(glyph(open).0.ends_with("BrainGroupOpen"));
+        assert_eq!(glyph(open).1, "text-secondary");
+        // THE NUMBER STANDS AT THE EDGE: its last digit on the row's last cell.
+        assert_eq!(at("1234"), ("text-secondary".to_owned(), shut, 99 - 4));
+        // WITH NO NUMBER OF ITS OWN, how many rows it holds.
+        assert_eq!(at("3"), ("text-secondary".to_owned(), open, 99 - 1));
+        // THE BAND IS A ROW'S.
+        let banded = screen.as_protocol().commands.iter().any(|c| {
+            matches!(c, Command::Selection { line, color, .. }
+                if *line == shut && color.as_str() == "surface-selection")
+        });
+        assert!(banded, "the cursor's title has no band");
+        // THE FOOTER.
+        let told = s.told();
+        assert_eq!(told.name.as_deref(), Some("fixture-heading-second"));
+        assert_eq!(told.about.as_deref(), Some("fixture-about-second"));
+        // AND THE POINTER.
+        let pointed = |s: &mut State, column, line| {
+            let _ = s.hover.set(0, (column, line));
+            let screen = drawn(s, 70, 100);
+            screen
+                .as_protocol()
+                .commands
+                .into_iter()
+                .find_map(|c| match c {
+                    Command::Pointed { about, .. } => Some(about),
+                    _ => None,
+                })
+        };
+        let fold = Some(Text::Key(key::ABOUT_SECTION_FOLD.into()));
+        let about = Some(Text::Key("fixture-about-second".into()));
+        assert_eq!(pointed(&mut s, 0, shut), fold);
+        assert_eq!(pointed(&mut s, 1, shut), fold);
+        assert_eq!(pointed(&mut s, 3, shut), about, "the title");
+        assert_eq!(pointed(&mut s, 97, shut), about, "the count");
+        // A SECTION THAT DOES NOT FOLD says the module's words too, and the
+        // brain's when the module has none.
+        let (_, plain, _) = at("fixture-heading-fourth");
+        assert_eq!(
+            pointed(&mut s, 3, plain),
+            Some(Text::Key("fixture-about-fourth".into()))
+        );
+        let mut page = a_folding_page(3);
+        page.sections[3].about = String::new();
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(
+            pointed(&mut s, 3, plain),
+            Some(Text::Key(key::ABOUT_SECTION.into()))
+        );
+    }
+
+    /// THE RULE EVERY LIST THAT REORDERS KEEPS. FAILS IF: the cursor stays
+    /// at its index while the page moves under it — a row added above,
+    /// sections reordered — or follows a row into another section, which is
+    /// what `RET` on "mark seen" does to a row, or ends anywhere but the next
+    /// row of its section when its own row leaves.
+    #[test]
+    fn the_cursor_stays_on_its_row_within_its_section() {
+        let row = |id: &str| a_dated_row(id, "a line", 3);
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        on_spot(&mut s, Spot::Screen(1));
+        let here = |s: &State| cursor_on(s).expect("the cursor is on a row");
+
+        // A ROW ADDED ABOVE IT.
+        let mut page = a_folding_page(3);
+        page.sections[0].rows.insert(0, row("first-new"));
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(here(&s), ("first".to_owned(), "first-1".to_owned()));
+
+        // A SECTION ADDED ABOVE IT, whose index and title move.
+        let mut page = a_folding_page(4);
+        let before = ModuleSection {
+            id: "before".to_owned(),
+            ..page.sections[0].clone()
+        };
+        page.sections.insert(0, before);
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(here(&s), ("first".to_owned(), "first-1".to_owned()));
+
+        // ITS ROW LEFT FOR ANOTHER SECTION, as a row marked seen does: the
+        // row after it takes the place, and the cursor does not go with it.
+        let mut page = a_folding_page(5);
+        let moved = page.sections[0].rows.remove(1);
+        page.sections[2].rows.push(moved);
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(here(&s), ("first".to_owned(), "first-2".to_owned()));
+
+        // THE LAST ONE LEFT: the row before it, still in the section.
+        let mut page = a_folding_page(6);
+        page.sections[0].rows.pop();
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(here(&s), ("first".to_owned(), "first-1".to_owned()));
+
+        // THE WHOLE SECTION LEFT: what stands where it stood, which is the
+        // next title — never a row, which `RET` would act on.
+        let mut page = a_folding_page(7);
+        page.sections[0].rows.clear();
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(here(&s), ("second".to_owned(), String::new()));
+    }
+
+    /// A page of the shape a module with no section ids draws: one section per
+    /// thing it keeps, each titled by its kind, so the titles repeat. Each row
+    /// is `<who>:<what>`, and each section holds `what`.
+    fn a_page_of_twins(generation: u64, sections: &[(&str, &[&str])]) -> ModuleScreen {
+        let section = |(who, what): &(&str, &[&str])| ModuleSection {
+            heading: "fixture-heading-twin".to_owned(),
+            rows: what
+                .iter()
+                .map(|w| a_dated_row(&format!("{who}:{w}"), "a line", 3))
+                .collect(),
+            id: String::new(),
+            about: String::new(),
+            fold: ronoctua_design::types::SectionFold::Never,
+            tally: ScreenCell::Empty,
+        };
+        ModuleScreen {
+            sections: sections.iter().map(section).collect(),
+            ..a_screen("fixture-routine", generation)
+        }
+    }
+
+    /// FAILS IF: a row of a section that shares its title with another goes
+    /// to the first of them when anything arrives — a section with no id is
+    /// named by its title, so the cursor would land on the row at the same
+    /// place of the first one and `RET` would act on that — or the row that
+    /// takes the place of one that left comes from the wrong section, or a
+    /// section that left hands the cursor to its twin.
+    #[test]
+    fn a_cursor_keeps_its_row_among_sections_of_one_title() {
+        let rows: &[&str] = &["sound", "forget"];
+        let row_acted_on = |s: &mut State| {
+            s.confirm().iter().find_map(|e| match e {
+                Effect::Ask(d) if d.what == Request::ActRow => Some(d.target),
+                _ => None,
+            })
+        };
+        let mut s = a_state();
+        on_the_page(&mut s, a_page_of_twins(2, &[("1", rows), ("2", rows)]));
+        on_spot(&mut s, Spot::Screen(3));
+        // A MIND AND THE SAME PAGE AGAIN, which every arrival is.
+        let mind = s.mind.clone();
+        s.act(Input::Mind(mind));
+        assert_eq!(s.spot_here(), Some(Spot::Screen(3)), "after a mind");
+        s.act(Input::ModuleScreen(a_page_of_twins(
+            3,
+            &[("1", rows), ("2", rows)],
+        )));
+        assert_eq!(s.spot_here(), Some(Spot::Screen(3)), "after a page");
+        assert_eq!(row_acted_on(&mut s), Some(4), "`RET` acted on its twin");
+        // THEY CHANGED PLACES, and it goes with its row.
+        s.act(Input::ModuleScreen(a_page_of_twins(
+            4,
+            &[("2", rows), ("1", rows)],
+        )));
+        assert_eq!(s.spot_here(), Some(Spot::Screen(1)), "after a swap");
+        // ITS ROW LEFT, and what takes the place is of the section it was in.
+        on_spot(&mut s, Spot::Screen(3));
+        s.act(Input::ModuleScreen(a_page_of_twins(
+            5,
+            &[("2", rows), ("1", &["sound", "again"])],
+        )));
+        assert_eq!(s.spot_here(), Some(Spot::Screen(3)), "after its row left");
+        // THE WHOLE SECTION LEFT: what stands where it stood, never a row of
+        // the twin at the same place.
+        let stood = s.spot - 1;
+        s.act(Input::ModuleScreen(a_page_of_twins(6, &[("2", rows)])));
+        assert_eq!(s.spot, stood.min(s.spots().len() - 1));
+        assert_ne!(s.spot_here(), Some(Spot::Screen(1)), "handed to its twin");
+    }
+
+    /// FAILS IF: a title is kept by its index when the sections move, or a
+    /// section shut in another window leaves the cursor on a row that is not
+    /// drawn, or the answer to a fold moves it — the mind brings every fold
+    /// back, and a person pressing `RET` on a title stays on it.
+    #[test]
+    fn a_title_is_kept_by_its_section() {
+        let mut s = a_state();
+        on_the_page(&mut s, a_folding_page(2));
+        on_spot(&mut s, Spot::Section(2));
+        let shut = |s: &mut State, id: &str| {
+            let mut mind = s.mind.clone();
+            mind.tasks[0].folds = vec![SectionState {
+                id: id.to_owned(),
+                open: false,
+            }];
+            s.act(Input::Mind(mind));
+        };
+        shut(&mut s, "first");
+        assert_eq!(
+            cursor_on(&s).map(|(id, _)| id).as_deref(),
+            Some("third"),
+            "rows gone above it moved the cursor off its title"
+        );
+        let mut page = a_folding_page(3);
+        page.sections.swap(0, 2);
+        s.act(Input::ModuleScreen(page));
+        assert_eq!(s.spot_here(), Some(Spot::Section(0)));
+        assert_eq!(cursor_on(&s).map(|(id, _)| id).as_deref(), Some("third"));
+
+        // SHUT IN ANOTHER WINDOW WITH THE CURSOR INSIDE IT.
+        on_spot(&mut s, Spot::Screen(0));
+        assert_eq!(cursor_on(&s).map(|(id, _)| id).as_deref(), Some("third"));
+        shut(&mut s, "third");
+        assert_eq!(s.spot_here(), Some(Spot::Section(0)), "under a shut title");
+    }
+
+    /// FAILS IF: the index a page's action sends is anything but its place in
+    /// `actions`, row actions included, the count the host's `act_page` reads
+    /// (`an_action_of_a_page_is_read_from_the_mind_it_was_counted_in`). The
+    /// daemon's half, the list with what a module holds back taken out, is
+    /// `an_action_for_a_module_switched_off_leaves_the_list_itself_while_it_is_on`.
+    #[test]
+    fn a_page_action_is_sent_by_its_place_in_the_list() {
+        let action = |id: &str, row: bool| ronoctua_design::types::ModuleAction {
+            id: id.to_owned(),
+            label_key: format!("cmd-fixture-{id}"),
+            row,
+            asks_key: String::new(),
+        };
+        let mut s = a_state();
+        // THE LIST WITH THE MODULE ON, as the mind brings it: row actions
+        // before the page's own.
+        s.mind.tasks[0].actions = vec![
+            action("seen", true),
+            action("ignore", true),
+            action("unignore", true),
+            action("seen-all", false),
+            action("filter", false),
+            action("follow", false),
+        ];
+        s.page = Page::Task;
+        let at = s.mind.tasks[0]
+            .actions
+            .iter()
+            .position(|a| a.id == "seen-all")
+            .expect("the fixture");
+        on_spot(&mut s, Spot::Action(at));
+        let out = s.confirm();
+        let [Effect::Ask(Demand { what, target })] = out.as_slice() else {
+            panic!("{out:?}");
+        };
+        assert_eq!(*what, Request::ActPage);
+        assert_eq!(*target, 4, "one-based, and the row actions are counted");
+    }
+
+    /// FAILS IF: a page's action under the cursor is kept by its index in
+    /// `actions` — the list the module's switch reshapes, what only a module
+    /// switched off offers leaving it while it is on. Switched off from
+    /// "mark all seen", the cursor would land on "run", and `RET` would read
+    /// the journal instead; switched back on, on a row's title.
+    #[test]
+    fn a_page_action_is_kept_by_its_id_when_the_switch_reshapes_the_list() {
+        let action = |id: &str, row: bool| ronoctua_design::types::ModuleAction {
+            id: id.to_owned(),
+            label_key: format!("cmd-fixture-{id}"),
+            row,
+            asks_key: String::new(),
+        };
+        // THE LIST AS THE MIND BRINGS IT, sorted by id, `run` only while off.
+        let actions = |off: bool| {
+            [
+                ("filter", false),
+                ("filter-line", true),
+                ("follow", false),
+                ("ignore", true),
+                ("reason", true),
+                ("refilter", true),
+                ("run", false),
+                ("seen", true),
+                ("seen-all", false),
+                ("unfilter", true),
+                ("unignore", true),
+            ]
+            .into_iter()
+            .filter(|(id, _)| off || *id != "run")
+            .map(|(id, row)| action(id, row))
+            .collect::<Vec<_>>()
+        };
+        let switched = |s: &mut State, off: bool| {
+            let mut mind = s.mind.clone();
+            mind.tasks[0].actions = actions(off);
+            s.act(Input::Mind(mind));
+        };
+        let on = |s: &State| match s.spot_here() {
+            Some(Spot::Action(n)) => Some(s.mind.tasks[0].actions[n].id.clone()),
+            _ => None,
+        };
+        let mut s = a_state();
+        s.mind.tasks[0].actions = actions(false);
+        s.page = Page::Task;
+        let at = |s: &State, id: &str| {
+            s.mind.tasks[0]
+                .actions
+                .iter()
+                .position(|a| a.id == id)
+                .expect("the fixture")
+        };
+        let wanted = at(&s, "seen-all");
+        on_spot(&mut s, Spot::Action(wanted));
+        switched(&mut s, true);
+        assert_eq!(on(&s).as_deref(), Some("seen-all"), "switched off");
+        switched(&mut s, false);
+        assert_eq!(on(&s).as_deref(), Some("seen-all"), "switched on again");
+
+        // GONE WITH THE SWITCH, the cursor stays among the page's actions.
+        switched(&mut s, true);
+        let wanted = at(&s, "run");
+        on_spot(&mut s, Spot::Action(wanted));
+        switched(&mut s, false);
+        assert_eq!(on(&s).as_deref(), Some("seen-all"), "the one at its place");
+    }
+
+    /// FAILS IF: the legend is not above the first section with a blank
+    /// between, is a spot, lights under the pointer, draws a word in any
+    /// colour but the one it explains, cuts a swatch that does not fit, or
+    /// says nothing of what the pointer rests on — or a page with no legend
+    /// spends a line or a blank on it.
+    #[test]
+    fn the_legend_explains_its_colours_and_a_swatch_goes_whole() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        let bare = a_folding_page(2);
+        on_the_page(&mut s, bare.clone());
+        let task = s.mind.tasks[0].clone();
+        let without = s.rows_of(&task, 100).len();
+        let mut page = a_folding_page(3);
+        page.legend = a_legend();
+        let page = with_words(
+            page,
+            &[
+                ("fixture-worst", "Worst"),
+                ("fixture-least", "The least of them"),
+            ],
+        );
+        s.act(Input::ModuleScreen(page));
+        let rows = s.rows_of(&task, 100);
+        assert_eq!(rows.len(), without + 2, "a legend takes a line and a blank");
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, Row::Legend))
+            .expect("the legend");
+        assert!(matches!(rows[at - 1], Row::Blank));
+        assert!(matches!(rows[at + 1], Row::Blank));
+        assert!(matches!(rows[at + 2], Row::Fold(0)), "not above the first");
+        assert!(!is_a_spot(&Row::Legend));
+
+        let screen = drawn(&mut s, 70, 100);
+        let seen = runs(&screen);
+        let place = |seen: &[(String, String, u16, u16)], what: &str| {
+            seen.iter()
+                .find(|(t, ..)| t == what)
+                .map(|(_, c, line, column)| (c.clone(), *line, *column))
+        };
+        let (colour, line, column) = place(&seen, "fixture-worst").expect("the word");
+        assert_eq!(colour, "state-critical");
+        assert_eq!(column, ronoctua_design::ICON);
+        let glyphs: Vec<_> = seen
+            .iter()
+            .filter(|(t, _, l, _)| *l == line && t.contains("BrainSwatch"))
+            .collect();
+        assert_eq!(glyphs.len(), 2, "{seen:?}");
+        assert_eq!(glyphs[0].1, "state-critical");
+        assert_eq!(glyphs[1].1, "text-secondary");
+        let (_, _, next) = place(&seen, "fixture-least").expect("the second word");
+        assert_eq!(glyphs[1].3, column + 5 + FACT_SPACING);
+        assert_eq!(next, glyphs[1].3 + ronoctua_design::ICON);
+
+        // WHOLE OR NOT AT ALL, at every width: what is drawn has room for
+        // all of its word, and nothing of a swatch that had none is left.
+        let budget = |screen: &Screen<Wit>, what: &str| {
+            screen.as_protocol().commands.iter().find_map(|c| match c {
+                Command::Text {
+                    text: Text::Key(k),
+                    max_width,
+                    ..
+                } if k == what => Some(*max_width),
+                _ => None,
+            })
+        };
+        let mut gone = 0;
+        for columns in 8..=60 {
+            let screen = drawn(&mut s, 70, columns);
+            let seen = runs(&screen);
+            let glyphs = seen
+                .iter()
+                .filter(|(t, ..)| t.contains("BrainSwatch"))
+                .count();
+            let worst = budget(&screen, "fixture-worst");
+            let least = budget(&screen, "fixture-least");
+            assert_eq!(
+                glyphs,
+                usize::from(worst.is_some()) + usize::from(least.is_some())
+            );
+            if let Some(cells) = worst {
+                assert_eq!(cells, 5, "at {columns}");
+            }
+            if let Some(cells) = least {
+                assert_eq!(cells, 17, "at {columns}");
+            } else {
+                gone += 1;
+            }
+        }
+        floor_of(gone, 10, "widths too narrow for the second swatch");
+
+        // NO GROUND UNDER THE POINTER, AND ITS OWN SENTENCE PER SWATCH.
+        let pointed = |s: &mut State, column| {
+            let _ = s.hover.set(0, (column, line));
+            let screen = drawn(s, 70, 100);
+            let lit = screen
+                .as_protocol()
+                .commands
+                .iter()
+                .any(|c| matches!(c, Command::Selection { line: l, .. } if *l == line));
+            assert!(!lit, "the legend lit under the pointer");
+            screen
+                .as_protocol()
+                .commands
+                .into_iter()
+                .find_map(|c| match c {
+                    Command::Pointed { about, .. } => Some(about),
+                    _ => None,
+                })
+        };
+        assert_eq!(
+            pointed(&mut s, 0),
+            Some(Text::Key("fixture-worst-about".into()))
+        );
+        assert_eq!(
+            pointed(&mut s, next),
+            Some(Text::Key("fixture-least-about".into()))
+        );
+        // AND THE AIR BETWEEN THEM IS NOTHING.
+        assert_eq!(pointed(&mut s, next - 3), None);
+        // A CLICK TAKES NOTHING: it is not a row anything happens to.
+        let before = s.spot;
+        assert!(s.clicked(0, line).is_empty());
+        assert_eq!(s.spot, before);
     }
 
     /// FAILS IF: opening a task's page does not ask the host to follow its
@@ -7894,12 +10299,20 @@ mod tests {
             label: ScreenCell::Moment(ronoctua_design::types::Timed {
                 at: 5,
                 text: "14:02".to_owned(),
+                stamp: ronoctua_design::types::Stamp {
+                    lead: String::new(),
+                    day: String::new(),
+                    tail: "14:02".to_owned(),
+                    today: false,
+                },
             }),
             value: ScreenCell::Data(message.clone()),
             note: ScreenCell::Count(3),
             tone: BrainTone::Watching,
             act: "seen".to_owned(),
             also: "ignore".to_owned(),
+            below: ScreenCell::Empty,
+            foot: Vec::new(),
         };
         s.act(Input::ModuleScreen(screen));
         s.spot = s
@@ -8185,5 +10598,659 @@ mod tests {
         let said = paragraphs(&drawn(&mut s, 40, 120));
         assert!(said.iter().all(|d| !d.contains("no page today")));
         assert!(s.spots().iter().any(|sp| matches!(sp, Spot::Screen(_))));
+    }
+
+    /// A fact, as a module says it.
+    fn a_fact(label: &str, value: ScreenCell, tone: BrainTone) -> RowFact {
+        RowFact {
+            label: label.to_owned(),
+            value,
+            tone,
+        }
+    }
+
+    /// A reason long enough to wrap, a filter's and a kind's row, and a row
+    /// that only says something under itself.
+    const A_REASON: &str = "Two service files claim one name, the first one read wins, nothing \
+                            is lost and nobody has to do anything at all about it, ever.";
+
+    fn a_filter_row(id: &str, below: ScreenCell) -> ModuleRow {
+        ModuleRow {
+            id: id.to_owned(),
+            label: ScreenCell::Data("a snippet".to_owned()),
+            value: ScreenCell::Data("the last line".to_owned()),
+            note: ScreenCell::Count(123),
+            tone: BrainTone::Quiet,
+            act: "unfilter".to_owned(),
+            also: "reason".to_owned(),
+            below,
+            foot: vec![
+                a_fact("fact-boot", ScreenCell::Count(123), BrainTone::Working),
+                a_fact(
+                    "fact-last",
+                    ScreenCell::Data("the last line, whole".to_owned()),
+                    BrainTone::Quiet,
+                ),
+            ],
+        }
+    }
+
+    /// A page of `rows`, whose words the host said, on a task whose module
+    /// offers the one action a filter's row names beside its press.
+    fn on_a_page_of(s: &mut State, rows: Vec<ModuleRow>) {
+        s.task = 0;
+        s.mind.tasks[0].actions = vec![ronoctua_design::types::ModuleAction {
+            id: "reason".to_owned(),
+            label_key: "fixture-say-why".to_owned(),
+            row: true,
+            asks_key: String::new(),
+        }];
+        let mut page = a_screen("fixture-routine", 7);
+        page.sections.truncate(1);
+        page.sections[0].rows = rows;
+        let page = with_words(
+            page,
+            &[
+                ("fact-boot", "This boot"),
+                ("fact-last", "Last line caught"),
+                ("fixture-say-why", "Say why this filter exists"),
+                ("reason-key", A_REASON),
+            ],
+        );
+        on_the_page(s, page);
+    }
+
+    /// The line a row of the module's page is drawn on, in the frame last
+    /// drawn, by its index across the sections.
+    fn line_of_row(s: &State, n: usize) -> u16 {
+        let rows = s.page_rows();
+        let at = rows
+            .iter()
+            .position(|r| matches!(r, Row::Screen(k, _) if *k == n))
+            .expect("the row is on the page");
+        s.blocks.body.top + lines_before(&rows, at) - lines_before(&rows, s.body_from)
+    }
+
+    /// FAILS IF: what a row says under itself takes no line of the page, or
+    /// more than it wraps to, or past the most it is given — or a key the host
+    /// said is counted as anything but its words, or one row with nothing
+    /// under it takes more than a line.
+    #[test]
+    fn a_row_is_as_tall_as_what_it_says_under_itself() {
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 73);
+        on_a_page_of(
+            &mut s,
+            vec![
+                a_filter_row("data", ScreenCell::Data(A_REASON.to_owned())),
+                a_filter_row("key", ScreenCell::Key("reason-key".to_owned())),
+                a_filter_row("none", ScreenCell::Empty),
+                a_filter_row("blind", ScreenCell::Key("fixture-unsaid".to_owned())),
+                a_filter_row("long", ScreenCell::Data(A_REASON.repeat(4))),
+            ],
+        );
+        let wraps = ronoctua_design::wrap(A_REASON, below_cells(73), 9).len();
+        assert!(wraps > 1, "the reason fits a line; this proves nothing");
+        let wraps = u16::try_from(wraps).expect("a few");
+        let tall: Vec<u16> = s
+            .page_rows()
+            .iter()
+            .filter_map(|r| match r {
+                Row::Screen(_, tall) => Some(*tall),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tall, [1 + wraps, 1 + wraps, 1, 2, 1 + BELOW_MOST]);
+    }
+
+    /// FAILS IF: the band or the pointer's ground stops at a row's first
+    /// line, the paragraph under it is not the row's, in its own tone, clear
+    /// of the page's bar; a click under the row is not a click on it, by the
+    /// rule of every row; or the pointer there says anything but what is
+    /// written there.
+    #[test]
+    fn the_lines_under_a_row_are_the_row() {
+        use ronoctua_design::frame::Command;
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 73);
+        on_a_page_of(
+            &mut s,
+            vec![
+                a_filter_row("under", ScreenCell::Data(A_REASON.to_owned())),
+                a_filter_row("next", ScreenCell::Empty),
+            ],
+        );
+        let screen = drawn(&mut s, 40, 73);
+        let first = line_of_row(&s, 0);
+        let last = line_of_row(&s, 1) - 1;
+        assert!(last > first, "the row is one line; this proves nothing");
+        let under = screen
+            .as_protocol()
+            .commands
+            .into_iter()
+            .find_map(|c| match c {
+                Command::Paragraph {
+                    line,
+                    lines,
+                    column,
+                    columns,
+                    color,
+                    content: ronoctua_design::frame::Text::Data(d),
+                    ..
+                } if d == A_REASON => Some((line, lines, column, columns, color)),
+                _ => None,
+            })
+            .expect("what the row says under itself is not on the page");
+        assert_eq!(under.0, first + 1);
+        assert_eq!(under.1, last - first);
+        assert_eq!(under.2, BELOW_AT);
+        assert_eq!(under.2 + under.3, 72, "it runs under the page's bar");
+        assert_eq!(under.4.as_str(), "text-folded");
+
+        // THE CLICK SELECTS, on any of its lines, and the second acts.
+        on_spot(&mut s, Spot::Enabled);
+        let _ = s.clicked(2, last);
+        assert_eq!(s.spot_here(), Some(Spot::Screen(0)));
+        let out = s.clicked(2, last);
+        assert!(
+            out.iter()
+                .any(|e| matches!(e, Effect::Ask(d) if d.what == Request::ActRow && d.target == 1)),
+            "the second click on what a row says under itself: {out:?}"
+        );
+        // THE BAND COVERS EVERY LINE, and the pointer's ground the same.
+        let grounded = |screen: &Screen<Wit>, line: u16| {
+            screen
+                .as_protocol()
+                .commands
+                .iter()
+                .any(|c| matches!(c, Command::Selection { line: l, .. } if *l == line))
+        };
+        let screen = drawn(&mut s, 40, 73);
+        assert!((first..=last).all(|line| grounded(&screen, line)));
+        assert!(!grounded(&screen, last + 2), "the next row is not this one");
+        on_spot(&mut s, Spot::Enabled);
+        let _ = s.hover.set(0, (30, last));
+        let screen = drawn(&mut s, 40, 73);
+        assert!((first..=last).all(|line| grounded(&screen, line)));
+        assert_eq!(s.pointed(), Some(Pointed::Datum(A_REASON.to_owned())));
+        // AND ON THE ROW ITSELF, what the row has to say.
+        let _ = s.hover.set(0, (30, first));
+        let _ = drawn(&mut s, 40, 73);
+        assert_eq!(
+            s.pointed(),
+            Some(Pointed::Datum("the last line".to_owned()))
+        );
+    }
+
+    /// FAILS IF: a row is drawn with half of what it says under itself at the
+    /// window's edge — a bar over a cut sentence for a row merely passing by —
+    /// or the cursor reaching it does not bring all of it in.
+    #[test]
+    fn a_row_at_the_windows_edge_goes_whole() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        let _ = drawn(&mut s, 30, 73);
+        on_a_page_of(
+            &mut s,
+            (0..12)
+                .map(|n| a_filter_row(&format!("row-{n}"), ScreenCell::Data(A_REASON.to_owned())))
+                .collect(),
+        );
+        for spot in 0..s.spots().len() {
+            s.spot = spot;
+            s.follows = true;
+            let screen = drawn(&mut s, 30, 73);
+            let foot = s.blocks.foot.top;
+            let cut = screen.as_protocol().commands.iter().any(|c| {
+                matches!(c, Command::Paragraph { line, lines, content: Text::Data(d), .. }
+                    if d == A_REASON && *line < foot && usize::from(*lines) < 2)
+            });
+            assert!(!cut, "a row's lines were cut by the window at spot {spot}");
+            if let Some(Spot::Screen(n)) = s.spot_here() {
+                let rows = s.page_rows();
+                let at = rows
+                    .iter()
+                    .position(|r| matches!(r, Row::Screen(k, _) if *k == n))
+                    .expect("the row");
+                assert!(
+                    at < s.body_from + fit_from(&rows, s.body_from, s.blocks.body.lines),
+                    "the cursor's row is not whole in the window"
+                );
+            }
+        }
+    }
+
+    /// FAILS IF: under a row the window cut to its first line, the pointer
+    /// lights a line, says what is not drawn there, or a click there takes the
+    /// row — or the row's own line stops answering.
+    #[test]
+    fn under_a_row_the_window_cut_nothing_answers() {
+        use ronoctua_design::frame::Command;
+        let mut s = a_state();
+        let _ = drawn(&mut s, 30, 73);
+        on_a_page_of(
+            &mut s,
+            (0..12)
+                .map(|n| a_filter_row(&format!("row-{n}"), ScreenCell::Data(A_REASON.to_owned())))
+                .collect(),
+        );
+        // THE WHEEL'S WINDOW, which stops wherever it is left: the first one
+        // that ends two lines or more into a row.
+        s.follows = false;
+        let cut = (0..s.page_rows().len())
+            .find_map(|from| {
+                s.body_from = from;
+                let _ = drawn(&mut s, 30, 73);
+                s.page_cut
+                    .filter(|cut| s.body_from == from && *cut < s.blocks.body.lines)
+            })
+            .expect("no window cuts a row with lines under it; this proves nothing");
+        let line = s.blocks.body.top + cut;
+        let spot = s.spot;
+        let lit = |screen: &Screen<Wit>, at: u16| {
+            screen
+                .as_protocol()
+                .commands
+                .iter()
+                .any(|c| matches!(c, Command::Selection { line: l, .. } if *l == at))
+        };
+        let _ = s.hover.set(0, (30, line));
+        let screen = drawn(&mut s, 30, 73);
+        assert!(!lit(&screen, line), "the pointer lit a line nothing is on");
+        assert_eq!(s.pointed(), None, "the pointer said what is not drawn");
+        assert!(
+            s.clicked(30, line).is_empty(),
+            "a click under it took the row"
+        );
+        assert_eq!(s.spot, spot);
+        // THE ROW'S OWN LINE answers as every row does.
+        let _ = s.hover.set(0, (30, line - 1));
+        let screen = drawn(&mut s, 30, 73);
+        assert!(lit(&screen, line - 1));
+        assert!(s.pointed().is_some());
+        let _ = s.clicked(30, line - 1);
+        assert!(matches!(s.spot_here(), Some(Spot::Screen(_))));
+    }
+
+    /// FAILS IF: a window shorter than the cursor's row walks past it: the
+    /// cursor on nothing drawn, or the frame refused for a line out of it.
+    #[test]
+    fn a_row_taller_than_the_window_stays_under_the_cursor() {
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 73);
+        on_a_page_of(
+            &mut s,
+            vec![
+                a_filter_row("tall", ScreenCell::Data(A_REASON.repeat(3))),
+                a_filter_row("next", ScreenCell::Empty),
+            ],
+        );
+        on_spot(&mut s, Spot::Screen(0));
+        s.follows = true;
+        let screen = drawn(&mut s, 10, 73);
+        screen.check().expect("the frame refused something");
+        let rows = s.page_rows();
+        assert!(
+            matches!(rows[s.body_from], Row::Screen(0, _)),
+            "the window went past the row under the cursor"
+        );
+    }
+
+    /// FAILS IF: a line too long for what the page gives it cannot be moved
+    /// by its own bar, or its bar moves the page or another row's.
+    #[test]
+    fn what_a_row_says_past_its_lines_has_a_bar_of_its_own() {
+        use ronoctua_design::frame::{Command, Text};
+        let long = A_REASON.repeat(4);
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 73);
+        on_a_page_of(
+            &mut s,
+            vec![
+                a_filter_row("long", ScreenCell::Data(long.clone())),
+                a_filter_row("next", ScreenCell::Data(long.clone())),
+            ],
+        );
+        let firsts = |s: &mut State| -> Vec<u16> {
+            let foot = {
+                let _ = drawn(s, 40, 73);
+                s.blocks.foot.top
+            };
+            drawn(s, 40, 73)
+                .as_protocol()
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::Paragraph {
+                        line,
+                        first_row,
+                        content: Text::Data(_),
+                        ..
+                    } if *line < foot => Some(*first_row),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(firsts(&mut s), [0, 0]);
+        let from = s.body_from;
+        let line = line_of_row(&s, 0) + 1;
+        let out = s.act(Input::Scrolled(ronoctua_design::types::ScrollEvent {
+            at: ronoctua_design::types::Position { column: 71, line },
+            first: 2,
+        }));
+        assert!(!out.is_empty(), "a drag on its bar did nothing");
+        assert_eq!(s.body_from, from, "its bar moved the page");
+        assert_eq!(firsts(&mut s), [2, 0]);
+    }
+
+    /// FAILS IF: in the footer, what a row says under itself and its last
+    /// fact are moved by one bar — a drag or a wheel on either scrolls both.
+    #[test]
+    fn the_footers_two_paragraphs_have_a_bar_each() {
+        use ronoctua_design::frame::{Command, Text};
+        let long = A_REASON.repeat(4);
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 73);
+        let mut row = a_filter_row("long", ScreenCell::Data(long.clone()));
+        row.foot[1].value = ScreenCell::Data(long);
+        on_a_page_of(&mut s, vec![row]);
+        on_spot(&mut s, Spot::Screen(0));
+        // Each paragraph of the footer: its first line, the cell the host
+        // answers its bar from, and the row it was left at.
+        let paragraphs = |s: &mut State| -> Vec<(u16, u16, u16)> {
+            let screen = drawn(s, 40, 73);
+            let foot = s.blocks.foot.top;
+            screen
+                .as_protocol()
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    Command::Paragraph {
+                        line,
+                        column,
+                        columns,
+                        first_row,
+                        content: Text::Data(_),
+                        ..
+                    } if *line >= foot => Some((*line, column + columns - 1, *first_row)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let drawn_first = paragraphs(&mut s);
+        assert_eq!(drawn_first.len(), 2, "the footer: {drawn_first:?}");
+        for (n, (line, column, _)) in drawn_first.iter().enumerate() {
+            let _ = s.act(Input::Scrolled(ronoctua_design::types::ScrollEvent {
+                at: ronoctua_design::types::Position {
+                    column: *column,
+                    line: *line,
+                },
+                first: 1 + u32::try_from(n).expect("two"),
+            }));
+        }
+        let left_at: Vec<u16> = paragraphs(&mut s).iter().map(|p| p.2).collect();
+        assert_eq!(left_at, [1, 2]);
+    }
+
+    /// FAILS IF: a row with nothing more to say stops being told by its
+    /// cells, which is every other module's footer — or a row that says more
+    /// keeps a sentence, or its name is a date.
+    #[test]
+    fn a_row_is_told_by_what_its_module_says_of_it() {
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 100);
+        let mut plain = a_dated_row("plain", "a line of the journal", 3);
+        let filter = a_filter_row("filter", ScreenCell::Key("reason-key".to_owned()));
+        let mut kind = a_dated_row("kind", "a line of the journal", 3);
+        kind.foot = filter.foot.clone();
+        plain.tone = BrainTone::Quiet;
+        let mut key = a_filter_row("key", ScreenCell::Empty);
+        key.label = ScreenCell::Key("fixture-row".to_owned());
+        let mut cells = a_dated_row("cells", "a line of the journal", 3);
+        cells.below = ScreenCell::Data("under it".to_owned());
+        on_a_page_of(
+            &mut s,
+            vec![plain.clone(), filter, kind, key, cells.clone()],
+        );
+
+        on_spot(&mut s, Spot::Screen(0));
+        let told = s.told();
+        assert_eq!(told.subject(), State::told_of_row(&plain).subject());
+        assert!(told.headline.is_none() && told.lines.is_empty() && told.below.is_none());
+
+        on_spot(&mut s, Spot::Screen(1));
+        let told = s.told();
+        assert_eq!(told.headline.as_deref(), Some("a snippet"));
+        assert_eq!(
+            told.below.as_ref().map(cell_word).as_deref(),
+            Some("reason-key")
+        );
+        assert_eq!(told.lines.len(), 2);
+        assert_eq!(told.also.as_deref(), Some("fixture-say-why"));
+        assert!(told.said.is_none() && told.logged.is_none() && told.about.is_none());
+
+        // A DATE IN THE LABEL'S PLACE NAMES NOTHING: its line does.
+        on_spot(&mut s, Spot::Screen(2));
+        assert_eq!(s.told().headline.as_deref(), Some("a line of the journal"));
+        // A KEY IS THE NAME EVERY FOOTER HAS.
+        on_spot(&mut s, Spot::Screen(3));
+        let told = s.told();
+        assert_eq!(told.name.as_deref(), Some("fixture-row"));
+        assert!(told.headline.is_none());
+        // WITH NO FACTS, what its cells say stays, and the line under it joins.
+        on_spot(&mut s, Spot::Screen(4));
+        let told = s.told();
+        assert_eq!(
+            told.below.as_ref().map(cell_word).as_deref(),
+            Some("under it")
+        );
+        assert_eq!(told.said, State::told_of_row(&cells).said);
+        assert!(told.logged.is_some());
+    }
+
+    /// FAILS IF: the footer's facts lose their tones to one grey — the owner's
+    /// *"tudo está na mesma cor"* —, the labels stop sharing a column as wide
+    /// as the widest, the last fact stops taking the rows left, or the words
+    /// under the name take a row a fact needed.
+    #[test]
+    fn the_footer_says_a_row_in_its_colours() {
+        use ronoctua_design::frame::{Command, Text};
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 100);
+        on_a_page_of(
+            &mut s,
+            vec![a_filter_row("f", ScreenCell::Key("reason-key".to_owned()))],
+        );
+        on_spot(&mut s, Spot::Screen(0));
+        let screen = drawn(&mut s, 40, 100);
+        let top = s.blocks.foot.top;
+        let seen = runs(&screen);
+        let at = |what: &str, line: u16| {
+            seen.iter()
+                .find(|(t, _, l, _)| t == what && *l == line)
+                .unwrap_or_else(|| panic!("`{what}` is not on line {line}: {seen:?}"))
+        };
+        assert_eq!(at("a snippet", top).1, "text-primary");
+        let label = at("fact-boot", top + 3);
+        let label_last = at("fact-last", top + 4);
+        assert_eq!(label.1, "text-dim");
+        assert_eq!(label_last.1, label.1);
+        assert_eq!(label.3, label_last.3);
+        let value = at("123", top + 3);
+        assert_eq!(value.1, "modeline-following");
+        assert_eq!(value.3, ronoctua_design::wide("Last line caught") + 1);
+
+        let paragraphs: Vec<_> = screen
+            .as_protocol()
+            .commands
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Paragraph {
+                    line,
+                    lines,
+                    column,
+                    color,
+                    content,
+                    ..
+                } if line >= top => Some((line, lines, column, color, content)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paragraphs.len(), 2, "{paragraphs:?}");
+        let (line, lines, column, color, content) = &paragraphs[0];
+        assert_eq!((*line, *lines, *column), (top + 1, 2, 0));
+        assert_eq!(color.as_str(), "text-folded");
+        assert_eq!(*content, Text::Key("reason-key".to_owned()));
+        let (line, lines, column, color, content) = &paragraphs[1];
+        assert_eq!(*line, top + 4);
+        assert_eq!(*lines, s.blocks.foot.lines - 4, "the rows left");
+        assert_eq!(*column, value.3);
+        assert_ne!(color.as_str(), "text-folded");
+        assert_eq!(*content, Text::Data("the last line, whole".to_owned()));
+    }
+
+    /// FAILS IF: the date of a fact is one run in one tone, unlike every other
+    /// date; or a row with a date last has it wrapped as a sentence.
+    #[test]
+    fn a_fact_is_dated_like_every_date() {
+        let mut s = a_state();
+        let _ = drawn(&mut s, 40, 100);
+        let moment = a_dated_row("x", "y", 1).label;
+        let mut row = a_filter_row("f", ScreenCell::Empty);
+        row.foot = vec![
+            a_fact("fact-boot", moment.clone(), BrainTone::Quiet),
+            a_fact("fact-last", moment, BrainTone::Danger),
+        ];
+        on_a_page_of(&mut s, vec![row]);
+        on_spot(&mut s, Spot::Screen(0));
+        let screen = drawn(&mut s, 40, 100);
+        let top = s.blocks.foot.top;
+        let seen = runs(&screen);
+        let day = |line: u16| {
+            seen.iter()
+                .find(|(t, _, l, _)| t == "23" && *l == line)
+                .unwrap_or_else(|| panic!("no day on line {line}: {seen:?}"))
+        };
+        let lead = |line: u16| {
+            seen.iter()
+                .find(|(t, _, l, _)| t == "2026-08-" && *l == line)
+                .unwrap_or_else(|| panic!("no date on line {line}: {seen:?}"))
+        };
+        assert_eq!(day(top + 1).1, "text-secondary");
+        assert_eq!(lead(top + 1).1, "text-dim");
+        assert_eq!(day(top + 2).1, "text-secondary");
+        assert_eq!(lead(top + 2).1, "state-error");
+    }
+
+    /// FAILS IF: the footer does not say what the row's other key does on this
+    /// row, whole; a click on it does not do it at once — it is the only way
+    /// to it with no header on the window —; it stops saying what it is under
+    /// the pointer, or spelling its `⌥`; or it lands on anything but a row of
+    /// its own where the first fact leaves it no room.
+    #[test]
+    fn the_rows_other_action_is_named_and_a_click_takes_it() {
+        let mut s = a_state();
+        s.act(Input::Phrases(vec![ronoctua_design::types::Phrase {
+            key: Phrases::LEADER_ALT.to_owned(),
+            text: "SUPER ALT".to_owned(),
+        }]));
+        let _ = drawn(&mut s, 40, 100);
+        on_a_page_of(&mut s, vec![a_filter_row("f", ScreenCell::Empty)]);
+        on_spot(&mut s, Spot::Screen(0));
+        let seen = runs(&drawn(&mut s, 40, 100));
+        let top = s.blocks.foot.top;
+        let (row, from, to) = s.also_at.expect("the footer does not name it");
+        assert_eq!(row, 1, "not beside the first fact");
+        assert_eq!(to, 100);
+        let name = seen
+            .iter()
+            .find(|(t, ..)| t == "fixture-say-why")
+            .expect("its name is not drawn");
+        assert_eq!(name.2, top + 1);
+        assert_eq!(
+            name.3 + ronoctua_design::wide("Say why this filter exists"),
+            100
+        );
+        assert_eq!(name.1, "state-accent");
+
+        let _ = s.hover.set(0, (from, top + row));
+        let seen = runs(&drawn(&mut s, 40, 100));
+        assert!(
+            seen.iter().any(|(t, ..)| t == "SUPER ALT"),
+            "its `⌥` is not spelt under the pointer"
+        );
+        assert_eq!(
+            s.pointed(),
+            Some(Pointed::Key(key::ABOUT_ROW_ALSO.to_owned()))
+        );
+        let out = s.clicked(from, top + row);
+        assert!(
+            out.iter().any(
+                |e| matches!(e, Effect::Ask(d) if d.what == Request::ActRowAlso && d.target == 1)
+            ),
+            "a click on it: {out:?}"
+        );
+        // A ROW THAT OFFERS NONE draws none, and no click is left behind.
+        let mut bare = a_filter_row("bare", ScreenCell::Empty);
+        bare.also = String::new();
+        s.act(Input::ModuleScreen(ModuleScreen {
+            generation: 8,
+            ..with_row(s.screen.clone(), bare)
+        }));
+        let _ = drawn(&mut s, 40, 100);
+        assert!(s.also_at.is_none());
+        // A NARROW WINDOW: its own row, the last one, and the last fact above.
+        let mut narrow = a_state();
+        let _ = drawn(&mut narrow, 40, 46);
+        on_a_page_of(&mut narrow, vec![a_filter_row("f", ScreenCell::Empty)]);
+        on_spot(&mut narrow, Spot::Screen(0));
+        let _ = drawn(&mut narrow, 40, 46);
+        let (row, ..) = narrow.also_at.expect("the footer does not name it");
+        assert_eq!(row, narrow.blocks.foot.lines - 1);
+        // TOO NARROW FOR ITS NAME, nothing: half a control is none.
+        let _ = drawn(&mut narrow, 40, 20);
+        assert!(narrow.also_at.is_none());
+    }
+
+    /// `page`, its first row now `row`.
+    fn with_row(page: Option<ModuleScreen>, row: ModuleRow) -> ModuleScreen {
+        let mut page = page.expect("a page");
+        page.sections[0].rows[0] = row;
+        page
+    }
+
+    /// FAILS IF: moving to another row keeps the sentence scrolled: what is
+    /// new in a footer has to count in what it is about, or it opens past the
+    /// end of what it says.
+    #[test]
+    fn a_rows_facts_are_what_its_footer_is_about() {
+        let filter = |last: &str| Told {
+            headline: Some("a snippet".to_owned()),
+            lines: vec![a_fact(
+                "fact-last",
+                ScreenCell::Data(last.to_owned()),
+                BrainTone::Quiet,
+            )],
+            ..Told::default()
+        };
+        let told = filter("a line");
+        assert_ne!(told.subject(), filter("another line").subject());
+        assert_ne!(told.subject(), Told::default().subject());
+        for changed in [
+            Told {
+                headline: None,
+                ..filter("a line")
+            },
+            Told {
+                below: Some(ScreenCell::Data("why".to_owned())),
+                ..filter("a line")
+            },
+            Told {
+                also: Some("fixture-say-why".to_owned()),
+                ..filter("a line")
+            },
+        ] {
+            assert_ne!(told.subject(), changed.subject());
+        }
     }
 }

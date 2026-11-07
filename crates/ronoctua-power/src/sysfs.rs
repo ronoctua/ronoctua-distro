@@ -178,7 +178,7 @@ pub fn write(
 ///
 /// # Errors
 ///
-/// As [`write`].
+/// As [`write()`].
 pub fn write_in(dir: &Path, start: Option<u8>, end: u8) -> anyhow::Result<Thresholds> {
     admissible(start, end)?;
     let now = read_in(dir).context("no thresholds to write")?;

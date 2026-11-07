@@ -45,8 +45,8 @@ ronoctua-files = { path = "../ronoctua-files" }
 # library the screen uses (`swash` underneath), with the distro's own face.
 cosmic-text.workspace = true
 
-[dependencies.tracing-subscriber]
-workspace = true
+[dependencies.ronoctua-log]
+path = "../ronoctua-log"
 
 # THE DAEMON, as its own binary — `nix/rust.nix` extracts JUST this, so the
 # unit's closure has no renderer and no wasm runtime.

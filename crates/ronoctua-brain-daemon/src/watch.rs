@@ -60,6 +60,39 @@
 //! been following is not down: it is started again from its cursor, and
 //! nothing was missed. What journalctl itself said goes to the log.
 //!
+//! # What a module missed is read for it alone
+//!
+//! A module switched off hears nothing, and the one cursor moves on without
+//! it, because it is everybody's. So a module that keeps its own place
+//! ([`Watcher::pass`]) is read what came after it by a PASS: a journalctl that
+//! ends ([`ronoctua_journal::catch_up_arguments`]), on a thread of its own,
+//! handed over in one message ([`Watcher::passed`]). A person asks for one
+//! ([`Acted::Pass`]), or the module comes back on; the brain's own start never
+//! does, because the follower's cursor already covers that — save for a pass
+//! the brain stopped in the middle of, which only it was reading: the module
+//! says it is owed ([`Watcher::owed`](crate::module::Watcher::owed)), and it
+//! is read again up to where the follower took over ([`Pass::until`](crate::module::Pass::until)).
+//!
+//! It touches nothing of the follower's. The shared cursor says where the
+//! FOLLOWER is, and a pass read somewhere else, for somebody else.
+//!
+//! A module that came back on hears the present at the same time, and a line
+//! both of them read is heard once. What the follower brought first is left
+//! out of the pass, and what the pass handed first is skipped when the
+//! follower brings it — so a pass that read every line the follower brought
+//! says so ([`Passed::ahead`]), being the only one left to move the module's
+//! place over what is skipped. A line is known by its cursor and never by when
+//! it was written: a clock stepped back makes a later line look older, and the
+//! time a line carries would drop lines nobody heard.
+//!
+//! # The cursor comes last
+//!
+//! It says a line was heard, and a restart starts after it. So what depends on
+//! that line is written first: what each module keeps of it
+//! ([`Watcher::keep`]), then the notes. The daemon has no signal handler, so a
+//! real stop never reaches [`Watching`]'s `Drop`, and the turn in which the
+//! cursor is written is the one moment the two can be made to agree.
+//!
 //! # A path
 //!
 //! Watched from its PARENT, narrowed to its name — its birth, its removal, and
@@ -81,7 +114,7 @@
 //! `state/person/software/` is made by the first declaration, and every
 //! declaration after it is written inside).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,10 +123,12 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use ronoctua_files::notice::{Notice, Pace};
-use ronoctua_journal::{BOOT_ID, Cursor, Entry, Follow, Keeper, Match, Priority, Refusal, Shares};
+use ronoctua_journal::{
+    BOOT_ID, Backfill, Cursor, Entry, Follow, Keeper, Match, Priority, Refusal, Shares,
+};
 
 use crate::hub::{Bell, Core, rehearsing_here};
-use crate::module::{Heard, Source};
+use crate::module::{Heard, Passed, Source};
 use crate::moment::Moment;
 
 /// The file the journal's cursor is kept in, under the state directory.
@@ -142,7 +177,8 @@ const LIVED: Duration = Duration::from_secs(60);
 pub trait Journalist: Send + Sync {
     /// Starts one journalctl with these arguments
     /// ([`ronoctua_journal::follow_arguments`],
-    /// [`ronoctua_journal::pass_arguments`] or
+    /// [`ronoctua_journal::pass_arguments`],
+    /// [`ronoctua_journal::catch_up_arguments`] or
     /// [`ronoctua_journal::probe_arguments`]).
     ///
     /// # Errors
@@ -164,6 +200,12 @@ pub trait Stream: Send {
     /// ([`Follow::settled`]). A stream that cannot tell says it is.
     fn settled(&mut self, _within: Duration) -> bool {
         true
+    }
+
+    /// Whether it exited with a failure, known once it ended
+    /// ([`Follow::failed`]). A stream that cannot tell says it did not.
+    fn failed(&self) -> bool {
+        false
     }
 
     /// What it said about itself, for the log.
@@ -191,6 +233,10 @@ impl Stream for Follow {
         Self::settled(self, within)
     }
 
+    fn failed(&self) -> bool {
+        Self::failed(self)
+    }
+
     fn said(&self) -> String {
         Self::said(self)
     }
@@ -210,6 +256,19 @@ enum Msg {
     JournalDown(Refusal),
     /// The journal is followed again.
     JournalUp,
+    /// A pass asked for one module ended. See this module's header.
+    Passed {
+        /// Whose.
+        module: &'static str,
+        /// What each of its journal sources took, by the source's index.
+        shares: Vec<(usize, Vec<Entry>)>,
+        /// How many lines its rings pushed out.
+        lost: u64,
+        /// The cursor of the last entry it read.
+        last: Option<Cursor>,
+        /// Why it could not read, when it could not.
+        why: Option<Refusal>,
+    },
     /// journalctl refused the saved cursor: the next start is a first one.
     Forget,
     /// Something changed at the path of this ear.
@@ -437,6 +496,8 @@ impl Watch {
         let mut dispatcher =
             Dispatcher::new(Arc::clone(&self.core), ears, keeper, tx.clone(), rung);
         dispatcher.paths = paths;
+        dispatcher.journalist.clone_from(&self.journalist);
+        dispatcher.stop = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
             .name("watch".to_owned())
             .spawn(move || dispatcher.run(&rx));
@@ -743,8 +804,116 @@ impl Follower {
     }
 }
 
-/// What journalctl said as it gave up, in its own words, for the log — the
-/// brain's page shows the log.
+/// One pass asked for one module — a journalctl that ends, read on a thread
+/// of its own because the follower sits blocked in its next line and the
+/// watch thread must never wait, and handed over in one message. See this
+/// module's header.
+struct Reader {
+    module: &'static str,
+    journalist: Arc<dyn Journalist>,
+    /// Its journal sources: which one, and its match with a ring of the size
+    /// asked for.
+    ears: Vec<(usize, Match)>,
+    after: Option<Cursor>,
+    /// The line it stops before, unread ([`Pass::until`](crate::module::Pass::until)).
+    until: Option<Cursor>,
+    tx: Sender<Msg>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Reader {
+    fn run(self) {
+        // AT ITS OWN MATCHES' PRIORITY, not the follower's: nothing goes on
+        // from where this one ends, so it carries no line nobody here wants.
+        let priority = ronoctua_journal::loosest(self.ears.iter().map(|(_, m)| m));
+        let args = ronoctua_journal::catch_up_arguments(self.after.as_ref(), priority);
+        let Some(mut read) = self.read(&args) else {
+            return;
+        };
+        // A CURSOR IT WOULD NOT TAKE stops only this one try, and this boot
+        // is what a module with no cursor reads. One that gave a line took
+        // its cursor, and what failed came after: reading this boot over it
+        // would hand the module what it already holds.
+        if self.after.is_some()
+            && read.why == Some(Refusal::Unreadable)
+            && read.shares.last().is_none()
+        {
+            tracing::info!(module = self.module, said = %read.said, "a pass was refused the place it was to start from, and reads this boot");
+            let args = ronoctua_journal::catch_up_arguments(None, priority);
+            let Some(again) = self.read(&args) else {
+                return;
+            };
+            read = again;
+        }
+        let Read { shares, why, said } = read;
+        if let Some(why) = why {
+            tracing::warn!(module = self.module, why = why.id(), said = %said, "a pass could not read the journal to its end");
+        }
+        let lost = shares.lost().iter().sum();
+        let (taken, last) = shares.taken();
+        let shares = self.ears.iter().map(|(at, _)| *at).zip(taken).collect();
+        let _ = self.tx.send(Msg::Passed {
+            module: self.module,
+            shares,
+            lost,
+            last,
+            why,
+        });
+    }
+
+    /// Reads one journalctl to its end. `None` when the thread was told to
+    /// stop on the way.
+    fn read(&self, args: &[String]) -> Option<Read> {
+        let wanted = self.ears.iter().map(|(_, m)| m.clone()).collect();
+        let mut shares = Shares::new(wanted, 0, None);
+        let mut pass = match self.journalist.open(args) {
+            Ok(p) => p,
+            Err(r) => {
+                return Some(Read {
+                    shares,
+                    why: Some(r),
+                    said: String::new(),
+                });
+            }
+        };
+        let ended = loop {
+            if self.stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            match pass.next_entry() {
+                // WHERE IT WAS TO STOP is an end like the journal's.
+                Ok(entry) if self.until.as_ref() == Some(&entry.cursor) => break Refusal::Ended,
+                Ok(entry) => shares.offer(&entry),
+                Err(r) => break r,
+            }
+        };
+        // A FAILURE AFTER A LINE ends like the end of the journal, and it is
+        // not: what comes after it was never read.
+        let why = match ended {
+            Refusal::Ended if pass.failed() => Some(Refusal::Unreadable),
+            Refusal::Ended => None,
+            refused => Some(refused),
+        };
+        Some(Read {
+            shares,
+            why,
+            said: pass.said(),
+        })
+    }
+}
+
+/// What one journalctl gave a pass.
+struct Read {
+    /// What its matches took.
+    shares: Shares,
+    /// Why it stopped short of the end of the journal, when it did.
+    why: Option<Refusal>,
+    /// What it said as it stopped, for the log.
+    said: String,
+}
+
+/// What journalctl said as the follower lost it, in its own words, for the
+/// log — the brain's page shows the log.
 fn tell_the_log(stream: &dyn Stream, why: Refusal) {
     let said = stream.said();
     tracing::warn!(why = why.id(), said = %said, "the journal is not being followed");
@@ -853,6 +1022,21 @@ struct Dispatcher {
     published: Option<Instant>,
     /// When it is to be published, when something waits for its turn.
     publish_due: Option<Instant>,
+    /// Where a pass reads from; `None` on a machine with no journalctl.
+    journalist: Option<Arc<dyn Journalist>>,
+    /// What tells a pass on its way that the thread is ending.
+    stop: Arc<AtomicBool>,
+    /// The modules a pass is being read for, each with the lines the follower
+    /// handed it meanwhile. Kept only while the pass lasts.
+    passing: BTreeMap<&'static str, HashSet<Cursor>>,
+    /// The lines the last pass that handed any handed each module, which the
+    /// follower may still bring. As big as the module's rings, and it can
+    /// stay: a cursor matches its own line and no other, whatever the clock
+    /// did, so nothing here can silence a module.
+    handed: BTreeMap<&'static str, HashSet<Cursor>>,
+    /// Whether it has looked at who is on yet: everybody comes on at the
+    /// first look, and only after it does coming on mean a person did it.
+    looked: bool,
 }
 
 impl Dispatcher {
@@ -875,6 +1059,11 @@ impl Dispatcher {
             woke: BTreeMap::new(),
             published: None,
             publish_due: None,
+            journalist: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            passing: BTreeMap::new(),
+            handed: BTreeMap::new(),
+            looked: false,
         }
     }
 
@@ -919,12 +1108,10 @@ impl Dispatcher {
         }
     }
 
-    /// On the way out: the notes, the cursor, and what is left to publish.
+    /// On the way out: the cursor, what it covers, and what is left to
+    /// publish.
     fn leave(&mut self) {
-        self.core.save_journal();
-        if let Err(e) = self.keeper.flush() {
-            tracing::warn!(error = %e, "the journal's cursor could not be written");
-        }
+        self.write_cursor();
         self.core.refresh();
     }
 
@@ -943,21 +1130,109 @@ impl Dispatcher {
     }
 
     /// Looks again at who is on: a watcher that came on is started — to
-    /// catch up on what it missed while it was off — and every module on is
-    /// told what its sources are doing now.
+    /// catch up on what it missed while it was off, and read for it when a
+    /// person switched it on — one that went off is told so, the passes asked
+    /// for begin, and every module on is told what its sources are doing now.
     fn reconcile(&mut self) {
         let now_on = self.switched_on();
         let came: Vec<&'static str> = now_on.difference(&self.on).copied().collect();
+        let went: Vec<&'static str> = self.on.difference(&now_on).copied().collect();
         self.on = now_on;
-        if !came.is_empty() {
-            let now = self.core.now();
-            for id in came {
-                if let Some(w) = self.core.modules().find(id).and_then(|m| m.watcher()) {
-                    w.started(now, &self.core.ctx(id, now, rehearsing_here()));
-                }
+        let now = self.core.now();
+        for id in went {
+            if let Some(w) = self.core.modules().find(id).and_then(|m| m.watcher()) {
+                w.stopped(now, &self.core.ctx(id, now, rehearsing_here()));
             }
         }
+        for id in came {
+            let mut owed = false;
+            if let Some(w) = self.core.modules().find(id).and_then(|m| m.watcher()) {
+                w.started(now, &self.core.ctx(id, now, rehearsing_here()));
+                owed = w.owed();
+            }
+            // NOT AT THE FIRST LOOK: the brain itself is starting, and what
+            // its modules missed is what the follower reads after its cursor —
+            // save what a pass the brain stopped in was reading, which nothing
+            // else will.
+            if self.looked || owed {
+                self.begin_pass(id, now);
+            }
+        }
+        self.looked = true;
+        for id in self.core.take_passes() {
+            self.begin_pass(id, now);
+        }
         self.settle();
+    }
+
+    /// Starts a pass for a module, if it wants one and none is on its way.
+    fn begin_pass(&mut self, id: &'static str, now: Moment) {
+        if self.passing.contains_key(id) {
+            return;
+        }
+        let Some(w) = self.core.modules().find(id).and_then(|m| m.watcher()) else {
+            return;
+        };
+        let ctx = self.core.ctx(id, now, rehearsing_here());
+        let Some(pass) = w.pass(now, &ctx) else {
+            return;
+        };
+        // EACH OF ITS MATCHES WITH A RING OF ITS OWN, which is what `Shares`
+        // already keeps: `Reader` names no boot to it, so `ThisBoot` covers
+        // all that was read, however many boots a cursor reaches across.
+        let ears: Vec<(usize, Match)> = self
+            .ears
+            .iter()
+            .filter(|ear| ear.module == id)
+            .filter_map(|ear| match &ear.kind {
+                Source::Journal(m) => {
+                    let backfill = Backfill::ThisBoot { most: pass.most };
+                    Some((
+                        ear.source,
+                        Match {
+                            backfill,
+                            ..m.clone()
+                        },
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        // EVERY PASS ASKED FOR IS ANSWERED, even one that cannot begin: a
+        // module waiting for it would say it is still reading.
+        let why = match &self.journalist {
+            _ if ears.is_empty() => None,
+            None => Some(Refusal::NoProgram),
+            Some(journalist) => {
+                let reader = Reader {
+                    module: id,
+                    journalist: Arc::clone(journalist),
+                    ears,
+                    after: pass.after,
+                    until: pass.until,
+                    tx: self.tx.clone(),
+                    stop: Arc::clone(&self.stop),
+                };
+                let spawned = std::thread::Builder::new()
+                    .name("journal-pass".to_owned())
+                    .spawn(move || reader.run());
+                if spawned.is_ok() {
+                    self.passing.insert(id, HashSet::new());
+                    return;
+                }
+                Some(Refusal::Unstartable)
+            }
+        };
+        w.passed(
+            Passed {
+                shares: &[],
+                lost: 0,
+                last: None,
+                why,
+                ahead: false,
+            },
+            &ctx,
+        );
     }
 
     /// Tells every module on what changed about its sources since it was
@@ -997,6 +1272,19 @@ impl Dispatcher {
                         && self.on.contains(ear.module)
                         && m.accepts(&entry)
                     {
+                        // A PASS GOT HERE FIRST: heard.
+                        if self
+                            .handed
+                            .get(ear.module)
+                            .is_some_and(|handed| handed.contains(&entry.cursor))
+                        {
+                            continue;
+                        }
+                        // THE FOLLOWER GOT HERE FIRST: the pass on its way
+                        // will not hand this one.
+                        if let Some(heard) = self.passing.get_mut(ear.module) {
+                            heard.insert(entry.cursor.clone());
+                        }
                         self.tell(
                             ear.module,
                             now,
@@ -1029,6 +1317,56 @@ impl Dispatcher {
                             },
                         );
                     }
+                }
+            }
+            Msg::Passed {
+                module,
+                mut shares,
+                lost,
+                last,
+                why,
+            } => {
+                // WHAT IS LEFT is what the follower did not bring, and it
+                // may still be on its way, even for a module that is off: it
+                // may come back on first. One that handed nothing leaves the
+                // last one's lines as they are.
+                //
+                // AND A PASS THAT READ EVERY LINE THE FOLLOWER BROUGHT went past
+                // its place: what the follower brings up to where the pass
+                // ended is skipped, never told, so the module is told so here,
+                // or its place stays behind lines it already counted.
+                let mut ahead = false;
+                if let Some(heard) = self.passing.remove(module) {
+                    let read: HashSet<&Cursor> = shares
+                        .iter()
+                        .flat_map(|(_, entries)| entries)
+                        .map(|e| &e.cursor)
+                        .collect();
+                    ahead = !heard.is_empty() && heard.iter().all(|c| read.contains(c));
+                    for (_, entries) in &mut shares {
+                        entries.retain(|e| !heard.contains(&e.cursor));
+                    }
+                }
+                let handed: HashSet<Cursor> = shares
+                    .iter()
+                    .flat_map(|(_, entries)| entries)
+                    .map(|e| e.cursor.clone())
+                    .collect();
+                if !handed.is_empty() {
+                    self.handed.insert(module, handed);
+                }
+                // AND THE CURSOR STAYS WHERE THE FOLLOWER LEFT IT.
+                if let Some(w) = self.core.modules().find(module).and_then(|m| m.watcher()) {
+                    w.passed(
+                        Passed {
+                            shares: &shares,
+                            lost,
+                            last: last.as_ref(),
+                            why,
+                            ahead,
+                        },
+                        &self.core.ctx(module, now, rehearsing_here()),
+                    );
                 }
             }
             Msg::JournalDown(why) => {
@@ -1175,15 +1513,26 @@ impl Dispatcher {
         }
     }
 
-    /// Writes the cursor down when its turn has come — the notes it covers
-    /// first, so a cursor never says a line was heard whose note is not on
-    /// disk.
+    /// Writes the cursor down when its turn has come.
     fn keep_cursor(&mut self, now: Instant) {
         if self.keeper.due().is_some_and(|at| at <= now) {
-            self.core.save_journal();
-            if let Err(e) = self.keeper.flush() {
-                tracing::warn!(error = %e, "the journal's cursor could not be written");
+            self.write_cursor();
+        }
+    }
+
+    /// Writes the cursor down, and first what it covers: each module's own
+    /// list, then the notes, so a cursor never says a line was heard that a
+    /// restart would not find. See this module's header.
+    fn write_cursor(&mut self) {
+        let now = self.core.now();
+        for id in &self.on {
+            if let Some(w) = self.core.modules().find(id).and_then(|m| m.watcher()) {
+                w.keep(now, &self.core.ctx(id, now, rehearsing_here()));
             }
+        }
+        self.core.save_journal();
+        if let Err(e) = self.keeper.flush() {
+            tracing::warn!(error = %e, "the journal's cursor could not be written");
         }
     }
 
@@ -1222,7 +1571,7 @@ mod tests {
     use super::*;
     use crate::fake::{Fake, Hand, manifest};
     use crate::mind::{Mind, Shared};
-    use crate::module::{Acted, Action, Arg, Manifest, Module, Noted};
+    use crate::module::{Acted, Action, Arg, Manifest, Module, Noted, Pass};
     use crate::prefs::{Prefs, Where};
     use crate::registry::Registry;
     use crate::wire::Knob;
@@ -1316,7 +1665,8 @@ mod tests {
     /// fixture that ignored them would pass a pass that journalctl cuts.
     ///
     /// Every opening is written down. The first `refusing` openings give up
-    /// at once, unreadable; each `--follow` after them takes the next live
+    /// at once, unreadable; the next pass, with `cutting` set, fails after
+    /// that many lines; each `--follow` after them takes the next live
     /// channel, and with none left it cannot start.
     struct Journald {
         /// Everything written before the watch started, oldest first.
@@ -1327,6 +1677,7 @@ mod tests {
         now_s: u64,
         live: Mutex<VecDeque<mpsc::Receiver<Entry>>>,
         refusing: AtomicUsize,
+        cutting: AtomicUsize,
         opened: Mutex<Vec<Vec<String>>>,
     }
 
@@ -1341,6 +1692,7 @@ mod tests {
                     now_s: 1000,
                     live: Mutex::new(receivers),
                     refusing: AtomicUsize::new(0),
+                    cutting: AtomicUsize::new(0),
                     opened: Mutex::new(Vec::new()),
                 }),
                 senders,
@@ -1377,11 +1729,18 @@ mod tests {
         }
     }
 
-    struct Scripted(std::vec::IntoIter<Entry>);
+    /// Its lines, then an end that says how it went.
+    struct Scripted {
+        lines: std::vec::IntoIter<Entry>,
+        failed: bool,
+    }
 
     impl Stream for Scripted {
         fn next_entry(&mut self) -> Result<Entry, Refusal> {
-            self.0.next().ok_or(Refusal::Ended)
+            self.lines.next().ok_or(Refusal::Ended)
+        }
+        fn failed(&self) -> bool {
+            self.failed
         }
     }
 
@@ -1447,7 +1806,14 @@ mod tests {
             };
             chosen.drain(..chosen.len().saturating_sub(keep));
             if !follows {
-                return Ok(Box::new(Scripted(chosen.into_iter())));
+                let cut = self.cutting.swap(0, Ordering::AcqRel);
+                if cut > 0 {
+                    chosen.truncate(cut);
+                }
+                return Ok(Box::new(Scripted {
+                    lines: chosen.into_iter(),
+                    failed: cut > 0,
+                }));
             }
             let live = self
                 .live
@@ -2034,6 +2400,9 @@ mod tests {
         label: "cmd-ringer-arm",
         row: false,
         asks: None,
+        opens: None,
+        optional: false,
+        while_off: false,
     };
 
     #[test]
@@ -2262,5 +2631,777 @@ mod tests {
                 .expect("start")
                 .is_none()
         );
+    }
+
+    static READ: Action = Action {
+        id: "read",
+        command: "reader-read",
+        label: "cmd-reader-read",
+        row: false,
+        asks: None,
+        opens: None,
+        optional: false,
+        while_off: false,
+    };
+
+    /// A scribe that keeps its own place, as a module with a pass does: `read`
+    /// asks for one from there, and each line it brings is noted, then how it
+    /// ended, and the place moves only to a line it really read.
+    fn reader(sources: Vec<Source>, from: Option<Cursor>, most: usize) -> Fake {
+        reader_to(sources, from, most, None)
+    }
+
+    /// [`reader`], whose passes stop before `until`.
+    fn reader_to(
+        sources: Vec<Source>,
+        from: Option<Cursor>,
+        most: usize,
+        until: Option<Cursor>,
+    ) -> Fake {
+        let place = Arc::new(Mutex::new(from));
+        let moved = Arc::clone(&place);
+        scribe("reader", sources)
+            .declaring(Manifest {
+                schedule: None,
+                actions: std::slice::from_ref(&READ),
+                ..manifest("reader")
+            })
+            .acts(|_, _| Acted::Pass)
+            .catches_up(
+                move |_, _| {
+                    Some(Pass {
+                        after: place.lock().expect("place").clone(),
+                        most,
+                        until: until.clone(),
+                    })
+                },
+                move |passed, ctx| {
+                    if let Some(last) = passed.last {
+                        *moved.lock().expect("place") = Some(last.clone());
+                    }
+                    let note = |text: String| {
+                        ctx.record(Noted::of("scribe-noted").with("what", Arg::Text(text)));
+                    };
+                    for (source, entries) in passed.shares {
+                        for e in entries {
+                            note(format!("read {source} {}", e.message));
+                        }
+                    }
+                    note(format!(
+                        "ended lost={} last={} why={}{}",
+                        passed.lost,
+                        passed.last.map_or("-", |c| c.0.as_str()),
+                        passed.why.map_or("-", Refusal::id),
+                        if passed.ahead { " ahead" } else { "" }
+                    ));
+                },
+            )
+    }
+
+    /// A dispatcher nothing feeds, for a test that hands it its messages in
+    /// the very order it is about, with the channel a pass answers on.
+    fn by_hand(
+        core: &Arc<Core>,
+        module: &'static str,
+        matches: Vec<Match>,
+        journalist: Option<Arc<dyn Journalist>>,
+    ) -> (Dispatcher, Receiver<Msg>) {
+        let (tx, rx) = mpsc::channel();
+        let ears = matches
+            .into_iter()
+            .enumerate()
+            .map(|(source, m)| Ear {
+                module,
+                source,
+                kind: Source::Journal(m),
+                down: None,
+                told: None,
+            })
+            .collect();
+        let mut dispatcher = Dispatcher::new(
+            Arc::clone(core),
+            ears,
+            Keeper::at(None, CURSOR_FILE, CURSOR_EVERY),
+            tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        dispatcher.journalist = journalist;
+        (dispatcher, rx)
+    }
+
+    /// The message a pass ends in.
+    fn the_pass(rx: &Receiver<Msg>) -> Msg {
+        loop {
+            match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(msg @ Msg::Passed { .. }) => return msg,
+                Ok(_) => {}
+                Err(e) => panic!("the pass never ended: {e}"),
+            }
+        }
+    }
+
+    /// What it noted so far, with no thread to publish it.
+    fn noted_now(core: &Core, module: &str) -> Vec<String> {
+        core.refresh();
+        noted(&core.shared.snapshot().0, module)
+    }
+
+    /// A journal that cannot even be started.
+    struct NoStart;
+
+    impl Journalist for NoStart {
+        fn open(&self, _args: &[String]) -> Result<Box<dyn Stream>, Refusal> {
+            Err(Refusal::Unstartable)
+        }
+    }
+
+    #[test]
+    fn a_pass_reads_after_the_module_and_leaves_the_shared_cursor_alone() {
+        // THE DEFECT THIS CATCHES: the pass written down as the follower's
+        // position. The shared cursor is everybody's, and a pass over what
+        // one module missed would send it back, for all of them.
+        let dir = scratch("pass");
+        Cursor("s=t;i=4".to_owned())
+            .write_to(&dir, CURSOR_FILE)
+            .expect("the cursor");
+        let quiet = Match {
+            max_priority: Some(ronoctua_journal::INFO),
+            message_contains: Some("Quiet".to_owned()),
+            ..Match::default()
+        };
+        let core = a_core(vec![
+            reader(
+                vec![Source::Journal(killed())],
+                Some(Cursor("s=t;i=1".to_owned())),
+                10,
+            )
+            .boxed(),
+            scribe("other", vec![Source::Journal(quiet)]).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let past = vec![
+            entry(1, "Killed first", 3),
+            entry(2, "Killed second", 3),
+            entry(3, "Killed third", 3),
+            entry(4, "a quieter line", 6),
+        ];
+        let (journal, _live) = Journald::with(past, 1);
+        let watching = Watch::new(Arc::clone(&core))
+            .reading(Some(journal.clone()))
+            .keeping_cursor_in(Some(dir.clone()))
+            .start()
+            .expect("start");
+        core.act("reader", "read", None, None).expect("asked");
+        let mind = until(&core, "the pass handed over", |m| {
+            noted(m, "reader")
+                .last()
+                .is_some_and(|t| t.starts_with("ended"))
+        });
+        assert_eq!(
+            noted(&mind, "reader"),
+            [
+                "read 0 Killed second",
+                "read 0 Killed third",
+                "ended lost=0 last=s=t;i=3 why=-"
+            ]
+        );
+        assert!(noted(&mind, "other").is_empty(), "the pass reached another");
+        drop(watching);
+        // AT ITS OWN PRIORITY, FROM ITS OWN PLACE, and it ends. Only passes
+        // are counted: the follower opens on a thread of its own, and nothing
+        // here waited for it.
+        let opened = journal.opened();
+        let passes: Vec<_> = opened
+            .iter()
+            .filter(|args| !args.iter().any(|a| a == "--follow"))
+            .collect();
+        assert_eq!(passes.len(), 1, "{opened:?}");
+        assert_eq!(
+            passes[0][2..],
+            ["--priority=0..3", "--after-cursor=s=t;i=1"]
+        );
+        // AND THE CURSOR IS WHERE THE FOLLOWER LEFT IT.
+        assert_eq!(
+            Cursor::read_from(&dir.join(CURSOR_FILE)),
+            Some(Cursor("s=t;i=4".to_owned()))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_source_keeps_its_own_ring_and_what_they_lost_is_said() {
+        // A WARNING NEVER PUSHES AN ERROR OUT: two bands, two rings, and each
+        // line in one of them.
+        let errors = Match {
+            max_priority: Some(ronoctua_journal::ERR),
+            ..Match::default()
+        };
+        let warnings = Match {
+            max_priority: Some(ronoctua_journal::WARNING),
+            min_priority: Some(ronoctua_journal::WARNING),
+            ..Match::default()
+        };
+        let core = a_core(vec![
+            reader(
+                vec![
+                    Source::Journal(errors.clone()),
+                    Source::Journal(warnings.clone()),
+                ],
+                None,
+                2,
+            )
+            .boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let past = vec![
+            entry(1, "an old error", 3),
+            entry(2, "an error", 3),
+            entry(3, "a warning", 4),
+            entry(4, "a newer warning", 4),
+            entry(5, "the newest warning", 4),
+            entry(6, "a line nobody here wants", 6),
+        ];
+        let (journal, _live) = Journald::with(past, 0);
+        let (mut d, rx) = by_hand(
+            &core,
+            "reader",
+            vec![errors, warnings],
+            Some(journal.clone()),
+        );
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        assert_eq!(
+            noted_now(&core, "reader"),
+            [
+                "read 0 an old error",
+                "read 0 an error",
+                "read 1 a newer warning",
+                "read 1 the newest warning",
+                "ended lost=1 last=s=t;i=5 why=-"
+            ]
+        );
+        // AT THE LOOSEST OF ITS OWN: the follower's priority is nobody's here.
+        assert_eq!(journal.opened()[0][2..], ["--priority=0..4", "--boot"]);
+    }
+
+    /// FAILS IF: a pass the brain stopped in the middle of is lost — the
+    /// follower's cursor covers only what the follower read, and the stretch
+    /// the pass was reading nothing else reads — or is read again past the
+    /// line the follower took over at, which the module heard already.
+    #[test]
+    fn a_pass_owed_as_the_brain_starts_is_read_up_to_where_the_follower_took_over() {
+        let past = vec![
+            entry(1, "Killed first", 3),
+            entry(2, "Killed second", 3),
+            entry(3, "Killed heard before the stop", 3),
+            entry(4, "Killed after it", 3),
+        ];
+        let took_over = Some(Cursor("s=t;i=3".to_owned()));
+        for owed in [true, false] {
+            let core = a_core(vec![
+                reader_to(vec![Source::Journal(killed())], None, 10, took_over.clone())
+                    .owes(move || owed)
+                    .boxed(),
+            ]);
+            let (journal, _) = Journald::with(past.clone(), 0);
+            let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal.clone()));
+            // THE FIRST LOOK: the brain is starting.
+            d.reconcile();
+            if !owed {
+                assert!(journal.opened().is_empty(), "the brain's start made a pass");
+                continue;
+            }
+            d.hear(the_pass(&rx));
+            assert_eq!(
+                noted_now(&core, "reader"),
+                [
+                    "read 0 Killed first",
+                    "read 0 Killed second",
+                    "ended lost=0 last=s=t;i=2 why=-"
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn a_module_switched_on_is_read_for_and_a_brain_that_starts_is_not() {
+        // A BRAIN THAT STARTS: everybody comes on, nobody is read for — what
+        // its modules missed is what the follower reads after its cursor.
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10)
+                .starts(|_, ctx| ctx.record(Noted::of("reader-started")))
+                .stops(|_, ctx| ctx.record(Noted::of("reader-stopped")))
+                .boxed(),
+        ]);
+        let past = vec![entry(1, "Killed while it was off", 3)];
+        let (journal, live) = Journald::with(past, 1);
+        let watching = Watch::new(Arc::clone(&core))
+            .reading(Some(journal.clone()))
+            .keeping_cursor_in(None)
+            .start()
+            .expect("start");
+        live[0].send(entry(2, "Killed now", 3)).expect("send");
+        let mind = until(&core, "the line", |m| noted(m, "reader").len() >= 2);
+        assert_eq!(noted(&mind, "reader"), ["reader-started", "Killed now"]);
+        assert_eq!(journal.opened().len(), 1, "the brain's start made a pass");
+        // SWITCHED OFF, and seen off: an off and an on inside one look of the
+        // thread are nothing at all, and nothing was missed.
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        until(&core, "stopped", |m| noted(m, "reader").len() >= 3);
+        // AND ON AGAIN BY A PERSON: started, and read for.
+        core.set("reader", &Knob::Enabled(true)).expect("on");
+        let mind = until(&core, "the pass", |m| {
+            noted(m, "reader")
+                .last()
+                .is_some_and(|t| t.starts_with("ended"))
+        });
+        assert_eq!(
+            noted(&mind, "reader")[2..],
+            [
+                "reader-stopped",
+                "reader-started",
+                "read 0 Killed while it was off",
+                "ended lost=0 last=s=t;i=1 why=-"
+            ]
+        );
+        drop(watching);
+    }
+
+    #[test]
+    fn what_a_pass_and_the_follower_both_read_is_heard_once() {
+        let line = |n: u64, text: &str| entry(n, text, 3);
+        let past = vec![
+            line(1, "Killed first"),
+            line(2, "Killed second"),
+            line(3, "Killed third"),
+            line(4, "Killed fourth"),
+        ];
+        let start = |past: Vec<Entry>| {
+            let core = a_core(vec![
+                reader(vec![Source::Journal(killed())], None, 10).boxed(),
+            ]);
+            core.set("reader", &Knob::Enabled(false)).expect("off");
+            let (journal, _) = Journald::with(past, 0);
+            let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal));
+            d.reconcile();
+            core.set("reader", &Knob::Enabled(true)).expect("on");
+            d.reconcile();
+            (core, d, rx)
+        };
+
+        // THE FOLLOWER GOT TO THE THIRD LINE FIRST: heard live, and the pass
+        // hands the others. Heard out of order, and once — and the pass, which
+        // read the third too, is ahead of the follower: what it brings up to
+        // the fourth is skipped, so only the pass can move the place there.
+        let (core, mut d, rx) = start(past.clone());
+        d.hear(Msg::Entry(line(3, "Killed third")));
+        d.hear(the_pass(&rx));
+        d.hear(Msg::Entry(line(4, "Killed fourth")));
+        assert_eq!(
+            noted_now(&core, "reader"),
+            [
+                "Killed third",
+                "read 0 Killed first",
+                "read 0 Killed second",
+                "read 0 Killed fourth",
+                "ended lost=0 last=s=t;i=4 why=- ahead"
+            ]
+        );
+
+        // THE PASS GOT TO THE FOURTH FIRST: what the follower still brings
+        // up to there is not heard, and the first line past it is.
+        let (core, mut d, rx) = start(past);
+        d.hear(the_pass(&rx));
+        d.hear(Msg::Entry(line(3, "Killed third")));
+        d.hear(Msg::Entry(line(4, "Killed fourth")));
+        d.hear(Msg::Entry(line(5, "Killed fifth")));
+        assert_eq!(
+            noted_now(&core, "reader"),
+            [
+                "read 0 Killed first",
+                "read 0 Killed second",
+                "read 0 Killed third",
+                "read 0 Killed fourth",
+                "ended lost=0 last=s=t;i=4 why=-",
+                "Killed fifth"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_is_known_by_its_cursor_so_a_clock_set_back_loses_none() {
+        // THE DEFECT THIS CATCHES: the pass and the follower told apart by
+        // when a line was written. With a clock an hour ahead at boot and set
+        // right later, the pass's newest stamp lies an hour past the present:
+        // every live line would be dropped until then, unheard, and a live
+        // line would take from the pass all it stamps after itself.
+        let ahead = entry(3600, "Killed ahead", 3);
+        let set_right = entry(10, "Killed set right", 3);
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (journal, _) = Journald::with(vec![ahead, set_right.clone()], 0);
+        let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal));
+        d.reconcile();
+        core.set("reader", &Knob::Enabled(true)).expect("on");
+        d.reconcile();
+        // WRITTEN WHILE THE PASS READS, stamped before the line it read first
+        // — and past where the pass ended, so the pass is not ahead of it.
+        d.hear(Msg::Entry(entry(20, "Killed live", 3)));
+        d.hear(the_pass(&rx));
+        // AND STILL THE ONE LINE BOTH READ is heard once.
+        d.hear(Msg::Entry(set_right));
+        d.hear(Msg::Entry(entry(30, "Killed after", 3)));
+        assert_eq!(
+            noted_now(&core, "reader"),
+            [
+                "Killed live",
+                "read 0 Killed ahead",
+                "read 0 Killed set right",
+                "ended lost=0 last=s=t;i=10 why=-",
+                "Killed after"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_a_pass_read_is_not_heard_again_when_the_module_comes_back_on() {
+        let past = vec![entry(1, "Killed first", 3), entry(2, "Killed second", 3)];
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (journal, _) = Journald::with(past, 0);
+        let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal.clone()));
+        d.reconcile();
+        // READ BY HAND while it is off, and the follower still behind.
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        let read = noted_now(&core, "reader");
+        // BACK ON: its place is where the pass ended, so the next pass reads
+        // nothing, and what the follower brings late was read already.
+        core.set("reader", &Knob::Enabled(true)).expect("on");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        d.hear(Msg::Entry(entry(2, "Killed second", 3)));
+        // A CLOCK SET BACK WHILE IT WAS OFF: a new line, stamped before the
+        // one the pass ended on, is a new line.
+        d.hear(Msg::Entry(Entry {
+            cursor: Cursor("s=t;i=3".to_owned()),
+            ..entry(1, "Killed under an older clock", 3)
+        }));
+        assert_eq!(
+            noted_now(&core, "reader")[read.len()..],
+            ["ended lost=0 last=- why=-", "Killed under an older clock"],
+            "a line was heard twice, or a new one not at all"
+        );
+        assert_eq!(
+            journal.opened()[1][2..],
+            ["--priority=0..3", "--after-cursor=s=t;i=2"]
+        );
+    }
+
+    #[test]
+    fn a_press_while_a_pass_is_on_its_way_is_that_pass() {
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (journal, _) = Journald::with(vec![entry(1, "Killed", 3)], 0);
+        let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal.clone()));
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        assert_eq!(journal.opened().len(), 1, "two passes for one");
+        assert_eq!(
+            noted_now(&core, "reader"),
+            ["read 0 Killed", "ended lost=0 last=s=t;i=1 why=-"]
+        );
+        // AND THE NEXT ONE, once this one ended, is a pass again.
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        assert_eq!(journal.opened().len(), 2);
+    }
+
+    #[test]
+    fn a_cursor_refused_falls_back_to_this_boot_and_an_empty_pass_is_not_a_failed_one() {
+        let past = vec![
+            entry_of("before", 1, "Killed before", 3),
+            entry(2, "Killed this boot", 3),
+        ];
+        let from = || Some(Cursor("not a cursor".to_owned()));
+        let press = |journal: Arc<Journald>, from: Option<Cursor>| {
+            let core = a_core(vec![
+                reader(vec![Source::Journal(killed())], from, 10).boxed(),
+            ]);
+            core.set("reader", &Knob::Enabled(false)).expect("off");
+            let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal));
+            d.reconcile();
+            core.act("reader", "read", None, None).expect("asked");
+            d.reconcile();
+            d.hear(the_pass(&rx));
+            noted_now(&core, "reader")
+        };
+        // THE CURSOR WOULD NOT BE TAKEN: this boot, in one more try.
+        let (journal, _) = Journald::with(past.clone(), 0);
+        journal.refusing.store(1, Ordering::Release);
+        assert_eq!(
+            press(journal.clone(), from()),
+            ["read 0 Killed this boot", "ended lost=0 last=s=t;i=2 why=-"]
+        );
+        let opened = journal.opened();
+        assert_eq!(opened[0][3], "--after-cursor=not a cursor");
+        assert_eq!(opened[1][3], "--boot");
+        // NOT EVEN THAT: a failed pass, which moves no place and says why. A
+        // journal with no cursor to blame gets one try.
+        let (journal, _) = Journald::with(past, 0);
+        journal.refusing.store(2, Ordering::Release);
+        assert_eq!(
+            press(journal.clone(), from()),
+            ["ended lost=0 last=- why=unreadable"]
+        );
+        assert_eq!(journal.opened().len(), 2);
+        let (journal, _) = Journald::with(Vec::new(), 0);
+        journal.refusing.store(1, Ordering::Release);
+        assert_eq!(
+            press(journal.clone(), None),
+            ["ended lost=0 last=- why=unreadable"]
+        );
+        assert_eq!(journal.opened().len(), 1);
+        // AN EMPTY ONE has no `last` either, and no reason: nothing was
+        // written, which is an answer.
+        let (journal, _) = Journald::with(Vec::new(), 0);
+        assert_eq!(press(journal, from()), ["ended lost=0 last=- why=-"]);
+    }
+
+    #[test]
+    fn a_pass_that_fails_after_a_line_says_so_and_the_next_goes_on_from_there() {
+        // THE DEFECT THIS CATCHES: journalctl failing partway read as the end
+        // of the journal, with what came after it never read and the module
+        // given nothing to act on.
+        let past = vec![
+            entry(1, "Killed first", 3),
+            entry(2, "Killed second", 3),
+            entry(3, "Killed third", 3),
+        ];
+        let core = a_core(vec![
+            reader(
+                vec![Source::Journal(killed())],
+                Some(Cursor("s=t;i=0".to_owned())),
+                10,
+            )
+            .boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (journal, _) = Journald::with(past, 0);
+        journal.cutting.store(2, Ordering::Release);
+        let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(journal.clone()));
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        // WHAT IT READ STANDS, and how far it got.
+        assert_eq!(
+            noted_now(&core, "reader"),
+            [
+                "read 0 Killed first",
+                "read 0 Killed second",
+                "ended lost=0 last=s=t;i=2 why=unreadable"
+            ]
+        );
+        // ITS CURSOR WAS TAKEN: one try, and never this boot over what it has.
+        assert_eq!(journal.opened().len(), 1);
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        assert_eq!(
+            noted_now(&core, "reader")[3..],
+            ["read 0 Killed third", "ended lost=0 last=s=t;i=3 why=-"]
+        );
+        assert_eq!(journal.opened()[1][3], "--after-cursor=s=t;i=2");
+    }
+
+    /// What a pass told the log, read on this thread so the log can be read.
+    fn logged_by(journal: Arc<Journald>, after: Option<Cursor>) -> Vec<crate::tail::Line> {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let backfill = Backfill::ThisBoot { most: 10 };
+        let (tx, _rx) = mpsc::channel();
+        let reader = Reader {
+            module: "reader",
+            journalist: journal,
+            ears: vec![(
+                0,
+                Match {
+                    backfill,
+                    ..killed()
+                },
+            )],
+            after,
+            until: None,
+            tx,
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        let (_, before) = crate::tail::global().after(0);
+        let subscriber = tracing_subscriber::registry().with(crate::tail::Copier);
+        tracing::subscriber::with_default(subscriber, || reader.run());
+        let (lines, _) = crate::tail::global().after(before);
+        lines
+            .into_iter()
+            .filter(|l| l.text.contains("pass"))
+            .collect()
+    }
+
+    #[test]
+    fn a_pass_tells_the_log_about_itself_and_never_about_the_follower() {
+        // THE DEFECT THIS CATCHES: a pass that failed wrote that the journal
+        // is not being followed, with the follower running, and a refused
+        // cursor wrote it before a second try that worked.
+        let past = || vec![entry(1, "Killed", 3)];
+        let refused = || Some(Cursor("not a cursor".to_owned()));
+        // A RETRY THAT WORKS is no failure.
+        let (journal, _) = Journald::with(past(), 0);
+        journal.refusing.store(1, Ordering::Release);
+        let lines = logged_by(journal, refused());
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].level, crate::tail::Level::Info, "{lines:?}");
+
+        // ONE CUT SHORT is, and so is one with nowhere left to read.
+        for (refusing, cutting, after) in [(0, 1, None), (2, 0, refused())] {
+            let (journal, _) = Journald::with(past(), 0);
+            journal.refusing.store(refusing, Ordering::Release);
+            journal.cutting.store(cutting, Ordering::Release);
+            let lines = logged_by(journal, after);
+            let warned = lines.last().expect("a line");
+            assert_eq!(warned.level, crate::tail::Level::Warn, "{lines:?}");
+            assert!(warned.text.contains("\"reader\""), "{lines:?}");
+            assert!(warned.text.contains("unreadable"), "{lines:?}");
+            assert!(
+                lines.iter().all(|l| !l.text.contains("not being followed")),
+                "{lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pass_that_cannot_begin_is_answered_all_the_same() {
+        // A MODULE WAITING FOR ITS ANSWER would say it is reading for ever.
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (mut d, _rx) = by_hand(&core, "reader", vec![killed()], None);
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        assert_eq!(
+            noted_now(&core, "reader"),
+            ["ended lost=0 last=- why=no-program"]
+        );
+        assert!(
+            d.passing.is_empty(),
+            "a pass that never began is on its way"
+        );
+
+        let core = a_core(vec![
+            reader(vec![Source::Journal(killed())], None, 10).boxed(),
+        ]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (mut d, rx) = by_hand(&core, "reader", vec![killed()], Some(Arc::new(NoStart)));
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        d.hear(the_pass(&rx));
+        assert_eq!(
+            noted_now(&core, "reader"),
+            ["ended lost=0 last=- why=unstartable"]
+        );
+
+        // A MODULE WITH NO JOURNAL SOURCE has nothing to read, which is no
+        // failure.
+        let core = a_core(vec![reader(Vec::new(), None, 10).boxed()]);
+        core.set("reader", &Knob::Enabled(false)).expect("off");
+        let (journal, _) = Journald::with(vec![entry(1, "Killed", 3)], 0);
+        let (mut d, _rx) = by_hand(&core, "reader", Vec::new(), Some(journal.clone()));
+        d.reconcile();
+        core.act("reader", "read", None, None).expect("asked");
+        d.reconcile();
+        assert_eq!(noted_now(&core, "reader"), ["ended lost=0 last=- why=-"]);
+        assert!(journal.opened().is_empty(), "nobody wants a journal here");
+    }
+
+    #[test]
+    fn going_off_is_told_once_and_a_brain_that_stops_tells_nobody() {
+        let core = a_core(vec![
+            Fake::watch("sleeper")
+                .listens(Vec::new(), |_, _| {})
+                .stops(|_, ctx| ctx.record(Noted::of("sleeper-stopped")))
+                .boxed(),
+        ]);
+        let (mut d, _rx) = by_hand(&core, "sleeper", Vec::new(), None);
+        let stops = || {
+            core.refresh();
+            let mind = core.shared.snapshot().0;
+            mind.journal
+                .iter()
+                .filter(|r| r.says == "sleeper-stopped")
+                .count()
+        };
+        d.reconcile();
+        d.leave();
+        assert_eq!(stops(), 0, "the brain's own end told it to stop");
+        core.set("sleeper", &Knob::Enabled(false)).expect("off");
+        d.reconcile();
+        d.reconcile();
+        assert_eq!(stops(), 1);
+    }
+
+    #[test]
+    fn what_a_module_keeps_is_written_before_the_cursor_that_covers_it() {
+        // THE DEFECT THIS CATCHES: the cursor on disk ahead of a module's
+        // list. A restart starts after the cursor, so the lines between the
+        // two were heard and are nowhere — and a real stop runs no `leave`.
+        let dir = scratch("keep");
+        let file = dir.join(CURSOR_FILE);
+        let saw = Arc::new(Mutex::new(Vec::<Option<Cursor>>::new()));
+        let (seen, looked) = (Arc::clone(&saw), file.clone());
+        let core = a_core(vec![
+            scribe("scribe", vec![Source::Journal(killed())])
+                .keeps(move |_, _| {
+                    seen.lock().expect("saw").push(Cursor::read_from(&looked));
+                })
+                .boxed(),
+            scribe("sleeper", vec![Source::Journal(killed())])
+                .keeps(|_, _| panic!("a module switched off was asked to keep"))
+                .boxed(),
+        ]);
+        core.set("sleeper", &Knob::Enabled(false)).expect("off");
+        let (mut d, _rx) = by_hand(&core, "scribe", vec![killed()], None);
+        d.keeper = Keeper::at(Some(dir.clone()), CURSOR_FILE, Duration::ZERO);
+        d.reconcile();
+        // NOTHING HEARD: nothing to cover, nobody asked.
+        d.keep_cursor(Instant::now());
+        assert!(saw.lock().expect("saw").is_empty(), "asked for nothing");
+
+        d.hear(Msg::Entry(entry(1, "Killed", 3)));
+        d.keep_cursor(Instant::now());
+        // AND ON THE WAY OUT TOO.
+        d.hear(Msg::Entry(entry(2, "Killed again", 3)));
+        d.leave();
+        let cursor = |n: u64| Some(Cursor(format!("s=t;i={n}")));
+        assert_eq!(
+            *saw.lock().expect("saw"),
+            [None, cursor(1)],
+            "the module was asked after the cursor moved"
+        );
+        assert_eq!(Cursor::read_from(&file), cursor(2));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

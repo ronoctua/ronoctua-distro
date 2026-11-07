@@ -3870,6 +3870,7 @@ dependencies = [
  "ronoctua-index",
  "ronoctua-journal",
  "ronoctua-llm",
+ "ronoctua-log",
  "ronoctua-machine",
  "ronoctua-memory",
  "ronoctua-network",
@@ -3911,12 +3912,12 @@ name = "ronoctua-browser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-log",
  "ronoctua-xdg",
  "rustix 1.1.4",
  "serde",
  "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -4160,6 +4161,7 @@ version = "0.1.0"
 dependencies = [
  "ronoctua-consent",
  "ronoctua-http",
+ "ronoctua-log",
  "serde",
  "serde_json",
  "signal-hook 0.4.4",
@@ -4175,6 +4177,7 @@ dependencies = [
  "ronoctua-apps",
  "ronoctua-files",
  "ronoctua-inspect",
+ "ronoctua-log",
  "ronoctua-software",
  "ronoctua-store",
  "ronoctua-video-metrics",
@@ -4184,7 +4187,6 @@ dependencies = [
  "serde_json",
  "tantivy",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -4258,13 +4260,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-keyboards",
+ "ronoctua-log",
  "ronoctua-store",
  "ronoctua-xdg",
  "rustix 1.1.4",
  "serde",
  "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -4290,6 +4292,14 @@ dependencies = [
  "serde",
  "serde_json",
  "zeroize",
+]
+
+[[package]]
+name = "ronoctua-log"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4334,8 +4344,8 @@ name = "ronoctua-network"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ronoctua-log",
  "tracing",
- "tracing-subscriber",
  "zbus",
 ]
 
@@ -4425,6 +4435,7 @@ dependencies = [
  "ronoctua-consent",
  "ronoctua-frames",
  "ronoctua-http",
+ "ronoctua-log",
  "ronoctua-lookup",
  "ronoctua-parts",
  "ronoctua-player",
@@ -4440,7 +4451,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "tracing-subscriber",
  "zbus",
 ]
 
@@ -4636,6 +4646,7 @@ dependencies = [
  "ronoctua-gestures",
  "ronoctua-i18n",
  "ronoctua-keymap",
+ "ronoctua-log",
  "ronoctua-notify",
  "ronoctua-private",
  "ronoctua-render",
@@ -4681,7 +4692,6 @@ dependencies = [
  "ronoctua-store",
  "ronoctua-tokens",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -5912,6 +5922,7 @@ dependencies = [
  "ronoctua-apps",
  "ronoctua-consent",
  "ronoctua-http",
+ "ronoctua-log",
  "ronoctua-machine",
  "ronoctua-parts",
  "ronoctua-person",
@@ -5964,6 +5975,7 @@ dependencies = [
  "ronoctua-effects",
  "ronoctua-files",
  "ronoctua-frames",
+ "ronoctua-log",
  "ronoctua-memory",
  "ronoctua-segment",
  "ronoctua-store",
@@ -5972,7 +5984,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
@@ -6014,12 +6025,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "ronoctua-log",
  "ronoctua-terminals",
  "rustix 1.1.4",
  "serde_json",
  "signal-hook 0.4.4",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -6080,6 +6091,7 @@ dependencies = [
  "ronoctua-files",
  "ronoctua-http",
  "ronoctua-incus",
+ "ronoctua-log",
  "ronoctua-lookup",
  "ronoctua-parts",
  "ronoctua-pq",
@@ -6093,7 +6105,6 @@ dependencies = [
  "serde_json",
  "signal-hook 0.4.4",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

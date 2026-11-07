@@ -391,12 +391,15 @@ impl Module for SearchIndex {
                 Section {
                     heading: super::key::SEARCH_INDEX_HEADING_NOW.into(),
                     rows: now_rows(&k, weight),
+                    ..Section::default()
                 },
                 Section {
                     heading: super::key::SEARCH_INDEX_HEADING_READS.into(),
                     rows: reads_rows(self.probe.settings(), self.probe.home().as_deref()),
+                    ..Section::default()
                 },
             ],
+            ..Screen::default()
         }
     }
 

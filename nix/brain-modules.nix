@@ -68,6 +68,13 @@
 # is a share — the RAM in use, the disk filled — which the footer writes with
 # the language's per cent sign. It is one mark: no instances (their digit
 # would stand where the share is) and no sets.
+#
+# ACTIONS (2026-11-07). `row` and `asks` as ever, and three more: `opens` for
+# an action that is only the way to something the footer opens, at either door
+# (`openable`, below), so it goes with neither a row nor a question, nobody
+# being there to receive them; `optional = true` for a question a blank answer
+# also answers; and `whileOff = true` for what only a module switched off
+# offers.
 {
   lib,
   # The folder every module lives in. A test passes the fixture's instead.
@@ -133,6 +140,13 @@ let
   isUnit = s: isString s && match "[a-z0-9@_.-]+\\.(service|timer|socket|path|target)" s != null;
 
   snakeOf = id: replaceStrings [ "-" ] [ "_" ] id;
+
+  # WHAT AN ACTION MAY BE THE WAY TO (`actions.<id>.opens`): what the footer
+  # opens for one, whichever door it was asked at (`brain::opening` in
+  # `ronoctua-shell-footer`). A name outside it would be an option that says
+  # "no module offers that" at both, so it is refused here, where it is
+  # written; one more is a word here and a case there.
+  openable = [ "journal-follow" ];
 
   # THE BASE LANGUAGE, whose `.ftl` names a person's fragment's keys
   # (`textNames`, the reader every fragment's names come from).
@@ -573,7 +587,7 @@ let
       actions = m.actions or { };
       actionProblems =
         if !(isAttrs actions) then
-          [ "actions is an attrset: { <id> = { row; asks; }; }" ]
+          [ "actions is an attrset: { <id> = { row; asks; opens; optional; whileOff; }; }" ]
         else
           concatMap (
             k:
@@ -583,18 +597,31 @@ let
             lib.optional (!(isWord k)) "actions.${k}: the name is an English kebab word"
             ++ (
               if !(isAttrs a) then
-                [ "actions.${k} is { row; asks; }" ]
+                [ "actions.${k} is { row; asks; opens; optional; whileOff; }" ]
               else
                 lib.optional (!(isBool (a.row or false))) "actions.${k}.row is a boolean"
                 ++ lib.optional (
                   (a.asks or null) != null && !(isKey a.asks)
                 ) "actions.${k}.asks is null or the key of a question"
-                ++ map (f: "actions.${k}.${f} is not a field (row, asks)") (
+                ++ lib.optional (
+                  (a.opens or null) != null && !(elem a.opens openable)
+                ) "actions.${k}.opens is null or one of ${lib.concatStringsSep ", " openable}"
+                # AN ACTION THAT OPENS A COMMAND REACHES NO MODULE, so there is
+                # nobody to hand a row or an answer to.
+                ++ lib.optional (
+                  (a.opens or null) != null && ((a.row or false) == true || (a.asks or null) != null)
+                ) "actions.${k}.opens goes with neither row nor asks"
+                ++ lib.optional (!(isBool (a.optional or false))) "actions.${k}.optional is a boolean"
+                ++ lib.optional (!(isBool (a.whileOff or false))) "actions.${k}.whileOff is a boolean"
+                ++ map (f: "actions.${k}.${f} is not a field (row, asks, opens, optional, whileOff)") (
                   filter (
                     f:
                     !(elem f [
                       "row"
                       "asks"
+                      "opens"
+                      "optional"
+                      "whileOff"
                     ])
                   ) (attrNames a)
                 )
@@ -837,6 +864,9 @@ let
         {
           row = false;
           asks = null;
+          opens = null;
+          optional = false;
+          whileOff = false;
         }
         // a
       ) (m.actions or { });

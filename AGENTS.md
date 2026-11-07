@@ -121,10 +121,11 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    o flake num processo só passou de 9 GiB com um quarto dos checks numa máquina de 14 GiB.
 8. **Zero string literal em UI.** Todo texto sai de uma `text-key`, completa em todos os idiomas
    declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa digita
-   num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04) são dado, como
-   o conteúdo de um arquivo, e também o nome próprio de um programa — o `name` do registro e o
-   `Name=` de um `.desktop`, igual em todo idioma (2026-10-20, aprovado no plano da leva); a moldura
-   em volta deles continua em chaves.
+   num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04), a linha do
+   journal, o trecho de um filtro dela (o que a pessoa digita e o de fábrica) e o porquê que a pessoa
+   escreve para um filtro (2026-11-07) são dado, como o conteúdo de um arquivo, e também o nome
+   próprio de um programa — o `name` do registro e o `Name=` de um `.desktop`, igual em todo idioma
+   (2026-10-20, aprovado no plano da leva); a moldura em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
    token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.) Exceção do
    dono (2026-11-02): a cor que um programa pede a um terminal — SGR de 256 cores e de 24 bits, e
@@ -324,7 +325,8 @@ no PATH, o KVM e o `nix-direnv`.
   catálogo (`RONOCTUA_BRAIN_CATALOGUE`), dado de runtime (cobra
   `brain-catalogue-is-what-the-daemon-compiled`).
 - Nada de fora cita o id, chave, glifo, unidade ou ação de um módulo, salvo o que o `namedBy` lista
-  (cobra `brain-modules-are-sealed`). Uma marca abre um comando só por `MarkId::opening(<comando>)`;
+  (cobra `brain-modules-are-sealed`). Uma marca abre um comando só por `MarkId::opening(<comando>)`,
+  e uma ação só pelo `opens` do manifesto, que as duas portas resolvem e nunca chega ao módulo;
   preferência resolve sobre `Prefs::of_module`, toda mudança um `Ask::Set` do núcleo.
 
 ### A fronteira com o compositor
@@ -450,6 +452,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | Wikipedia, DuckDuckGo, SearXNG e Brave Search | `ronoctua-websearch` |
 | o super-índice do fast-access (tantivy) | `ronoctua-index` |
 | o journal do systemd (`journalctl --follow`) | `ronoctua-journal` |
+| o `tracing` de todo programa nosso, e a prioridade com que uma linha dele chega ao journal | `ronoctua-log` (cobra `one-log-boundary`) |
 | a paleta do console do kernel (os 16 slots de um VT, `ESC ] P`) | `ronoctua-vt` |
 | podman | `ronoctua-containers` (cobra `one-podman-boundary`) |
 | PAM | `ronoctua-pam` (cobra `one-pam-boundary`) |

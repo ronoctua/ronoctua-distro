@@ -16,13 +16,7 @@ use ronoctua_terminals::registry::Registry;
 use ronoctua_terminals::spawn::{READY, Serve};
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    ronoctua_log::init("info");
     let mut serve = match Serve::parse(std::env::args_os().skip(1)) {
         Ok(s) => s,
         Err(why) => {

@@ -86,6 +86,17 @@ resto. Faltam fotos, com asserção, de:
 
 ### Na máquina do dono
 
+- **O compositor cai** (`scroll.service`, SEGV, três vezes só em 3 de novembro): ler o core e saber
+  se é o Scroll ou algo que o shell pede pelo IPC. Pronto quando uma semana passa sem queda.
+- **O core de uma queda se perde** (`Failed to send coredump datagram: Broken pipe`, 20 em 14 dias,
+  junto das quedas do compositor): o `systemd-coredump` não entrega o core grande. Pronto quando a
+  próxima queda deixa um core que o `coredumpctl` lê.
+- **O `ssh-agent` recusa assinar** (`sshkey_sign: invalid format`, 15 em 14 dias): uma chave do
+  agente está num formato que ele não usa. Pronto quando nenhuma assinatura falha.
+- **Os nossos programas escrevem muitas linhas `info` no journal** (cerca de 29 mil por dia, a
+  maioria dos buffers): agora que o nível chega certo, baixar o padrão de quem mais fala. Pronto
+  quando um dia de uso deixa poucas centenas.
+
 - **O rodapé transparente**: nos modos ocultos, o véu e a borda em repouso mostram a janela por baixo
   (o driver aceita `PreMultiplied`?), sem a frase `echo-footer-opaque`.
 - **Os crafts do ArtCraft Launcher**: rodam fora de um ambiente FHS? que lançador escrevem, que tipos

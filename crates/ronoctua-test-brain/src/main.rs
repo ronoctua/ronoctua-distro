@@ -26,9 +26,10 @@
 
 use anyhow::{Context as _, Result, bail};
 use ronoctua_protocol::{
-    ActivityRow, Announcement, BrainTone, DayPart, Gate, HoldKind, Input, Mind, ModuleAction,
-    ModuleRow, ModuleScreen, ModuleSection, Notice, NoticeLevel, OutcomeKind, Pulse, RunRecord,
-    ScreenCell, Standing, StepOutcome, TaskKind, TaskState, TaskStep, Vital, VitalSign,
+    ActivityRow, Announcement, BrainTone, DayPart, Gate, HoldKind, Input, LegendSwatch, Mind,
+    ModuleAction, ModuleRow, ModuleScreen, ModuleSection, Notice, NoticeLevel, OutcomeKind, Phrase,
+    Pulse, RowFact, RunRecord, ScreenCell, SectionFold, SectionState, Stamp, Standing, StepOutcome,
+    TaskKind, TaskState, TaskStep, Vital, VitalSign,
 };
 
 /// The labels this buffer cuts ON PURPOSE, and why.
@@ -184,6 +185,16 @@ fn named(mind: &mut Mind, words: &std::collections::HashMap<String, String>) {
     }
 }
 
+/// The moment every fixture is at, cut where its day is.
+fn a_stamp() -> Stamp {
+    Stamp {
+        lead: "2026-08-".to_owned(),
+        day: "23".to_owned(),
+        tail: " 13:00".to_owned(),
+        today: true,
+    }
+}
+
 /// A run of `task`, with the keys the host would have sent beside it.
 fn a_run(task: &str, outcome: OutcomeKind, at: &str, why: &str) -> RunRecord {
     RunRecord {
@@ -192,12 +203,7 @@ fn a_run(task: &str, outcome: OutcomeKind, at: &str, why: &str) -> RunRecord {
         began: NOW - 7200,
         ended: NOW - 7000,
         when_text: "2026-08-23 13:00".to_owned(),
-        when_stamp: ronoctua_protocol::Stamp {
-            lead: "2026-08-".to_owned(),
-            day: "23".to_owned(),
-            tail: " 13:00".to_owned(),
-            today: true,
-        },
+        when_stamp: a_stamp(),
         outcome,
         at: at.to_owned(),
         why: why.to_owned(),
@@ -299,6 +305,12 @@ fn task(id: &str, standing: Standing, hold: HoldKind, why_not: &str, ran: bool) 
             label_key: "cmd-brain-run".to_owned(),
             row: false,
             asks_key: String::new(),
+        }],
+        // ONE SECTION THE PERSON OPENED, so the list crosses with something in
+        // it: the page's own shut section (`screen`) by the id it gave.
+        folds: vec![SectionState {
+            id: "older".to_owned(),
+            open: true,
         }],
     }
 }
@@ -447,9 +459,19 @@ fn mind(ids: &[String], one: TaskState, announcement: Announcement, said: bool) 
     }
 }
 
-/// A module's own page, of two sections, by keys the texts have — one row
-/// that acts and one that tells, every kind of cell among them.
-fn screen(module: &str) -> ModuleScreen {
+/// The value of the row that wears each tone a list sorted by gravity adds, so
+/// the frame can say what became of it past the WIT.
+const CRITICAL: &str = "a critical value";
+const MINOR: &str = "a minor value";
+
+/// A module's own page, of three sections, by keys the texts have — one row
+/// that acts and one that tells, every kind of cell among them, and everything
+/// the protocol lets a page say about itself beside its rows.
+///
+/// WHAT THE COMPONENT DOES NOT DRAW STILL HAS TO CROSS: `wasmtime` zips a
+/// record by position and then compares names, and a field out of step fails
+/// at this `event`, with the page's first push.
+fn screen(module: &str, words: &std::collections::HashMap<String, String>) -> ModuleScreen {
     let row = |id: &str, label: &str, value: ScreenCell, tone: BrainTone, act: &str| ModuleRow {
         id: id.to_owned(),
         label: ScreenCell::Key(label.to_owned()),
@@ -457,7 +479,7 @@ fn screen(module: &str) -> ModuleScreen {
         note: ScreenCell::Data("a note the module wrote".to_owned()),
         tone,
         act: act.to_owned(),
-        also: String::new(),
+        ..ModuleRow::default()
     };
     ModuleScreen {
         module: module.to_owned(),
@@ -472,6 +494,7 @@ fn screen(module: &str) -> ModuleScreen {
                         ScreenCell::Moment(ronoctua_protocol::Timed {
                             at: NOW,
                             text: "2026-08-23 13:00".to_owned(),
+                            stamp: a_stamp(),
                         }),
                         BrainTone::Watching,
                         "fixture",
@@ -484,6 +507,44 @@ fn screen(module: &str) -> ModuleScreen {
                         "",
                     ),
                 ],
+                ..ModuleSection::default()
+            },
+            // THE GRAVITIES, in a section that folds with a tally of its own.
+            // The second row names none of the new fields.
+            ModuleSection {
+                heading: "brain-history".to_owned(),
+                rows: vec![
+                    ModuleRow {
+                        below: ScreenCell::Data("the line under the row".to_owned()),
+                        foot: vec![RowFact {
+                            label: "brain-next".to_owned(),
+                            value: ScreenCell::Moment(ronoctua_protocol::Timed {
+                                at: NOW,
+                                text: "2026-08-23 13:00".to_owned(),
+                                stamp: a_stamp(),
+                            }),
+                            tone: BrainTone::Minor,
+                        }],
+                        ..row(
+                            "d",
+                            "brain-last-run",
+                            ScreenCell::Data(CRITICAL.to_owned()),
+                            BrainTone::Critical,
+                            "",
+                        )
+                    },
+                    row(
+                        "e",
+                        "brain-next",
+                        ScreenCell::Data(MINOR.to_owned()),
+                        BrainTone::Minor,
+                        "",
+                    ),
+                ],
+                id: "older".to_owned(),
+                about: "brain-enabled".to_owned(),
+                fold: SectionFold::Shut,
+                tally: ScreenCell::Count(12),
             },
             ModuleSection {
                 heading: "brain-steps".to_owned(),
@@ -497,10 +558,39 @@ fn screen(module: &str) -> ModuleScreen {
                     BrainTone::Quiet,
                     "",
                 )],
+                ..ModuleSection::default()
             },
         ],
         refused: String::new(),
+        legend: vec![LegendSwatch {
+            tone: BrainTone::Critical,
+            says: "brain-history".to_owned(),
+            about: "brain-enabled".to_owned(),
+        }],
+        // IN THE LANGUAGE OF THE PASS, as the hub sends them: a word the
+        // page measures in one language and the host draws in another is
+        // a budget measured against the wrong sentence.
+        phrases: vec![Phrase {
+            key: "brain-history".to_owned(),
+            text: words
+                .get("brain-history")
+                .cloned()
+                .unwrap_or_else(|| "brain-history".to_owned()),
+        }],
     }
+}
+
+/// The colour a frame writes this piece of data in, when it writes it.
+fn colour_of<'a>(list: &'a ronoctua_protocol::DisplayList, data: &str) -> Option<&'a str> {
+    use ronoctua_protocol::{Command, Text};
+    list.commands.iter().find_map(|c| match c {
+        Command::Text {
+            text: Text::Data(d),
+            color,
+            ..
+        } if d == data => Some(color.as_str()),
+        _ => None,
+    })
 }
 
 /// Whether a frame WRITES this piece of data, as a line or as a paragraph.
@@ -721,7 +811,7 @@ fn drive(
     }
     inst.event(&Input::Cancel)?;
     inst.event(&Input::EnterState(PAGE.to_owned()))?;
-    inst.event(&Input::ModuleScreen(Box::new(screen(&first))))?;
+    inst.event(&Input::ModuleScreen(Box::new(screen(&first, &words))))?;
     let behind = look(&mut inst)?;
     if behind.commands.is_empty() {
         bail!("a task's own page drew nothing");
@@ -729,6 +819,19 @@ fn drive(
     println!(
         "page      a task's own, with its schedule, its module's page, its steps and its history"
     );
+    // THE NEW TONES ARE THE PAGE'S OWN WORDS FOR COLOUR, past the WIT: a case
+    // this side names and that side does not fails the push above, and one
+    // that crossed to the wrong arm is a row in a neighbour's colour.
+    for (value, tone, colour) in [
+        (CRITICAL, "critical", "state-critical"),
+        (MINOR, "minor", "text-secondary"),
+    ] {
+        let drawn = colour_of(&behind, value);
+        if drawn != Some(colour) {
+            bail!("a {tone} row is drawn in {drawn:?} and not in `{colour}`");
+        }
+    }
+    println!("gravity   a critical row and a minor one, each in its colour");
 
     // AND THE CURSOR WALKS IT, which is what puts the footer on each kind of
     // row in turn: a schedule row, an action, a module's row, a step, and a
@@ -747,7 +850,7 @@ fn drive(
     // A newer generation that is a SENTENCE and no rows: the page says why,
     // and a refused page never looks like an empty one.
     const REFUSED: &str = "the brain would not show this page";
-    let mut refused = screen(&first);
+    let mut refused = screen(&first, &words);
     refused.generation += 1;
     refused.sections.clear();
     refused.refused = REFUSED.to_owned();

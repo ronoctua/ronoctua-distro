@@ -377,6 +377,10 @@ pub enum Role {
     /// something" — and the brain's whole reason for having a screen is the
     /// second kind of sentence.
     Danger,
+    /// The step above [`Role::Danger`]: something was lost, or is about to be.
+    /// A red that separates from the error's, so a list sorted by gravity
+    /// reads its top two as two levels and not one alarm.
+    Critical,
     /// Something is wrong and nothing stopped: the step below [`Role::Danger`],
     /// in the theme's warning tone. A log's `WARN` wears it, beside the error's
     /// red, so the two levels are not one alarm.
@@ -616,6 +620,7 @@ impl Palette for Tokens {
             Role::Shelf => "surface-container",
             Role::Header => "surface-header",
             Role::Danger => "state-error",
+            Role::Critical => "state-critical",
             Role::Warning => "state-warning",
             Role::Once => "text-once",
             Role::Watching => "modeline-watching",

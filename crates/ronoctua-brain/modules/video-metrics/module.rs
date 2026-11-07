@@ -109,7 +109,7 @@ impl Probe for Machine {
     fn saving(&self) -> bool {
         ronoctua_power::Manager::fresh()
             .ok()
-            .and_then(|m| m.read().profiles)
+            .and_then(|m| m.profiles())
             .is_some_and(|p| p.active == ronoctua_power::Profile::PowerSaver)
     }
 
@@ -311,7 +311,9 @@ impl Module for VideoMetrics {
             sections: vec![Section {
                 heading: super::key::VIDEO_METRICS_BRAIN_LAST.into(),
                 rows: rows_of(self.kept().last),
+                ..Section::default()
             }],
+            ..Screen::default()
         }
     }
 }

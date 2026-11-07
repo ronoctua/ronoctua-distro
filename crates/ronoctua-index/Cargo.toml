@@ -38,7 +38,7 @@ write = [
   "ronoctua-video-metrics/db",
   "dep:rustix",
   "dep:flate2",
-  "dep:tracing-subscriber",
+  "dep:ronoctua-log",
 ]
 
 [dependencies]
@@ -69,7 +69,7 @@ ronoctua-video-metrics = { path = "../ronoctua-video-metrics", default-features 
 rustix = { workspace = true, optional = true, features = [ "fs", "event" ] }
 # A manual page is gzip. Already in the lock (`ronoctua-inspect`, `png`).
 flate2 = { version = "1.1", optional = true }
-tracing-subscriber = { workspace = true, optional = true }
+ronoctua-log = { path = "../ronoctua-log", optional = true }
 
 # THE UNIT: `serve` (reconcile, then inotify), and the one-shot `build`,
 # `query` and `wait` the checks drive.

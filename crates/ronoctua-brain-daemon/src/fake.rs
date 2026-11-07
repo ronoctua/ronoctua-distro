@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::module::{
-    Act, Acted, Ctx, Face, Heard, Kind, Look, Manifest, Module, Needs, Run, Schedule, Scheduled,
-    Screen, Source, Units, Watcher,
+    Act, Acted, Ctx, Face, Heard, Kind, Look, Manifest, Module, Needs, Pass, Passed, Run, Schedule,
+    Scheduled, Screen, Source, Units, Watcher,
 };
 use crate::moment::Moment;
 use crate::prefs::{PartOfDay, TaskPrefs};
@@ -88,6 +88,9 @@ type ActFn = dyn Fn(&Act, &Ctx) -> Acted + Send + Sync;
 type HeardFn = dyn Fn(Heard<'_>, &Ctx) + Send + Sync;
 type WakeFn = dyn Fn(Moment) -> Option<Moment> + Send + Sync;
 type StartedFn = dyn Fn(Moment, &Ctx) + Send + Sync;
+type PassFn = dyn Fn(Moment, &Ctx) -> Option<Pass> + Send + Sync;
+type PassedFn = dyn Fn(Passed<'_>, &Ctx) + Send + Sync;
+type OwedFn = dyn Fn() -> bool + Send + Sync;
 
 /// A module made of closures.
 pub struct Fake {
@@ -107,6 +110,11 @@ pub struct Fake {
     heard: Box<HeardFn>,
     wake: Box<WakeFn>,
     started: Box<StartedFn>,
+    stopped: Box<StartedFn>,
+    keep: Box<StartedFn>,
+    pass: Box<PassFn>,
+    passed: Box<PassedFn>,
+    owed: Box<OwedFn>,
     /// Every dismissal and snooze the core passed on, in order.
     pub put_away: Mutex<Vec<(String, Option<Moment>)>>,
 }
@@ -129,6 +137,11 @@ impl Fake {
             heard: Box::new(|_, _| {}),
             wake: Box::new(|_| None),
             started: Box::new(|_, _| {}),
+            stopped: Box::new(|_, _| {}),
+            keep: Box::new(|_, _| {}),
+            pass: Box::new(|_, _| None),
+            passed: Box::new(|_, _| {}),
+            owed: Box::new(|| false),
             put_away: Mutex::new(Vec::new()),
         }
     }
@@ -246,6 +259,40 @@ impl Fake {
         self
     }
 
+    /// What it does when it is switched off.
+    #[must_use]
+    pub fn stops(mut self, f: impl Fn(Moment, &Ctx) + Send + Sync + 'static) -> Self {
+        self.stopped = Box::new(f);
+        self
+    }
+
+    /// What it writes down before the journal's cursor is.
+    #[must_use]
+    pub fn keeps(mut self, f: impl Fn(Moment, &Ctx) + Send + Sync + 'static) -> Self {
+        self.keep = Box::new(f);
+        self
+    }
+
+    /// What it wants of a pass, and what it does with what one read.
+    #[must_use]
+    pub fn catches_up(
+        mut self,
+        pass: impl Fn(Moment, &Ctx) -> Option<Pass> + Send + Sync + 'static,
+        passed: impl Fn(Passed<'_>, &Ctx) + Send + Sync + 'static,
+    ) -> Self {
+        self.pass = Box::new(pass);
+        self.passed = Box::new(passed);
+        self.listening = true;
+        self
+    }
+
+    /// Whether a pass is owed it as the brain starts.
+    #[must_use]
+    pub fn owes(mut self, f: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.owed = Box::new(f);
+        self
+    }
+
     /// Boxed, for a registry.
     pub fn boxed(self) -> Box<dyn Module> {
         Box::new(self)
@@ -327,6 +374,26 @@ impl Watcher for Fake {
 
     fn started(&self, now: Moment, ctx: &Ctx) {
         (self.started)(now, ctx);
+    }
+
+    fn stopped(&self, now: Moment, ctx: &Ctx) {
+        (self.stopped)(now, ctx);
+    }
+
+    fn keep(&self, now: Moment, ctx: &Ctx) {
+        (self.keep)(now, ctx);
+    }
+
+    fn pass(&self, now: Moment, ctx: &Ctx) -> Option<Pass> {
+        (self.pass)(now, ctx)
+    }
+
+    fn passed(&self, passed: Passed<'_>, ctx: &Ctx) {
+        (self.passed)(passed, ctx);
+    }
+
+    fn owed(&self) -> bool {
+        (self.owed)()
     }
 
     fn heard(&self, heard: Heard<'_>, ctx: &Ctx) {

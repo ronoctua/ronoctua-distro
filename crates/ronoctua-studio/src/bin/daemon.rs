@@ -21,13 +21,7 @@ use anyhow::{Context as _, Result};
 use ronoctua_studio::{engine, wire};
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_studio=info".into()),
-        )
-        .init();
+    ronoctua_log::init("ronoctua_studio=info");
 
     let path = wire::socket_path()?;
     // A socket file left by a killed daemon answers nothing; one that

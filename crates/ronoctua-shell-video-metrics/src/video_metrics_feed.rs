@@ -663,7 +663,7 @@ fn scan() -> Scanned {
 fn saving() -> bool {
     ronoctua_power::Manager::fresh()
         .ok()
-        .and_then(|m| m.read().profiles)
+        .and_then(|m| m.profiles())
         .is_some_and(|p| p.active == ronoctua_power::Profile::PowerSaver)
 }
 

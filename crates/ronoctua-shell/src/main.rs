@@ -121,13 +121,7 @@ fn main() -> Result<()> {
     // The value does not matter here; it is the call that ANCHORS the clock.
     let _ = ronoctua_render::start();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_shell=info,ronoctua_render=info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    ronoctua_log::init("ronoctua_shell=info,ronoctua_render=info");
 
     // THE DATE'S SHAPE, before any door: it is a process-wide value the way
     // the theme (below) is, so that a date resolves through it wherever one

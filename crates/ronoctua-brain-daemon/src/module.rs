@@ -78,6 +78,11 @@ pub enum Acted {
     /// Put the module's scheduled run in the queue — the gate, the countdown
     /// and the journal apply as to any run.
     Queue,
+    /// Read what the journal wrote while it was not listening: a pass over
+    /// that stretch, for this module alone, which the watch thread makes off
+    /// this one ([`Watcher::pass`]). Refused while the module is on, when it
+    /// hears everything as it happens.
+    Pass,
     /// Not done, and the WORD says why: a core word (`unknown`) or one of the
     /// module's `whys`.
     Refused(&'static str),
@@ -415,7 +420,48 @@ pub enum Heard<'a> {
 /// hears ([`Heard::Journal`]), and the rest is what those two are made of. They
 /// were local copies of the same shapes while `ronoctua-journal` was being
 /// written; nothing that names `module::Match` changed when they were swapped.
-pub use ronoctua_journal::{Backfill, Cursor, Entry, Field, Match, Priority};
+pub use ronoctua_journal::{Backfill, Cursor, Entry, Field, Match, Priority, Refusal};
+
+/// A pass as a watcher wants it ([`Watcher::pass`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pass {
+    /// Where it stopped: what came after this is read. `None` reads this boot.
+    pub after: Option<Cursor>,
+    /// The most each of its journal sources keeps, the newest of what it
+    /// accepts.
+    pub most: usize,
+    /// The line it stops BEFORE, unread, when it is not to read to the end of
+    /// the journal: an owed pass ([`Watcher::owed`]) reads only up to the
+    /// first line the follower brought the module while the pass the brain
+    /// stopped in was on its way — from there on the module heard it, or the
+    /// follower brings it again. `None` reads to the end.
+    pub until: Option<Cursor>,
+}
+
+/// What a pass read ([`Watcher::passed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Passed<'a> {
+    /// What each journal source took, by the source's index as [`Heard`] says
+    /// it, oldest first — only what it has not heard: a line the follower
+    /// reached first is left out.
+    pub shares: &'a [(usize, Vec<Entry>)],
+    /// How many lines its sources accepted past [`Pass::most`], which are
+    /// gone: the rings keep the newest.
+    pub lost: u64,
+    /// Where the pass ended: the last line it read, taken or not. `None` when
+    /// it read nothing, so where the module stopped still stands, whether that
+    /// is because nothing was written or because of `why`.
+    pub last: Option<&'a Cursor>,
+    /// Why it could not read to the end of the journal. `None` for a pass that
+    /// got there, an empty one included. With a [`Passed::last`] it read that
+    /// far, and what it read is here: what came after it was not read.
+    pub why: Option<Refusal>,
+    /// Whether it read every line the follower brought the module while it
+    /// was on its way, one at least: then [`Passed::last`] is past the place
+    /// the follower left, and what the follower brings up to there is skipped
+    /// as heard — never told, so only this can move the module's place.
+    pub ahead: bool,
+}
 
 // ---------------------------------------------------------------------------
 // The three traits.
@@ -532,6 +578,41 @@ pub trait Watcher: Send + Sync {
     /// until then.
     fn started(&self, _now: Moment, _ctx: &Ctx) {}
 
+    /// It was switched off: from here on it hears nothing and is not woken,
+    /// so what it was holding back for later is written now. On the watch
+    /// thread: NEVER BLOCKS.
+    fn stopped(&self, _now: Moment, _ctx: &Ctx) {}
+
+    /// The journal's cursor is about to be written, and a restart will start
+    /// after it. What the module keeps of what it heard is written first, so
+    /// the cursor never says a line was heard that its list does not hold.
+    /// Asked of every module that is on, on the watch thread: NEVER BLOCKS.
+    fn keep(&self, _now: Moment, _ctx: &Ctx) {}
+
+    /// A pass over what it missed is about to begin — a person asked
+    /// ([`Acted::Pass`]), or the module came back on: from where, and how
+    /// much. `None` is no pass at all, which is every module's answer but
+    /// one that keeps its own place. Never asked when the brain starts: the
+    /// follower's cursor already covers that — save for a pass that is owed
+    /// ([`Watcher::owed`]). On the watch thread: NEVER BLOCKS.
+    fn pass(&self, _now: Moment, _ctx: &Ctx) -> Option<Pass> {
+        None
+    }
+
+    /// Whether a pass it asked for was on its way when the brain stopped,
+    /// and is owed still: the follower's cursor does not cover what that pass
+    /// was reading, and nothing else would read it. Asked of a module that
+    /// is on as the brain starts, which then gets its pass after all.
+    /// `false` for every module but one that keeps its own place. On the
+    /// watch thread: NEVER BLOCKS.
+    fn owed(&self) -> bool {
+        false
+    }
+
+    /// A pass it asked for ended, however it ended: every [`Watcher::pass`]
+    /// is answered once. On the watch thread: NEVER BLOCKS.
+    fn passed(&self, _passed: Passed<'_>, _ctx: &Ctx) {}
+
     /// Something it listens to happened. On the watch thread: NEVER BLOCKS.
     fn heard(&self, heard: Heard<'_>, ctx: &Ctx);
 
@@ -640,6 +721,7 @@ mod tests {
             }],
             message_contains: Some("Killed".to_owned()),
             backfill: Backfill::ThisBoot { most: 10 },
+            ..Match::default()
         };
         let mut entry = Entry {
             priority: Some(3),

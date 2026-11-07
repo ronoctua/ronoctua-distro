@@ -44,7 +44,8 @@
 //! preference, would never be seen: nothing it waits on would move. Every
 //! change of that kind RINGS it ([`Core::ring_on`]) — a module's `changed`,
 //! any preference written — and it looks again: who is on now, and when each
-//! wants waking.
+//! wants waking. A pass a person asked for travels the same way
+//! ([`Core::take_passes`]).
 //!
 //! # Notes are written down at most once a second
 //!
@@ -131,6 +132,8 @@ pub struct Core {
     put_away: Mutex<BTreeMap<(String, String), PutAway>>,
     /// Who is rung when something may have changed. See this module's header.
     bell: Mutex<Option<Bell>>,
+    /// The modules a person asked a pass for, until the watch thread looks.
+    passes: Mutex<BTreeSet<&'static str>>,
     /// When the journal's file was written, and whether notes wait for it.
     saving: Mutex<Saving>,
 }
@@ -184,6 +187,7 @@ impl Core {
             written: AtomicBool::new(false),
             put_away: Mutex::new(BTreeMap::new()),
             bell: Mutex::new(None),
+            passes: Mutex::new(BTreeSet::new()),
             saving: Mutex::new(Saving::default()),
         }
     }
@@ -321,6 +325,12 @@ impl Core {
         if let Some(bell) = bell {
             bell();
         }
+    }
+
+    /// The modules a person asked a pass for since the last look, emptied:
+    /// the watch thread's, which alone reads for them.
+    pub fn take_passes(&self) -> BTreeSet<&'static str> {
+        std::mem::take(&mut *held(&self.passes))
     }
 
     // -----------------------------------------------------------------------
@@ -654,6 +664,12 @@ impl Core {
             _ => false,
         };
         self.shared.change(|mind| {
+            // WHAT IS SAID OF A PAGE makes no entry: an entry holds every
+            // knob at what the module ships today.
+            if let Knob::Fold { section, open } = knob {
+                mind.prefs.fold(manifest.id, section, *open);
+                return;
+            }
             let entry = mind.prefs.chosen_mut(manifest);
             match knob {
                 Knob::IntervalDays(days) => entry.interval_days = *days,
@@ -671,6 +687,7 @@ impl Core {
                     }
                 }
                 Knob::ResetSteps => entry.steps_flipped.clear(),
+                Knob::Fold { .. } => {}
             }
         });
         self.keep(Some(m));
@@ -730,9 +747,12 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// [`Refused::Ask`]: no such module or action, a row action with no row,
-    /// an action that asks with no answer, a queue for a module with no run.
-    /// [`Refused::Key`]: the module declined, with the TEXT KEY of its reason
+    /// [`Refused::Ask`]: no such module or action, an action that is only the
+    /// way to something (a door opens it), a row action with no row, an
+    /// action that asks with no answer, a queue for a module with no run, a
+    /// pass for a module that listens to nothing.
+    /// [`Refused::Key`]: the module declined, or a pass was asked of one that
+    /// is on, with the TEXT KEY of the reason
     /// (`<module>-why-<word>`, or `brain-why-<word>` for a core word) — two
     /// cases and not one string, so the door knows which to translate.
     pub fn act(
@@ -750,12 +770,23 @@ impl Core {
                 "`{module}` has no action called `{action}`"
             )));
         };
+        // THE WAY TO SOMETHING is a door's to open, and no module hears of it:
+        // one sent here anyway, by a door that had no word on it yet, is
+        // refused rather than handed to a module that has no answer for it.
+        if let Some(opens) = declared.opens {
+            return Err(Refused::Ask(format!(
+                "`{module}-{action}` is the way to `{opens}`, which a door opens"
+            )));
+        }
         if declared.row && row.is_none() {
             return Err(Refused::Ask(format!(
                 "`{module}-{action}` acts on a row, and no row was given"
             )));
         }
-        if declared.asks.is_some() && answer.as_deref().is_none_or(|a| a.trim().is_empty()) {
+        if declared.asks.is_some()
+            && !declared.optional
+            && answer.as_deref().is_none_or(|a| a.trim().is_empty())
+        {
             return Err(Refused::Ask(format!(
                 "`{module}-{action}` needs an answer, and none was given"
             )));
@@ -777,6 +808,23 @@ impl Core {
                     return Err(Refused::Ask(format!("`{module}` has no run to queue")));
                 }
                 self.shared.queue_up(manifest.id);
+                Ok(())
+            }
+            Acted::Pass => {
+                if m.watcher().is_none() {
+                    return Err(Refused::Ask(format!(
+                        "`{module}` listens to nothing, so it has no pass to read"
+                    )));
+                }
+                // ON, IT HEARS EVERYTHING AS IT HAPPENS: a pass now could only
+                // hand it the same lines again.
+                if self.enabled(m) {
+                    return Err(Refused::Key(why_key(m, "listening")));
+                }
+                held(&self.passes).insert(manifest.id);
+                // RUNG AFTER IT IS WRITTEN: the ring of `touch` above may
+                // already have been heard.
+                self.ring();
                 Ok(())
             }
             Acted::Refused(word) => Err(Refused::Key(why_key(m, word))),
@@ -1010,7 +1058,17 @@ fn row_of(
             why_key(m, why_not)
         },
         screen_generation,
-        actions: manifest.actions.iter().map(ActionState::from).collect(),
+        // WHAT ONLY A MODULE SWITCHED OFF OFFERS leaves the list here, and only
+        // here. The page and the door that answers it count this list by
+        // index: left in the mind and dropped further on, a page's action
+        // would be sent as the one before it.
+        actions: manifest
+            .actions
+            .iter()
+            .filter(|a| !(a.while_off && mine.enabled))
+            .map(ActionState::from)
+            .collect(),
+        folds: mine.folds.clone(),
     }
 }
 
@@ -1109,6 +1167,9 @@ mod tests {
         label: "cmd-noisy-say",
         row: false,
         asks: Some("ask-noisy-say"),
+        opens: None,
+        optional: false,
+        while_off: false,
     };
     const FORGET: Action = Action {
         id: "forget",
@@ -1116,6 +1177,9 @@ mod tests {
         label: "cmd-noisy-forget",
         row: true,
         asks: None,
+        opens: None,
+        optional: false,
+        while_off: false,
     };
     const RANG: EventKind = EventKind {
         name: "rang",
@@ -1180,7 +1244,9 @@ mod tests {
                         ..Row::default()
                     })
                     .collect(),
+                ..Section::default()
             }],
+            ..Screen::default()
         });
         let words = Arc::clone(&told);
         let fake = fake.acts(move |act, ctx| match act.action.as_str() {
@@ -1710,6 +1776,228 @@ mod tests {
         core.act("queued", "forget", Some("r".to_owned()), None)
             .expect("queued");
         assert_eq!(core.shared.snapshot().0.queue, ["queued"]);
+    }
+
+    /// An action of the module the tests below declare, `tidy`.
+    const fn tidy_action(id: &'static str, command: &'static str, label: &'static str) -> Action {
+        Action {
+            id,
+            command,
+            label,
+            row: false,
+            asks: None,
+            opens: None,
+            optional: false,
+            while_off: false,
+        }
+    }
+
+    const CATCH_UP: Action = Action {
+        while_off: true,
+        ..tidy_action("catch-up", "tidy-catch-up", "cmd-tidy-catch-up")
+    };
+    const ALL: Action = tidy_action("all", "tidy-all", "cmd-tidy-all");
+    const SAY_WHY: Action = Action {
+        row: true,
+        asks: Some("ask-tidy-say-why"),
+        optional: true,
+        ..tidy_action("say-why", "tidy-say-why", "cmd-tidy-say-why")
+    };
+
+    /// A watch that notes every action it is asked for, with the answer, and
+    /// answers `catch-up` with a pass.
+    fn tidy() -> (Fake, Arc<Mutex<Vec<String>>>) {
+        let told = Arc::new(Mutex::new(Vec::<String>::new()));
+        let words = Arc::clone(&told);
+        let fake = Fake::new(Manifest {
+            schedule: None,
+            actions: &[CATCH_UP, ALL, SAY_WHY],
+            ..manifest("tidy")
+        })
+        .listens(Vec::new(), |_, _| {})
+        .acts(move |act, _| {
+            words.lock().expect("told").push(format!(
+                "{}:{}",
+                act.action,
+                act.answer.clone().unwrap_or_default()
+            ));
+            if act.action == "catch-up" {
+                Acted::Pass
+            } else {
+                Acted::Done
+            }
+        });
+        (fake, told)
+    }
+
+    #[test]
+    fn a_pass_is_asked_for_only_while_a_module_is_off() {
+        let (fake, _) = tidy();
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        // ON, IT HEARS EVERYTHING AS IT HAPPENS: refused with the core's word,
+        // and nothing waits for the watch thread.
+        assert_eq!(
+            core.act("tidy", "catch-up", None, None),
+            Err(Refused::Key("brain-why-listening".to_owned()))
+        );
+        assert!(core.take_passes().is_empty(), "a refused pass was kept");
+        // OFF, it is waiting for the thread, and rings it. Twice is one pass,
+        // and taken once it is gone.
+        core.set("tidy", &Knob::Enabled(false)).expect("off");
+        let rung = Arc::new(AtomicU64::new(0));
+        let counts = Arc::clone(&rung);
+        core.ring_on(Arc::new(move || {
+            counts.fetch_add(1, Ordering::Relaxed);
+        }));
+        core.act("tidy", "catch-up", None, None).expect("asked");
+        // THE LAST RING COMES AFTER IT IS WRITTEN, or the thread could look,
+        // find nothing and go back to sleep on it.
+        assert_eq!(rung.load(Ordering::Relaxed), 2, "touched, then rung");
+        core.act("tidy", "catch-up", None, None).expect("asked");
+        assert_eq!(core.take_passes(), BTreeSet::from(["tidy"]));
+        assert!(core.take_passes().is_empty(), "a pass was taken twice");
+
+        // A MODULE THAT LISTENS TO NOTHING HAS NONE: that is the ask's fault.
+        let deaf = Fake::new(Manifest {
+            schedule: None,
+            actions: &[ALL],
+            ..manifest("deaf")
+        })
+        .acts(|_, _| Acted::Pass);
+        let (core, _) = a_core(vec![deaf.boxed()], 1000);
+        core.set("deaf", &Knob::Enabled(false)).expect("off");
+        assert!(matches!(
+            core.act("deaf", "all", None, None),
+            Err(Refused::Ask(why)) if why.contains("listens to nothing")
+        ));
+    }
+
+    #[test]
+    fn a_blank_answer_passes_only_when_the_question_is_optional() {
+        let (fake, told) = tidy();
+        let (noisy, heard) = noisy();
+        let (core, _) = a_core(vec![fake.boxed(), noisy.boxed()], 1000);
+        let row = || Some("r".to_owned());
+        // BLANK CLEARS: the module receives it, as it was typed.
+        core.act("tidy", "say-why", row(), Some("  ".to_owned()))
+            .expect("blank is an answer here");
+        core.act("tidy", "say-why", row(), None)
+            .expect("no answer is a blank one");
+        core.act("tidy", "say-why", row(), Some("because".to_owned()))
+            .expect("an answer");
+        assert_eq!(
+            *told.lock().expect("told"),
+            ["say-why:  ", "say-why:", "say-why:because"]
+        );
+        // AND ONLY THEN: a question that is not optional still needs one, and
+        // an optional one still needs its row.
+        assert!(
+            core.act("noisy", "say", None, Some(" ".to_owned()))
+                .is_err()
+        );
+        assert!(heard.told.lock().expect("told").is_empty(), "a blank ran");
+        assert!(core.act("tidy", "say-why", None, None).is_err());
+    }
+
+    /// FAILS IF: an action that is only the way to something reaches its
+    /// module — the doors open it, and one sent anyway, by name before a door
+    /// had a mind to read that from, is refused here and not run.
+    #[test]
+    fn an_action_that_opens_something_never_reaches_its_module() {
+        const LOOK: Action = Action {
+            opens: Some("tidy-look"),
+            ..tidy_action("look", "tidy-look", "cmd-tidy-look")
+        };
+        let told = Arc::new(Mutex::new(Vec::<String>::new()));
+        let words = Arc::clone(&told);
+        let fake = Fake::new(Manifest {
+            schedule: None,
+            actions: &[ALL, LOOK],
+            ..manifest("tidy")
+        })
+        .acts(move |act, _| {
+            words.lock().expect("told").push(act.action.clone());
+            Acted::Done
+        });
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        assert!(matches!(
+            core.act("tidy", "look", None, None),
+            Err(Refused::Ask(why)) if why.contains("a door opens")
+        ));
+        core.act("tidy", "all", None, None).expect("done");
+        assert_eq!(*told.lock().expect("told"), ["all"], "the way to it ran");
+    }
+
+    #[test]
+    fn an_action_for_a_module_switched_off_leaves_the_list_itself_while_it_is_on() {
+        // THE DEFECT THIS CATCHES: filtered further on and not here, the page
+        // would count one list and `ActPage` index another, and "all" would
+        // be sent as the action before it. So the list a page's index reads
+        // is the mind's, read exactly as the host's `act_page` reads it.
+        let (fake, told) = tidy();
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        let press = |core: &Arc<Core>, nth: usize| {
+            core.publish(1000, Pulse::default());
+            let (mind, _) = core.shared.snapshot();
+            let actions = &mind.task("tidy").expect("row").actions;
+            // THE PAGE'S: the actions on no row, by their index in the list.
+            let on_the_page: Vec<usize> = actions
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| !a.row)
+                .map(|(n, _)| n)
+                .collect();
+            // THE HOST'S: that index, into the same list.
+            let action = actions[on_the_page[nth]].id.clone();
+            core.act("tidy", &action, None, None)
+        };
+        // ON: `all` is the first page action, and `all` is what is sent.
+        press(&core, 0).expect("all");
+        assert_eq!(*told.lock().expect("told"), ["all:"]);
+        // OFF: both are offered, each by its own index.
+        core.set("tidy", &Knob::Enabled(false)).expect("off");
+        press(&core, 0).expect("catch-up");
+        press(&core, 1).expect("all");
+        assert_eq!(
+            *told.lock().expect("told"),
+            ["all:", "catch-up:", "all:"],
+            "a page action was sent as its neighbour"
+        );
+        // AND THE ROW'S OWN ACTION STAYS, on or off.
+        core.set("tidy", &Knob::Enabled(true)).expect("on");
+        core.publish(1000, Pulse::default());
+        let (mind, _) = core.shared.snapshot();
+        let ids: Vec<&str> = mind
+            .task("tidy")
+            .expect("row")
+            .actions
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(ids, ["all", "say-why"]);
+    }
+
+    #[test]
+    fn a_fold_is_the_persons_and_reaches_the_mind() {
+        let (fake, _) = tidy();
+        let (core, _) = a_core(vec![fake.boxed()], 1000);
+        for (section, open) in [("older", true), ("newer", false), ("older", false)] {
+            let knob = Knob::Fold {
+                section: section.to_owned(),
+                open,
+            };
+            core.set("tidy", &knob).expect("fold");
+        }
+        core.publish(1000, Pulse::default());
+        let (mind, _) = core.shared.snapshot();
+        let folds = &mind.task("tidy").expect("row").folds;
+        assert_eq!(folds.get("older"), Some(&false), "the last choice stands");
+        assert_eq!(folds.get("newer"), Some(&false));
+        assert_eq!(folds.len(), 2);
+        // AND IT MOVES NOTHING ELSE of what the module declared, and holds
+        // none of it at today's value.
+        assert!(mind.task("tidy").expect("row").enabled);
+        assert!(mind.prefs.tasks.is_empty(), "a fold made an entry");
     }
 
     #[test]

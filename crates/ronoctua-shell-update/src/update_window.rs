@@ -6148,6 +6148,7 @@ mod tests {
             why_key: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
+            folds: std::collections::BTreeMap::new(),
         });
         mind
     }

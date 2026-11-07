@@ -968,6 +968,9 @@
   # `player-folded` is, because it is the same gesture.
   brain-group = "md-menu_right";
   brain-group-open = "md-menu_down";
+  # A COLOUR OF A PAGE'S LEGEND, a filled disc of it: beside its word, the
+  # area that tells two near reds apart, which a word's thin strokes do not.
+  brain-swatch = "cod-circle_filled";
 
   # THE MAXIMUM ALERT BAR (`crate::alert`): the battery's own alarm drawing in
   # its margin — the modeline's `battery-danger`, which says the same thing —

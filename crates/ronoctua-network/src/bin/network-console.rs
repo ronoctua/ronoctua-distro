@@ -52,13 +52,7 @@ const SETTLE: Duration = Duration::from_secs(45);
 const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_network=info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    ronoctua_log::init("ronoctua_network=info");
 
     if graphical_session()? {
         tracing::info!("there is a graphical session; the question has a better place");

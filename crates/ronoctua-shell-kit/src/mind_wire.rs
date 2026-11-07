@@ -25,7 +25,7 @@
 //! text for the date it cannot compute.
 
 use ronoctua_brain::mind::Posted;
-use ronoctua_brain::module::{Arg, Args, Cell, Level, Notice, Screen, Tone};
+use ronoctua_brain::module::{Arg, Args, Cell, Fold, Level, Notice, Screen, Section, Tone};
 use ronoctua_brain::{Announcement, Mind};
 
 /// The whole mind, turned into the record the WIT carries.
@@ -310,6 +310,14 @@ fn task_of(
         },
         screen_generation: t.screen_generation,
         actions: t.actions.iter().map(action_of).collect(),
+        folds: t
+            .folds
+            .iter()
+            .map(|(id, open)| ronoctua_protocol::SectionState {
+                id: id.clone(),
+                open: *open,
+            })
+            .collect(),
     }
 }
 
@@ -527,15 +535,18 @@ pub fn control_label(
 }
 
 /// A module's own page, as the WIT carries it: the same rows, each cell's
-/// moment dated and each size written in the person's units.
+/// moment dated and cut where its day is, each size written in the person's
+/// units. `now` says which day is today.
 #[must_use]
 pub fn screen_of(
     module: &str,
     generation: u64,
     screen: &Screen,
+    now: i64,
     zone: &ronoctua_files::when::Zone,
     texts: &ronoctua_i18n::Texts,
 ) -> ronoctua_protocol::ModuleScreen {
+    let cell = |c: &Cell| cell_of(c, now, zone, texts);
     ronoctua_protocol::ModuleScreen {
         module: module.to_owned(),
         generation,
@@ -549,18 +560,104 @@ pub fn screen_of(
                     .iter()
                     .map(|r| ronoctua_protocol::ModuleRow {
                         id: r.id.clone(),
-                        label: cell_of(&r.label, zone, texts),
-                        value: cell_of(&r.value, zone, texts),
-                        note: cell_of(&r.note, zone, texts),
+                        label: cell(&r.label),
+                        value: cell(&r.value),
+                        note: cell(&r.note),
                         tone: tone_of(r.tone),
                         act: r.act.as_deref().unwrap_or_default().to_owned(),
                         also: r.also.as_deref().unwrap_or_default().to_owned(),
+                        below: cell(&r.below),
+                        foot: r
+                            .foot
+                            .iter()
+                            .map(|f| ronoctua_protocol::RowFact {
+                                label: f.label.to_string(),
+                                value: cell(&f.value),
+                                tone: tone_of(f.tone),
+                            })
+                            .collect(),
                     })
                     .collect(),
+                id: s.id.to_string(),
+                about: s.about.to_string(),
+                fold: fold_of(s),
+                tally: cell(&s.tally),
             })
             .collect(),
         refused: String::new(),
+        legend: screen
+            .legend
+            .iter()
+            .map(|swatch| ronoctua_protocol::LegendSwatch {
+                tone: tone_of(swatch.tone),
+                says: swatch.says.to_string(),
+                about: swatch.about.to_string(),
+            })
+            .collect(),
+        phrases: phrases_of(module, screen, texts),
     }
+}
+
+/// How a section folds, as the WIT names it. One with no id does not: nothing
+/// could keep what the person chose.
+fn fold_of(s: &Section) -> ronoctua_protocol::SectionFold {
+    use ronoctua_protocol::SectionFold as F;
+    match s.fold {
+        _ if s.id.is_empty() => F::Never,
+        Fold::Never => F::Never,
+        Fold::Open => F::Open,
+        Fold::Shut => F::Shut,
+    }
+}
+
+/// THE KEYS A PAGE DRAWS, in the person's language and each once, for the
+/// component to MEASURE: they come with the page, so it could not declare
+/// them, and it has no translator (invariant 11). It still draws the key. One
+/// the texts do not have stays out, and the page measures that one blind.
+///
+/// A ROW'S OTHER ACTION too, by the label every action of `module` has: the
+/// page names it flush right, so the width is what says where it begins.
+fn phrases_of(
+    module: &str,
+    screen: &Screen,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<ronoctua_protocol::Phrase> {
+    fn key_of(c: &Cell) -> Option<&str> {
+        match c {
+            Cell::Key(k) => Some(k),
+            _ => None,
+        }
+    }
+    let mut keys: Vec<&str> = Vec::new();
+    for section in &screen.sections {
+        keys.push(&section.heading);
+        keys.extend(key_of(&section.tally));
+        for row in &section.rows {
+            let cells = [&row.label, &row.value, &row.note, &row.below];
+            keys.extend(cells.into_iter().filter_map(key_of));
+            for fact in &row.foot {
+                keys.push(&fact.label);
+                keys.extend(key_of(&fact.value));
+            }
+        }
+    }
+    keys.extend(screen.legend.iter().map(|swatch| swatch.says.as_ref()));
+    let labels: Vec<String> = screen
+        .sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .filter_map(|row| row.also.as_deref())
+        .map(|action| format!("cmd-{module}-{action}"))
+        .collect();
+    keys.extend(labels.iter().map(String::as_str));
+    let mut seen = std::collections::BTreeSet::new();
+    keys.into_iter()
+        .filter(|k| texts.has(k) && seen.insert(*k))
+        .map(|k| ronoctua_protocol::Phrase {
+            key: k.to_owned(),
+            text: texts.t(k),
+        })
+        .collect()
 }
 
 /// A module's page that did NOT come: no rows, and the sentence that says
@@ -575,14 +672,15 @@ pub fn refused_screen(
     ronoctua_protocol::ModuleScreen {
         module: module.to_owned(),
         generation,
-        sections: Vec::new(),
         refused: said,
+        ..ronoctua_protocol::ModuleScreen::default()
     }
 }
 
 /// One cell of a module's row.
 fn cell_of(
     c: &Cell,
+    now: i64,
     zone: &ronoctua_files::when::Zone,
     texts: &ronoctua_i18n::Texts,
 ) -> ronoctua_protocol::ScreenCell {
@@ -594,6 +692,7 @@ fn cell_of(
         Cell::Moment(at) => C::Moment(ronoctua_protocol::Timed {
             at: u64::try_from(*at).unwrap_or(0),
             text: iso(*at, zone),
+            stamp: stamp(*at, now, zone),
         }),
         Cell::Count(n) => C::Count(*n),
         Cell::Bytes(b) => C::Bytes(ronoctua_protocol::Measured {
@@ -612,6 +711,8 @@ pub(crate) const fn tone_of(t: Tone) -> ronoctua_protocol::BrainTone {
         Tone::Danger => ronoctua_protocol::BrainTone::Danger,
         Tone::Accent => ronoctua_protocol::BrainTone::Accent,
         Tone::Working => ronoctua_protocol::BrainTone::Working,
+        Tone::Critical => ronoctua_protocol::BrainTone::Critical,
+        Tone::Minor => ronoctua_protocol::BrainTone::Minor,
     }
 }
 
@@ -820,7 +921,7 @@ pub fn answer_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_brain::module::{Arg, Cell, Level, Notice, Row, Section, Tone};
+    use ronoctua_brain::module::{Arg, Fact, Row, Swatch};
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").unwrap()
@@ -850,6 +951,7 @@ mod tests {
             why_key: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
+            folds: std::collections::BTreeMap::new(),
         }
     }
 
@@ -985,6 +1087,7 @@ mod tests {
             label: "cmd-fixture-keep".to_owned(),
             row: false,
             asks: Some("ask-fixture-keep".to_owned()),
+            opens: None,
         });
         mind.tasks.push(task);
         mind.notices = vec![
@@ -1053,10 +1156,13 @@ mod tests {
                     tone: Tone::Watching,
                     act: Some("forget".into()),
                     also: Some("ignore".into()),
+                    ..Row::default()
                 }],
+                ..Section::default()
             }],
+            ..ronoctua_brain::module::Screen::default()
         };
-        let over = screen_of("fixture", 7, &screen, &utc(), &texts());
+        let over = screen_of("fixture", 7, &screen, 1_700_000_000, &utc(), &texts());
         assert_eq!((over.module.as_str(), over.generation), ("fixture", 7));
         let row = &over.sections[0].rows[0];
         assert_eq!(row.act, "forget");
@@ -1073,9 +1179,215 @@ mod tests {
             row.note,
             ronoctua_protocol::ScreenCell::Moment(ronoctua_protocol::Timed {
                 at: 1_700_000_000,
-                text: "2023-11-14 22:13".to_owned()
+                text: "2023-11-14 22:13".to_owned(),
+                stamp: ronoctua_protocol::Stamp {
+                    lead: "2023-11-".to_owned(),
+                    day: "14".to_owned(),
+                    tail: " 22:13".to_owned(),
+                    today: true,
+                },
             })
         );
+    }
+
+    /// A page with everything a page can say: a legend, a section that folds
+    /// with a tally of its own, and a row of each new tone with a line under
+    /// it and facts for the footer.
+    fn a_full_page() -> Screen {
+        let key = |k: &'static str| Cell::Key(k.into());
+        Screen {
+            sections: vec![Section {
+                id: "older".into(),
+                heading: crate::key::BRAIN_TITLE.into(),
+                about: "fixture-about".into(),
+                rows: vec![
+                    Row {
+                        id: "r-1".to_owned(),
+                        label: key(crate::key::BRAIN_TITLE),
+                        tone: Tone::Critical,
+                        below: Cell::Data("why it is here".to_owned()),
+                        foot: vec![Fact {
+                            label: crate::key::BRAIN_TITLE.into(),
+                            value: Cell::Count(4),
+                            tone: Tone::Minor,
+                        }],
+                        ..Row::default()
+                    },
+                    Row {
+                        id: "r-2".to_owned(),
+                        tone: Tone::Minor,
+                        ..Row::default()
+                    },
+                ],
+                fold: Fold::Shut,
+                tally: Cell::Count(12),
+            }],
+            legend: vec![Swatch {
+                tone: Tone::Critical,
+                says: crate::key::BRAIN_WHY_ABORTED.into(),
+                about: "fixture-swatch-about".into(),
+            }],
+        }
+    }
+
+    /// FAILS IF: anything a module can say of a page stops at this side of
+    /// the WIT, a new tone falls back to a neighbour, or a row that names
+    /// none of it crosses with something invented.
+    #[test]
+    fn a_whole_page_crosses_and_a_plain_row_crosses_empty() {
+        use ronoctua_protocol::{BrainTone, Phrase, RowFact, ScreenCell, SectionFold};
+        let t = texts();
+        let over = screen_of("fixture", 7, &a_full_page(), 0, &utc(), &t);
+        let section = &over.sections[0];
+        assert_eq!(section.id, "older");
+        assert_eq!(section.about, "fixture-about");
+        assert_eq!(section.fold, SectionFold::Shut);
+        assert_eq!(section.tally, ScreenCell::Count(12));
+        let (row, plain) = (&section.rows[0], &section.rows[1]);
+        assert_eq!(row.tone, BrainTone::Critical);
+        assert_eq!(row.below, ScreenCell::Data("why it is here".to_owned()));
+        assert_eq!(
+            row.foot,
+            [RowFact {
+                label: crate::key::BRAIN_TITLE.to_owned(),
+                value: ScreenCell::Count(4),
+                tone: BrainTone::Minor,
+            }]
+        );
+        assert_eq!(plain.tone, BrainTone::Minor);
+        assert_eq!(plain.below, ScreenCell::Empty);
+        assert!(plain.foot.is_empty());
+        assert_eq!(over.legend[0].tone, BrainTone::Critical);
+        assert_eq!(over.legend[0].says, crate::key::BRAIN_WHY_ABORTED);
+        assert_eq!(over.legend[0].about, "fixture-swatch-about");
+        // AND THE WORDS THAT MEASURE IT come with the page, in this language.
+        assert!(
+            over.phrases.contains(&Phrase {
+                key: crate::key::BRAIN_WHY_ABORTED.to_owned(),
+                text: t.t(crate::key::BRAIN_WHY_ABORTED),
+            }),
+            "the legend's word crossed with no phrase: {:?}",
+            over.phrases
+        );
+    }
+
+    /// FAILS IF: a section that cannot keep a choice is offered as one that
+    /// folds, or a module that said nothing of folding has a page that does.
+    #[test]
+    fn a_section_folds_only_with_an_id() {
+        use ronoctua_protocol::SectionFold;
+        let fold = |id: &'static str, fold: Fold| {
+            fold_of(&Section {
+                id: id.into(),
+                fold,
+                ..Section::default()
+            })
+        };
+        assert_eq!(fold("older", Fold::Shut), SectionFold::Shut);
+        assert_eq!(fold("older", Fold::Open), SectionFold::Open);
+        assert_eq!(fold("older", Fold::Never), SectionFold::Never);
+        assert_eq!(fold("", Fold::Shut), SectionFold::Never);
+        assert_eq!(fold("", Fold::Open), SectionFold::Never);
+    }
+
+    /// FAILS IF: a key the page draws cannot be measured — here each place a
+    /// page says one has a key of its own, so losing any of them shows — or
+    /// one crosses twice, a key the texts do not have crosses with no words
+    /// behind it, or data that spells a key is taken for one.
+    #[test]
+    fn a_pages_phrases_are_its_keys_once_and_only_those_with_text() {
+        use crate::key as k;
+        const GONE: &str = "fixture-gone-from-the-texts";
+        let key = |name: &'static str| Cell::Key(name.into());
+        let page = Screen {
+            sections: vec![Section {
+                heading: k::BRAIN_TITLE.into(),
+                tally: key(k::BRAIN_WHY_ABORTED),
+                rows: vec![Row {
+                    label: key(k::BRAIN_WHY_ASLEEP),
+                    value: key(k::BRAIN_WHY_BATTERY),
+                    note: key(k::BRAIN_WHY_BUSY),
+                    below: key(k::BRAIN_WHY_CPU),
+                    also: Some("next".into()),
+                    foot: vec![
+                        Fact {
+                            label: k::BRAIN_WHY_NETWORK.into(),
+                            value: key(k::BRAIN_WHY_POSTPONED),
+                            ..Fact::default()
+                        },
+                        Fact {
+                            label: k::BRAIN_TITLE.into(),
+                            value: Cell::Data(k::BRAIN_WHY_REFUSED.to_owned()),
+                            ..Fact::default()
+                        },
+                        Fact {
+                            label: GONE.into(),
+                            value: key(GONE),
+                            ..Fact::default()
+                        },
+                    ],
+                    ..Row::default()
+                }],
+                ..Section::default()
+            }],
+            legend: vec![
+                Swatch {
+                    says: k::BRAIN_WHY_RUNAWAY.into(),
+                    ..Swatch::default()
+                },
+                Swatch {
+                    says: GONE.into(),
+                    ..Swatch::default()
+                },
+            ],
+        };
+        let t = texts();
+        let phrases: Vec<_> = [
+            k::BRAIN_TITLE,
+            k::BRAIN_WHY_ABORTED,
+            k::BRAIN_WHY_ASLEEP,
+            k::BRAIN_WHY_BATTERY,
+            k::BRAIN_WHY_BUSY,
+            k::BRAIN_WHY_CPU,
+            k::BRAIN_WHY_NETWORK,
+            k::BRAIN_WHY_POSTPONED,
+            k::BRAIN_WHY_RUNAWAY,
+            k::CMD_BUFFER_NEXT,
+        ]
+        .into_iter()
+        .map(|key| ronoctua_protocol::Phrase {
+            key: key.to_owned(),
+            text: t.t(key),
+        })
+        .collect();
+        assert_eq!(phrases_of("buffer", &page, &t), phrases);
+    }
+
+    /// FAILS IF: `today` on a module's date does not follow the clock the
+    /// page was given, the one thing the component cannot work out.
+    #[test]
+    fn a_modules_date_is_today_by_the_mind_s_clock() {
+        const DAY: i64 = 86_400;
+        let at = 1_700_000_000;
+        let today = |now: i64| {
+            let ronoctua_protocol::ScreenCell::Moment(moment) =
+                cell_of(&Cell::Moment(at), now, &utc(), &texts())
+            else {
+                panic!("a moment did not cross as a moment")
+            };
+            assert_eq!(
+                format!(
+                    "{}{}{}",
+                    moment.stamp.lead, moment.stamp.day, moment.stamp.tail
+                ),
+                moment.text,
+                "the three pieces are the same date"
+            );
+            moment.stamp.today
+        };
+        assert!(today(at));
+        assert!(!today(at + DAY));
+        assert!(!today(at - DAY));
     }
 
     /// FAILS IF: a record's keys are built out of ids on the component's side

@@ -307,7 +307,12 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
             doc += ", on a row"
         if spec.get("asks"):
             doc += f", asking `{spec['asks']}` first"
+        if spec.get("opens"):
+            doc += f", opening `{spec['opens']}`"
+        if spec.get("whileOff"):
+            doc += ", while it is off"
         asks = f"Some(super::key::{key_of[spec['asks']]})" if spec.get("asks") else "None"
+        opens = f"Some({rust_str(spec['opens'])})" if spec.get("opens") else "None"
         items.append(f"    /// {doc}.")
         items.append(
             f"    pub const {const(a)}: crate::module::Action = crate::module::Action {{"
@@ -315,7 +320,10 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
             f" command: {rust_str(command)},"
             f" label: super::key::{key_of['cmd-' + command]},"
             f" row: {'true' if spec['row'] else 'false'},"
-            f" asks: {asks}, }};"
+            f" asks: {asks},"
+            f" opens: {opens},"
+            f" optional: {'true' if spec.get('optional') else 'false'},"
+            f" while_off: {'true' if spec.get('whileOff') else 'false'}, }};"
         )
     block("What a person can ask of it by name", "action", items)
 

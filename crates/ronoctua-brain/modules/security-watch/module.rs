@@ -461,16 +461,20 @@ impl Module for SecurityWatch {
                     Section {
                         heading: Cow::Borrowed(super::key::SECURITY_WATCH_HEADING_NOW),
                         rows: now_rows,
+                        ..Section::default()
                     },
                     Section {
                         heading: Cow::Borrowed(super::key::SECURITY_WATCH_HEADING_BLOCKED),
                         rows: blocked,
+                        ..Section::default()
                     },
                     Section {
                         heading: Cow::Borrowed(super::key::SECURITY_WATCH_HEADING_ADMIN),
                         rows: admin,
+                        ..Section::default()
                     },
                 ],
+                ..Screen::default()
             }
         })
     }
@@ -507,6 +511,7 @@ impl Watcher for SecurityWatch {
                     seconds: rules::REFUSED_BACK_S,
                     most: 64,
                 },
+                ..Match::default()
             }),
             // WHAT SUDO SAID — a week of it the first time, for the page.
             Source::Journal(Match {
@@ -517,6 +522,7 @@ impl Watcher for SecurityWatch {
                     seconds: rules::SUDO_BACK_S,
                     most: rules::SUDO_MOST,
                 },
+                ..Match::default()
             }),
             // THE FIREWALL'S UNITS, when they fail.
             Source::Journal(Match {
@@ -527,6 +533,7 @@ impl Watcher for SecurityWatch {
                 )],
                 message_contains: None,
                 backfill: Backfill::ThisBoot { most: 4 },
+                ..Match::default()
             }),
             Source::Path(self.places.run.clone()),
             Source::Path(self.places.lib.clone()),

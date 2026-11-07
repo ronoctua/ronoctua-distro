@@ -23,9 +23,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rustix.workspace = true
-# The host's log, on stderr (Chrome passes it through to its own). The queue's
-# host already carries the same crate.
-tracing-subscriber.workspace = true
+# The host's log, on stderr (Chrome passes it through to its own).
+ronoctua-log = { path = "../ronoctua-log" }
 
 [lints]
 workspace = true

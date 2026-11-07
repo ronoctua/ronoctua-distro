@@ -222,7 +222,9 @@ impl Module for DiskSpace {
             sections: vec![Section {
                 heading: super::key::DISK_SPACE_HEADING_NOW.into(),
                 rows: rows_of(&look.pulse.rooms),
+                ..Section::default()
             }],
+            ..Screen::default()
         }
     }
 }

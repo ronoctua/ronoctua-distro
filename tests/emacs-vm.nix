@@ -713,10 +713,11 @@ pkgs.testers.runNixOSTest {
           # asked for is no `NRestarts`).
           machine.sleep(duration=datetime.timedelta(seconds=5))
           after = daemon()
-          # The footer's log is `tracing`'s, which colours its field names.
-          journal = re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed(
+          # The footer's log reaches the journal plain (`ronoctua_log`), so a
+          # field reads the way it is written.
+          journal = machine.succeed(
               f"journalctl --no-pager -o cat --after-cursor={shlex.quote(cursor)} _UID={uid}"
-          ))
+          )
           lost = [
               line for line in journal.splitlines()
               if "Lost connection to Wayland compositor" in line

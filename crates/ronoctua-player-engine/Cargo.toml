@@ -77,8 +77,8 @@ ronoctua-words = { path = "../ronoctua-words" }
 # crate mints (`engine/catalog.rs`), as a NASA video is opened on one.
 ronoctua-consent = { path = "../ronoctua-consent" }
 
-[dependencies.tracing-subscriber]
-workspace = true
+[dependencies.ronoctua-log]
+path = "../ronoctua-log"
 
 [dev-dependencies]
 # A test mints its passes from a consent file of its own; the helpers that do

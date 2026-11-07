@@ -329,6 +329,9 @@ mod tests {
         label: "cmd-ringer-nope",
         row: false,
         asks: None,
+        opens: None,
+        optional: false,
+        while_off: false,
     };
 
     /// How many times the stepped module was told its preferences moved.
@@ -370,7 +373,9 @@ mod tests {
                 sections: vec![Section {
                     heading: "ringer-heading".into(),
                     rows: Vec::new(),
+                    ..Section::default()
                 }],
+                ..Screen::default()
             })
             .acts(|act, _| {
                 if act.action == NOPE.id {

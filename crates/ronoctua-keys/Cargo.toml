@@ -19,7 +19,7 @@ path = "src/bin/ronoctua-keys.rs"
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+ronoctua-log = { path = "../ronoctua-log" }
 serde.workspace = true
 serde_json.workspace = true
 # THE IOCTLS AND THE INOTIFY. `rustix` and not `libc`: its API is safe, and

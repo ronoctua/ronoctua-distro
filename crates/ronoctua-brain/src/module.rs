@@ -241,6 +241,7 @@ impl Manifest {
                 runaway_minutes: s.runaway_minutes,
                 every_minutes: s.every_minutes,
                 steps_flipped: std::collections::BTreeSet::new(),
+                folds: std::collections::BTreeMap::new(),
             },
             None => TaskPrefs {
                 countdown_seconds: 0,
@@ -360,8 +361,9 @@ impl Manifest {
             return Some("a count on one instance (its digit stands where a count would)");
         }
         // THE MODELINE AT REST IS SILENT: a quiet mark says only that all is
-        // well, and only a mark declared `resting` may say that.
-        if mark.tone == Tone::Quiet && !declared.resting {
+        // well, and only a mark declared `resting` may say that. A minor one
+        // wears the same colour there, so it says the same.
+        if matches!(mark.tone, Tone::Quiet | Tone::Minor) && !declared.resting {
             return Some("a mark at rest its manifest does not declare `resting`");
         }
         // WHICH MARK IT IS: its name, its set and its instance — the lead of
@@ -530,10 +532,10 @@ pub struct MarkId {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub instances: u8,
     /// DECLARED: whether it may be drawn AT REST — published in
-    /// [`Tone::Quiet`], saying only that all is well. The modeline at rest is
-    /// silent (`AGENTS.md`), so the core drops a quiet mark that does not
-    /// declare this, and the loader lets only the marks the owner approved
-    /// declare it (`resting-marks-are-the-approved-ones`).
+    /// [`Tone::Quiet`] or [`Tone::Minor`], saying only that all is well. The
+    /// modeline at rest is silent (`AGENTS.md`), so the core drops a quiet
+    /// mark that does not declare this, and the loader lets only the marks
+    /// the owner approved declare it (`resting-marks-are-the-approved-ones`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub resting: bool,
     /// Which of its instances this is, from 1; `0` for a mark that is one.
@@ -809,6 +811,20 @@ pub struct Action {
     /// The key of the question it asks first, when it needs an answer; the
     /// answer arrives in `Act::answer`.
     pub asks: Option<&'static str>,
+    /// What it is only the way to, by a name the footer opens (the loader's
+    /// `openable`): the footer opens it whichever door it was asked at, and
+    /// no module hears of it. The twin of [`MarkId::opening`], and declared
+    /// here for the same reason: a buffer cannot name what it opens, and a
+    /// manifest can.
+    pub opens: Option<&'static str>,
+    /// Whether a blank answer to its question is an answer too: the action
+    /// that clears what it sets. The module then receives it blank.
+    pub optional: bool,
+    /// Whether it is offered only while the module is switched off. Answered
+    /// once, where the mind's row is built: with the module on it is not in
+    /// the list at all, so the mind, the page and the door that counts by
+    /// index all hold the same one.
+    pub while_off: bool,
 }
 
 /// An event a module may tell the footer, as the manifest declared it.
@@ -885,6 +901,11 @@ pub enum Tone {
     Danger,
     /// The module's own emphasis.
     Accent,
+    /// PAST [`Tone::Danger`]: something was lost, or is about to be.
+    Critical,
+    /// WORTH KEEPING AND NOT WORTH A LOOK: the quiet end of a list that sorts
+    /// by gravity, where [`Tone::Quiet`] would say nothing is the matter.
+    Minor,
 }
 
 /// How loud a notice is. The ORDER is the strip's precedence, quietest first:
@@ -996,16 +1017,69 @@ pub struct Item {
 pub struct Screen {
     /// In order.
     pub sections: Vec<Section>,
+    /// The colours its rows wear, each with what it stands for; empty draws
+    /// no legend.
+    pub legend: Vec<Swatch>,
+}
+
+/// One colour of a page's legend.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Swatch {
+    /// The colour, by meaning.
+    pub tone: Tone,
+    /// The word, as a text key, drawn in that colour.
+    pub says: Word,
+    /// What the pointer says on it, as a text key.
+    pub about: Word,
+}
+
+/// Whether a section folds, and how it starts. What the person chose
+/// (`Prefs::folds`) wins over this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Fold {
+    /// A plain title.
+    #[default]
+    Never,
+    /// It folds, and starts open.
+    Open,
+    /// It folds, and starts shut.
+    Shut,
 }
 
 /// One titled block of a module's page.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Section {
+    /// Its id inside the module, what a person's choice is kept under. A
+    /// section with no id cannot fold, and draws as [`Fold::Never`] whatever
+    /// it says.
+    pub id: Word,
     /// Its title, as a text key.
     pub heading: Word,
+    /// What the pointer says on its title, as a text key; empty says nothing
+    /// of its own.
+    pub about: Word,
     /// Its rows.
     pub rows: Vec<Row>,
+    /// Whether it folds, and how it starts.
+    pub fold: Fold,
+    /// The number its title shows, when the rows' count is not the one worth
+    /// reading; [`Cell::Empty`] shows how many rows it holds.
+    pub tally: Cell,
+}
+
+/// One fact of a row, for what the page says of it under the cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Fact {
+    /// What it is, as a text key.
+    pub label: Word,
+    /// Its value.
+    pub value: Cell,
+    /// Its colour, by meaning.
+    pub tone: Tone,
 }
 
 /// One row of a module's page.
@@ -1018,7 +1092,7 @@ pub struct Row {
     pub label: Cell,
     /// Its value.
     pub value: Cell,
-    /// A quieter line under it.
+    /// A quieter word beside the value, in a column of its own.
     pub note: Cell,
     /// Its colour, by meaning.
     pub tone: Tone,
@@ -1029,6 +1103,16 @@ pub struct Row {
     /// its press — the journal's "ignore this type" on an error not yet seen,
     /// which is otherwise two steps. `None` is a row with one action or none.
     pub also: Option<Word>,
+    /// A line under it that is still the row: the cursor and the band cover
+    /// it, and a click on it selects the row. [`Cell::Empty`] is one line.
+    pub below: Cell,
+    /// What the page says of it under the cursor, beyond what the row shows.
+    pub foot: Vec<Fact>,
+    /// What the question of its action starts from, already typed, so a
+    /// person edits what is there instead of writing it again. It stops at
+    /// the host, which reads the page as JSON; a component has no use for it,
+    /// and it never crosses the WIT.
+    pub starts: String,
 }
 
 /// One cell of a row. The host formats moments and sizes; the component has no
@@ -1160,6 +1244,9 @@ mod tests {
             label: "cmd-fixture-forget",
             row: true,
             asks: None,
+            opens: None,
+            optional: false,
+            while_off: false,
         }],
         events: &[EventKind {
             name: "emptied",
@@ -1393,6 +1480,7 @@ mod tests {
             ..mark(seat.numbered(2, None), Tone::Warning)
         };
         let resting = mark(full.clone(), Tone::Quiet);
+        let minor = mark(full.clone(), Tone::Minor);
         // THE OTHER CASES, each refused for its own reason.
         let besides_undeclared = mark(
             full.besides(&MarkId::of("gone", "fixture-gone", "h"), 0),
@@ -1421,6 +1509,7 @@ mod tests {
             ("an action on one instance", acted),
             ("a count on one instance", counted),
             ("a quiet mark that does not rest", resting),
+            ("a minor mark that does not rest", minor),
             ("a rest the id gave itself", forged),
             (
                 "another case the manifest does not declare",
@@ -1684,16 +1773,32 @@ mod tests {
     fn a_screen_crosses_whole() {
         let screen = Screen {
             sections: vec![Section {
+                id: "older".into(),
                 heading: "fixture-heading".into(),
+                about: "fixture-about".into(),
                 rows: vec![Row {
                     id: "one".to_owned(),
                     label: Cell::Key("fixture-row".into()),
                     value: Cell::Bytes(1 << 30),
                     note: Cell::Moment(1_700_000_000),
-                    tone: Tone::Danger,
+                    tone: Tone::Critical,
                     act: Some("forget".into()),
                     also: Some("keep".into()),
+                    below: Cell::Data("under the row".to_owned()),
+                    foot: vec![Fact {
+                        label: "fixture-fact".into(),
+                        value: Cell::Count(4),
+                        tone: Tone::Minor,
+                    }],
+                    starts: "what the question starts from".to_owned(),
                 }],
+                fold: Fold::Shut,
+                tally: Cell::Count(12),
+            }],
+            legend: vec![Swatch {
+                tone: Tone::Minor,
+                says: "fixture-says".into(),
+                about: "fixture-says-about".into(),
             }],
         };
         let line = serde_json::to_string(&screen).expect("encode");
@@ -1701,6 +1806,21 @@ mod tests {
             serde_json::from_str::<Screen>(&line).expect("decode"),
             screen
         );
+    }
+
+    /// FAILS IF: a page that names none of what a page can say about itself
+    /// stops reading: a module of the person's, or a brain a version behind
+    /// the shell, answers with exactly that.
+    #[test]
+    fn a_page_that_says_nothing_new_still_reads() {
+        let line = r#"{"sections":[{"heading":"fixture-heading","rows":[{"id":"one"}]}]}"#;
+        let screen: Screen = serde_json::from_str(line).expect("decode");
+        let section = &screen.sections[0];
+        assert_eq!(section.fold, Fold::Never);
+        assert_eq!(section.tally, Cell::Empty);
+        assert_eq!(section.rows[0].below, Cell::Empty);
+        assert!(section.rows[0].foot.is_empty());
+        assert!(screen.legend.is_empty());
     }
 
     #[test]

@@ -19,13 +19,7 @@ use ronoctua_network::agent::{AGENT_PATH, Agent, IDENTIFIER, RONOCTUA_PATH, Rono
 use ronoctua_network::nm;
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_network=info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    ronoctua_log::init("ronoctua_network=info");
 
     // The SYSTEM bus: NetworkManager belongs to the host, not to the session. On
     // the session bus the registration would return "name has no owner", which is the

@@ -327,7 +327,7 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// The component does not export `ronoctua:buffer/view@0.4.0` with the three
+    /// The component does not export `ronoctua:buffer/view@0.5.0` with the three
     /// functions — which is a contract refusal, and not a detail: a buffer with no
     /// `event` would accept keys and never react.
     pub fn open(&self, component: &wasmtime::component::Component) -> Result<Instance> {
@@ -338,8 +338,8 @@ impl Runtime {
             .context("could not instantiate the component")?;
 
         let vision = instance
-            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.4.0")
-            .context("the component does not export `ronoctua:buffer/view@0.4.0`")?;
+            .get_export_index(&mut store, None, "ronoctua:buffer/view@0.5.0")
+            .context("the component does not export `ronoctua:buffer/view@0.5.0`")?;
         let export = |store: &mut wasmtime::Store<State>, name: &str| {
             instance
                 .get_export_index(store, Some(&vision), name)
@@ -705,15 +705,7 @@ fn run_val(r: &ronoctua_protocol::RunRecord) -> wasmtime::component::Val {
         ("when-text".into(), Val::String(r.when_text.clone())),
         // THE SAME MOMENT, CUT WHERE ITS DAY IS — the host's, because the
         // component has no zone to find the day with.
-        (
-            "when-stamp".into(),
-            Val::Record(vec![
-                ("lead".into(), Val::String(r.when_stamp.lead.clone())),
-                ("day".into(), Val::String(r.when_stamp.day.clone())),
-                ("tail".into(), Val::String(r.when_stamp.tail.clone())),
-                ("today".into(), Val::Bool(r.when_stamp.today)),
-            ]),
-        ),
+        ("when-stamp".into(), stamp_val(&r.when_stamp)),
         (
             "outcome".into(),
             Val::Enum(outcome_kind_name(r.outcome).to_owned()),
@@ -828,6 +820,18 @@ fn activity_row_val(a: &ronoctua_protocol::ActivityRow) -> wasmtime::component::
     ])
 }
 
+/// A moment cut where its day is: a run's and a module cell's are the same
+/// record, so they are one lowering.
+fn stamp_val(s: &ronoctua_protocol::Stamp) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("lead".into(), Val::String(s.lead.clone())),
+        ("day".into(), Val::String(s.day.clone())),
+        ("tail".into(), Val::String(s.tail.clone())),
+        ("today".into(), Val::Bool(s.today)),
+    ])
+}
+
 /// The name a `brain-tone` has in the WIT.
 const fn brain_tone_name(t: ronoctua_protocol::BrainTone) -> &'static str {
     use ronoctua_protocol::BrainTone as T;
@@ -838,7 +842,28 @@ const fn brain_tone_name(t: ronoctua_protocol::BrainTone) -> &'static str {
         T::Danger => "danger",
         T::Accent => "accent",
         T::Working => "working",
+        T::Critical => "critical",
+        T::Minor => "minor",
     }
+}
+
+/// The name a `section-fold` has in the WIT.
+const fn section_fold_name(f: ronoctua_protocol::SectionFold) -> &'static str {
+    use ronoctua_protocol::SectionFold as F;
+    match f {
+        F::Never => "never",
+        F::Open => "open",
+        F::Shut => "shut",
+    }
+}
+
+/// A section open or shut: a `task-state` carries a list of them.
+fn section_state_val(s: &ronoctua_protocol::SectionState) -> wasmtime::component::Val {
+    use wasmtime::component::Val;
+    Val::Record(vec![
+        ("id".into(), Val::String(s.id.clone())),
+        ("open".into(), Val::Bool(s.open)),
+    ])
 }
 
 /// One cell of a module's row, as the WIT's `screen-cell` variant.
@@ -854,6 +879,7 @@ fn cell_val(c: &ronoctua_protocol::ScreenCell) -> wasmtime::component::Val {
             Some(Val::Record(vec![
                 ("at".into(), Val::U64(t.at)),
                 ("text".into(), Val::String(t.text.clone())),
+                ("stamp".into(), stamp_val(&t.stamp)),
             ])),
         ),
         C::Count(n) => ("count", Some(Val::U64(*n))),
@@ -889,12 +915,52 @@ fn val_of_screen(s: &ronoctua_protocol::ModuleScreen) -> wasmtime::component::Va
                         ("tone".into(), Val::Enum(brain_tone_name(r.tone).to_owned())),
                         ("act".into(), Val::String(r.act.clone())),
                         ("also".into(), Val::String(r.also.clone())),
+                        ("below".into(), cell_val(&r.below)),
+                        (
+                            "foot".into(),
+                            Val::List(
+                                r.foot
+                                    .iter()
+                                    .map(|f| {
+                                        Val::Record(vec![
+                                            ("label".into(), Val::String(f.label.clone())),
+                                            ("value".into(), cell_val(&f.value)),
+                                            (
+                                                "tone".into(),
+                                                Val::Enum(brain_tone_name(f.tone).to_owned()),
+                                            ),
+                                        ])
+                                    })
+                                    .collect(),
+                            ),
+                        ),
                     ])
                 })
                 .collect();
             Val::Record(vec![
                 ("heading".into(), Val::String(section.heading.clone())),
                 ("rows".into(), Val::List(rows)),
+                ("id".into(), Val::String(section.id.clone())),
+                ("about".into(), Val::String(section.about.clone())),
+                (
+                    "fold".into(),
+                    Val::Enum(section_fold_name(section.fold).to_owned()),
+                ),
+                ("tally".into(), cell_val(&section.tally)),
+            ])
+        })
+        .collect();
+    let legend = s
+        .legend
+        .iter()
+        .map(|swatch| {
+            Val::Record(vec![
+                (
+                    "tone".into(),
+                    Val::Enum(brain_tone_name(swatch.tone).to_owned()),
+                ),
+                ("says".into(), Val::String(swatch.says.clone())),
+                ("about".into(), Val::String(swatch.about.clone())),
             ])
         })
         .collect();
@@ -903,6 +969,8 @@ fn val_of_screen(s: &ronoctua_protocol::ModuleScreen) -> wasmtime::component::Va
         ("generation".into(), Val::U64(s.generation)),
         ("sections".into(), Val::List(sections)),
         ("refused".into(), Val::String(s.refused.clone())),
+        ("legend".into(), Val::List(legend)),
+        ("phrases".into(), val_of_phrases(&s.phrases)),
     ])
 }
 
@@ -1403,6 +1471,10 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                     "actions".into(),
                     Val::List(t.actions.iter().map(action_val).collect()),
                 ),
+                (
+                    "folds".into(),
+                    Val::List(t.folds.iter().map(section_state_val).collect()),
+                ),
             ])
         })
         .collect();
@@ -1614,6 +1686,16 @@ fn setting_from(v: Option<&wasmtime::component::Val>) -> Option<ronoctua_protoco
         }
         // It carries nothing: there is one default and it is the flake's.
         ("reset-steps", None) => Knob::ResetSteps,
+        ("fold", Some(Val::Record(f))) => {
+            let g = |name: &str| f.iter().find(|(n, _)| n == name).map(|(_, v)| v);
+            let (Some(Val::String(id)), Some(Val::Bool(open))) = (g("id"), g("open")) else {
+                return None;
+            };
+            Knob::Fold(ronoctua_protocol::SectionState {
+                id: id.clone(),
+                open: *open,
+            })
+        }
         (otherwise, _) => {
             tracing::warn!(knob = otherwise, "an unknown preference");
             return None;
@@ -2725,6 +2807,10 @@ mod tests {
                     row: true,
                     asks_key: "ask-fixture-keep".to_owned(),
                 }],
+                folds: vec![ronoctua_protocol::SectionState {
+                    id: "older".to_owned(),
+                    open: true,
+                }],
             }],
             queue: vec!["update".to_owned()],
             running: String::new(),
@@ -2861,7 +2947,8 @@ mod tests {
                 "why-key",
                 "why-text",
                 "screen-generation",
-                "actions"
+                "actions",
+                "folds"
             ]
         );
         let last = field(&tasks[0], "last").expect("last");
@@ -2870,6 +2957,11 @@ mod tests {
             panic!("the registry's steps are not a list")
         };
         assert_eq!(shape(&outcomes[0]), ["id", "ok", "seconds", "trouble"]);
+        let wasmtime::component::Val::List(folds) = field(&tasks[0], "folds").expect("folds")
+        else {
+            panic!("folds is not a list")
+        };
+        assert_eq!(shape(&folds[0]), ["id", "open"]);
         let wasmtime::component::Val::List(steps) = field(&tasks[0], "steps").expect("steps")
         else {
             panic!("steps is not a list")
@@ -3000,7 +3092,7 @@ mod tests {
     /// standing between `tune` and that same silence is this test.
     #[test]
     fn tuning_is_an_effect_the_host_can_actually_build() {
-        use ronoctua_protocol::{Effect, Knob, Setting, StepSwitch};
+        use ronoctua_protocol::{Effect, Knob, SectionState, Setting, StepSwitch};
         use wasmtime::component::Val;
 
         let tune = |knob: Val| {
@@ -3060,6 +3152,19 @@ mod tests {
         assert_eq!(
             effects_from(&tune(Val::Variant("reset-steps".to_owned(), None))),
             of(Knob::ResetSteps)
+        );
+        assert_eq!(
+            effects_from(&tune(Val::Variant(
+                "fold".to_owned(),
+                Some(Box::new(Val::Record(vec![
+                    ("id".into(), Val::String("older".into())),
+                    ("open".into(), Val::Bool(true)),
+                ])))
+            ))),
+            of(Knob::Fold(SectionState {
+                id: "older".to_owned(),
+                open: true,
+            }))
         );
 
         // AND THE GAPS ARE REFUSALS, not defaults. A `part-of-day` this build
@@ -3125,7 +3230,8 @@ mod tests {
     #[test]
     fn a_module_screen_has_the_wit_shape() {
         use ronoctua_protocol::{
-            BrainTone, Measured, ModuleRow, ModuleScreen, ModuleSection, ScreenCell, Timed,
+            BrainTone, LegendSwatch, Measured, ModuleRow, ModuleScreen, ModuleSection, Phrase,
+            RowFact, ScreenCell, SectionFold, Stamp, Timed,
         };
         use wasmtime::component::Val;
         let screen = ModuleScreen {
@@ -3143,16 +3249,51 @@ mod tests {
                     note: ScreenCell::Moment(Timed {
                         at: 5,
                         text: "1970-01-01 00:00".to_owned(),
+                        stamp: Stamp {
+                            lead: "1970-01-".to_owned(),
+                            day: "01".to_owned(),
+                            tail: " 00:00".to_owned(),
+                            today: true,
+                        },
                     }),
-                    tone: BrainTone::Watching,
+                    tone: BrainTone::Critical,
                     act: "forget".to_owned(),
                     also: "keep".to_owned(),
+                    below: ScreenCell::Data("what is under it".to_owned()),
+                    foot: vec![RowFact {
+                        label: "fixture-fact".to_owned(),
+                        value: ScreenCell::Count(4),
+                        tone: BrainTone::Minor,
+                    }],
                 }],
+                id: "older".to_owned(),
+                about: "fixture-about".to_owned(),
+                fold: SectionFold::Shut,
+                tally: ScreenCell::Count(12),
             }],
             refused: "fixture refusal".to_owned(),
+            legend: vec![LegendSwatch {
+                tone: BrainTone::Minor,
+                says: "fixture-says".to_owned(),
+                about: "fixture-says-about".to_owned(),
+            }],
+            phrases: vec![Phrase {
+                key: "fixture-row".to_owned(),
+                text: "A row".to_owned(),
+            }],
         };
         let v = val_of_screen(&screen);
-        assert_eq!(shape(&v), ["module", "generation", "sections", "refused"]);
+        assert_eq!(
+            shape(&v),
+            [
+                "module",
+                "generation",
+                "sections",
+                "refused",
+                "legend",
+                "phrases"
+            ]
+        );
         assert_eq!(
             field(&v, "refused"),
             Some(&Val::String("fixture refusal".to_owned()))
@@ -3160,18 +3301,70 @@ mod tests {
         let Val::List(sections) = field(&v, "sections").expect("sections") else {
             panic!("sections is not a list")
         };
-        assert_eq!(shape(&sections[0]), ["heading", "rows"]);
+        assert_eq!(
+            shape(&sections[0]),
+            ["heading", "rows", "id", "about", "fold", "tally"]
+        );
+        assert_eq!(
+            field(&sections[0], "fold"),
+            Some(&Val::Enum("shut".to_owned()))
+        );
+        assert_eq!(
+            field(&sections[0], "tally"),
+            Some(&Val::Variant(
+                "count".to_owned(),
+                Some(Box::new(Val::U64(12)))
+            ))
+        );
         let Val::List(rows) = field(&sections[0], "rows").expect("rows") else {
             panic!("rows is not a list")
         };
         assert_eq!(
             shape(&rows[0]),
-            ["id", "label", "value", "note", "tone", "act", "also"]
+            [
+                "id", "label", "value", "note", "tone", "act", "also", "below", "foot"
+            ]
         );
         assert_eq!(
             field(&rows[0], "tone"),
-            Some(&Val::Enum("watching".to_owned()))
+            Some(&Val::Enum("critical".to_owned()))
         );
+        let Val::List(foot) = field(&rows[0], "foot").expect("foot") else {
+            panic!("the foot is not a list")
+        };
+        assert_eq!(shape(&foot[0]), ["label", "value", "tone"]);
+        assert_eq!(
+            field(&foot[0], "tone"),
+            Some(&Val::Enum("minor".to_owned()))
+        );
+        // THE DAY OF A MODULE'S DATE crosses cut, in the record a run's does.
+        let Some(Val::Variant(_, Some(moment))) = field(&rows[0], "note") else {
+            panic!("the note is not a moment")
+        };
+        assert_eq!(shape(moment), ["at", "text", "stamp"]);
+        let stamp = field(moment, "stamp").expect("stamp");
+        assert_eq!(shape(stamp), ["lead", "day", "tail", "today"]);
+        assert_eq!(field(stamp, "today"), Some(&Val::Bool(true)));
+        let Val::List(legend) = field(&v, "legend").expect("legend") else {
+            panic!("the legend is not a list")
+        };
+        assert_eq!(shape(&legend[0]), ["tone", "says", "about"]);
+        assert_eq!(
+            field(&legend[0], "tone"),
+            Some(&Val::Enum("minor".to_owned()))
+        );
+        assert_eq!(
+            field(&legend[0], "says"),
+            Some(&Val::String("fixture-says".to_owned()))
+        );
+        assert_eq!(
+            field(&legend[0], "about"),
+            Some(&Val::String("fixture-says-about".to_owned()))
+        );
+        let Val::List(phrases) = field(&v, "phrases").expect("phrases") else {
+            panic!("the phrases are not a list")
+        };
+        assert_eq!(shape(&phrases[0]), ["key", "text"]);
         let Some(Val::Variant(case, Some(payload))) = field(&rows[0], "value") else {
             panic!("the value is not a variant with a payload")
         };
@@ -3191,6 +3384,69 @@ mod tests {
             panic!("the input is not a variant")
         };
         assert_eq!(case, "module-screen");
+    }
+
+    /// A ROW THAT SAYS NOTHING OF THE NEW FIELDS has them all the same, and
+    /// empty: a record cannot be short of a field, and a page written before
+    /// they existed still has to lower.
+    #[test]
+    fn a_plain_row_crosses_with_nothing_under_it() {
+        use ronoctua_protocol::{ModuleRow, ModuleScreen, ModuleSection};
+        use wasmtime::component::Val;
+        let v = val_of_screen(&ModuleScreen {
+            sections: vec![ModuleSection {
+                rows: vec![ModuleRow::default()],
+                ..ModuleSection::default()
+            }],
+            ..ModuleScreen::default()
+        });
+        let Val::List(sections) = field(&v, "sections").expect("sections") else {
+            panic!("sections is not a list")
+        };
+        assert_eq!(
+            field(&sections[0], "fold"),
+            Some(&Val::Enum("never".to_owned()))
+        );
+        let empty = Val::Variant("empty".to_owned(), None);
+        assert_eq!(field(&sections[0], "tally"), Some(&empty));
+        let Val::List(rows) = field(&sections[0], "rows").expect("rows") else {
+            panic!("rows is not a list")
+        };
+        assert_eq!(field(&rows[0], "below"), Some(&empty));
+        assert_eq!(field(&rows[0], "foot"), Some(&Val::List(Vec::new())));
+        assert_eq!(field(&v, "legend"), Some(&Val::List(Vec::new())));
+        assert_eq!(field(&v, "phrases"), Some(&Val::List(Vec::new())));
+    }
+
+    /// FAILS IF: a component built for the last protocol gets past `open`, to
+    /// trap on the first record a field longer than it knows — or is refused
+    /// without saying which protocol this host speaks.
+    #[test]
+    fn a_component_of_the_last_protocol_is_refused_at_load() {
+        // `(component (instance $old) (export "<name>" (instance $old)))`, by
+        // hand: the engine is built without the text format.
+        const OLD: &[u8] = b"ronoctua:buffer/view@0.4.0";
+        let export = [
+            &[1, 0, u8::try_from(OLD.len()).expect("a short name")][..],
+            OLD,
+            &[5, 0, 0],
+        ]
+        .concat();
+        let wasm = [
+            &b"\0asm\x0d\0\x01\0"[..],
+            &[5, 3, 1, 1, 0],
+            &[11, u8::try_from(export.len()).expect("a short section")],
+            &export,
+        ]
+        .concat();
+        let rt = Runtime::fresh().expect("the engine");
+        let cwasm = rt.precompile(&wasm).expect("it is a component");
+        let component = rt.load(&cwasm).expect("it loads");
+        let refused = rt.open(&component).err().expect("an old component opened");
+        assert!(
+            refused.to_string().contains("ronoctua:buffer/view@0.5.0"),
+            "the refusal does not name the protocol: {refused}"
+        );
     }
 
     /// EVERY VERB OF THE MODULES comes back from the guest, behind the brain's

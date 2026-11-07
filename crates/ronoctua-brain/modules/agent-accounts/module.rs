@@ -709,10 +709,12 @@ fn sections_of(kept: &Kept, now: Moment) -> Vec<Section> {
         Section {
             heading: super::key::AGENT_ACCOUNTS_HEADING_ACCOUNTS.into(),
             rows: accounts,
+            ..Section::default()
         },
         Section {
             heading: super::key::AGENT_ACCOUNTS_HEADING_LINES.into(),
             rows: lines,
+            ..Section::default()
         },
     ]
 }
@@ -761,6 +763,7 @@ impl Module for AgentAccounts {
     fn screen(&self, look: &Look<'_>) -> Screen {
         Screen {
             sections: sections_of(&self.kept(), look.now),
+            ..Screen::default()
         }
     }
 

@@ -16,13 +16,7 @@ fn main() -> ExitCode {
         eprintln!("usage: ronoctua-browser chrome-extension://<id>/  (started by Chrome)");
         return ExitCode::from(2);
     };
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_browser=info".into()),
-        )
-        .init();
+    ronoctua_log::init("ronoctua_browser=info");
     tracing::info!(%origin, "started by Chrome");
     // The end of stdin is the end of the port, and returning from `main`
     // ends the footer's thread with it.

@@ -319,15 +319,7 @@ fn main() -> ExitCode {
         }
     };
     if matches!(command.as_str(), "serve" | "build") {
-        use tracing_subscriber::layer::SubscriberExt as _;
-        use tracing_subscriber::util::SubscriberInitExt as _;
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "ronoctua_index=info".into()),
-            )
-            .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-            .init();
+        ronoctua_log::init("ronoctua_index=info");
     }
     let result = match command.as_str() {
         "serve" => serve(&args),

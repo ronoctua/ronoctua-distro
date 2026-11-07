@@ -912,7 +912,10 @@ where
 
 /// [`log_of`] the inherited `RUST_LOG`, on standard error, for the whole run.
 fn install_log() {
-    let log = log_of(std::env::var("RUST_LOG").ok().as_deref(), std::io::stderr);
+    let log = log_of(
+        std::env::var("RUST_LOG").ok().as_deref(),
+        ronoctua_log::Stderr::detect(),
+    );
     if tracing::subscriber::set_global_default(log).is_err() {
         let _ = writeln!(
             std::io::stderr(),

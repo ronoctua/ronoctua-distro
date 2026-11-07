@@ -4,12 +4,12 @@
 What the footer draws of a module, and nothing it compiles: the marks a module
 may put on the modeline (each with its glyph's token and the key of its hint),
 its notices, the actions a person may ask of it by name (the command, the
-label's key, whether it acts on a row, the question it asks first), the
-events it may tell — each with the notification it raises, as an entry of the
-notification catalogue —, its reasons, its text prefixes, every text key it
-needs, and the GLYPHS its marks are drawn with, measured against the real
-face (codepoint, the size beside the text, the ink across) by the same code
-that measures the chrome's own tokens.
+label's key, whether it acts on a row, the question it asks first, what it
+opens), the events it may tell — each with the notification it raises, as
+an entry of the notification catalogue —, its reasons, its text prefixes, every
+text key it needs, and the GLYPHS its marks are drawn with, measured against
+the real face (codepoint, the size beside the text, the ink across) by the same
+code that measures the chrome's own tokens.
 
 The footer reads it at run time (`RONOCTUA_BRAIN_CATALOGUE`, which the
 wrappers set): `ronoctua_brain::catalogue` resolves a mark's glyph and lists
@@ -170,6 +170,10 @@ def main() -> int:
                     "label": label,
                     "row": spec["row"],
                     "asks": spec.get("asks"),
+                    # THE ONE FIELD OF THE THREE THE FOOTER READS HERE: with no
+                    # mind, this file is all it knows of an action, and what
+                    # `optional` and `whileOff` decide is the daemon's.
+                    "opens": spec.get("opens"),
                 }
             )
 

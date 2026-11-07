@@ -343,6 +343,7 @@ impl Module for OomWatch {
                     label: Cell::Key(format!("brain-journal-why-{why}").into()),
                     ..Row::default()
                 }],
+                ..Section::default()
             });
         }
         let rows = if state.recent.is_empty() {
@@ -369,8 +370,12 @@ impl Module for OomWatch {
         sections.push(Section {
             heading: super::key::OOM_WATCH_HEADING_RECENT.into(),
             rows,
+            ..Section::default()
         });
-        Screen { sections }
+        Screen {
+            sections,
+            ..Screen::default()
+        }
     }
 }
 

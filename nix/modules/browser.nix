@@ -165,13 +165,6 @@ in
       ] (_: "google-chrome.desktop");
     };
 
-    # The portal is what a file dialog and a screen share go through on Wayland.
-    # `xdg.portal` is already enabled by nix/modules/scroll.nix; this only adds the
-    # GTK backend, which is the one Chrome talks to.
-    xdg.portal.extraPortals = lib.mkIf cfg.enable [
-      pkgs.xdg-desktop-portal-gtk
-    ];
-
     # THE KEYRING STAYS FORCED OFF EVEN WITHOUT CHROME.
     #
     # It is written as a negative because leaving it unmentioned is how it comes

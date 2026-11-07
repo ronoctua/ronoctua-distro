@@ -277,13 +277,9 @@ pkgs.testers.runNixOSTest {
 
 
     def footer_log():
-        """The footer's journal, colours off. `--all`: a segment's line carries glyphs, and
-        journalctl shortens a line it does not call printable to a blob."""
-        import re
-
-        return re.sub(
-            r"\x1b\[[0-9;]*m", "", machine.succeed("journalctl -u footer --no-pager -o cat --all")
-        )
+        """The footer's journal. `--all`: a segment's line carries glyphs, and journalctl
+        shortens a line it does not call printable to a blob."""
+        return machine.succeed("journalctl -u footer --no-pager -o cat --all")
 
 
     def modeline():

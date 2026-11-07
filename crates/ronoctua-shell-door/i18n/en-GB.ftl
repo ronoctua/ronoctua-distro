@@ -198,6 +198,7 @@ notif-action-software-maintenance = See the updates
 notif-action-software-trials = See the trials
 notif-action-software-android = Open Android
 echo-brain-no-action = No module of the brain offers that
+echo-brain-choose-a-row = That acts on one row: choose it on the module's page
 echo-brain-snoozed = Put off
 # A PREFERENCE THAT COULD NOT BE SAVED is said, never only logged.
 echo-preference-not-written = { $file } could not be saved ({ $why }): what you changed lasts only until the footer restarts.

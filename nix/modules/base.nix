@@ -494,6 +494,11 @@ in
       enable = true;
       alsa.enable = true;
       pulse.enable = true;
+      # NO X11 BELL. `pipewire.conf` loads `module-x11-bell` wherever there is
+      # an X display, and that display dying took the sound with it: every
+      # core PipeWire dumped here stopped in the module's I/O error handler
+      # (`x11_io_error_exit_handler`). A bell nothing rings is not worth it.
+      extraConfig.pipewire."90-no-x11-bell"."context.properties"."module.x11.bell" = false;
     };
 
     # THE NETWORK IS NOT HERE. It belongs to `nix/modules/network.nix`, together

@@ -47,6 +47,7 @@ impl Palette for Wit {
             Role::Shelf => wit::Color::SurfaceContainer,
             Role::Header => wit::Color::SurfaceHeader,
             Role::Danger => wit::Color::StateError,
+            Role::Critical => wit::Color::StateCritical,
             Role::Warning => wit::Color::StateWarning,
             Role::Once => wit::Color::TextOnce,
             Role::Watching => wit::Color::ModelineWatching,

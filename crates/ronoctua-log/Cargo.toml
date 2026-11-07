@@ -1,0 +1,20 @@
+[package]
+name = "ronoctua-log"
+description = "The one tracing init of our programs: a log on standard error, and every line with its priority when that stream is the journal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A CRATE OF ITS OWN because neither neighbour can take it: `ronoctua-xdg`
+# stays at zero dependencies, and `ronoctua-journal` is the brain daemon's
+# alone and reads the journal rather than writing to it — every program that
+# logs through it would link the follower. No `RONOCTUA_*`: the one variable
+# here is systemd's.
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

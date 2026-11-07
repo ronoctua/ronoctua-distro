@@ -468,7 +468,9 @@ impl Module for Reminder {
             sections: vec![Section {
                 heading: super::key::BELONGINGS_REMINDER_HEADING.into(),
                 rows,
+                ..Section::default()
             }],
+            ..Screen::default()
         }
     }
 }

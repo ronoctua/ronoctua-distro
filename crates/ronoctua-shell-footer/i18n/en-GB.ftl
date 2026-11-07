@@ -12,6 +12,7 @@
 cmd-mx-open = Run command…
 cmd-buffer-terminal-external = Open external terminal
 cmd-monitor-btop = Process monitor (btop)
+cmd-journal-follow = System journal, live (journalctl)
 cmd-monitor-bottom = Process monitor (bottom)
 
 ## which-key prefix groups

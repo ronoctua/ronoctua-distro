@@ -213,6 +213,16 @@ impl Line {
         }
     }
 
+    /// The same question, opening with `text` on the line — taken as ONE
+    /// line (see [`one_line`]) —: what there is to change, as [`Self::new`]
+    /// says, for a question that is not asked by its own id. `DEL` takes it
+    /// back from the end, and what is left, nothing included, is the answer.
+    #[must_use]
+    pub fn starting_from(mut self, text: &str) -> Self {
+        self.text = one_line(text);
+        self
+    }
+
     /// What is typed, as the screen shows it: the text, or ONE DOT PER CELL
     /// of it when it is a secret.
     ///
@@ -408,6 +418,31 @@ mod tests {
         for c in s.chars() {
             line.key(plain(if c == ' ' { Sym::Space } else { Sym::Char(c) }));
         }
+    }
+
+    /// FAILS IF: a question opens with nothing on the line, or with a line
+    /// that cannot be changed, or an answer taken back to nothing is not an
+    /// answer: an optional question is cleared that way, and whether a blank
+    /// is refused is its asker's to say.
+    #[test]
+    fn a_question_that_starts_from_a_text_is_edited_and_may_end_blank() {
+        let mut l = Line::asking("fixture-why", "ask-fixture-why").starting_from(" a\nline ");
+        assert_eq!(l.text, "a line", "taken as one line");
+        assert_eq!(l.asks, Some("ask-fixture-why"));
+        l.key(plain(Sym::Backspace));
+        l.key(plain(Sym::Backspace));
+        typed(&mut l, "st");
+        assert_eq!(
+            l.key(plain(Sym::Enter)),
+            Step::Answer("fixture-why", "a list".into())
+        );
+        for _ in 0.."a list".len() {
+            l.key(plain(Sym::Backspace));
+        }
+        assert_eq!(
+            l.key(plain(Sym::Enter)),
+            Step::Answer("fixture-why", String::new())
+        );
     }
 
     #[test]

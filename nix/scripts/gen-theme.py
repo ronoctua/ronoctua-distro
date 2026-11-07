@@ -1493,23 +1493,45 @@ CONTRAST_GATES = (
     # and the page's footer. Measured 31.4 at the lowest (the selection).
     *((f"text.status.{s}", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 28, 30) for s in ("good", "idle", "bad", "held", "skipped", "busy")),
     # THE FOLDED RECORDS' DATES, in the activity log's container: quieter
-    # than the status, and still read. Measured 27.5 at the lowest.
-    ("text.folded", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 24, 27),
-    # TODAY'S DAY, louder than the day beside it, on the same grounds.
-    ("text.today", ("surface.buffer", "surface.selection", "surface.hover", "surface.container"), 45, 50),
+    # than the status, and still read. Measured 27.5 at the lowest. And what
+    # a module's row says under itself, on the page and again in the page's
+    # footer: 28.1 on the header (industrial's chrome).
+    ("text.folded", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 24, 27),
+    # TODAY'S DAY, louder than the day beside it, on the same grounds — the
+    # footer's too, where a row's facts carry their dates. Measured 52.4 at
+    # the lowest (flashbang's selection).
+    ("text.today", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 45, 50),
     # A WATCH ON THE BRAIN'S LIST reads as the rows around it do: the page,
     # the cursor's band and the pointer's, and the page's frame. Measured
     # 44.1 at the lowest (frost's chrome).
     ("text.listening", ("surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 40, 43),
     # THE TONES A BRAIN MODULE GIVES A MARK, on the modeline's own band, and
     # the levels of its notices on the brain's page — the page, the cursor's
-    # band and the pointer's. `text.secondary`, the quiet one, already is.
-    ("state.warning", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover"), 45, 50),
+    # band and the pointer's — and the page's footer, where a row's facts
+    # wear the row's tones. `text.secondary`, the quiet one, already is.
+    # Measured 54.3 at the lowest (papyrus's selection).
+    ("state.warning", ("modeline.background", "surface.buffer", "surface.selection", "surface.hover", *RAISED_GROUNDS), 45, 50),
     # A MARK'S WARNING, the orange that took the amber's place on the marks
     # (owner, 2026-11-02): on the same grounds, at the same rung — and on the
     # security centre's window, whose rows say what its shield says.
     ("state.caution", ("modeline.background", "surface.chrome", "surface.buffer", "surface.selection", "surface.hover"), 45, 50),
     ("state.error", ("modeline.background", "surface.buffer", "surface.selection"), 45, 50),
+    # THE CRITICAL RED, the loudest of the four tones a module's rows are
+    # told apart by (owner, 2026-11-07): on the modeline's band, where a
+    # mark wears it while one is unseen, and on the page, the cursor's band,
+    # the pointer's and the page's frame.
+    #
+    # ACCEPTED UNDER THE BODY'S FLOOR, at the owner's word. A saturated red is
+    # what tells it from the error's rose, and it pays for that in contrast:
+    # 40-43 on the owner's page (industrial's absolute desk) and 37.0 at the
+    # lowest (forest's selection). The colour is not the only thing that says
+    # it — the page's footer says the severity in a word, which is also what
+    # carries it under a red-green deficiency, where the two reds meet.
+    # Two rows, because the two bands and the header cost it two Lc the page
+    # does not: 39.0 at the lowest on the first three grounds, 37.0 on the
+    # other three.
+    ("state.critical", ("modeline.background", "surface.buffer", "surface.container"), 36, 38),
+    ("state.critical", ("surface.selection", "surface.hover", "surface.header"), 34, 36),
     ("state.accent", ("modeline.background",), 45, 50),
     # AND THE SELECTION'S, at the same rung.
     ("modeline.selection", ("modeline.background",), 40, 45),
@@ -1876,7 +1898,24 @@ DISTANCE_GATES = (
     # A SELECTED OUTLINE beside the focused one: a window can be both.
     ("border.selected", "border.active", 0.05, 0.06),
     ("border.selected", "border.inactive", 0.05, 0.06),
+    # THE FOUR SEVERITIES ON ONE PAGE (owner, 2026-11-07): critical, error,
+    # a warning that matters and a warning, each told from the other three,
+    # since a list of errors is read by its colours before its words. Read
+    # before gating, at the nearest: warning from the grey 0.078 (papyrus),
+    # error from the grey 0.123 (flashbang's desk), error from warning 0.126,
+    # critical from the grey 0.185 and from warning 0.199.
+    #
+    # THE TWO REDS keep their older, lower floor, and papyrus sits in its warn
+    # band at 0.048 — ACCEPTED at the owner's word rather than moved, since
+    # raising that theme's separation would move its critical notifications
+    # too. The other ten sit at 0.079-0.098, and the word in the page's
+    # footer is what tells the two apart where the colour barely does.
     ("state.error", "state.critical", 0.04, 0.05),
+    ("state.critical", "state.warning", 0.06, 0.07),
+    ("state.critical", "text.secondary", 0.06, 0.07),
+    ("state.error", "state.warning", 0.06, 0.07),
+    ("state.error", "text.secondary", 0.06, 0.07),
+    ("state.warning", "text.secondary", 0.06, 0.07),
     # THE MESSAGE AND THE BUTTON UNDER IT. They are drawn one line apart on the
     # same ground and they are not the same kind of thing — one is read, the
     # other is pressed — and for a while they were the same colour. This is

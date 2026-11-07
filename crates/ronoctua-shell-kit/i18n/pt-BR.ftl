@@ -351,6 +351,7 @@ brain-why-quiet = Só quando pedida
 brain-why-unknown = Não sabe fazer isso
 brain-why-refused = A máquina recusou
 brain-why-rehearsing = Este cérebro só ensaia: não muda nada na máquina
+brain-why-listening = Está ligada e ouve tudo na hora
 brain-journal-why-no-program = Este cérebro não recebeu o journal para ler
 brain-journal-why-unstartable = Não foi possível abrir o leitor do journal
 brain-journal-why-unreadable = Não foi possível ler o journal

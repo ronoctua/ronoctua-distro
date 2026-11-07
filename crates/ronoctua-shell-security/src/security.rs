@@ -5814,7 +5814,9 @@ mod tests {
                         ..R::default()
                     },
                 ],
+                ..S::default()
             }],
+            ..Screen::default()
         };
         let (blocked, admin) = lists_of(&screen);
         assert_eq!(blocked.len(), 1);

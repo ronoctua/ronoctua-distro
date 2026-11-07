@@ -97,6 +97,9 @@ ronoctua-llm = { path = "../ronoctua-llm", default-features = false }
 # for the module that says a boot trial failed. Pure: serde, the person
 # crate's schemas and `geteuid`; nothing of it runs as part of the brain.
 ronoctua-machine = { path = "../ronoctua-machine" }
+# The formatting half of the daemon's log; its registry, under the ring's
+# filter (`tail`), stays here.
+ronoctua-log = { path = "../ronoctua-log" }
 anyhow.workspace = true
 tracing.workspace = true
 # The journal and the preferences, as JSON — and a module's own files.

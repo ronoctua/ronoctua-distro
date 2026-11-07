@@ -89,6 +89,52 @@ pub fn get_all(
     Ok(proxy.get_all(name)?)
 }
 
+/// The named properties of one object, one live `Get` each and no cache — for
+/// a daemon whose `GetAll` costs more than its bytes (see `crate::login`).
+///
+/// # Errors
+///
+/// Nothing answered: the object is not there, or the daemon did not answer.
+pub fn get_some(
+    connection: &zbus::blocking::Connection,
+    service: &str,
+    path: &str,
+    interface: &str,
+    names: &[&str],
+) -> anyhow::Result<Props> {
+    let proxy = zbus::blocking::fdo::PropertiesProxy::builder(connection)
+        .destination(service)?
+        .path(path)?
+        .build()?;
+    let name = zbus::names::InterfaceName::try_from(interface)?;
+    Ok(answered(names, |property| {
+        proxy.get(name.clone(), property)
+    })?)
+}
+
+/// One answer per name, in a map. A name that gets none is skipped, the way
+/// `GetAll` leaves out what a daemon lacks; only a silence from all of them is
+/// an error, and it is the last one heard.
+fn answered<E>(
+    names: &[&str],
+    mut ask: impl FnMut(&str) -> Result<OwnedValue, E>,
+) -> Result<Props, E> {
+    let mut props = Props::new();
+    let mut refused = None;
+    for name in names {
+        match ask(name) {
+            Ok(value) => {
+                props.insert((*name).to_owned(), value);
+            }
+            Err(e) => refused = Some(e),
+        }
+    }
+    match refused {
+        Some(e) if props.is_empty() => Err(e),
+        _ => Ok(props),
+    }
+}
+
 /// Writes one property — the way `ActiveProfile` is set.
 ///
 /// # Errors
@@ -175,4 +221,43 @@ pub fn f64_of(v: Option<&OwnedValue>) -> f64 {
 pub fn dicts_of(v: Option<&OwnedValue>) -> Vec<Props> {
     v.and_then(|v| <Vec<Props>>::try_from(v.clone()).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OwnedValue, answered};
+    use zbus::zvariant::Value;
+
+    fn a_value() -> OwnedValue {
+        OwnedValue::try_from(Value::Bool(true)).unwrap()
+    }
+
+    #[test]
+    fn a_name_the_daemon_lacks_is_skipped() {
+        let got = answered(&["Here", "Gone", "AlsoHere"], |name| match name {
+            "Gone" => Err("no such property"),
+            _ => Ok(a_value()),
+        })
+        .unwrap();
+        let mut names: Vec<&str> = got.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["AlsoHere", "Here"]);
+    }
+
+    #[test]
+    fn only_a_silence_from_every_name_is_an_error() {
+        let got = answered(&["One", "Two"], |_| Err::<OwnedValue, _>("nobody home"));
+        assert_eq!(got.err(), Some("nobody home"));
+    }
+
+    #[test]
+    fn every_name_is_asked_once_and_by_its_own_call() {
+        let mut asked = Vec::new();
+        answered(&["One", "Two", "Three"], |name| {
+            asked.push(name.to_owned());
+            Ok::<_, ()>(a_value())
+        })
+        .unwrap();
+        assert_eq!(asked, ["One", "Two", "Three"]);
+    }
 }

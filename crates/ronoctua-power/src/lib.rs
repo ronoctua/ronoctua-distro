@@ -755,7 +755,7 @@ pub struct Sleep {
 }
 
 impl Sleep {
-    /// What one `GetAll` of the manager says; the `Can*` answers come from
+    /// What the manager's [`login::READ`] say; the `Can*` answers come from
     /// method calls and are filled in by the caller.
     #[must_use]
     pub fn from_props(p: &Props) -> Self {
@@ -1340,24 +1340,35 @@ impl Manager {
         }
     }
 
-    fn read_profiles(&self, out: &mut Snapshot) {
+    /// What power-profiles-daemon says, and nothing else: for a caller that
+    /// wants the profile and has no business with the other two daemons.
+    #[must_use]
+    pub fn profiles(&self) -> Option<Profiles> {
         match upower::get_all(
             &self.connection,
             profiles::SERVICE,
             profiles::PATH,
             profiles::INTERFACE,
         ) {
-            Ok(props) => out.profiles = Some(Profiles::from_props(&props)),
-            Err(e) => tracing::debug!(error = %e, "no power-profiles-daemon on the bus"),
+            Ok(props) => Some(Profiles::from_props(&props)),
+            Err(e) => {
+                tracing::debug!(error = %e, "no power-profiles-daemon on the bus");
+                None
+            }
         }
     }
 
+    fn read_profiles(&self, out: &mut Snapshot) {
+        out.profiles = self.profiles();
+    }
+
     fn read_login(&self, out: &mut Snapshot) {
-        let Ok(props) = upower::get_all(
+        let Ok(props) = upower::get_some(
             &self.connection,
             login::SERVICE,
             login::PATH,
             login::MANAGER,
+            &login::READ,
         ) else {
             return;
         };
@@ -1576,7 +1587,7 @@ where
         .name("power-upower".to_owned())
         .spawn(move || {
             // THE MATCH RULE BEFORE THE FIRST READING. The reading is some
-            // fifteen round trips; a `PropertiesChanged` emitted during it —
+            // thirty round trips; a `PropertiesChanged` emitted during it —
             // the cable going in — would land before the rule and be lost,
             // and the modeline would keep the discharging glyph until
             // UPower's next poll thirty seconds later.
@@ -2018,6 +2029,131 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.held(), vec![Keep::Sleep], "once, whatever the count");
+    }
+
+    /// Every property logind's manager has, by the names `busctl introspect`
+    /// lists, each holding a value that reads as no default. A key `from_props`
+    /// starts reading is in this map without anybody coming here.
+    fn manager_props() -> Props {
+        const WORDS: [&str; 20] = [
+            "BlockInhibited",
+            "BlockWeakInhibited",
+            "DelayInhibited",
+            "DesignatedMaintenanceTime",
+            "HandleHibernateKey",
+            "HandleHibernateKeyLongPress",
+            "HandleLidSwitch",
+            "HandleLidSwitchDocked",
+            "HandleLidSwitchExternalPower",
+            "HandlePowerKey",
+            "HandlePowerKeyLongPress",
+            "HandleRebootKey",
+            "HandleRebootKeyLongPress",
+            "HandleSecureAttentionKey",
+            "HandleSuspendKey",
+            "HandleSuspendKeyLongPress",
+            "IdleAction",
+            "RebootParameter",
+            "RebootToBootLoaderEntry",
+            "WallMessage",
+        ];
+        const FLAGS: [&str; 10] = [
+            "Docked",
+            "EnableWallMessages",
+            "IdleHint",
+            "KillUserProcesses",
+            "LidClosed",
+            "OnExternalPower",
+            "PreparingForShutdown",
+            "PreparingForSleep",
+            "RebootToFirmwareSetup",
+            "RemoveIPC",
+        ];
+        const COUNTS: [&str; 14] = [
+            "HoldoffTimeoutUSec",
+            "IdleActionUSec",
+            "IdleSinceHint",
+            "IdleSinceHintMonotonic",
+            "InhibitDelayMaxUSec",
+            "InhibitorsMax",
+            "NCurrentInhibitors",
+            "NCurrentSessions",
+            "RebootToBootLoaderMenu",
+            "RuntimeDirectoryInodesMax",
+            "RuntimeDirectorySize",
+            "SessionsMax",
+            "StopIdleSessionUSec",
+            "UserStopDelayUSec",
+        ];
+        const LISTS: [&str; 4] = [
+            "BootLoaderEntries",
+            "KillExcludeUsers",
+            "KillOnlyUsers",
+            "SleepOperation",
+        ];
+        let mut p = Props::new();
+        let put = |p: &mut Props, k: &str, v: Value<'static>| {
+            p.insert(k.to_owned(), OwnedValue::try_from(v).unwrap());
+        };
+        for k in WORDS {
+            put(&mut p, k, Value::from("a word"));
+        }
+        for k in FLAGS {
+            put(&mut p, k, Value::Bool(true));
+        }
+        for k in COUNTS {
+            put(&mut p, k, Value::U64(1_800_000_000));
+        }
+        for k in LISTS {
+            put(&mut p, k, Value::from(vec!["a word"]));
+        }
+        put(&mut p, "NAutoVTs", Value::U32(6));
+        put(&mut p, "ScheduledShutdown", Value::from(("a word", 1_u64)));
+        let metadata = std::collections::HashMap::from([("a word", 1_u64)]);
+        put(
+            &mut p,
+            "PreparingForShutdownWithMetadata",
+            Value::from(metadata),
+        );
+        p
+    }
+
+    /// `of`, with only the properties `names` calls for.
+    fn only(of: &Props, names: &[&str]) -> Props {
+        of.iter()
+            .filter(|(k, _)| names.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.try_clone().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn the_names_read_say_what_every_property_says() {
+        let all = manager_props();
+        assert_eq!(
+            Sleep::from_props(&only(&all, &login::READ)),
+            Sleep::from_props(&all),
+            "`from_props` reads a key `login::READ` does not ask for"
+        );
+    }
+
+    #[test]
+    fn every_name_read_is_one_the_sleep_needs() {
+        let all = manager_props();
+        let whole = Sleep::from_props(&all);
+        for name in login::READ {
+            let others: Vec<&str> = login::READ.into_iter().filter(|n| *n != name).collect();
+            assert_ne!(
+                Sleep::from_props(&only(&all, &others)),
+                whole,
+                "`login::READ` asks for {name}, and nothing reads it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_boot_entries_are_never_asked_for() {
+        assert!(manager_props().contains_key("BootLoaderEntries"));
+        assert!(!login::READ.contains(&"BootLoaderEntries"));
     }
 
     #[test]

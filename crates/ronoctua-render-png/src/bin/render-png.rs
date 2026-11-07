@@ -522,6 +522,9 @@ fn main() -> Result<()> {
     // from the LAST position down, and the later of two at one position
     // first, so every one lands where its flag stood.
     let mut placed: Vec<(usize, usize, Input)> = Vec::new();
+    // WHICH DAY A PAGE'S DATES CALL TODAY: the mind's clock, as in the window,
+    // and the mind is gone by the time the pages are turned.
+    let now = ask.mind.as_ref().map_or(0, |(_, mind, _)| mind.now);
     if let Some((at, mind, zone)) = ask.mind.take() {
         placed.push((
             at,
@@ -538,7 +541,7 @@ fn main() -> Result<()> {
                     screen,
                 },
                 zone,
-            ) => mind_wire::screen_of(&module, generation, &screen, &zone, &texts),
+            ) => mind_wire::screen_of(&module, generation, &screen, now, &zone, &texts),
             // NEWER THAN ANY PAGE GIVEN BEFORE IT, as a refusal that follows
             // a page is in the window.
             Page::Refused(module, words) => mind_wire::refused_screen(
@@ -658,7 +661,7 @@ fn main() -> Result<()> {
     let mut interned = ronoctua_shell_kit::chrome::Interned::default();
     let declared = ronoctua_shell_kit::chrome::declared(&list, &keymap, &mut interned, &texts);
     let mut hinted = ronoctua_shell_kit::chrome::Hinted::default();
-    hinted.offers_leader_alt(&[]);
+    hinted.offers_leader_alt(&[ronoctua_shell_kit::chrome::OF_A_BUFFER]);
     // WHAT THE POINTER RESTS ON (`--hover`), as the host says it
     // (`door::list::line_zero`): on the header's line in place of the keys —
     // and, with the header hidden, on the footer's minibuffer, which this

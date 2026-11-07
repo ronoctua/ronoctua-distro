@@ -196,6 +196,7 @@ notif-action-software-maintenance = Ver as atualizações
 notif-action-software-trials = Ver as experiências
 notif-action-software-android = Abrir o Android
 echo-brain-no-action = Nenhum módulo do cérebro oferece isso
+echo-brain-choose-a-row = Isso age sobre uma linha: escolha-a na página do módulo
 echo-brain-snoozed = Adiado
 # A PREFERENCE THAT COULD NOT BE SAVED is said, never only logged.
 echo-preference-not-written = Não foi possível gravar { $file } ({ $why }): o que você mudou vale só até o rodapé reiniciar.

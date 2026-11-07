@@ -405,6 +405,7 @@ impl Reminders {
                 tone: Tone::Danger,
                 act: Some(super::action::DISMISS.id.into()),
                 also: None,
+                ..Row::default()
             });
             for (n, minutes) in super::notice::DUE.snooze.iter().enumerate() {
                 rows.push(Row {
@@ -490,6 +491,7 @@ impl Reminders {
         Section {
             heading: repeat_key(&r.repeat).into(),
             rows,
+            ..Section::default()
         }
     }
 }
@@ -584,6 +586,7 @@ impl Module for Reminders {
             sections.push(Section {
                 heading: super::key::REMINDERS_HEADING_RINGING.into(),
                 rows: ringing,
+                ..Section::default()
             });
         }
         if !st.readable {
@@ -598,8 +601,12 @@ impl Module for Reminders {
                     tone: Tone::Danger,
                     ..Row::default()
                 }],
+                ..Section::default()
             });
-            return Screen { sections };
+            return Screen {
+                sections,
+                ..Screen::default()
+            };
         }
         if !st.book.missed.is_empty() {
             sections.push(Section {
@@ -618,6 +625,7 @@ impl Module for Reminders {
                         ..Row::default()
                     })
                     .collect(),
+                ..Section::default()
             });
         }
         let mut coming: Vec<&Reminder> = st
@@ -635,10 +643,14 @@ impl Module for Reminders {
                     label: key(super::key::REMINDERS_ROW_NONE),
                     ..Row::default()
                 }],
+                ..Section::default()
             });
         }
         sections.extend(coming.iter().map(|r| Self::reminder_section(r)));
-        Screen { sections }
+        Screen {
+            sections,
+            ..Screen::default()
+        }
     }
 
     fn act(&self, act: &Act, ctx: &Ctx) -> Acted {

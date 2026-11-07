@@ -47,10 +47,11 @@
 # an image mounting itself with FUSE, which this system never asks for.
 #
 # WHAT THE STAGE CHANGES, and nothing else: the compositor draws into Xvfb
-# (there is no card), nothing reaches a substituter, and Chrome is the
-# stand-in. The real one cannot be in this machine at all — it is unfree, and
-# a test node takes the flake's `pkgs`, which does not allow that — so the
-# browser module is off and the two units get the one variable
+# (there is no card), nothing reaches a substituter, NetworkManager has nothing
+# to connect to, and Chrome is the stand-in. The real one cannot be in this
+# machine at all — it is unfree, and a test node takes the flake's `pkgs`,
+# which does not allow that — so the browser module is off and the two units
+# get the one variable
 # `nix/software-tools.nix` gives them when it is on, read from that table.
 # What this leaves unproved is the CLI wrapper's own `--set-default` of that
 # variable: here `web-open` inherits it from the footer. Every other unit,
@@ -311,6 +312,26 @@ pkgs.testers.runNixOSTest {
 
       # OFFLINE, and saying so: nothing waits on a substituter it cannot reach.
       nix.settings.substituters = lib.mkForce [ ];
+      # NETWORKMANAGER, AS ON A MACHINE, with nothing to connect to: the
+      # framework's interfaces stay out, and a connection exists only when the
+      # last step makes one.
+      networking.networkmanager = {
+        enable = true;
+        settings.main.no-auto-default = "*";
+        unmanaged = [
+          "eth0"
+          "eth1"
+        ];
+        # LAST OF THE SCRIPTS, so a line here says the others answered the event.
+        dispatcherScripts = lib.mkAfter [
+          {
+            type = "basic";
+            source = pkgs.writeShellScript "ronoctua-probe-heard" ''
+              echo "$2" >> /run/ronoctua-probe-heard
+            '';
+          }
+        ];
+      };
       virtualisation.additionalPaths = [
         fakeChrome
         firstProbe
@@ -365,9 +386,6 @@ pkgs.testers.runNixOSTest {
       DOWNLOADS = f"{home}/${downloads}"
       SCANNED = "application catalogue scanned"
       RESCANNING = "the application directories changed; rescanning"
-      # tracing colours its fields, and a colour code sits between `apps` and
-      # `=` in what the journal keeps.
-      ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
       def user_ctl(args):
@@ -382,11 +400,12 @@ pkgs.testers.runNixOSTest {
           )
 
 
+      # The log reaches the journal plain (`ronoctua_log`), so a field reads the
+      # way it is written.
       def journal_of(unit):
-          raw = machine.succeed(
+          return machine.succeed(
               f"journalctl --no-pager -a -o cat _SYSTEMD_USER_UNIT={unit} || true"
           )
-          return ANSI.sub("", raw)
 
 
       def count(said, unit=FOOTER):
@@ -582,6 +601,19 @@ pkgs.testers.runNixOSTest {
           # business, and one after it is this test's.
           restarts_at_start = restarts()
           print(f"footer pid {footer_pid}, display {display}, restarts {restarts_at_start}")
+
+      # AND THE PERSON'S UNIT IS SKIPPED, NOT FAILED. It is the one that has to
+      # reach Flathub, and it used to fail at every boot that came before the
+      # network. `nm-online` says no here, after its thirty seconds: this
+      # machine has no connection.
+      with subtest("with no network, nix-flatpak's unit of the person is skipped and not failed"):
+          unit = "flatpak-managed-install.service"
+          machine.wait_until_succeeds(
+              f"[ \"$(systemctl --machine={user}@ --user show -p Result --value {unit})\" = exec-condition ]",
+              timeout=timedelta(minutes=2),
+          )
+          failed = machine.succeed(f"journalctl -b -o cat | grep -c 'Failed to start {unit}' || true")
+          assert failed.strip() == "0", f"{unit} failed to start {failed.strip()} time(s)"
 
       with subtest("the session's PATH and XDG_DATA_DIRS reach the footer and the queue"):
           profile_bins = [
@@ -827,5 +859,64 @@ pkgs.testers.runNixOSTest {
           assert restarts() == restarts_at_start, (
               f"the footer's unit restarted: {restarts_at_start} -> {restarts()}"
           )
+
+      # AND THE NETWORK THAT COMES AFTER A SKIP RUNS WHAT IT SKIPPED, through
+      # NetworkManager's own event: a skip is not a failure, so nothing else
+      # would. The last step, because a run goes on to reach for a Flathub this
+      # machine does not have: it is its start that is asked, not its end.
+      with subtest("a network that comes after a skip runs what it skipped, and only that"):
+          units = ("flatpak-managed-install.service", "flatpak-managed-install-timer.service")
+
+          def main(unit, moment):
+              return user_ctl(f"show -p ExecMain{moment}TimestampMonotonic --value {unit}").strip()
+
+          def started(unit):
+              return main(unit, "Start")
+
+          def network_comes(heard):
+              machine.succeed("nmcli connection up arrives")
+              machine.wait_until_succeeds(f"[ \"$(grep -c '^up$' /run/ronoctua-probe-heard)\" = {heard} ]")
+
+          # THE WEEK'S RUN, skipped the same way: its timer fires on no clock here.
+          user_ctl(f"start --no-block {units[1]}")
+          for unit in units:
+              machine.wait_until_succeeds(
+                  f"[ \"$(systemctl --machine={user}@ --user show -p Result --value {unit})\" = exec-condition ]",
+                  timeout=timedelta(minutes=2),
+              )
+              assert started(unit) == "0", f"{unit} ran offline: {started(unit)}"
+
+          machine.succeed(
+              "nmcli connection add type dummy ifname dummy0 con-name arrives autoconnect no "
+              "ipv4.method manual ipv4.addresses 10.99.0.1/24 ipv6.method disabled"
+          )
+          network_comes(1)
+          for unit in units:
+              machine.wait_until_succeeds(
+                  f"[ \"$(systemctl --machine={user}@ --user show -p ExecMainStartTimestampMonotonic --value {unit})\" != 0 ]",
+                  timeout=timedelta(minutes=1),
+              )
+          # ONE AT A TIME, though the event owed both at once.
+          assert int(started(units[1])) >= int(main(units[0], "Exit")), (
+              f"{units[1]} started at {started(units[1])}, inside the run of {units[0]}, "
+              f"which ended at {main(units[0], 'Exit')}"
+          )
+
+          # AND A RUN NOTHING SKIPPED STAYS STOPPED, whatever the network does.
+          for unit in units:
+              user_ctl(f"stop {unit}")
+          ran = {unit: started(unit) for unit in units}
+          machine.succeed("nmcli connection down arrives")
+          network_comes(2)
+          # NOTHING QUEUED FOR EITHER first. A start the event made in error is
+          # queued before the probe hears the event (it is the last script, and
+          # `--no-block` returns once the job is in), and stamps the unit only
+          # when its job is done; read before that, a wrong start would pass.
+          machine.wait_until_succeeds(
+              f"! systemctl --machine={user}@ --user list-jobs --no-legend | grep -F -e {' -e '.join(units)}",
+              timeout=timedelta(minutes=2),
+          )
+          for unit in units:
+              assert started(unit) == ran[unit], f"{unit} ran again with nothing skipped"
     '';
 }

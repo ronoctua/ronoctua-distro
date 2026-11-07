@@ -8,7 +8,7 @@
 # name: a count limit on the SYSTEM's generations that always keeps the
 # current, the running and the booted one.
 #
-# # The four things this module does
+# # The five things this module does
 #
 # 1. **A floor.** At boot a unit measures the filesystem under `/nix/store` and
 #    writes Nix's own `min-free` and `max-free` into `/run/ronoctua-store`, as a
@@ -32,6 +32,7 @@
 #    menu and keeps what it lists.
 # 4. **Build logs age out** after `buildLogDays`, through the `systemd-tmpfiles`
 #    clean that already runs every day. No clock is armed here.
+# 5. **The journal has a limit**, of size and of age (`assets/cache.nix`).
 #
 # # What is gone, and why
 #
@@ -700,5 +701,19 @@ in
     systemd.tmpfiles.rules = [
       "e /nix/var/log/nix/drvs - - - ${toString cfg.buildLogDays}d"
     ];
+
+    # -----------------------------------------------------------------
+    # 4. The journal
+    # -----------------------------------------------------------------
+    # The numbers, and why they are these, are in `assets/cache.nix`. A switch
+    # applies them: journald restarts on a change of this file. The rest stays
+    # systemd's on purpose: a file's size is an eighth of the cap, the runtime
+    # journal lives only until the flush, and a hundred files is far more than
+    # these limits leave.
+    services.journald.settings.Journal = {
+      SystemMaxUse = "${toString declared.journalMaxGiB}G";
+      MaxRetentionSec = "${toString declared.journalDays}day";
+      MaxFileSec = "${toString declared.journalFileDays}day";
+    };
   };
 }

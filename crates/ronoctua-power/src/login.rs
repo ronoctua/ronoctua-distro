@@ -13,9 +13,13 @@
 //!
 //! # The properties are not proxied
 //!
-//! `HandleLidSwitch`, `IdleAction`, `LidClosed` and the rest arrive together
-//! through one `GetAll` (see `upower::get_all`), which is what `Sleep::from_props`
-//! is fed and what the fixture test feeds it.
+//! `HandleLidSwitch`, `IdleAction`, `LidClosed` and the rest are asked for by
+//! name, one `Get` each ([`READ`], through `upower::get_some`), and the map that
+//! makes is what `Sleep::from_props` is fed and what the fixture test feeds it.
+//! Not one `GetAll`, the way the other two daemons are read: to answer it the
+//! manager computes `BootLoaderEntries`, which reparses every boot entry, and
+//! logind warns once per entry each time (measured: a read every thirty seconds
+//! was fifteen thousand lines a day in the journal). One `Get` does not.
 
 #![allow(missing_docs)]
 
@@ -27,6 +31,21 @@ pub const PATH: &str = "/org/freedesktop/login1";
 
 /// The manager's interface.
 pub const MANAGER: &str = "org.freedesktop.login1.Manager";
+
+/// The manager's properties `Sleep::from_props` reads, and no other.
+pub const READ: [&str; 11] = [
+    "HandleLidSwitch",
+    "HandleLidSwitchExternalPower",
+    "HandleLidSwitchDocked",
+    "HandlePowerKey",
+    "IdleAction",
+    "IdleActionUSec",
+    "LidClosed",
+    "OnExternalPower",
+    "Docked",
+    "PreparingForSleep",
+    "BlockInhibited",
+];
 
 /// The `who` an inhibitor of ours carries, and how `ListInhibitors` is read
 /// back to find them again. A NAME and not the pid: the footer restarts, and

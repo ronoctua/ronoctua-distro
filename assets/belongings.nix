@@ -413,6 +413,16 @@
       kept = true;
       reason = "preference";
     };
+    # The journal's kinds a person chose to ignore, and the filters they wrote
+    # or switched off, each with its reason: their judgement of the noise.
+    "config/brain/journal-errors/filters.json" = {
+      kept = true;
+      reason = "preference";
+    };
+    "config/brain/journal-errors/ignored.json" = {
+      kept = true;
+      reason = "preference";
+    };
     # The reminders a person set, birthdays among them: theirs to bring back.
     "config/brain/reminders/reminders.json" = {
       kept = true;

@@ -164,6 +164,13 @@ pub enum Knob {
     },
     /// Every step back to what the distro ships.
     ResetSteps,
+    /// One section of its page, open or shut.
+    Fold {
+        /// Which section, by id.
+        section: String,
+        /// Whether it is to stay open.
+        open: bool,
+    },
 }
 
 /// What the brain says back.
@@ -346,7 +353,9 @@ mod tests {
                     label: "cmd-made-up-keep".to_owned(),
                     row: false,
                     asks: Some("ask-made-up-keep".to_owned()),
+                    opens: None,
                 }],
+                folds: std::collections::BTreeMap::from([("older".to_owned(), true)]),
             }],
             queue: vec!["made-up".to_owned()],
             running: String::new(),
@@ -471,6 +480,13 @@ mod tests {
                 task: "made-up".to_owned(),
                 knob: Knob::ResetSteps,
             },
+            Ask::Set {
+                task: "made-up".to_owned(),
+                knob: Knob::Fold {
+                    section: "older".to_owned(),
+                    open: true,
+                },
+            },
             Ask::Gate {
                 gate: crate::prefs::Gate::default(),
             },
@@ -535,8 +551,11 @@ mod tests {
                         tone: Tone::Watching,
                         act: None,
                         also: Some("ignore".into()),
+                        ..Row::default()
                     }],
+                    ..Section::default()
                 }],
+                ..crate::module::Screen::default()
             },
         });
     }

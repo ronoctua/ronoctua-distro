@@ -194,7 +194,7 @@ pkgs.testers.runNixOSTest {
             f"journalctl -u {unit} --no-pager | grep 'terminal opened' > /dev/null",
             timeout=timedelta(minutes=1),
         )
-        said = re.sub(r"\x1b\[[0-9;]*m", "", machine.succeed(f"journalctl -u {unit} --no-pager"))
+        said = machine.succeed(f"journalctl -u {unit} --no-pager")
         found = re.findall(r"terminal opened .*?\bid=([0-9a-f]{16})", said)
         assert found, f"{unit} opened no terminal:\n{said[-3000:]}"
         return found[-1]

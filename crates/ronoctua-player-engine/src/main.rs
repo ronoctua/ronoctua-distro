@@ -18,17 +18,10 @@ mod mpv;
 mod remote;
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                // THE BINARY'S OWN NAME is what its modules log under
-                // (`ronoctua_player::engine`, `::mpris`, `::remote`) — the
-                // package's name matched nothing, and the daemon said no
-                // more than its warnings.
-                .unwrap_or_else(|_| "ronoctua_player=info".into()),
-        )
-        .init();
+    // THE BINARY'S OWN NAME is what its modules log under
+    // (`ronoctua_player::engine`, `::mpris`, `::remote`) — the package's name
+    // matched nothing, and the daemon said no more than its warnings.
+    ronoctua_log::init("ronoctua_player=info");
 
     // THE PALETTES, read now and not at the first subtitle: the lanes it
     // burns into a film are tokens, and the colours are data read at run time

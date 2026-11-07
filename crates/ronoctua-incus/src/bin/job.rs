@@ -24,7 +24,7 @@ const JOB_MOST_BYTES: u64 = 64 << 10;
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(ronoctua_log::Stderr::detect())
         .with_ansi(false)
         .without_time()
         .with_level(false)

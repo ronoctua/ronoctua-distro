@@ -56,6 +56,7 @@ tracing.workspace = true
 # THE CLI'S LOG, on standard error (`cli::install_log`): what a verb logs
 # reaches the update's journal and the queue's.
 tracing-subscriber.workspace = true
+ronoctua-log = { path = "../ronoctua-log" }
 # Process groups (cancel kills the whole tree), `flock` (one lane per
 # source, shared by the screen and the update run) and `uname` (the machine's
 # name a declaration says it was edited on).

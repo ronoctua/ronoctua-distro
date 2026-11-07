@@ -773,12 +773,13 @@ impl Places {
 /// loudest of theirs, so one waiting for the person is still seen.
 const fn loudness(tone: Tone) -> u8 {
     match tone {
-        Tone::Quiet => 0,
+        Tone::Quiet | Tone::Minor => 0,
         Tone::Working => 1,
         Tone::Watching => 2,
         Tone::Accent => 3,
         Tone::Warning => 4,
         Tone::Danger => 5,
+        Tone::Critical => 6,
     }
 }
 

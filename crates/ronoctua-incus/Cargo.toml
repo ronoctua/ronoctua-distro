@@ -26,7 +26,7 @@ publish.workspace = true
 [features]
 default = [ "client", "cli" ]
 client = [ "dep:ronoctua-http", "dep:ronoctua-consent", "dep:serde_json", "dep:tracing" ]
-cli = [ "client", "dep:tracing-subscriber", "dep:signal-hook" ]
+cli = [ "client", "dep:tracing-subscriber", "dep:ronoctua-log", "dep:signal-hook" ]
 
 [dependencies]
 serde.workspace = true
@@ -41,6 +41,7 @@ ronoctua-http = { path = "../ronoctua-http", features = [ "ws" ], optional = tru
 ronoctua-consent = { path = "../ronoctua-consent", optional = true }
 # The job's log, on its stderr, which the queue keeps as the row's trouble.
 tracing-subscriber = { workspace = true, optional = true }
+ronoctua-log = { path = "../ronoctua-log", optional = true }
 # `SIGTERM` from the queue cancels the daemon's operation before the job
 # leaves (a flag, in its safe spelling).
 signal-hook = { workspace = true, optional = true }

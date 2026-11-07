@@ -105,8 +105,8 @@ signal-hook.workspace = true
 name = "ronoctua-transfers"
 path = "src/bin/daemon.rs"
 
-[dependencies.tracing-subscriber]
-workspace = true
+[dependencies.ronoctua-log]
+path = "../ronoctua-log"
 
 [lints]
 workspace = true

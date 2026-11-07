@@ -245,7 +245,9 @@ impl Module for PartsWatch {
             sections: vec![Section {
                 heading: super::key::PARTS_WATCH_HEADING_PARTS.into(),
                 rows: rows_of(&self.kept()),
+                ..Section::default()
             }],
+            ..Screen::default()
         }
     }
 }

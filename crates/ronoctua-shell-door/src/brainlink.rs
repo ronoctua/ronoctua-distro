@@ -80,15 +80,17 @@ pub fn interned(id: &str) -> Option<&'static str> {
 /// something is wrong, the journal's errors among them. A warning is the
 /// marks' own ORANGE (`state.caution`, owner 2026-11-02), not the band's
 /// amber: beside the dev build's amber and the answer's gold, the amber read
-/// as one more gold mark.
+/// as one more gold mark. PAST DANGER is the theme's alarm red, and a MINOR
+/// mark is the quiet any row wears.
 #[must_use]
 pub const fn tone_colour(tone: Tone) -> tokens::Color {
     match tone {
-        Tone::Quiet => tokens::color::TEXT_SECONDARY,
+        Tone::Quiet | Tone::Minor => tokens::color::TEXT_SECONDARY,
         Tone::Watching => tokens::color::MODELINE_WATCHING,
         Tone::Working => tokens::color::MODELINE_FOLLOWING,
         Tone::Warning => tokens::color::STATE_CAUTION,
         Tone::Danger => tokens::color::STATE_ERROR,
+        Tone::Critical => tokens::color::STATE_CRITICAL,
         Tone::Accent => tokens::color::STATE_ACCENT,
     }
 }
@@ -311,6 +313,46 @@ pub struct Acting {
     pub command: String,
     /// The key of the question it asks first, when it asks one.
     pub asks: Option<String>,
+    /// Whether it acts on one row of the module's page, and so means nothing
+    /// asked with none: the door says so, rather than ask its question and
+    /// have the brain refuse the answer.
+    pub row: bool,
+    /// What it is only the way to: the footer opens that, whichever door
+    /// asked, and the brain never hears of it.
+    pub opens: Option<String>,
+    /// What its question opens with, already typed: the row's own
+    /// (`module::Row::starts`), and nothing for an action of the page.
+    pub starts: String,
+}
+
+/// What asking for an action comes to, at either door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asked<'a> {
+    /// It is only the way to this, which the footer opens.
+    Opens(&'a str),
+    /// It acts on a row, and this was asked with none.
+    NoRow,
+    /// Its question goes on the line first.
+    Question,
+    /// It goes to the brain.
+    Send,
+}
+
+/// What `acting` comes to, asked on a row or not and with its question
+/// answered or not: one answer, so the window and the footer's line cannot
+/// differ on what reaches the brain.
+#[must_use]
+pub fn asked(acting: &Acting, on_a_row: bool, answered: bool) -> Asked<'_> {
+    if let Some(opens) = &acting.opens {
+        return Asked::Opens(opens);
+    }
+    if acting.row && !on_a_row {
+        return Asked::NoRow;
+    }
+    if acting.asks.is_some() && !answered {
+        return Asked::Question;
+    }
+    Asked::Send
 }
 
 /// The ask that does an action, with what was typed for it.
@@ -343,11 +385,15 @@ pub fn question_id(command: &str) -> Option<&'static str> {
 /// in place of any question spelt otherwise — a fallback nobody would see
 /// until the question was the wrong one.
 ///
+/// It opens with what the row starts it from (`Acting::starts`), for the
+/// person to change.
+///
 /// `None` for an action that asks nothing, or past [`NAMES_KEPT`].
 #[must_use]
-pub fn question_of(acting: &Acting) -> Option<(&'static str, &'static str)> {
+pub fn question_of(acting: &Acting) -> Option<crate::line::Line> {
     let asks = acting.asks.as_deref()?;
-    Some((interned(&acting.command)?, interned(asks)?))
+    let line = crate::line::Line::asking(interned(&acting.command)?, interned(asks)?);
+    Some(line.starting_from(&acting.starts))
 }
 
 /// Follows the daemon's own log on a thread of its own, sending every batch
@@ -377,6 +423,68 @@ pub fn follow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn acting() -> Acting {
+        Acting {
+            module: "fixture".to_owned(),
+            action: "act".to_owned(),
+            command: "fixture-act".to_owned(),
+            asks: None,
+            row: false,
+            opens: None,
+            starts: String::new(),
+        }
+    }
+
+    /// FAILS IF: an action that only opens a command reaches the brain, or
+    /// asks anything first; a row's action puts its question with no row for
+    /// the answer to act on; or an answered question is put again.
+    #[test]
+    fn both_doors_ask_an_action_the_same_way() {
+        let plain = acting();
+        assert_eq!(asked(&plain, false, false), Asked::Send);
+        assert_eq!(asked(&plain, true, false), Asked::Send);
+
+        let opens = Acting {
+            opens: Some("fixture-open".to_owned()),
+            asks: Some("ask-fixture".to_owned()),
+            row: true,
+            ..acting()
+        };
+        assert_eq!(asked(&opens, false, false), Asked::Opens("fixture-open"));
+
+        let on_a_row = Acting {
+            row: true,
+            asks: Some("ask-fixture".to_owned()),
+            ..acting()
+        };
+        assert_eq!(asked(&on_a_row, false, false), Asked::NoRow);
+        assert_eq!(asked(&on_a_row, false, true), Asked::NoRow);
+        assert_eq!(asked(&on_a_row, true, false), Asked::Question);
+        assert_eq!(asked(&on_a_row, true, true), Asked::Send);
+    }
+
+    /// FAILS IF: a row's question opens empty, or opens with what it starts
+    /// from anywhere but on the line, under the action's command and in its
+    /// module's words.
+    #[test]
+    fn a_question_opens_with_what_the_row_starts_it_from() {
+        let plain = Acting {
+            asks: Some("ask-fixture".to_owned()),
+            ..acting()
+        };
+        let line = question_of(&plain).expect("a question");
+        assert_eq!((line.id, line.asks), ("fixture-act", Some("ask-fixture")));
+        assert_eq!(line.text, "");
+
+        let line = question_of(&Acting {
+            starts: "a line to cut down".to_owned(),
+            ..plain
+        })
+        .expect("a question");
+        assert_eq!(line.text, "a line to cut down");
+        assert!(question_of(&acting()).is_none(), "it asks nothing");
+    }
 
     #[test]
     fn not_now_postpones_while_nothing_is_running() {

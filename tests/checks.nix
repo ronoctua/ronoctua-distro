@@ -981,6 +981,11 @@ let
     ronoctua-shell = rust.shell;
   };
 
+  # Each name once on both buses, and every name still answers. Two nodes, the
+  # second one without `nix/modules/dbus.nix`, because zero lines prove nothing
+  # on a machine where nothing writes them.
+  dbusNamesVm = import ./dbus-names-vm.nix { inherit pkgs; };
+
   # The machine does not freeze when memory runs out, and the desktop is not the
   # victim. Two nodes with different RAM, because a percentage that is merely
   # present looks exactly like one that does not adapt.
@@ -16702,12 +16707,21 @@ let
     JSON
     # AND THE WATCH'S OWN PAGE, one answer of the socket to `Ask::Screen`.
     cat > screen.json <<'JSON'
-    {"say":"screen","module":"fixture-watch","generation":1,"screen":{"sections":[
-      {"heading":"brain-history","rows":[
+    {"say":"screen","module":"fixture-watch","generation":1,"screen":{
+     "legend":[{"tone":"critical","says":"brain-outcome-failed","about":"about-brain-record"},
+               {"tone":"minor","says":"brain-outcome-skipped","about":"about-brain-history"}],
+     "sections":[
+      {"id":"open","fold":"open","heading":"brain-history","about":"about-brain-history","rows":[
         {"id":"a","label":{"key":"brain-last-run"},"value":{"moment":1789790000},
-         "note":{"data":"what the module wrote"},"tone":"watching","act":"act"},
+         "note":{"data":"what the module wrote"},"tone":"watching","act":"act",
+         "below":{"data":"a line under the row, still the row"},
+         "foot":[{"label":"brain-next","value":{"count":3},"tone":"minor"}]},
         {"id":"b","label":{"key":"brain-next"},"value":{"bytes":412000000},
          "note":"empty","tone":"danger","act":null}]},
+      {"id":"shut","fold":"shut","heading":"brain-tasks","about":"about-brain-tasks",
+       "tally":{"count":1234},"rows":[
+        {"id":"d","label":{"key":"brain-next"},"value":{"count":7},
+         "note":"empty","tone":"quiet","act":null}]},
       {"heading":"brain-steps","rows":[
         {"id":"c","label":{"key":"brain-enabled"},"value":{"count":3},
          "note":{"data":"and a note under it"},"tone":"quiet","act":null}]}]}}
@@ -17945,6 +17959,243 @@ let
               print("ERROR:", line, file=sys.stderr)
           sys.exit(1)
       print(f"OK: no snapshot holds the store, a cache or the containers' storage; {len(facts['units'])} subvolume unit(s)")
+      END
+    '';
+
+  # THE JOURNAL HAS A LIMIT, AND IT IS THE ONE `assets/cache.nix` DECLARES.
+  #
+  # Asked of the file journald reads, as the `vm` machine writes it: a setting
+  # that never reached `/etc` limits nothing, and journald would say nothing.
+  # The age limit only ever takes archived files, so a file's span stays under
+  # it; and a sweep asking for more than the cap has nothing to remove, so the
+  # person who ran it would be told it worked.
+  the-journal-has-a-limit =
+    let
+      journald =
+        pkgs.writeText "journald.conf"
+          self.nixosConfigurations.vm.config.environment.etc."systemd/journald.conf".text;
+      declared = pkgs.writeText "journal-limits.json" (
+        builtins.toJSON { inherit (import ../assets/cache.nix) journalMaxGiB journalDays journalFileDays; }
+      );
+    in
+    mkCheck "the-journal-has-a-limit" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import configparser, json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: `journald.conf` is read as journald reads it, an INI file, and
+      # the declared numbers arrive as JSON written by Nix.
+      # FILE-WIDE: a sweep's size stands wherever the file that runs it puts
+      # it. `hashless`, so a number named in a comment does not answer.
+      declared = json.loads(pathlib.Path("${declared}").read_text())
+      conf = configparser.ConfigParser()
+      conf.optionxform = str
+      conf.read_string(pathlib.Path("${journald}").read_text())
+      journal = conf["Journal"]
+      wrong = []
+
+      for option, value in (("SystemMaxUse", f"{declared['journalMaxGiB']}G"),
+                            ("MaxRetentionSec", f"{declared['journalDays']}day"),
+                            ("MaxFileSec", f"{declared['journalFileDays']}day")):
+          if journal.get(option) != value:
+              wrong.append(f"journald.conf has {option}={journal.get(option)}, and assets/cache.nix says {value}")
+      if declared["journalFileDays"] >= declared["journalDays"]:
+          wrong.append("a journal file spans the whole retention, so the age limit reaches its old lines late")
+
+      # THE SWEEPS BY HAND, the brain's steps found by the file they live in.
+      steps = sorted(pathlib.Path("${../crates/ronoctua-brain/modules}").glob("*/steps.nix"))
+      sizes = []
+      for f in [pathlib.Path("${../nix/modules/memory.nix}"), *steps]:
+          sizes += [int(s) for s in re.findall(r"--vacuum-size=(\d+)M", hashless(f.read_text()))]
+      floor(len(sizes), 2, "journal sweeps read")
+      cap = declared["journalMaxGiB"] * 1024
+      for size in sizes:
+          if size >= cap:
+              wrong.append(f"a sweep asks for {size} MiB, at or above the cap of {cap} MiB: it would remove nothing")
+
+      if wrong:
+          print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+          sys.exit(1)
+      print(f"OK: the journal keeps {journal['SystemMaxUse']} for {journal['MaxRetentionSec']}, {len(sizes)} sweeps below the cap")
+      END
+    '';
+
+  # THE BROKER'S CONFIGURATION LOSES WHAT `system-path` HOLDS, AND NOTHING ELSE.
+  #
+  # `nix/scripts/dbus-conf.py` decides by the bytes on disk, so it is run on a
+  # tree planted here, with each way a directory can differ. What `dbus-names-vm`
+  # proves on real buses is that the rule is enough; what this proves, in a
+  # second, is that nothing only a package carries is dropped by a name
+  # looking alike.
+  dbus-conf-keeps-what-only-it-has = mkCheck "dbus-conf-keeps-what-only-it-has" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, subprocess, sys, tempfile
+    exec(open("${pyPrelude}").read())
+
+    # PARSED: what is read is what the script wrote from confs planted here,
+    # asked one whole entry at a time.
+    # FILE-WIDE: a conf is one line of entries, with no item to narrow to.
+    SCRIPT = "${../nix/scripts/dbus-conf.py}"
+    SERVICES = "share/dbus-1/system-services"
+    POLICY = "share/dbus-1/system.d"
+    SESSION_SERVICES = "share/dbus-1/services"
+    SESSION_POLICY = "share/dbus-1/session.d"
+    store = pathlib.Path(tempfile.mkdtemp())
+    linked = store / "system-path"
+
+    def plant(package, path, text):
+        file = store / package / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(text)
+
+    def link(package, path):
+        # A link, as the real `system-path` holds it.
+        file = linked / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.symlink_to(store / package / path)
+
+    def entry(kind, package, sub):
+        return f"<{kind}>{store / package}/{sub}</{kind}>"
+
+    def listed(package, services, policy):
+        return (entry("servicedir", package, services) + entry("includedir", package, policy)
+                + entry("includedir", package, policy.replace("share/", "etc/")))
+
+    # EVERYTHING IT HOLDS, `system-path` HOLDS: all of it goes.
+    for path in (f"{SERVICES}/same.service", f"{POLICY}/same.conf",
+                 f"{SESSION_SERVICES}/same.service", f"{SESSION_POLICY}/same.conf"):
+        plant("copied", path, "the same bytes\n")
+        link("copied", path)
+    # THE SAME NAME WITH OTHER BYTES, in one directory of two: that one stays,
+    # and the other, a real copy, goes. Decided per directory.
+    plant("rewritten", f"{SERVICES}/same.service", "other bytes\n")
+    plant("rewritten", f"{SESSION_SERVICES}/same.service", "other bytes\n")
+    plant("rewritten", f"{POLICY}/same.conf", "the same bytes\n")
+    # A FILE `system-path` DOES NOT LINK, beside one it does.
+    plant("unlinked", f"{POLICY}/same.conf", "the same bytes\n")
+    plant("unlinked", f"{POLICY}/only.conf", "only here\n")
+    # A DIRECTORY THAT DOES NOT EXIST carries nothing: `empty` has no files.
+    (store / "empty").mkdir()
+    # A LINK THAT RESOLVES NOWHERE HERE, under a name `system-path` holds: it may
+    # resolve on the machine, where the broker reads it. `unseen` is planted by
+    # not being planted: a root this build cannot see, with nothing to compare.
+    dangling = store / "dangling" / POLICY / "same.conf"
+    dangling.parent.mkdir(parents=True)
+    dangling.symlink_to("/etc/dangling/dbus.conf")
+    # AND A DIRECTORY BEHIND ONE: `share/dbus-1` itself is the link, so no file
+    # under it can be looked at here.
+    behind = store / "dangling-dir" / "share" / "dbus-1"
+    behind.parent.mkdir(parents=True)
+    behind.symlink_to("/etc/dangling-dir/dbus-1")
+
+    def whole(system, session):
+        conf = store / "whole"
+        conf.mkdir(exist_ok=True)
+        (conf / "system.conf").write_text(system)
+        (conf / "session.conf").write_text(session)
+        return conf
+
+    def run(conf, into):
+        return subprocess.run([sys.executable, SCRIPT, str(conf), str(linked), str(into)],
+                              capture_output=True, text=True)
+
+    # `unlinked` TWICE: a repeat has to go even where the entry itself stays.
+    packages = ["copied", "system-path", "rewritten", "unlinked", "empty", "unlinked",
+                "dangling", "dangling-dir", "unseen"]
+    system_in = "<busconfig><type>system</type>" + "".join(
+        listed(p, SERVICES, POLICY) for p in packages) + "</busconfig>"
+    session_in = "<busconfig><standard_session_servicedirs/>" + "".join(
+        listed(p, SESSION_SERVICES, SESSION_POLICY) for p in packages) + "</busconfig>"
+    conf = whole(system_in, session_in)
+    out = store / "out"
+    ran = run(conf, out)
+    if ran.returncode != 0:
+        print(f"ERROR: the script refused a good tree: {ran.stderr}", file=sys.stderr)
+        sys.exit(1)
+    system = must((out / "system.conf").read_text(), "the written system.conf")
+    session = must((out / "session.conf").read_text(), "the written session.conf")
+
+    ASKED = (
+        # A conf, an entry, how many times it stays, and why.
+        (system, entry("servicedir", "copied", SERVICES), 0, "an identical copy"),
+        (system, entry("includedir", "copied", POLICY), 0, "an identical copy"),
+        (system, entry("servicedir", "system-path", SERVICES), 1, "system-path's own services"),
+        (system, entry("includedir", "system-path", POLICY), 1, "system-path's own policy"),
+        (system, entry("servicedir", "rewritten", SERVICES), 1, "the same name with other bytes"),
+        (system, entry("includedir", "rewritten", POLICY), 0, "the directory beside it, a real copy"),
+        (system, entry("includedir", "unlinked", POLICY), 1, "a file nothing links, and listed twice"),
+        (system, entry("servicedir", "empty", SERVICES), 0, "a directory with no files"),
+        (system, entry("includedir", "dangling", POLICY), 1, "a link that resolves nowhere here"),
+        (system, entry("servicedir", "dangling-dir", SERVICES), 1, "a directory behind a link that resolves nowhere here"),
+        (system, entry("includedir", "dangling-dir", POLICY), 1, "a directory behind a link that resolves nowhere here"),
+        (system, entry("includedir", "empty", POLICY), 0, "a directory with no files"),
+        (system, entry("servicedir", "unseen", SERVICES), 1, "a root this build cannot see"),
+        (system, entry("includedir", "unseen", POLICY), 1, "a root this build cannot see"),
+        (session, entry("servicedir", "copied", SESSION_SERVICES), 0, "an identical copy"),
+        (session, entry("servicedir", "system-path", SESSION_SERVICES), 0, "what XDG_DATA_DIRS reads"),
+        (session, entry("includedir", "system-path", SESSION_POLICY), 1, "what XDG_DATA_DIRS does not cover"),
+        (session, entry("servicedir", "rewritten", SESSION_SERVICES), 1, "the same name with other bytes"),
+    )
+    wrong = [f"{why}: {given} is listed {text.count(given)} time(s), not {times}"
+             for text, given, times, why in ASKED if text.count(given) != times]
+    floor(system.count("<servicedir>") + system.count("<includedir>"), 3, "entries kept in system.conf")
+    for kept in ("<busconfig><type>system</type>", "</busconfig>"):
+        if kept not in system:
+            wrong.append(f"the script took {kept} out of system.conf, which is not an entry")
+    if "<standard_session_servicedirs/>" not in session:
+        wrong.append("the script took <standard_session_servicedirs/> out of session.conf")
+
+    # AND THE TWO REFUSALS: a conf that lost what a dropped directory is read
+    # from is a bus with no names, and the build has to stop there.
+    for why, system_conf, session_conf in (
+        ("system.conf without system-path's services",
+         system_in.replace(entry("servicedir", "system-path", SERVICES), ""), session_in),
+        ("session.conf without <standard_session_servicedirs/>",
+         system_in, session_in.replace("<standard_session_servicedirs/>", "")),
+    ):
+        if run(whole(system_conf, session_conf), store / "refused").returncode == 0:
+            wrong.append(f"the script accepted {why}")
+
+    if wrong:
+        print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {len(ASKED)} entries asked of a planted tree, and both refusals hold")
+    END
+  '';
+
+  # PIPEWIRE LOADS NO X11 BELL, BY THE CONDITION UPSTREAM STILL READS.
+  #
+  # The X display dying segfaulted PipeWire through `module-x11-bell`. A VM
+  # proves nothing about it: with no display the module fails under `nofail`,
+  # set or not. So both halves are read where PipeWire reads them, the fragment
+  # in `/etc` and the condition in the shipped `pipewire.conf`; a condition
+  # renamed upstream would leave the setting standing and the module back.
+  pipewire-loads-no-x11-bell =
+    let
+      vm = self.nixosConfigurations.vm.config;
+    in
+    mkCheck "pipewire-loads-no-x11-bell" [ pkgs.python3 ] ''
+      python3 - <<'END'
+      import json, pathlib, re, sys
+      exec(open("${pyPrelude}").read())
+
+      # PARSED: the fragment is the JSON Nix generated for it.
+      # FILE-WIDE: the shipped `pipewire.conf` is one list of modules, asked
+      # for the one whose condition this hangs on; `hashless` takes off the
+      # commented-out ones.
+      fragment = pathlib.Path("${vm.environment.etc.pipewire.source}/pipewire.conf.d/90-no-x11-bell.conf")
+      said = json.loads(fragment.read_text())["context.properties"]
+      shipped = hashless(pathlib.Path("${vm.services.pipewire.package}/share/pipewire/pipewire.conf").read_text())
+      floor(len(shipped), 1000, "characters of pipewire.conf")
+      wrong = []
+      if said.get("module.x11.bell") is not False:
+          wrong.append(f"the fragment says module.x11.bell = {said.get('module.x11.bell')!r}, and it has to be false")
+      if not re.search(r"libpipewire-module-x11-bell.*?condition = \[ \{ module\.x11\.bell = !false \} \]", shipped, re.S):
+          wrong.append("pipewire.conf no longer guards module-x11-bell with module.x11.bell: the setting holds nothing back")
+      if wrong:
+          print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+          sys.exit(1)
+      print("OK: module.x11.bell is false, and upstream's module still asks it")
       END
     '';
 
@@ -31933,6 +32184,28 @@ let
         (refused "an id that is not an English kebab word" "is not an English kebab word" {
           id = "Made_Up";
         })
+        (refused "an action that opens a command and acts on a row"
+          "actions.go.opens goes with neither row nor asks"
+          {
+            manifest = complete.manifest // {
+              actions.go = {
+                opens = "some-command";
+                row = true;
+              };
+            };
+          }
+        )
+        (refused "an action that opens a command and asks first"
+          "actions.go.opens goes with neither row nor asks"
+          {
+            manifest = complete.manifest // {
+              actions.go = {
+                opens = "some-command";
+                asks = "ask-made-up-go";
+              };
+            };
+          }
+        )
       ];
       accepted = {
         complete = brainSample.problemsOf complete;
@@ -37014,11 +37287,23 @@ let
                         return True
             return False
 
+        def own_of(f):
+            # A BRAIN MODULE'S OWN FOLDER: there `state_dir` and `config_dir`
+            # are the module's (`<root>/brain/<id>/`, `Ctx::config_dir`), never
+            # the root itself — read as the root, its files were looked for
+            # where no store writes them.
+            parts = f.relative_to(crates).parts
+            if parts[:2] == ("ronoctua-brain", "modules") and len(parts) > 3:
+                return f"brain/{parts[2]}/"
+            return ""
+
         def root_of(f, expr, depth=0):
             # "config", "state" or "given", and a folder inside it.
             if "state_dir" in expr:
-                return "state", ""
-            if "config_dir" in expr or "ronoctua_xdg::name" in expr or ".config" in expr:
+                return "state", own_of(f)
+            if "config_dir" in expr:
+                return "config", own_of(f)
+            if "ronoctua_xdg::name" in expr or ".config" in expr:
                 return "config", ""
             m = re.fullmatch(r"(\w+)\(\)", expr)
             if m and depth < 4:
@@ -38878,6 +39163,42 @@ let
         print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
         sys.exit(1)
     print("OK: one crate asks resolved, and only from the network view's thread")
+    END
+  '';
+
+  # ONE CRATE SAYS WHAT A LOG LINE IS WORTH. A program that builds a `fmt`
+  # writer of its own reaches the journal as `info`, in colour, and whoever
+  # asks the journal for errors never hears it. Two keep a builder of their
+  # own (the incus job, the software CLI), for their shape, and both hand it
+  # `ronoctua_log::Stderr`.
+  one-log-boundary = mkCheck "one-log-boundary" [ pkgs.python3 ] ''
+    python3 - <<'END'
+    import pathlib, re, sys
+    exec(open("${pyPrelude}").read())
+
+    # FILE-WIDE: a program sets its log up once, wherever in the file it
+    # likes, and the offence is the name of the formatter with no word of
+    # the crate beside it; the product's, cut at `mod tests` (`without_tests`).
+    crates = pathlib.Path("${../crates}")
+    boundary = crates / "ronoctua-log"
+    FMT = re.compile(r"tracing_subscriber::(?:\{[^}]*\b)?fmt\b")
+    wrong, sites = [], 0
+    for f in workspace_sources(crates):
+        if boundary in f.parents:
+            continue
+        code = uncommented(without_tests(f.read_text()))
+        ours = "ronoctua_log::" in code
+        sites += ours
+        if FMT.search(code) and not ours:
+            wrong.append(f"{f.relative_to(crates)} builds a log with no ronoctua_log:: in it; the journal would file it as info")
+    floor(sites, 13, "programs that log through ronoctua-log")
+    lib = uncommented(without_tests((boundary / "src" / "lib.rs").read_text()))
+    if "JOURNAL_STREAM" not in lib:
+        wrong.append("ronoctua-log no longer reads JOURNAL_STREAM; has the boundary moved?")
+    if wrong:
+        print("ERROR: " + "\nERROR: ".join(wrong), file=sys.stderr)
+        sys.exit(1)
+    print(f"OK: {sites} programs log through ronoctua-log")
     END
   '';
 
@@ -57159,6 +57480,7 @@ let
       browser-key-is-persisted
       errands-are-handled-alike
       one-resolve-boundary
+      one-log-boundary
       one-browser-boundary
       native-hosts-take-chromes-origin
       extension-version-moves
@@ -57386,6 +57708,9 @@ let
       nix-gc-keeps-generations
       store-has-a-floor
       snapshots-skip-the-store
+      the-journal-has-a-limit
+      dbus-conf-keeps-what-only-it-has
+      pipewire-loads-no-x11-bell
       numeric-selectors-get-numbers
       every-view-follows-its-cursor
       syncthing-options-are-declared
@@ -57437,6 +57762,7 @@ let
     secureboot-vm = secureBootVm;
     inherit installer-dryrun;
     oom-vm = oomVm;
+    dbus-names-vm = dbusNamesVm;
     inherit
       notifications-table-generated
       notifications-have-text
@@ -57598,6 +57924,7 @@ let
       scrypt-work-is-the-same-everywhere
       errands-are-handled-alike
       one-resolve-boundary
+      one-log-boundary
       one-browser-boundary
       native-hosts-take-chromes-origin
       extension-version-moves

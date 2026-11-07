@@ -18,7 +18,7 @@ anyhow.workspace = true
 # go to the system log — not to the bus, where the one asking is a
 # service and not a person.
 tracing.workspace = true
-tracing-subscriber.workspace = true
+ronoctua-log = { path = "../ronoctua-log" }
 
 # The daemon that answers NetworkManager. A binary of its own, and not a mode of the
 # footer: it is a SYSTEM daemon and starts before any session — the network has to

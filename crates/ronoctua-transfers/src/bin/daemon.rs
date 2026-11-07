@@ -22,13 +22,7 @@ fn main() -> Result<()> {
     // The unit's log goes to the journal; the two short-lived doors are quiet
     // unless something is wrong, because `xdg-open` has nowhere to show a line
     // and Chrome treats anything on stdout as a message.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ronoctua_transfers=info".into()),
-        )
-        .init();
+    ronoctua_log::init("ronoctua_transfers=info");
 
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     match mode_of(&args) {

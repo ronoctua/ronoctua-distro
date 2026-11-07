@@ -4,26 +4,41 @@
 //!
 //! # A watch on the journal the core already follows
 //!
-//! One match ([`Watcher::sources`]): every entry at `err` or worse, of the
-//! system's journal and the person's (the core's follower reads both). On the
-//! brain's FIRST start — no cursor yet — the core's one pass over the past
-//! hands this boot's last [`rules::BACKFILL_MOST`] to the modules on THEN; on
-//! every later start the cursor decides, and what happened while the brain
-//! was off is heard then. It ships off, so on a new machine that first start
-//! passes it by and keeps the cursor: switched on later, it hears from that
-//! moment, and nothing the journal said before is read again for it (the
-//! core runs no pass for a module that comes on; `docs/PENDING.md`).
+//! Two matches ([`Watcher::sources`]): every entry at `err` or worse, and the
+//! warnings alone, each with a ring of its own, of the system's journal and the
+//! person's (the core's follower reads both). On the brain's FIRST start — no
+//! cursor yet — the core's one pass over the past hands this boot's last
+//! [`rules::BACKFILL_MOST`] errors and [`rules::BACKFILL_WARNINGS`] warnings to
+//! the modules on THEN; on every later start the cursor decides, and what
+//! happened while the brain was off is heard then.
+//!
+//! # What it missed while it was off
+//!
+//! The cursor is everybody's, so it moves on while this is switched off. So
+//! this keeps a place of its own, the last line it heard ([`State::left_at`]),
+//! and the core reads for it what came after ([`Watcher::pass`]): by itself
+//! when it comes back on, and on the page's `run` while it stays off. Only a
+//! line moves the place: a pass that read nothing or could not read says
+//! nothing of where the journal is, and forgetting the place over it would
+//! read the whole boot again. A pass asked for is OWED until it ends, in the
+//! file too ([`State::owed`]): a brain stopped while one read reads it again
+//! as it starts ([`Watcher::owed`]), up to where the follower took over.
 //!
 //! # The book
 //!
 //! [`rules::Book`]: the kinds in the list, each with its count, its last
-//! message and moment, its boot and how many times since it was seen; and the
-//! kinds ignored. The list is state (`errors.json`, under its state
-//! directory, with how often each ignored kind was heard since); what is
-//! ignored is the person's choice (`ignored.json`, under its config
-//! directory, through `ronoctua-store`). A burst of errors is one write of the
-//! list, a few seconds later ([`Watcher::next_wake`] arms a clock only while
-//! something waits to be written); a person's act is written at once.
+//! message and moment, its boot and how many times since it was seen; the plain
+//! warnings apart from it; and the kinds ignored. The list is state
+//! (`errors.json`, under its state directory, with how often each ignored kind
+//! was heard since); what is ignored is the person's choice (`ignored.json`,
+//! under its config directory, through `ronoctua-store`). A burst of errors is
+//! one write of the list, a few seconds later ([`Watcher::next_wake`] arms a
+//! clock only while something waits to be written), and the page hears of a
+//! line that moved no count on the mark only every half minute — the numbers
+//! on its row catch up then — because most lines are those. An error reaches
+//! the page at once. The file does not wait for that clock: it goes ahead of
+//! the journal's cursor ([`Watcher::keep`]), at the cursor's pace. A person's
+//! act is written at once.
 //!
 //! # The person's file is written only when they act
 //!
@@ -37,14 +52,16 @@
 //! # The mark
 //!
 //! While a kind is not seen yet, one mark on the modeline in the colour of a
-//! watch, with how many kinds — and none at rest (invariant 14). It stays
-//! until everything is marked seen.
+//! watch, with how many kinds, and in the colour of a crisis while one of them
+//! is critical — and none at rest (invariant 14). It stays until everything is
+//! marked seen. The warnings are never on it.
 
+mod classify;
+mod noise;
 mod rules;
 
-#[cfg(test)]
-mod fixtures;
-
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -53,12 +70,12 @@ use serde::{Deserialize, Serialize};
 use ronoctua_store::Store;
 
 use crate::module::{
-    Act, Acted, Backfill, Birth, Cell, Ctx, Face, Heard, Look, Manifest, Mark, Match, Module, Row,
-    Screen, Section, Source, Tone, Watcher, Word,
+    Act, Acted, Backfill, Birth, Cell, Ctx, Cursor, Entry, Face, Fact, Fold, Heard, Look, Manifest,
+    Mark, Match, Module, Pass, Passed, Row, Screen, Section, Source, Swatch, Tone, Watcher, Word,
 };
 use crate::moment::Moment;
 
-use rules::{Book, Filter, Group, Ignored, Kind, Origin};
+use rules::{Book, Choice, Filter, Group, Ignored, Kind, Origin, Severity};
 
 /// The list, under its state directory.
 const LIST_FILE: &str = "errors.json";
@@ -72,6 +89,14 @@ const FILTERS_FILE: &str = "filters.json";
 /// How long a change of the list waits before it is written, in seconds — so
 /// a burst of a thousand lines is one write.
 const WRITE_AFTER_S: Moment = 5;
+
+/// How long the page waits to hear of a line that moved no count on the mark,
+/// in seconds: a warning, or one a filter or an ignored kind took. Those are
+/// most of what the journal says, and the mark has no news of them, so at most
+/// one publication goes to them in this long, and the counts on their rows
+/// catch up then. The file is not held to it, because a cursor is never written
+/// ahead of the list ([`Watcher::keep`]).
+const QUIET_AFTER_S: Moment = 30;
 
 /// The entry: its book, read from where it was left, and this boot's id.
 #[must_use]
@@ -110,21 +135,83 @@ struct State {
     lost: Option<String>,
     /// Its page's generation.
     generation: u64,
-    /// Since when the list has changed without being written; `None` when it
-    /// is written.
-    unwritten: Option<Moment>,
+    /// When what waits is next done; `None` when nothing waits.
+    write_at: Option<Moment>,
+    /// What waits moved no count on the mark, so nothing has said the page
+    /// changed: the wake says it.
+    quietly: bool,
+    /// A line was heard since the file was written, which a cursor about to
+    /// be written needs in it.
+    behind: bool,
+    /// Where it stopped: the last line it read, and what a pass starts after.
+    /// `None` when it never read one, and a pass reads this boot.
+    left_at: Option<Cursor>,
+    /// When: the moment of that line, or of being switched off.
+    left_moment: Option<Moment>,
+    /// The core says it is listening: between [`Watcher::started`] and
+    /// [`Watcher::stopped`].
+    on: bool,
+    /// A pass is on its way, in this process.
+    reading: bool,
+    /// A pass is owed: asked for and not answered yet — kept in the file, so a
+    /// brain stopped while one read reads it again ([`Watcher::owed`]). While
+    /// one is, a line the follower brings does not move [`State::left_at`],
+    /// which is where that pass reads from.
+    owed: bool,
+    /// Where the follower is while a pass is owed: the last line it brought,
+    /// and its moment — the place, once a pass that ended behind it is done.
+    followed: Option<(Cursor, Moment)>,
+    /// The first line the follower brought while a pass was owed: where that
+    /// pass, read again after a stop, ends — what came from there on was
+    /// heard, or is the follower's to bring again.
+    followed_from: Option<Cursor>,
+    /// What the last pass found.
+    last_run: Option<LastRun>,
+}
+
+/// What the last pass found, for the page to say.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct LastRun {
+    /// When it ended.
+    at: Moment,
+    /// How many lines reached a list.
+    listed: u64,
+    /// How many were past its ring, and went.
+    lost: u64,
+    /// Why it stopped short: a core word (`brain-journal-why-<word>`).
+    why: Option<String>,
 }
 
 /// The list as it is kept — state, the brain's own.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 struct ListFile {
+    /// The boot it was written in: what a filter caught counts only for it.
+    boot: String,
     groups: Vec<Group>,
+    /// The plain warnings: only those of this boot survive a start.
+    warnings: Vec<Group>,
     /// How many times each ignored kind was heard since it was ignored.
     ignored_since: Vec<Since>,
-    /// How many lines each filter has caught, and the last one, keyed by
-    /// snippet — STATE, kept with the list, never in the person's file.
+    /// How many lines each filter caught in [`ListFile::boot`], and the last
+    /// one, keyed by snippet — STATE, kept with the list, never in the person's
+    /// file.
     filtered_since: Vec<Caught>,
+    /// See [`State::left_at`].
+    left_at: Option<Cursor>,
+    /// See [`State::left_moment`].
+    left_moment: Option<Moment>,
+    /// See [`State::last_run`].
+    last_run: Option<LastRun>,
+    /// See [`State::owed`].
+    owed: bool,
+    /// See [`State::followed`]: the line.
+    followed: Option<Cursor>,
+    /// See [`State::followed`]: its moment.
+    followed_moment: Option<Moment>,
+    /// See [`State::followed_from`].
+    followed_from: Option<Cursor>,
 }
 
 /// How many times an ignored kind was heard since.
@@ -152,51 +239,41 @@ struct IgnoredFile {
     ignored: Vec<Ignored>,
 }
 
+impl IgnoredFile {
+    /// What it holds, by kind as today's folding writes it, so what the person
+    /// ignored before a folding changed is still what they ignored — each with
+    /// the kind the file wrote, which the list's counts were kept by.
+    fn refolded(self) -> impl Iterator<Item = (Kind, Ignored)> {
+        self.ignored.into_iter().map(|i| {
+            let kept = i.kind.clone();
+            let kind = i.kind.refolded_with(&i.message);
+            (kept, Ignored { kind, ..i })
+        })
+    }
+}
+
 /// What is filtered as it is kept — the person's choice, and nothing that
-/// moves on its own. A shipped snippet turned off is here with `off`; one they
-/// typed is here; a shipped snippet left as it is is NOT here, and on by being
-/// shipped.
+/// moves on its own. A shipped snippet turned off, or with a reason of theirs,
+/// is here; one they typed is here; a shipped snippet left as it is is NOT
+/// here, and on by being shipped.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 struct FiltersFile {
     filters: Vec<Choice>,
 }
 
-/// One snippet in the person's file.
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-struct Choice {
-    /// The snippet.
-    text: String,
-    /// Off: a shipped snippet the person turned off (never written for one of
-    /// their own, which simply leaves the file).
-    off: bool,
-}
-
 impl FiltersFile {
-    /// Its snippets as `(text, off)` pairs, for the book to rebuild from.
-    fn choices(&self) -> Vec<(String, bool)> {
-        self.filters
-            .iter()
-            .map(|c| (c.text.clone(), c.off))
-            .collect()
-    }
-
-    /// The file for these filters: the shipped ones turned off, and the
-    /// person's own — never a shipped snippet left as it is.
+    /// The file for these filters: the shipped ones the person changed, and
+    /// their own — never a shipped snippet left as it is.
     fn of(filters: &[Filter]) -> Self {
         Self {
             filters: filters
                 .iter()
-                .filter_map(|f| match f.origin {
-                    Origin::Default => f.off.then(|| Choice {
-                        text: f.text.clone(),
-                        off: true,
-                    }),
-                    Origin::Custom => Some(Choice {
-                        text: f.text.clone(),
-                        off: f.off,
-                    }),
+                .filter(|f| f.origin == Origin::Custom || f.off || !f.reason.is_empty())
+                .map(|f| Choice {
+                    text: f.text.clone(),
+                    off: f.off,
+                    reason: f.reason.clone(),
                 })
                 .collect(),
         }
@@ -238,38 +315,45 @@ impl JournalErrors {
         let filters: FiltersFile = filters_store
             .parsed()
             .unwrap_or_else(|| filters_store.read());
+        // THE COUNTS WERE KEPT by the kind the person's file wrote — until they
+        // act, that file is never written again — or by today's.
+        let mut was: BTreeMap<Kind, Kind> = BTreeMap::new();
         let mut book = Book {
-            groups: list
-                .groups
-                .into_iter()
-                .map(|g| (g.kind.clone(), g))
-                .collect(),
+            groups: rules::by_kind(list.groups),
+            warnings: rules::by_kind(list.warnings),
             ignored: ignored
-                .ignored
-                .into_iter()
-                .map(|i| (i.kind.clone(), i))
+                .refolded()
+                .map(|(kept, i)| {
+                    was.insert(kept, i.kind.clone());
+                    (i.kind.clone(), i)
+                })
                 .collect(),
             filters: Vec::new(),
+            boot: boot.clone(),
         };
         for Since { kind, since } in list.ignored_since {
+            let kind = was.remove(&kind).unwrap_or_else(|| kind.refolded());
             if let Some(i) = book.ignored.get_mut(&kind) {
                 i.since = since;
             }
         }
-        // THE FILTERS, from the shipped defaults and the person's file, with
-        // the counts the brain kept — then a sweep of the kept list for a kind
-        // an active filter now holds (a default added since it was written).
-        book.set_filters(&filters.choices());
-        for Caught {
-            text,
-            since,
-            message,
-        } in list.filtered_since
-        {
-            let folded = text.to_lowercase();
-            if let Some(f) = book.filters.iter_mut().find(|f| f.folded == folded) {
-                f.since = since;
-                f.message = message;
+        // THE FILTERS, from the shipped ones and the person's file, with the
+        // counts the brain kept — this boot's, and no other: that is the whole
+        // of what ended a number that only grew — then a sweep of the kept list
+        // for a kind an active filter now holds (one added since it was written).
+        book.set_filters(&filters.filters);
+        if list.boot == boot {
+            for Caught {
+                text,
+                since,
+                message,
+            } in list.filtered_since
+            {
+                let folded = text.to_lowercase();
+                if let Some(f) = book.filters.iter_mut().find(|f| f.folded == folded) {
+                    f.since = since;
+                    f.message = message;
+                }
             }
         }
         book.apply_filters();
@@ -282,6 +366,12 @@ impl JournalErrors {
             boot,
             state: Mutex::new(State {
                 book,
+                left_at: list.left_at,
+                left_moment: list.left_moment,
+                last_run: list.last_run,
+                owed: list.owed,
+                followed: list.followed.zip(list.followed_moment),
+                followed_from: list.followed_from,
                 ..State::default()
             }),
         }
@@ -293,15 +383,25 @@ impl JournalErrors {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Writes the list now, with how often each ignored kind was heard —
-    /// the brain's state, and never the person's file.
+    /// Writes the list now and leaves nothing waiting: whoever calls this says
+    /// the page moved.
     fn write_list(&self, state: &mut State) {
-        state.unwritten = None;
+        state.write_at = None;
+        state.quietly = false;
+        self.write_file(state);
+    }
+
+    /// Writes the file, with how often each ignored kind was heard — the
+    /// brain's state, and never the person's file.
+    fn write_file(&self, state: &mut State) {
+        state.behind = false;
         write(
             self.state_dir.as_deref(),
             LIST_FILE,
             &ListFile {
+                boot: self.boot.clone(),
                 groups: state.book.groups.values().cloned().collect(),
+                warnings: state.book.warnings.values().cloned().collect(),
                 ignored_since: state
                     .book
                     .ignored
@@ -322,8 +422,29 @@ impl JournalErrors {
                         message: f.message.clone(),
                     })
                     .collect(),
+                left_at: state.left_at.clone(),
+                left_moment: state.left_moment,
+                last_run: state.last_run.clone(),
+                owed: state.owed,
+                followed: state.followed.as_ref().map(|(at, _)| at.clone()),
+                followed_moment: state.followed.as_ref().map(|(_, moment)| *moment),
+                followed_from: state.followed_from.clone(),
             },
         );
+    }
+
+    /// Does what waits: the file if a cursor has not taken it there, and the
+    /// page if nothing has told it yet.
+    fn write_what_waits(&self, state: &mut State, ctx: &Ctx) {
+        let quietly = state.quietly;
+        state.write_at = None;
+        state.quietly = false;
+        if state.behind {
+            self.write_file(state);
+        }
+        if quietly {
+            Self::moved(state, ctx);
+        }
     }
 
     /// Ignores a kind, or hears it again, in the book AND in the person's
@@ -349,7 +470,7 @@ impl JournalErrors {
         // THE FILE AS IT IS NOW is what is ignored, with the counts the brain
         // kept — then this one kind moves.
         let mut counts = std::mem::take(&mut state.book.ignored);
-        for i in file.ignored {
+        for (_, i) in file.refolded() {
             let since = counts.remove(&i.kind).map_or(0, |kept| kept.since);
             state
                 .book
@@ -385,7 +506,7 @@ impl JournalErrors {
             );
             return Acted::Refused(super::why::UNREADABLE);
         };
-        state.book.set_filters(&file.choices());
+        state.book.set_filters(&file.filters);
         let acted = change(&mut state.book);
         if acted != Acted::Done {
             return acted;
@@ -409,25 +530,199 @@ fn key(k: &'static str) -> Cell {
     Cell::Key(k.into())
 }
 
+/// The second an entry was written, by the journal's clock.
+fn second_of(entry: &Entry, now: Moment) -> Moment {
+    i64::try_from(entry.realtime_us / 1_000_000).unwrap_or(now)
+}
+
+/// The colour of how grave a kind is: the legend's, and one meaning in every
+/// section.
+const fn tone_of(severity: Severity) -> Tone {
+    match severity {
+        Severity::Critical => Tone::Critical,
+        Severity::Error => Tone::Danger,
+        Severity::Notable => Tone::Warning,
+        Severity::Warning => Tone::Minor,
+    }
+}
+
+/// The word for how grave a kind is, which the legend also says.
+const fn word_of(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Critical => super::key::JOURNAL_ERRORS_LEGEND_CRITICAL,
+        Severity::Error => super::key::JOURNAL_ERRORS_LEGEND_ERROR,
+        Severity::Notable => super::key::JOURNAL_ERRORS_LEGEND_NOTABLE,
+        Severity::Warning => super::key::JOURNAL_ERRORS_LEGEND_WARNING,
+    }
+}
+
+/// One colour of the legend.
+fn swatch(severity: Severity, about: &'static str) -> Swatch {
+    Swatch {
+        tone: tone_of(severity),
+        says: word_of(severity).into(),
+        about: about.into(),
+    }
+}
+
+/// The legend: one line, and no number, because the titles have those.
+fn legend() -> Vec<Swatch> {
+    vec![
+        swatch(
+            Severity::Critical,
+            super::key::JOURNAL_ERRORS_LEGEND_CRITICAL_ABOUT,
+        ),
+        swatch(
+            Severity::Error,
+            super::key::JOURNAL_ERRORS_LEGEND_ERROR_ABOUT,
+        ),
+        swatch(
+            Severity::Notable,
+            super::key::JOURNAL_ERRORS_LEGEND_NOTABLE_ABOUT,
+        ),
+        swatch(
+            Severity::Warning,
+            super::key::JOURNAL_ERRORS_LEGEND_WARNING_ABOUT,
+        ),
+    ]
+}
+
+/// What the page says of a kind under the cursor: how grave in a word, since
+/// colour alone is lost on some eyes, since when, how often this boot and
+/// the message whole, which takes the room left.
+fn foot_of(g: &Group, boot: &str) -> Vec<Fact> {
+    let this_boot = if boot.is_empty() || g.boot == boot {
+        g.boot_count
+    } else {
+        0
+    };
+    vec![
+        Fact {
+            label: super::key::JOURNAL_ERRORS_FACT_SEVERITY.into(),
+            value: key(word_of(g.severity())),
+            tone: tone_of(g.severity()),
+        },
+        Fact {
+            label: super::key::JOURNAL_ERRORS_FACT_FIRST.into(),
+            value: Cell::Moment(g.first),
+            tone: Tone::Quiet,
+        },
+        Fact {
+            label: super::key::JOURNAL_ERRORS_FACT_THIS_BOOT.into(),
+            value: Cell::Count(this_boot),
+            tone: Tone::Working,
+        },
+        Fact {
+            label: super::key::JOURNAL_ERRORS_FACT_WHOLE.into(),
+            value: Cell::Data(g.message.clone()),
+            tone: Tone::Quiet,
+        },
+    ]
+}
+
 /// One kind of the list as a row: when it last happened, who said what, and
 /// how many times — the one thing a press on it does, and the other one its
-/// own key does (`also`).
-fn row_of(g: &Group, act: &'static str, also: Option<&'static str>, tone: Tone) -> Row {
+/// own key does (`also`). The line a filter by it starts from is the row's
+/// own, for the person to cut down to what should go.
+fn row_of(g: &Group, boot: &str, act: &'static str, also: &'static str) -> Row {
+    // THE JOURNAL'S OWN LINE, `<unit>: <message>` as `journalctl` prints it —
+    // DATA, like the brain's log line (invariant 8's exception).
+    let shown = rules::line(&g.kind.who, rules::headline(&g.message));
     Row {
         id: g.kind.id(),
         label: Cell::Moment(g.last),
-        // THE JOURNAL'S OWN LINE, `<unit>: <message>` as `journalctl` prints
-        // it — DATA, like the brain's log line (invariant 8's exception).
-        value: Cell::Data(if g.kind.who.is_empty() {
-            g.message.clone()
+        starts: if also == super::action::FILTER_LINE.id {
+            shown.clone()
         } else {
-            format!("{}: {}", g.kind.who, g.message)
-        }),
+            String::new()
+        },
+        value: Cell::Data(shown),
         note: Cell::Count(g.count),
-        tone,
+        tone: tone_of(g.severity()),
         act: Some(Word::Borrowed(act)),
-        also: also.map(Word::Borrowed),
+        also: Some(Word::Borrowed(also)),
+        foot: foot_of(g, boot),
+        ..Row::default()
     }
+}
+
+/// One filter as a row: its snippet, what it last caught and how many this
+/// boot, why it exists under it, a press to turn it off or on and its other
+/// key to say why.
+fn filter_row(f: &Filter) -> Row {
+    let mut foot = vec![Fact {
+        label: super::key::JOURNAL_ERRORS_FACT_THIS_BOOT.into(),
+        value: Cell::Count(f.since),
+        tone: Tone::Working,
+    }];
+    if !f.message.is_empty() {
+        foot.push(Fact {
+            label: super::key::JOURNAL_ERRORS_FACT_LAST_CAUGHT.into(),
+            value: Cell::Data(f.message.clone()),
+            tone: Tone::Quiet,
+        });
+    }
+    // WHAT THE PERSON WROTE WINS, and what a filter ships with is the
+    // language's: the reason a question starts from is only theirs to edit.
+    let below = match f.shipped {
+        _ if !f.reason.is_empty() => Cell::Data(f.reason.clone()),
+        Some(sentence) => key(sentence),
+        None => Cell::Empty,
+    };
+    Row {
+        id: f.id(),
+        label: Cell::Data(f.text.clone()),
+        value: Cell::Data(f.message.clone()),
+        note: Cell::Count(f.since),
+        // MINOR AND NOT QUIET: a quiet value takes a setting's colour, which
+        // reads as the legend's notable warning. What a filter held is no
+        // severity at all.
+        tone: Tone::Minor,
+        act: Some(Word::Borrowed(if f.off {
+            super::action::REFILTER.id
+        } else {
+            super::action::UNFILTER.id
+        })),
+        also: Some(Word::Borrowed(super::action::REASON.id)),
+        below,
+        foot,
+        starts: f.reason.clone(),
+    }
+}
+
+/// The rows of a module that is off: where it stopped, and what the last read
+/// found.
+fn run_rows(state: &State) -> Vec<Row> {
+    let stopped = match (state.reading, &state.left_at, state.left_moment) {
+        (true, ..) => key(super::key::JOURNAL_ERRORS_RUN_READING),
+        (false, Some(_), Some(at)) => Cell::Moment(at),
+        (false, ..) => key(super::key::JOURNAL_ERRORS_RUN_FROM_BOOT),
+    };
+    let mut rows = vec![Row {
+        id: "stopped".to_owned(),
+        label: key(super::key::JOURNAL_ERRORS_ROW_STOPPED),
+        value: stopped,
+        ..Row::default()
+    }];
+    if let Some(run) = &state.last_run {
+        // WHY IT STOPPED SHORT before anything else it could say: a read that
+        // failed and a read that found nothing are not the same news.
+        let below = match &run.why {
+            Some(why) => Cell::Key(format!("brain-journal-why-{why}").into()),
+            None if run.lost > 0 => key(super::key::JOURNAL_ERRORS_RUN_CUT),
+            None if run.listed == 0 => key(super::key::JOURNAL_ERRORS_RUN_NOTHING),
+            None => Cell::Empty,
+        };
+        rows.push(Row {
+            id: "last-run".to_owned(),
+            label: key(super::key::JOURNAL_ERRORS_ROW_LAST_RUN),
+            value: Cell::Moment(run.at),
+            note: Cell::Count(run.listed),
+            below,
+            ..Row::default()
+        });
+    }
+    rows
 }
 
 impl Module for JournalErrors {
@@ -450,7 +745,11 @@ impl Module for JournalErrors {
         if unseen > 0 {
             face.marks.push(Mark {
                 id: super::mark::UNSEEN,
-                tone: Tone::Watching,
+                tone: if state.book.worst_unseen() == Some(Severity::Critical) {
+                    Tone::Critical
+                } else {
+                    Tone::Watching
+                },
                 count: u32::try_from(unseen).unwrap_or(u32::MAX),
                 act: None,
             });
@@ -458,7 +757,7 @@ impl Module for JournalErrors {
         face
     }
 
-    fn screen(&self, _look: &Look<'_>) -> Screen {
+    fn screen(&self, look: &Look<'_>) -> Screen {
         let state = self.state();
         let sorted = state.book.sorted(&self.boot);
         let mut sections = Vec::new();
@@ -466,107 +765,168 @@ impl Module for JournalErrors {
         // an empty list under it would read as a machine with no errors.
         if let Some(why) = &state.lost {
             sections.push(Section {
+                id: "journal".into(),
                 heading: super::key::JOURNAL_ERRORS_HEADING_JOURNAL.into(),
+                about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_JOURNAL.into(),
                 rows: vec![Row {
                     id: "journal".to_owned(),
                     label: Cell::Key(format!("brain-journal-why-{why}").into()),
                     ..Row::default()
                 }],
+                ..Section::default()
+            });
+        }
+        // SWITCHED OFF, IT SAYS WHERE IT STOPPED: what it holds is from then,
+        // and the read that brings it up to now is the person's to ask for.
+        if !look.mine.enabled {
+            sections.push(Section {
+                id: "run".into(),
+                heading: super::key::JOURNAL_ERRORS_HEADING_RUN.into(),
+                about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_RUN.into(),
+                rows: run_rows(&state),
+                ..Section::default()
             });
         }
         let seen = super::action::SEEN.id;
         let ignore = super::action::IGNORE.id;
-        let rows = |groups: &[&Group], act, also, tone| {
+        let filter_line = super::action::FILTER_LINE.id;
+        let rows = |groups: &[&Group], act, also| {
             groups
                 .iter()
-                .map(|g| row_of(g, act, also, tone))
+                .map(|g| row_of(g, &self.boot, act, also))
                 .collect::<Vec<_>>()
+        };
+        // NOTHING AT ALL is a sentence, not a page of headings over nothing
+        // (the page leaves out a section with no rows), and it is a title
+        // with no count: the one row under it is not a kind.
+        let nothing = sorted.unseen.is_empty()
+            && sorted.earlier.is_empty()
+            && sorted.seen.is_empty()
+            && sorted.ignored.is_empty();
+        let unseen = if nothing {
+            vec![Row {
+                id: "none".to_owned(),
+                label: key(if look.mine.enabled {
+                    super::key::JOURNAL_ERRORS_ROW_NONE
+                } else {
+                    super::key::JOURNAL_ERRORS_ROW_OFF
+                }),
+                ..Row::default()
+            }]
+        } else {
+            rows(&sorted.unseen, seen, ignore)
         };
         // AN ERROR NOT YET SEEN is marked seen by its press, and its type
         // ignored by its other key — one step, not seen first and ignored
         // after in the section below.
         sections.push(Section {
+            id: "unseen".into(),
             heading: super::key::JOURNAL_ERRORS_HEADING_UNSEEN.into(),
-            rows: rows(&sorted.unseen, seen, Some(ignore), Tone::Watching),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_UNSEEN.into(),
+            rows: unseen,
+            fold: if nothing { Fold::Never } else { Fold::Open },
+            ..Section::default()
         });
         sections.push(Section {
+            id: "earlier".into(),
             heading: super::key::JOURNAL_ERRORS_HEADING_EARLIER.into(),
-            rows: rows(&sorted.earlier, seen, Some(ignore), Tone::Watching),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_EARLIER.into(),
+            rows: rows(&sorted.earlier, seen, ignore),
+            fold: Fold::Open,
+            ..Section::default()
+        });
+        // A WARNING IS NOT ON THE MARK, so there is nothing to see in it: its
+        // press ignores the kind, and its other key filters by the line.
+        sections.push(Section {
+            id: "warnings".into(),
+            heading: super::key::JOURNAL_ERRORS_HEADING_WARNINGS.into(),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_WARNINGS.into(),
+            rows: rows(&sorted.warnings, ignore, filter_line),
+            fold: Fold::Shut,
+            ..Section::default()
         });
         sections.push(Section {
+            id: "seen".into(),
             heading: super::key::JOURNAL_ERRORS_HEADING_SEEN.into(),
-            rows: rows(&sorted.seen, ignore, None, Tone::Quiet),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_SEEN.into(),
+            rows: rows(&sorted.seen, ignore, filter_line),
+            fold: Fold::Shut,
+            ..Section::default()
         });
         sections.push(Section {
+            id: "ignored".into(),
             heading: super::key::JOURNAL_ERRORS_HEADING_IGNORED.into(),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_IGNORED.into(),
             rows: sorted
                 .ignored
                 .iter()
                 .map(|i| Row {
                     id: i.kind.id(),
                     label: Cell::Data(i.kind.who.clone()),
-                    value: Cell::Data(i.message.clone()),
+                    value: Cell::Data(rules::headline(&i.message).to_owned()),
                     note: Cell::Count(i.since),
-                    tone: Tone::Quiet,
+                    // Minor, for the reason a filter row is (`filter_row`).
+                    tone: Tone::Minor,
                     act: Some(Word::Borrowed(super::action::UNIGNORE.id)),
                     also: None,
+                    ..Row::default()
                 })
                 .collect(),
+            fold: Fold::Shut,
+            ..Section::default()
         });
-        // NOTHING AT ALL is a sentence, not a page of headings over nothing
-        // (the page leaves out a section with no rows).
-        if sorted.unseen.is_empty()
-            && sorted.earlier.is_empty()
-            && sorted.seen.is_empty()
-            && sorted.ignored.is_empty()
-        {
-            sections.push(Section {
-                heading: super::key::JOURNAL_ERRORS_HEADING_UNSEEN.into(),
-                rows: vec![Row {
-                    id: "none".to_owned(),
-                    label: key(super::key::JOURNAL_ERRORS_ROW_NONE),
-                    ..Row::default()
-                }],
-            });
-        }
         // THE FILTERS, at the foot of the page: each snippet, the last line it
-        // caught and how many — one that is on to turn off, one that is off to
-        // turn on. A filtered line is counted here and never on the mark.
-        let filters = state.book.filters();
-        if !filters.is_empty() {
-            let mut shown: Vec<&Filter> = filters.iter().collect();
-            shown.sort_by(|a, b| a.off.cmp(&b.off).then_with(|| a.folded.cmp(&b.folded)));
-            sections.push(Section {
-                heading: super::key::JOURNAL_ERRORS_HEADING_FILTERED.into(),
-                rows: shown
-                    .iter()
-                    .map(|f| Row {
-                        id: f.id(),
-                        label: Cell::Data(f.text.clone()),
-                        value: Cell::Data(f.message.clone()),
-                        note: Cell::Count(f.since),
-                        tone: Tone::Quiet,
-                        act: Some(Word::Borrowed(if f.off {
-                            super::action::REFILTER.id
-                        } else {
-                            super::action::UNFILTER.id
-                        })),
-                        also: None,
-                    })
-                    .collect(),
-            });
+        // caught and how many this boot — one that is on to turn off, one that
+        // is off to turn on. A filtered line is counted here and never on the
+        // mark. What ships and caught nothing is a long list that says nothing
+        // yet, in a section of its own; the person's own stays in the first,
+        // where they will look for it.
+        let (idle, mut caught): (Vec<&Filter>, Vec<&Filter>) = state
+            .book
+            .filters()
+            .iter()
+            .partition(|f| f.origin == Origin::Default && !f.off && f.since == 0);
+        caught.sort_by_key(|f| (f.off, Reverse(f.since), f.folded.clone()));
+        sections.push(Section {
+            id: "filtered".into(),
+            heading: super::key::JOURNAL_ERRORS_HEADING_FILTERED.into(),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_FILTERED.into(),
+            tally: Cell::Count(caught.iter().map(|f| f.since).sum()),
+            rows: caught.iter().map(|f| filter_row(f)).collect(),
+            fold: Fold::Shut,
+        });
+        sections.push(Section {
+            id: "filtered-idle".into(),
+            heading: super::key::JOURNAL_ERRORS_HEADING_FILTERED_IDLE.into(),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_FILTERED_IDLE.into(),
+            rows: idle.iter().map(|f| filter_row(f)).collect(),
+            fold: Fold::Shut,
+            ..Section::default()
+        });
+        Screen {
+            sections,
+            legend: legend(),
         }
-        Screen { sections }
     }
 
     fn act(&self, act: &Act, ctx: &Ctx) -> Acted {
         let mut state = self.state();
         let action = act.action.as_str();
+        // A READ BY HAND IS THE CORE'S TO MAKE: it refuses one while this
+        // hears everything as it happens, and here is only the one on its way.
+        if action == super::action::RUN.id {
+            return if state.reading {
+                Acted::Refused(super::why::READING)
+            } else {
+                Acted::Pass
+            };
+        }
         // THE PAGE'S OWN, needing no row: mark everything seen, or add a filter
-        // from what the person typed.
+        // from what the person typed — from nothing, or from a line of a row
+        // they cut down, which is the same filter.
         if action == super::action::SEEN_ALL.id {
             state.book.see_all();
-        } else if action == super::action::FILTER.id {
+        } else if action == super::action::FILTER.id || action == super::action::FILTER_LINE.id {
             let answer = act.answer.as_deref().unwrap_or("");
             let acted = self.refile(&mut state, |book| {
                 let text = answer.trim();
@@ -610,6 +970,16 @@ impl Module for JournalErrors {
                         Acted::Refused(super::why::GONE)
                     }
                 }),
+                a if a == super::action::REASON.id => {
+                    let answer = act.answer.as_deref().unwrap_or("");
+                    self.refile(&mut state, |book| {
+                        if book.give_reason(row, answer) {
+                            Acted::Done
+                        } else {
+                            Acted::Refused(super::why::GONE)
+                        }
+                    })
+                }
                 _ => return Acted::Refused("unknown"),
             };
             if acted != Acted::Done {
@@ -626,13 +996,134 @@ impl Module for JournalErrors {
 
 impl Watcher for JournalErrors {
     fn sources(&self) -> Vec<Source> {
-        vec![Source::Journal(Match {
-            max_priority: Some(ronoctua_journal::ERR),
-            backfill: Backfill::ThisBoot {
-                most: rules::BACKFILL_MOST,
-            },
-            ..Match::default()
-        })]
+        vec![
+            Source::Journal(Match {
+                max_priority: Some(ronoctua_journal::ERR),
+                backfill: Backfill::ThisBoot {
+                    most: rules::BACKFILL_MOST,
+                },
+                ..Match::default()
+            }),
+            // THE WARNINGS ALONE, with a ring of their own, so a burst of them
+            // reaches back no further than itself and pushes out no error.
+            Source::Journal(Match {
+                max_priority: Some(ronoctua_journal::WARNING),
+                min_priority: Some(ronoctua_journal::WARNING),
+                backfill: Backfill::ThisBoot {
+                    most: rules::BACKFILL_WARNINGS,
+                },
+                ..Match::default()
+            }),
+        ]
+    }
+
+    fn started(&self, _now: Moment, ctx: &Ctx) {
+        let mut state = self.state();
+        state.on = true;
+        Self::moved(&mut state, ctx);
+    }
+
+    fn stopped(&self, now: Moment, ctx: &Ctx) {
+        let mut state = self.state();
+        state.on = false;
+        state.left_moment = Some(now);
+        // NOW, because off is the one state with no wake: the core tells a
+        // module on, and what waited would wait until it came back.
+        self.write_list(&mut state);
+        Self::moved(&mut state, ctx);
+    }
+
+    fn keep(&self, _now: Moment, _ctx: &Ctx) {
+        let mut state = self.state();
+        if !state.behind {
+            return;
+        }
+        self.write_file(&mut state);
+        // THE FILE, AND ONLY THE FILE: the cursor is due every few seconds and
+        // at once after a silence, and the page of a quiet line stays on its
+        // half minute. A line that moved the mark's count has told the page
+        // already.
+        if !state.quietly {
+            state.write_at = None;
+        }
+    }
+
+    fn pass(&self, _now: Moment, ctx: &Ctx) -> Option<Pass> {
+        let mut state = self.state();
+        // OWED SINCE A BRAIN THAT STOPPED while it read: read again up to the
+        // first line the follower brought then, and no further — those were
+        // heard. A pass asked for afresh starts with the follower nowhere.
+        let until = if state.owed {
+            state.followed_from.clone()
+        } else {
+            state.followed = None;
+            state.followed_from = None;
+            None
+        };
+        state.reading = true;
+        state.owed = true;
+        // AT ONCE: a brain stopped before the next cursor would otherwise
+        // forget that the stretch this reads was never heard.
+        self.write_list(&mut state);
+        Self::moved(&mut state, ctx);
+        Some(Pass {
+            after: state.left_at.clone(),
+            most: rules::PASS_MOST,
+            until,
+        })
+    }
+
+    fn owed(&self) -> bool {
+        self.state().owed
+    }
+
+    fn passed(&self, passed: Passed<'_>, ctx: &Ctx) {
+        let now = ctx.now();
+        let mut state = self.state();
+        // EACH SOURCE HANDS ITS OWN, oldest first; heard in the order they
+        // were written, a row ends on the message that came last.
+        let mut entries: Vec<&Entry> = passed.shares.iter().flat_map(|(_, e)| e).collect();
+        entries.sort_by_key(|e| e.realtime_us);
+        let mut listed = 0;
+        for entry in &entries {
+            let heard = state.book.hear(entry, second_of(entry, now));
+            if !matches!(heard, rules::Heard::Ignored | rules::Heard::Filtered) {
+                listed += 1;
+            }
+        }
+        // THE PLACE MOVES ONLY WITH A LINE. A pass that read nothing or could
+        // not read hands no `last`, and the place it started from still
+        // stands: wiping it would have the next read count the whole boot
+        // again. And never behind the follower, which brought lines while
+        // this read and may be past where this pass ended, on or off since —
+        // unless the pass read every line the follower brought, and is past
+        // it: the core skips what the follower brings up to there, so nothing
+        // else would move the place over lines already counted.
+        let followed = state.followed.take();
+        state.followed_from = None;
+        state.owed = false;
+        match passed.last {
+            Some(last) if passed.ahead || followed.is_none() => {
+                state.left_at = Some(last.clone());
+                state.left_moment = Some(entries.last().map_or(now, |e| second_of(e, now)));
+            }
+            _ => {
+                if let Some((at, moment)) = followed {
+                    state.left_at = Some(at);
+                    state.left_moment = Some(moment);
+                }
+            }
+        }
+        state.last_run = Some(LastRun {
+            at: now,
+            listed,
+            lost: passed.lost,
+            why: passed.why.map(|why| why.id().to_owned()),
+        });
+        state.reading = false;
+        // AT ONCE, moved or not: off, nothing else will write it.
+        self.write_list(&mut state);
+        Self::moved(&mut state, ctx);
     }
 
     fn heard(&self, heard: Heard<'_>, ctx: &Ctx) {
@@ -640,17 +1131,37 @@ impl Watcher for JournalErrors {
         let mut state = self.state();
         match heard {
             Heard::Journal { entry, .. } => {
-                let at = i64::try_from(entry.realtime_us / 1_000_000).unwrap_or(now);
-                state.book.hear(entry, at);
-                state.unwritten.get_or_insert(now);
-                Self::moved(&mut state, ctx);
+                let at = second_of(entry, now);
+                // WHILE A PASS IS OWED the place is where it reads from, and
+                // the follower's is kept beside it until it ends.
+                if state.owed {
+                    state
+                        .followed_from
+                        .get_or_insert_with(|| entry.cursor.clone());
+                    state.followed = Some((entry.cursor.clone(), at));
+                } else {
+                    state.left_at = Some(entry.cursor.clone());
+                    state.left_moment = Some(at);
+                }
+                state.behind = true;
+                match state.book.hear(entry, at) {
+                    rules::Heard::New | rules::Heard::Again => {
+                        let soon = now + WRITE_AFTER_S;
+                        state.write_at = Some(state.write_at.map_or(soon, |at| at.min(soon)));
+                        Self::moved(&mut state, ctx);
+                    }
+                    // NO COUNT ON THE MARK MOVED: nothing for the mark, and
+                    // most of what the journal says — the counts on their rows
+                    // reach the page with the wake.
+                    rules::Heard::Quiet | rules::Heard::Ignored | rules::Heard::Filtered => {
+                        state.write_at.get_or_insert(now + QUIET_AFTER_S);
+                        state.quietly = true;
+                    }
+                }
             }
             Heard::Wake => {
-                if state
-                    .unwritten
-                    .is_some_and(|since| since + WRITE_AFTER_S <= now)
-                {
-                    self.write_list(&mut state);
+                if state.write_at.is_some_and(|at| at <= now) {
+                    self.write_what_waits(&mut state, ctx);
                 }
             }
             Heard::Lost { why, .. } => {
@@ -669,62 +1180,161 @@ impl Watcher for JournalErrors {
     }
 
     fn next_wake(&self, _now: Moment) -> Option<Moment> {
-        // A CLOCK ONLY WHILE THE LIST WAITS TO BE WRITTEN.
-        self.state().unwritten.map(|since| since + WRITE_AFTER_S)
+        // A CLOCK ONLY WHILE SOMETHING WAITS: THE FILE, OR THE PAGE.
+        self.state().write_at
     }
 }
 
-/// The kind of a row, for a test.
 #[cfg(test)]
-fn kind_of(line: &str) -> rules::Kind {
-    rules::Kind::of(
-        &crate::module::Entry::parse(line).expect("a fixture that is not a journal line"),
-    )
-}
+mod fixtures;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module::Entry;
+    use crate::module::Refusal;
 
     const BOOT: &str = "0123456789abcdef0123456789abcdef";
+
+    /// The kind of a row.
+    fn kind_of(line: &str) -> rules::Kind {
+        rules::Kind::of(&Entry::parse(line).expect("a fixture that is not a journal line"))
+    }
 
     fn errors() -> JournalErrors {
         JournalErrors::keeping(None, None, BOOT.to_owned())
     }
 
+    /// What it may look at while it is on, the state most of these are about:
+    /// it ships off, and off its page opens with where it stopped.
     fn look() -> Look<'static> {
         static PULSE: std::sync::OnceLock<crate::pulse::Pulse> = std::sync::OnceLock::new();
         static MINE: std::sync::OnceLock<crate::prefs::TaskPrefs> = std::sync::OnceLock::new();
         Look {
             now: 0,
             pulse: PULSE.get_or_init(crate::pulse::Pulse::default),
-            mine: MINE.get_or_init(|| super::super::MANIFEST.defaults()),
+            mine: MINE.get_or_init(|| crate::prefs::TaskPrefs {
+                enabled: true,
+                ..super::super::MANIFEST.defaults()
+            }),
             last: None,
         }
     }
 
-    /// Hears a line through the module's own match, as the core would.
-    fn hear(m: &JournalErrors, ctx: &Ctx, line: &str) -> bool {
-        let entry = Entry::parse(line).expect("a fixture that is not a journal line");
-        let Some(Source::Journal(wanted)) = m.sources().into_iter().next() else {
-            panic!("no journal source");
-        };
-        if !wanted.accepts(&entry) {
-            return false;
+    /// The same while it is off, as it ships.
+    fn look_off() -> Look<'static> {
+        static MINE: std::sync::OnceLock<crate::prefs::TaskPrefs> = std::sync::OnceLock::new();
+        Look {
+            mine: MINE.get_or_init(|| super::super::MANIFEST.defaults()),
+            ..look()
         }
-        m.heard(
-            Heard::Journal {
-                source: 0,
-                entry: &entry,
-            },
-            ctx,
-        );
-        true
+    }
+
+    /// Hears a line through the module's own matches, as the core would: each
+    /// source that accepts it. How many did.
+    fn heard_by(m: &JournalErrors, ctx: &Ctx, line: &str) -> usize {
+        let entry = Entry::parse(line).expect("a fixture that is not a journal line");
+        let mut accepted = 0;
+        for (source, wanted) in m.sources().into_iter().enumerate() {
+            let Source::Journal(wanted) = wanted else {
+                panic!("not a journal source");
+            };
+            if wanted.accepts(&entry) {
+                accepted += 1;
+                m.heard(
+                    Heard::Journal {
+                        source,
+                        entry: &entry,
+                    },
+                    ctx,
+                );
+            }
+        }
+        accepted
+    }
+
+    fn hear(m: &JournalErrors, ctx: &Ctx, line: &str) -> bool {
+        heard_by(m, ctx, line) > 0
     }
 
     fn marks(m: &JournalErrors) -> Vec<Mark> {
         m.face(&look()).marks
+    }
+
+    /// One line of a made-up journal, the `n`th: its cursor says so, and it is
+    /// written `n` seconds after [`fixtures::AT`].
+    fn written(n: u64, priority: u8, unit: &str, message: &str) -> String {
+        let at = fixtures::AT.unsigned_abs() + n;
+        serde_json::json!({
+            "__CURSOR": format!("cursor-{n}"),
+            "__REALTIME_TIMESTAMP": format!("{at}000000"),
+            "_BOOT_ID": BOOT,
+            "PRIORITY": priority.to_string(),
+            "_SYSTEMD_UNIT": unit,
+            "MESSAGE": message,
+        })
+        .to_string()
+    }
+
+    /// A pass over `journal`, as the core makes one: from where the module
+    /// says, each source its own lines, and the place of the last line read.
+    fn read(m: &JournalErrors, ctx: &Ctx, journal: &[String]) {
+        let pass = m.pass(ctx.now(), ctx).expect("it wants no pass");
+        let entries: Vec<Entry> = journal
+            .iter()
+            .map(|line| Entry::parse(line).expect("a line of no journal"))
+            .collect();
+        let from = pass.after.as_ref().map_or(0, |after| {
+            entries
+                .iter()
+                .position(|e| e.cursor == *after)
+                .map_or(0, |at| at + 1)
+        });
+        let shares: Vec<(usize, Vec<Entry>)> = m
+            .sources()
+            .into_iter()
+            .enumerate()
+            .map(|(source, wanted)| {
+                let Source::Journal(wanted) = wanted else {
+                    panic!("not a journal source");
+                };
+                let taken = entries[from..]
+                    .iter()
+                    .filter(|e| wanted.accepts(e))
+                    .cloned()
+                    .collect();
+                (source, taken)
+            })
+            .collect();
+        let last = entries[from..].last().map(|e| e.cursor.clone());
+        m.passed(
+            Passed {
+                shares: &shares,
+                lost: 0,
+                last: last.as_ref(),
+                why: None,
+                ahead: false,
+            },
+            ctx,
+        );
+    }
+
+    /// The section of this id, of a page.
+    fn section<'a>(screen: &'a Screen, id: &str) -> Option<&'a Section> {
+        screen.sections.iter().find(|s| s.id == id)
+    }
+
+    /// How many times the kind that says `what` was counted, in the list or
+    /// among the warnings.
+    fn count_of(m: &JournalErrors, what: &str) -> u64 {
+        let state = m.state();
+        state
+            .book
+            .groups
+            .values()
+            .chain(state.book.warnings.values())
+            .filter(|g| g.message.contains(what))
+            .map(|g| g.count)
+            .sum()
     }
 
     #[test]
@@ -740,8 +1350,8 @@ mod tests {
         ] {
             assert!(hear(&m, &ctx, line), "an error was not accepted: {line}");
         }
-        // A WARNING AND AN INFO LINE ARE NOT ERRORS.
-        assert!(!hear(&m, &ctx, fixtures::WARNING));
+        // A WARNING IS HEARD AND NOT COUNTED, and an info line is not heard.
+        assert_eq!(heard_by(&m, &ctx, fixtures::WARNING), 1);
         assert!(!hear(&m, &ctx, fixtures::INFO_NO_PRIORITY));
         let got = marks(&m);
         assert_eq!(got.len(), 1);
@@ -761,9 +1371,10 @@ mod tests {
             !kept.changes().is_empty(),
             "the face moved and nobody was told"
         );
-        // AND THE PAGE: this boot's kinds, newest first, the nginx one twice.
+        // AND THE PAGE: this boot's kinds, the nginx one twice.
         let screen = m.screen(&look());
         let unseen = &screen.sections[0];
+        assert_eq!(unseen.id, "unseen");
         assert_eq!(
             unseen.heading,
             super::super::key::JOURNAL_ERRORS_HEADING_UNSEEN
@@ -786,7 +1397,11 @@ mod tests {
         // ITS TYPE IS IGNORED FROM HERE, by the row's other key — not seen
         // first and ignored after, two steps for one wish.
         assert_eq!(nginx.also.as_deref(), Some(super::super::action::IGNORE.id));
-        assert_eq!(nginx.tone, Tone::Watching);
+        assert_eq!(
+            nginx.tone,
+            Tone::Danger,
+            "an error is not an error's colour"
+        );
         // THE KERNEL HAS NO UNIT, and is named `kernel`; the person's service
         // by its own unit, from their journal.
         let values: Vec<&Cell> = unseen.rows.iter().map(|r| &r.value).collect();
@@ -823,11 +1438,7 @@ mod tests {
         );
         // THE ROWS STAY, as seen, and a press on one now ignores its kind.
         let screen = m.screen(&look());
-        let seen = screen
-            .sections
-            .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_SEEN)
-            .expect("the seen section");
+        let seen = section(&screen, "seen").expect("the seen section");
         assert_eq!(seen.rows.len(), 2);
         assert!(
             seen.rows
@@ -891,11 +1502,7 @@ mod tests {
         let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
         assert_eq!(marks(&again)[0].count, 1);
         let screen = again.screen(&look());
-        let ignored = screen
-            .sections
-            .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_IGNORED)
-            .expect("the ignored section");
+        let ignored = section(&screen, "ignored").expect("the ignored section");
         assert_eq!(ignored.rows.len(), 1);
         assert_eq!(ignored.rows[0].id, nginx);
         assert_eq!(ignored.rows[0].note, Cell::Count(1), "heard once since");
@@ -1049,23 +1656,13 @@ mod tests {
         let (ctx, _) = Ctx::kept(super::super::ID, 100);
         hear(&m, &ctx, fixtures::NGINX_BIND_80);
         let screen = m.screen(&look());
-        let earlier = screen
-            .sections
-            .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_EARLIER)
-            .expect("the earlier section");
+        let earlier = section(&screen, "earlier").expect("the earlier section");
         assert_eq!(
             earlier.rows.len(),
             1,
             "an error of another boot read as this one's"
         );
-        assert!(
-            screen
-                .sections
-                .iter()
-                .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_UNSEEN)
-                .is_some_and(|s| s.rows.is_empty())
-        );
+        assert!(section(&screen, "unseen").is_some_and(|s| s.rows.is_empty()));
     }
 
     #[test]
@@ -1073,21 +1670,31 @@ mod tests {
         let m = errors();
         let screen = m.screen(&look());
         let rows: Vec<&Row> = screen.sections.iter().flat_map(|s| &s.rows).collect();
-        // THE NONE ROW first, and the one shipped filter at the foot.
+        // THE NONE ROW first, under a title that counts nothing, and what
+        // ships at the foot: nothing caught yet, so all of it idle.
         assert_eq!(
             rows[0].label,
             key(super::super::key::JOURNAL_ERRORS_ROW_NONE)
         );
         assert!(rows[0].act.is_none());
-        let filtered = screen
-            .sections
-            .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)
-            .expect("the filtered section");
-        assert_eq!(filtered.rows.len(), 1, "the shipped default is not shown");
+        assert_eq!(screen.sections[0].fold, Fold::Never);
+        let idle = section(&screen, "filtered-idle").expect("the idle filters");
         assert_eq!(
-            filtered.rows[0].act.as_deref(),
+            idle.rows.len(),
+            noise::SHIPPED.len(),
+            "what ships is not shown"
+        );
+        assert_eq!(
+            idle.rows[0].act.as_deref(),
             Some(super::super::action::UNFILTER.id)
+        );
+        assert!(section(&screen, "filtered").is_some_and(|s| s.rows.is_empty()));
+        // OFF, IT SAYS SO: an empty list then proves nothing about the machine.
+        let screen = m.screen(&look_off());
+        let none = section(&screen, "unseen").expect("the section of the sentence");
+        assert_eq!(
+            none.rows[0].label,
+            key(super::super::key::JOURNAL_ERRORS_ROW_OFF)
         );
         let (ctx, _) = Ctx::kept(super::super::ID, 1);
         m.heard(
@@ -1113,18 +1720,33 @@ mod tests {
     fn it_asks_the_core_for_errors_and_this_boots_last_few() {
         let m = errors();
         let sources = m.sources();
-        assert_eq!(sources.len(), 1);
-        let Source::Journal(wanted) = &sources[0] else {
-            panic!("not a journal source");
+        assert_eq!(sources.len(), 2);
+        let (Source::Journal(errors), Source::Journal(warnings)) = (&sources[0], &sources[1])
+        else {
+            panic!("not two journal sources");
         };
-        assert_eq!(wanted.max_priority, Some(ronoctua_journal::ERR));
+        assert_eq!(errors.max_priority, Some(ronoctua_journal::ERR));
+        assert_eq!(errors.min_priority, None);
         assert_eq!(
-            wanted.backfill,
+            errors.backfill,
             Backfill::ThisBoot {
                 most: rules::BACKFILL_MOST
             }
         );
-        assert!(wanted.fields.is_empty() && wanted.message_contains.is_none());
+        // THE WARNINGS ALONE: an error is not heard twice, and a ring of their
+        // own keeps them from pushing the errors out of the past.
+        assert_eq!(warnings.max_priority, Some(ronoctua_journal::WARNING));
+        assert_eq!(warnings.min_priority, Some(ronoctua_journal::WARNING));
+        assert_eq!(
+            warnings.backfill,
+            Backfill::ThisBoot {
+                most: rules::BACKFILL_WARNINGS
+            }
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        assert_eq!(heard_by(&m, &ctx, fixtures::NGINX_BIND_80), 1);
+        assert_eq!(heard_by(&m, &ctx, fixtures::WARNING), 1);
+        assert!(errors.fields.is_empty() && errors.message_contains.is_none());
     }
 
     #[test]
@@ -1186,11 +1808,7 @@ mod tests {
         // choice to turn the default off both come back.
         let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
         let screen = again.screen(&look());
-        let filtered = screen
-            .sections
-            .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)
-            .expect("the filtered section");
+        let filtered = section(&screen, "filtered").expect("the filtered section");
         assert!(
             filtered.rows.iter().any(
                 |r| matches!(&r.label, Cell::Data(d) if d == "Ignoring duplicate name")
@@ -1209,15 +1827,1086 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The id of the filtered row whose snippet is `text`, for a test.
+    /// The id of the filter row whose snippet is `text`, for a test.
     fn filter_row(m: &JournalErrors, text: &str) -> Option<String> {
         m.screen(&look())
             .sections
             .iter()
-            .find(|s| s.heading == super::super::key::JOURNAL_ERRORS_HEADING_FILTERED)?
-            .rows
-            .iter()
+            .filter(|s| s.id == "filtered" || s.id == "filtered-idle")
+            .flat_map(|s| &s.rows)
             .find(|r| matches!(&r.label, Cell::Data(d) if d == text))
             .map(|r| r.id.clone())
+    }
+
+    #[test]
+    fn a_page_is_its_nine_sections_each_saying_what_it_is() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        // ONE ROW IN EACH, so none is the empty one the page would leave out.
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        hear(&m, &ctx, &written(1, 4, "w.service", "a plain warning"));
+        hear(&m, &ctx, fixtures::KERNEL_IO);
+        hear(&m, &ctx, fixtures::USER_SYNC);
+        let seen = kind_of(fixtures::KERNEL_IO).id();
+        assert_eq!(m.act(&act_on("seen", Some(&seen)), &ctx), Acted::Done);
+        let ignored = kind_of(fixtures::USER_SYNC).id();
+        assert_eq!(m.act(&act_on("ignore", Some(&ignored)), &ctx), Acted::Done);
+        hear(&m, &ctx, fixtures::DBUS_SYSTEM);
+        m.heard(
+            Heard::Lost {
+                source: 0,
+                why: "unreadable",
+            },
+            &ctx,
+        );
+        let screen = m.screen(&look_off());
+        let shape: Vec<(&str, Fold)> = screen
+            .sections
+            .iter()
+            .map(|s| (s.id.as_ref(), s.fold))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("journal", Fold::Never),
+                ("run", Fold::Never),
+                ("unseen", Fold::Open),
+                ("earlier", Fold::Open),
+                ("warnings", Fold::Shut),
+                ("seen", Fold::Shut),
+                ("ignored", Fold::Shut),
+                ("filtered", Fold::Shut),
+                ("filtered-idle", Fold::Shut),
+            ]
+        );
+        for s in &screen.sections {
+            assert!(!s.heading.is_empty(), "`{}` has no title", s.id);
+            assert_eq!(
+                s.about,
+                format!("journal-errors-about-section-{}", s.id),
+                "the section says nothing of itself"
+            );
+        }
+        // THE COUNT OF THE FILTERS IS LINES, the others' their rows.
+        assert_eq!(
+            section(&screen, "filtered").map(|s| s.tally.clone()),
+            Some(Cell::Count(1))
+        );
+        assert_eq!(
+            section(&screen, "warnings").map(|s| s.tally.clone()),
+            Some(Cell::Empty)
+        );
+        // THE LEGEND IS ONE COLOUR A DEGREE, the words in the rows' own colour.
+        let legend: Vec<(Tone, &str)> = screen
+            .legend
+            .iter()
+            .map(|s| (s.tone, s.says.as_ref()))
+            .collect();
+        assert_eq!(
+            legend,
+            [
+                (
+                    Tone::Critical,
+                    super::super::key::JOURNAL_ERRORS_LEGEND_CRITICAL
+                ),
+                (Tone::Danger, super::super::key::JOURNAL_ERRORS_LEGEND_ERROR),
+                (
+                    Tone::Warning,
+                    super::super::key::JOURNAL_ERRORS_LEGEND_NOTABLE
+                ),
+                (
+                    Tone::Minor,
+                    super::super::key::JOURNAL_ERRORS_LEGEND_WARNING
+                ),
+            ]
+        );
+        assert!(screen.legend.iter().all(|s| !s.about.is_empty()));
+    }
+
+    #[test]
+    fn a_row_says_how_grave_in_words_and_the_rest_under_the_cursor() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let long = "the first line\nand the rest of it";
+        hear(&m, &ctx, &written(1, 2, "a.service", long));
+        hear(&m, &ctx, &written(2, 2, "a.service", long));
+        let screen = m.screen(&look());
+        let row = &section(&screen, "unseen").expect("the list").rows[0];
+        assert_eq!(row.tone, Tone::Critical);
+        assert_eq!(
+            row.value,
+            Cell::Data("a.service: the first line".to_owned()),
+            "a row shows the first line"
+        );
+        let labels: Vec<&str> = row.foot.iter().map(|f| f.label.as_ref()).collect();
+        assert_eq!(
+            labels,
+            [
+                super::super::key::JOURNAL_ERRORS_FACT_SEVERITY,
+                super::super::key::JOURNAL_ERRORS_FACT_FIRST,
+                super::super::key::JOURNAL_ERRORS_FACT_THIS_BOOT,
+                super::super::key::JOURNAL_ERRORS_FACT_WHOLE,
+            ]
+        );
+        assert_eq!(
+            row.foot[0].value,
+            key(super::super::key::JOURNAL_ERRORS_LEGEND_CRITICAL),
+            "colour was the only thing that said how grave"
+        );
+        assert_eq!(row.foot[0].tone, Tone::Critical);
+        assert_eq!(row.foot[1].value, Cell::Moment(fixtures::AT + 1));
+        assert_eq!(row.foot[2].value, Cell::Count(2));
+        assert_eq!(row.foot[3].value, Cell::Data(long.to_owned()));
+        // A ROW THAT ASKS NOTHING starts from nothing.
+        assert!(row.starts.is_empty());
+    }
+
+    #[test]
+    fn a_warning_row_starts_its_filter_from_the_line_and_stays_off_the_mark() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::WARNING);
+        assert!(marks(&m).is_empty(), "a warning reached the mark");
+        let screen = m.screen(&look());
+        let row = &section(&screen, "warnings").expect("the warnings").rows[0];
+        assert_eq!(row.tone, Tone::Minor);
+        assert_eq!(row.act.as_deref(), Some(super::super::action::IGNORE.id));
+        assert_eq!(
+            row.also.as_deref(),
+            Some(super::super::action::FILTER_LINE.id)
+        );
+        assert_eq!(row.starts, "nginx.service: low on worker connections");
+        // IGNORED FROM THE ROW, and it leaves.
+        let id = row.id.clone();
+        assert_eq!(m.act(&act_on("ignore", Some(&id)), &ctx), Acted::Done);
+        assert!(
+            m.screen(&look())
+                .sections
+                .iter()
+                .all(|s| { s.id != "warnings" || s.rows.is_empty() })
+        );
+        // AND FILTERED FROM THE ROW, by the line the person cut down.
+        let m = errors();
+        hear(&m, &ctx, fixtures::WARNING);
+        let cut = Act {
+            action: super::super::action::FILTER_LINE.id.to_owned(),
+            row: Some(id),
+            answer: Some("low on worker".to_owned()),
+        };
+        assert_eq!(m.act(&cut, &ctx), Acted::Done);
+        assert!(
+            m.state().book.warnings.is_empty(),
+            "the filter left it there"
+        );
+    }
+
+    #[test]
+    fn the_warnings_survive_a_restart_in_the_same_boot_and_not_in_a_new_one() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let keeping = |boot: &str| {
+            JournalErrors::keeping(
+                Some(state_dir.clone()),
+                Some(config_dir.clone()),
+                boot.to_owned(),
+            )
+        };
+        let m = keeping(BOOT);
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::WARNING);
+        m.keep(100, &ctx);
+        let warnings = |m: &JournalErrors| m.state().book.warnings.len();
+        assert_eq!(warnings(&keeping(BOOT)), 1, "a restart lost the warnings");
+        assert_eq!(
+            warnings(&keeping("ffffffffffffffffffffffffffffffff")),
+            0,
+            "another boot's warnings came back"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn what_a_filter_counted_survives_a_restart_and_is_nothing_in_a_new_boot() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let keeping = |boot: &str| {
+            JournalErrors::keeping(
+                Some(state_dir.clone()),
+                Some(config_dir.clone()),
+                boot.to_owned(),
+            )
+        };
+        let m = keeping(BOOT);
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::DBUS_SYSTEM);
+        hear(&m, &ctx, fixtures::DBUS_USER);
+        m.keep(100, &ctx);
+        let caught = |m: &JournalErrors| m.state().book.filters()[0].since;
+        assert_eq!(
+            caught(&keeping(BOOT)),
+            2,
+            "a restart lost this boot's count"
+        );
+        // A NEW BOOT STARTS FROM NOTHING, and that is what ended the number
+        // that only grew.
+        let next = keeping("ffffffffffffffffffffffffffffffff");
+        assert_eq!(caught(&next), 0);
+        assert!(next.state().book.filters()[0].message.is_empty());
+        // AN OLDER FILE, which names no boot, is another boot's.
+        std::fs::write(
+            state_dir.join(LIST_FILE),
+            r#"{"filtered-since":[{"text":"Ignoring duplicate name","since":3536}]}"#,
+        )
+        .expect("write");
+        assert_eq!(caught(&keeping(BOOT)), 0, "3536 came back");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_filter_row_says_why_and_how_many_and_the_last_line() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::DBUS_SYSTEM);
+        let screen = m.screen(&look());
+        let filtered = section(&screen, "filtered").expect("the filtered section");
+        assert_eq!(filtered.tally, Cell::Count(1));
+        let row = &filtered.rows[0];
+        assert_eq!(
+            row.below,
+            key(super::super::key::JOURNAL_ERRORS_REASON_DUPLICATE_NAME)
+        );
+        assert_eq!(row.also.as_deref(), Some(super::super::action::REASON.id));
+        assert_eq!(row.foot.len(), 2);
+        assert_eq!(row.foot[0].value, Cell::Count(1));
+        assert_eq!(row.foot[0].tone, Tone::Working);
+        assert_eq!(
+            row.foot[0].label,
+            super::super::key::JOURNAL_ERRORS_FACT_THIS_BOOT
+        );
+        assert_eq!(row.foot[1].tone, Tone::Quiet);
+        assert!(
+            matches!(&row.foot[1].value, Cell::Data(d) if d.contains("Ignoring duplicate name"))
+        );
+        // ONE THAT CAUGHT NOTHING has no last line to say.
+        let idle = section(&screen, "filtered-idle").expect("the idle filters");
+        assert_eq!(idle.rows[0].foot.len(), 1);
+    }
+
+    #[test]
+    fn a_reason_on_a_shipped_filter_is_written_and_blank_clears_it() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let id = filter_row(&m, "Ignoring duplicate name").expect("the row");
+        let reason = |answer: &str| Act {
+            action: super::super::action::REASON.id.to_owned(),
+            row: Some(id.clone()),
+            answer: Some(answer.to_owned()),
+        };
+        // ON, AND WITH A REASON: the file holds it though it is off nowhere.
+        assert_eq!(m.act(&reason("my own words"), &ctx), Acted::Done);
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(config_dir.join(FILTERS_FILE)).expect("read"))
+                .expect("json");
+        assert_eq!(file["filters"][0]["reason"], "my own words");
+        assert_eq!(file["filters"][0]["off"], false);
+        let again =
+            JournalErrors::keeping(Some(state_dir), Some(config_dir.clone()), BOOT.to_owned());
+        let screen = again.screen(&look());
+        let row = section(&screen, "filtered-idle")
+            .and_then(|s| s.rows.iter().find(|r| r.id == id))
+            .expect("the row");
+        assert_eq!(row.below, Cell::Data("my own words".to_owned()));
+        assert_eq!(
+            row.starts, "my own words",
+            "the question starts from nothing"
+        );
+        // BLANK GIVES THE SENTENCE IT SHIPS WITH BACK, and the file empties.
+        assert_eq!(m.act(&reason(""), &ctx), Acted::Done);
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(config_dir.join(FILTERS_FILE)).expect("read"))
+                .expect("json");
+        assert_eq!(file["filters"].as_array().map(Vec::len), Some(0));
+        let screen = m.screen(&look());
+        let row = section(&screen, "filtered-idle")
+            .and_then(|s| s.rows.iter().find(|r| r.id == id))
+            .expect("the row");
+        assert_eq!(
+            row.below,
+            key(super::super::key::JOURNAL_ERRORS_REASON_DUPLICATE_NAME)
+        );
+        // A REASON FOR A ROW THAT WENT is refused.
+        let gone = Act {
+            row: Some("ffffffffffffffff".to_owned()),
+            ..reason("x")
+        };
+        assert_eq!(m.act(&gone, &ctx), Acted::Refused(super::super::why::GONE));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_shipped_filter_the_person_turned_off_in_a_file_stays_off() {
+        // THE FILE AS IT IS ON A MACHINE TODAY, written before there were
+        // reasons or more than one shipped snippet.
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        std::fs::create_dir_all(&config_dir).expect("mkdir");
+        std::fs::write(
+            config_dir.join(FILTERS_FILE),
+            r#"{"filters":[{"text":"Ignoring duplicate name","off":true}]}"#,
+        )
+        .expect("write");
+        let m = JournalErrors::keeping(Some(state_dir), Some(config_dir.clone()), BOOT.to_owned());
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        assert!(m.state().book.filters()[0].off, "the person's off was lost");
+        assert!(hear(&m, &ctx, fixtures::DBUS_SYSTEM));
+        assert_eq!(marks(&m)[0].count, 1, "a filter the person turned off held");
+        let screen = m.screen(&look());
+        let row = section(&screen, "filtered")
+            .map(|s| &s.rows[0])
+            .expect("a filter that is off is with those that are on");
+        assert_eq!(row.act.as_deref(), Some(super::super::action::REFILTER.id));
+        // AND A CHANGE TO ANOTHER FILTER keeps it.
+        let other = filter_row(&m, "hrtimer: interrupt took").expect("the row");
+        assert_eq!(
+            m.act(
+                &act_on(super::super::action::UNFILTER.id, Some(&other)),
+                &ctx
+            ),
+            Acted::Done
+        );
+        let file = std::fs::read_to_string(config_dir.join(FILTERS_FILE)).expect("read");
+        assert!(file.contains("Ignoring duplicate name"), "{file}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_old_failure_of_a_unit_stays_ignored_and_its_two_old_rows_are_one() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        std::fs::create_dir_all(&state_dir).expect("mkdir");
+        std::fs::create_dir_all(&config_dir).expect("mkdir");
+        // THE PERSON IGNORED A FAILURE, when each of its lines was a kind.
+        let ignored = IgnoredFile {
+            ignored: vec![Ignored {
+                kind: rules::Kind {
+                    who: "made-up.service".to_owned(),
+                    template: "made-up.service: Failed with result 'exit-code'.".to_owned(),
+                },
+                message: "made-up.service: Failed with result 'exit-code'.".to_owned(),
+                since: 0,
+            }],
+        };
+        std::fs::write(
+            config_dir.join(IGNORED_FILE),
+            serde_json::to_vec(&ignored).expect("json"),
+        )
+        .expect("write");
+        // AND ANOTHER ONE IS TWO ROWS OF THE OLD LIST.
+        let row = |template: &str| {
+            serde_json::json!({
+                "kind": {"who": "other.service", "template": template},
+                "message": template,
+                "first": 1, "last": 2, "count": 1, "unseen": 1, "boot": BOOT,
+            })
+        };
+        let list = serde_json::json!({"groups": [
+            row("Failed to start other.service."),
+            row("other.service: Failed with result 'exit-code'."),
+        ]});
+        std::fs::write(state_dir.join(LIST_FILE), list.to_string()).expect("write");
+        let m = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        assert_eq!(m.state().book.groups.len(), 1, "one failure stayed two");
+        assert_eq!(marks(&m)[0].count, 1, "one failure counted twice");
+        // BOTH ITS LINES, HEARD NOW, are what the person ignored.
+        for line in [fixtures::UNIT_RESULT, fixtures::UNIT_START_FAILED] {
+            let entry = Entry::parse(line).expect("a fixture that is not a journal line");
+            assert_eq!(
+                m.state().book.hear(&entry, 3),
+                rules::Heard::Ignored,
+                "an ignored failure came back"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_old_list_and_an_old_ignored_file_hold_under_todays_folding() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        std::fs::create_dir_all(&state_dir).expect("mkdir");
+        std::fs::create_dir_all(&config_dir).expect("mkdir");
+        let crash = |pid: u32| rules::Kind {
+            who: format!("systemd-coredump@3-{pid}-0.service"),
+            template: "Process # (a) of user # dumped core.\n\nStack trace of thread #:".to_owned(),
+        };
+        // THE PERSON IGNORED ONE CRASH, when each crash was a kind of its own.
+        let ignored = IgnoredFile {
+            ignored: vec![Ignored {
+                kind: crash(1),
+                message: "Process 1 (a) of user 1000 dumped core.\n\nStack".to_owned(),
+                since: 0,
+            }],
+        };
+        std::fs::write(
+            config_dir.join(IGNORED_FILE),
+            serde_json::to_vec(&ignored).expect("json"),
+        )
+        .expect("write");
+        // AND TWO MORE OF THE SAME ARE IN THE OLD LIST, TWO ROWS.
+        let row = |pid: u32| {
+            serde_json::json!({
+                "kind": {"who": crash(pid).who, "template": crash(pid).template},
+                "message": "Process (b)",
+                "first": 1, "last": 2, "count": 1, "unseen": 1, "boot": BOOT,
+            })
+        };
+        let list = serde_json::json!({"groups": [row(2), row(3)]});
+        std::fs::write(state_dir.join(LIST_FILE), list.to_string()).expect("write");
+        let before = std::fs::read(config_dir.join(IGNORED_FILE)).expect("read");
+        let m = JournalErrors::keeping(Some(state_dir), Some(config_dir.clone()), BOOT.to_owned());
+        assert_eq!(m.state().book.groups.len(), 1, "two rows of one crash");
+        // A CRASH HEARD NOW is what the person ignored.
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let now = written(
+            1,
+            2,
+            "systemd-coredump@7-9000-0.service",
+            "Process 9000 (a) of user 1000 dumped core.\n\nStack trace of thread 9000:",
+        );
+        hear(&m, &ctx, &now);
+        assert_eq!(
+            m.state().book.ignored.values().next().map(|i| i.since),
+            Some(1),
+            "an ignored kind of the old file is not ignored any more"
+        );
+        // THE FILE IS WRITTEN ONLY WHEN THE PERSON ACTS.
+        assert_eq!(
+            std::fs::read(config_dir.join(IGNORED_FILE)).expect("read"),
+            before
+        );
+        let kind = m.state().book.ignored.keys().next().cloned().expect("kind");
+        assert_eq!(
+            m.act(&act_on("unignore", Some(&kind.id())), &ctx),
+            Acted::Done,
+            "the act could not find what the file holds"
+        );
+        assert!(m.state().book.ignored.is_empty(), "the old kind stayed in");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a kind kept under the folding before this one, with a word
+    /// it cut into pieces — a Nix hash, a short rev, a name `mktemp` made —
+    /// stops matching its own lines: ignored, they come back on the list and
+    /// the mark, and an old row stands beside today's of the same kind.
+    #[test]
+    fn a_kind_kept_with_a_word_the_old_folding_cut_holds_under_todays() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        std::fs::create_dir_all(&state_dir).expect("mkdir");
+        std::fs::create_dir_all(&config_dir).expect("mkdir");
+        // AS THE FOLDING BEFORE WROTE THEM: each run of digits of the word
+        // folded alone. (message then, template then, a line of it now)
+        let cases = [
+            (
+                "Cannot open /nix/store/62yhnxbs4zbclpansd8vcpnwz5js40zs-system-path/share",
+                "Cannot open /nix/store/#yhnxbs#zbclpansd#vcpnwz#js#zs-system-path/share",
+                "Cannot open /nix/store/0aw8bdz1jnc0ihxa7kd3mf6lzr2qpg9x-system-path/share",
+            ),
+            (
+                "Generation 26.11.20261027.31ecbac is broken",
+                "Generation #.#.#.#ecbac is broken",
+                "Generation 26.11.20261103.9d2f0aa is broken",
+            ),
+            (
+                "Cannot write /tmp/nix-shell.6BABLQ/stdout",
+                "Cannot write /tmp/nix-shell.#BABLQ/stdout",
+                "Cannot write /tmp/nix-shell.Xk3PqZ/stdout",
+            ),
+        ];
+        let kept = |template: &str| rules::Kind {
+            who: "made-up.service".to_owned(),
+            template: template.to_owned(),
+        };
+        // THE PERSON IGNORED THE FIRST TWO, with a count kept by the old kind.
+        let ignored = IgnoredFile {
+            ignored: cases[..2]
+                .iter()
+                .map(|(message, template, _)| Ignored {
+                    kind: kept(template),
+                    message: (*message).to_owned(),
+                    since: 0,
+                })
+                .collect(),
+        };
+        std::fs::write(
+            config_dir.join(IGNORED_FILE),
+            serde_json::to_vec(&ignored).expect("json"),
+        )
+        .expect("write");
+        // AND THE THIRD IS A ROW OF THE OLD LIST.
+        let (message, template, _) = cases[2];
+        let list = serde_json::json!({
+            "groups": [{
+                "kind": kept(template),
+                "message": message,
+                "first": 1, "last": 2, "count": 1, "unseen": 1, "boot": BOOT,
+            }],
+            "ignored-since": [{"kind": kept(cases[0].1), "since": 4}],
+        });
+        std::fs::write(state_dir.join(LIST_FILE), list.to_string()).expect("write");
+        let m = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        for (n, (_, _, now)) in (1..).zip(cases) {
+            hear(&m, &ctx, &written(n, 3, "made-up.service", now));
+        }
+        let state = m.state();
+        let since: Vec<u64> = state.book.ignored.values().map(|i| i.since).collect();
+        assert_eq!(state.book.ignored.len(), 2);
+        assert!(
+            since.contains(&5) && since.contains(&1),
+            "an ignored kind stopped matching its lines, or lost its count: {since:?}"
+        );
+        assert_eq!(state.book.groups.len(), 1, "an old row beside today's");
+        let row = state.book.groups.values().next().expect("the row");
+        assert_eq!(row.count, 2);
+        assert_eq!(row.kind.template, "Cannot write /tmp/nix-shell.#/stdout");
+        drop(state);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_run_while_off_is_the_cores_and_a_second_one_says_it_is_reading() {
+        let m = errors();
+        let (ctx, kept) = Ctx::kept(super::super::ID, 100);
+        // BY NAME, WITH NO ROW, as the page sends it.
+        let run = act_on(super::super::action::RUN.id, None);
+        assert_eq!(m.act(&run, &ctx), Acted::Pass);
+        const { assert!(super::super::action::RUN.while_off) };
+        let pass = m.pass(100, &ctx).expect("it wants the pass");
+        assert_eq!(pass.after, None, "a place it never had");
+        assert_eq!(pass.most, rules::PASS_MOST);
+        let screen = m.screen(&look_off());
+        assert_eq!(
+            section(&screen, "run").map(|s| s.rows[0].value.clone()),
+            Some(key(super::super::key::JOURNAL_ERRORS_RUN_READING)),
+            "nothing says it is reading"
+        );
+        assert_eq!(
+            m.act(&run, &ctx),
+            Acted::Refused(super::super::why::READING)
+        );
+        assert_eq!(
+            super::super::MANIFEST.why_key(super::super::why::READING),
+            Some(super::super::key::JOURNAL_ERRORS_WHY_READING)
+        );
+        assert!(!kept.changes().is_empty(), "the page did not hear of it");
+    }
+
+    #[test]
+    fn the_run_section_is_there_only_while_off_and_says_where_it_stopped() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        assert!(section(&m.screen(&look()), "run").is_none());
+        // NEVER RAN: from the boot's start.
+        let screen = m.screen(&look_off());
+        let run = section(&screen, "run").expect("the section");
+        assert_eq!(run.rows.len(), 1);
+        assert_eq!(
+            run.rows[0].value,
+            key(super::super::key::JOURNAL_ERRORS_RUN_FROM_BOOT)
+        );
+        // RAN, AND STOPPED: since when, whatever the last line it heard.
+        m.started(100, &ctx);
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        let (off, _) = Ctx::kept(super::super::ID, 500);
+        m.stopped(500, &off);
+        let screen = m.screen(&look_off());
+        assert_eq!(
+            section(&screen, "run").map(|s| s.rows[0].value.clone()),
+            Some(Cell::Moment(500))
+        );
+    }
+
+    #[test]
+    fn the_last_read_says_what_it_found() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 700);
+        let last_read = |m: &JournalErrors| {
+            m.screen(&look_off())
+                .sections
+                .iter()
+                .find(|s| s.id == "run")
+                .and_then(|s| s.rows.get(1).cloned())
+                .expect("the row of the last read")
+        };
+        let journal = [
+            written(1, 3, "a.service", "broken"),
+            written(2, 4, "b.service", "slow"),
+            written(3, 3, "dbus.service", "Ignoring duplicate name 'x'"),
+        ];
+        read(&m, &ctx, &journal);
+        let found = last_read(&m);
+        assert_eq!(found.value, Cell::Moment(700));
+        assert_eq!(
+            found.note,
+            Cell::Count(2),
+            "a filtered line is not on a list"
+        );
+        assert_eq!(found.below, Cell::Empty);
+        // NOTHING NEW is said, and the row is not left blank.
+        read(&m, &ctx, &journal);
+        assert_eq!(
+            last_read(&m).below,
+            key(super::super::key::JOURNAL_ERRORS_RUN_NOTHING)
+        );
+        // MORE THAN THE RING HELD.
+        m.pass(700, &ctx);
+        m.passed(
+            Passed {
+                shares: &[],
+                lost: 12,
+                last: None,
+                why: None,
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert_eq!(
+            last_read(&m).below,
+            key(super::super::key::JOURNAL_ERRORS_RUN_CUT)
+        );
+        // AND A READ THAT FAILED says that, in the core's words.
+        m.pass(700, &ctx);
+        m.passed(
+            Passed {
+                shares: &[],
+                lost: 12,
+                last: None,
+                why: Some(Refusal::Unstartable),
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert_eq!(
+            last_read(&m).below,
+            Cell::Key("brain-journal-why-unstartable".into())
+        );
+    }
+
+    #[test]
+    fn a_line_read_by_a_pass_is_not_read_again() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let mut journal = vec![
+            written(1, 3, "a.service", "broken"),
+            written(2, 4, "b.service", "slow"),
+        ];
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 1);
+        assert_eq!(count_of(&m, "slow"), 1);
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 1, "the second read read it again");
+        assert_eq!(count_of(&m, "slow"), 1);
+        // WHAT CAME AFTER is read, and only that.
+        journal.push(written(3, 3, "a.service", "broken"));
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 2);
+    }
+
+    #[test]
+    fn nothing_repeats_when_it_comes_back_on() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        m.started(100, &ctx);
+        let mut journal = vec![written(1, 3, "a.service", "broken")];
+        hear(&m, &ctx, &journal[0]);
+        m.stopped(101, &ctx);
+        // OFF: the journal goes on.
+        journal.push(written(2, 3, "a.service", "broken"));
+        journal.push(written(3, 3, "a.service", "broken"));
+        // BACK ON, with the pass the core makes for it and a line the follower
+        // brings while it runs. The core hands each line once (its cursor is
+        // how it knows), and what is asked of the module is where it goes on.
+        m.started(200, &ctx);
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 3, "what it missed was not read");
+        // OFF AT ONCE, nothing heard since: the pass was the last thing read,
+        // and a run from before it would read the same lines twice.
+        m.stopped(201, &ctx);
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 3, "a line came twice");
+        // AND BACK ON WITH A FOLLOWER AHEAD OF THE PASS: its place wins.
+        m.started(300, &ctx);
+        let ahead = written(9, 3, "a.service", "broken");
+        let pass = m.pass(300, &ctx).expect("a pass");
+        assert_eq!(pass.after, Some(Cursor("cursor-3".to_owned())));
+        hear(&m, &ctx, &ahead);
+        let behind = Cursor("cursor-5".to_owned());
+        m.passed(
+            Passed {
+                shares: &[],
+                lost: 0,
+                last: Some(&behind),
+                why: None,
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert_eq!(
+            m.state().left_at,
+            Some(Cursor("cursor-9".to_owned())),
+            "a pass moved the place back behind the follower"
+        );
+    }
+
+    /// FAILS IF: a brain stopped while a pass read loses what the pass was
+    /// reading — nothing in the file says it is owed, and the follower's lines
+    /// moved the place over it — or the pass read again counts a line the
+    /// follower brought before the stop.
+    #[test]
+    fn a_pass_the_brain_stopped_in_is_owed_and_read_again_up_to_the_follower() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let keeping = || {
+            JournalErrors::keeping(
+                Some(state_dir.clone()),
+                Some(config_dir.clone()),
+                BOOT.to_owned(),
+            )
+        };
+        let journal: Vec<String> = (1..=6)
+            .map(|n| written(n, 3, "a.service", "broken"))
+            .collect();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let m = keeping();
+        read(&m, &ctx, &journal[..1]);
+        assert!(!m.owed(), "a pass that ended is owed");
+        // SWITCHED ON: the pass reads from the first line, and the follower
+        // brings the fifth and the sixth meanwhile — then the brain stops.
+        m.started(100, &ctx);
+        let pass = m.pass(100, &ctx).expect("a pass");
+        assert_eq!(pass.until, None, "a pass asked afresh stops short");
+        hear(&m, &ctx, &journal[4]);
+        hear(&m, &ctx, &journal[5]);
+        m.keep(100, &ctx);
+        drop(m);
+        // STARTED AGAIN: the pass is owed, from where it was to read, up to
+        // the first line the follower brought.
+        let m = keeping();
+        assert!(m.owed(), "a pass the brain stopped in is not owed");
+        m.started(200, &ctx);
+        let pass = m.pass(200, &ctx).expect("a pass");
+        assert_eq!(pass.after, Some(Cursor("cursor-1".to_owned())));
+        assert_eq!(pass.until, Some(Cursor("cursor-5".to_owned())));
+        let shares: Vec<Entry> = journal[1..4]
+            .iter()
+            .map(|line| Entry::parse(line).expect("a line"))
+            .collect();
+        let last = shares[2].cursor.clone();
+        m.passed(
+            Passed {
+                shares: &[(0, shares)],
+                lost: 0,
+                last: Some(&last),
+                why: None,
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert!(!m.owed());
+        assert_eq!(count_of(&m, "broken"), 6, "a line lost, or counted twice");
+        assert_eq!(
+            m.state().left_at,
+            Some(Cursor("cursor-6".to_owned())),
+            "the place is not the follower's"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: a pass that read past every line the follower brought while
+    /// it ran leaves the place at the follower's line. The core skips what
+    /// the follower brings up to where the pass ended, so nothing else moves
+    /// it, and a read after the module goes off counts those lines again.
+    #[test]
+    fn a_pass_past_the_follower_takes_the_place() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        m.started(100, &ctx);
+        let journal: Vec<String> = (1..=3)
+            .map(|n| written(n, 3, "a.service", "broken"))
+            .collect();
+        let pass = m.pass(100, &ctx).expect("a pass");
+        assert_eq!(pass.after, None);
+        // THE FOLLOWER BRINGS THE FIRST LINE while the pass reads all three;
+        // the core hands the pass's share without it.
+        hear(&m, &ctx, &journal[0]);
+        let rest: Vec<Entry> = journal[1..]
+            .iter()
+            .map(|line| Entry::parse(line).expect("a line"))
+            .collect();
+        let last = rest[1].cursor.clone();
+        m.passed(
+            Passed {
+                shares: &[(0, rest)],
+                lost: 0,
+                last: Some(&last),
+                why: None,
+                ahead: true,
+            },
+            &ctx,
+        );
+        assert_eq!(m.state().left_at, Some(last), "the place stayed behind");
+        // OFF, AND READ AGAIN: nothing it holds is counted twice.
+        m.stopped(101, &ctx);
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 3, "a line came twice");
+    }
+
+    #[test]
+    fn an_empty_pass_and_a_failed_one_keep_the_place_and_a_third_read_brings_nothing() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let journal = vec![
+            written(1, 3, "a.service", "broken"),
+            written(2, 3, "a.service", "broken"),
+        ];
+        read(&m, &ctx, &journal);
+        let place = Some(Cursor("cursor-2".to_owned()));
+        assert_eq!(m.state().left_at, place);
+        // NOTHING NEW: `last` is `None`.
+        read(&m, &ctx, &journal);
+        assert_eq!(m.state().left_at, place, "an empty pass wiped the place");
+        // AND A PASS THAT FAILED, which read nothing either.
+        m.pass(100, &ctx);
+        m.passed(
+            Passed {
+                shares: &[],
+                lost: 0,
+                last: None,
+                why: Some(Refusal::Unreadable),
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert_eq!(m.state().left_at, place, "a failed pass wiped the place");
+        // THE THIRD READ brings nothing: wiped, it would count the boot again.
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 2);
+        // THE PLACE IS IN THE FILE, for a brain that starts again.
+        let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        assert_eq!(again.state().left_at, place);
+        read(&again, &ctx, &journal);
+        assert_eq!(count_of(&again, "broken"), 2, "a restart read it all again");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pass_cut_short_keeps_what_it_read_and_goes_on_from_there() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        let journal: Vec<String> = (1..=3)
+            .map(|n| written(n, 3, "a.service", "broken"))
+            .collect();
+        let got = Entry::parse(&journal[0]).expect("a line");
+        let last = got.cursor.clone();
+        m.pass(100, &ctx);
+        m.passed(
+            Passed {
+                shares: &[(0, vec![got])],
+                lost: 0,
+                last: Some(&last),
+                why: Some(Refusal::Unreadable),
+                ahead: false,
+            },
+            &ctx,
+        );
+        assert_eq!(m.state().left_at, Some(last), "what it read is read");
+        read(&m, &ctx, &journal);
+        assert_eq!(count_of(&m, "broken"), 3, "a line came twice, or none");
+    }
+
+    #[test]
+    fn stopping_writes_what_waited_because_off_has_no_wake() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        m.started(100, &ctx);
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        assert!(m.next_wake(100).is_some());
+        m.stopped(101, &ctx);
+        assert_eq!(m.next_wake(101), None, "the clock stayed armed off");
+        let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        assert_eq!(marks(&again)[0].count, 1, "what waited was lost");
+        let place = again.state().left_at.clone();
+        assert_eq!(place, Some(kept_cursor(fixtures::NGINX_BIND_80)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn kept_cursor(line: &str) -> Cursor {
+        Entry::parse(line).expect("a line").cursor
+    }
+
+    #[test]
+    fn the_journals_cursor_never_gets_ahead_of_the_list() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        // THE CORE IS ABOUT TO WRITE THE CURSOR, long before the wake.
+        m.keep(101, &ctx);
+        assert_eq!(m.next_wake(101), None, "nothing is left to write");
+        let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        assert_eq!(
+            marks(&again)[0].count,
+            1,
+            "the cursor passed a line the list lost"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cursor_takes_a_quiet_line_to_the_file_and_the_page_keeps_its_clock() {
+        let root = scratch(line!());
+        let (state_dir, config_dir) = (root.join("state"), root.join("config"));
+        let file = state_dir.join(LIST_FILE);
+        let m = JournalErrors::keeping(
+            Some(state_dir.clone()),
+            Some(config_dir.clone()),
+            BOOT.to_owned(),
+        );
+        let (ctx, kept) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::WARNING);
+        // THE CORE IS ABOUT TO WRITE THE CURSOR, long before the wake.
+        m.keep(101, &ctx);
+        assert!(kept.changes().is_empty(), "a cursor published the mind");
+        assert_eq!(
+            m.next_wake(101),
+            Some(100 + QUIET_AFTER_S),
+            "the page lost its clock"
+        );
+        let again = JournalErrors::keeping(Some(state_dir), Some(config_dir), BOOT.to_owned());
+        assert_eq!(
+            again.state().book.warnings.len(),
+            1,
+            "the cursor passed a line the list lost"
+        );
+        // ANOTHER MODULE'S LINE MOVES THE CURSOR TOO, and nothing here moved.
+        std::fs::remove_file(&file).expect("remove");
+        m.keep(102, &ctx);
+        assert!(!file.exists(), "a cursor wrote a list that had not moved");
+        // THE WAKE TELLS THE PAGE, and the file is already there.
+        let (wake, kept) = Ctx::kept(super::super::ID, 100 + QUIET_AFTER_S);
+        m.heard(Heard::Wake, &wake);
+        assert_eq!(kept.changes().len(), 1, "the page never heard of the line");
+        assert!(!file.exists(), "the wake wrote a list that had not moved");
+        assert_eq!(m.next_wake(200), None);
+        // A LINE AFTER THE CURSOR is the wake's to write.
+        hear(&m, &wake, fixtures::WARNING);
+        let (wake, _) = Ctx::kept(super::super::ID, 200 + QUIET_AFTER_S);
+        m.heard(Heard::Wake, &wake);
+        assert!(file.exists(), "the wake lost a line no cursor took");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_line_that_moves_no_count_waits_half_a_minute_and_publishes_once() {
+        let m = errors();
+        let (ctx, kept) = Ctx::kept(super::super::ID, 100);
+        for n in 0..50 {
+            hear(&m, &ctx, &written(n, 4, "a.service", "slow"));
+            hear(
+                &m,
+                &ctx,
+                &written(n, 3, "b.service", "Ignoring duplicate name 'x'"),
+            );
+        }
+        assert_eq!(
+            m.next_wake(100),
+            Some(100 + QUIET_AFTER_S),
+            "no five-second clock"
+        );
+        assert!(kept.changes().is_empty(), "each line published the mind");
+        // THE WAKE WRITES, AND SAYS SO ONCE, for the page.
+        m.heard(
+            Heard::Wake,
+            &Ctx::kept(super::super::ID, 100 + QUIET_AFTER_S).0,
+        );
+        assert_eq!(m.next_wake(200), None);
+        // AND AN ERROR HURRIES WHAT WAITS.
+        let (ctx, kept) = Ctx::kept(super::super::ID, 300);
+        hear(&m, &ctx, &written(60, 4, "a.service", "slow"));
+        assert_eq!(m.next_wake(300), Some(300 + QUIET_AFTER_S));
+        hear(&m, &ctx, &written(61, 3, "c.service", "broken"));
+        assert_eq!(m.next_wake(300), Some(300 + WRITE_AFTER_S));
+        assert_eq!(kept.changes().len(), 1, "the error did not publish at once");
+    }
+
+    #[test]
+    fn a_quiet_wake_tells_the_page() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::WARNING);
+        let generation = m.face(&look()).screen;
+        let (wake, kept) = Ctx::kept(super::super::ID, 100 + QUIET_AFTER_S);
+        m.heard(Heard::Wake, &wake);
+        assert_eq!(
+            kept.changes().len(),
+            1,
+            "the page never heard of the warning"
+        );
+        assert!(m.face(&look()).screen > generation);
+        // A WAKE WITH NOTHING TO DO SAYS NOTHING.
+        m.heard(Heard::Wake, &wake);
+        assert_eq!(kept.changes().len(), 1);
+    }
+
+    #[test]
+    fn a_critical_not_seen_turns_the_mark_and_seen_it_goes_back() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::NGINX_BIND_80);
+        assert_eq!(marks(&m)[0].tone, Tone::Watching);
+        hear(&m, &ctx, fixtures::COREDUMP_NO_MESSAGE);
+        assert_eq!(marks(&m)[0].tone, Tone::Critical);
+        assert_eq!(marks(&m)[0].count, 2);
+        let crash = kind_of(fixtures::COREDUMP_NO_MESSAGE).id();
+        assert_eq!(m.act(&act_on("seen", Some(&crash)), &ctx), Acted::Done);
+        assert_eq!(marks(&m)[0].tone, Tone::Watching, "a critical already seen");
+        assert_eq!(marks(&m)[0].count, 1);
+    }
+
+    #[test]
+    fn a_worth_a_look_warning_counts_on_the_mark_and_a_plain_one_does_not() {
+        let m = errors();
+        let (ctx, _) = Ctx::kept(super::super::ID, 100);
+        hear(&m, &ctx, fixtures::UNIT_RESULT);
+        assert_eq!(marks(&m)[0].count, 1);
+        let screen = m.screen(&look());
+        let row = &section(&screen, "unseen").expect("the list").rows[0];
+        assert_eq!(row.tone, Tone::Warning);
+        hear(&m, &ctx, fixtures::WARNING);
+        assert_eq!(marks(&m)[0].count, 1, "a plain warning reached the mark");
     }
 }

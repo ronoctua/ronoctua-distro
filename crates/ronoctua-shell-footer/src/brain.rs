@@ -1195,9 +1195,22 @@ pub fn act_of(mind: Option<&Mind>, argument: Option<&str>) -> Result<Acting, &'s
     if declared.is_none() && argument.is_some() && mind.and_then(|m| m.task(&module)).is_some() {
         return Err(crate::key::ECHO_BRAIN_NO_ACTION);
     }
+    let command = format!("{module}-{action}");
+    // AND WITH NO MIND TO LIST IT, the build's catalogue says what it is, as
+    // it does for `<module>-<action>`: before the footer's first mind an
+    // action that is only the way to something reached the module, and one
+    // that asks went unasked.
+    let (asks, row, opens) = match declared {
+        Some(a) => (a.asks.clone(), a.row, a.opens.clone()),
+        None => crate::leader::module_action(&command)
+            .map_or((None, false, None), |c| (c.asks, c.row, c.opens)),
+    };
     Ok(Acting {
-        command: format!("{module}-{action}"),
-        asks: declared.and_then(|a| a.asks.clone()),
+        command,
+        asks,
+        row,
+        opens,
+        starts: String::new(),
         module,
         action,
     })
@@ -1218,8 +1231,31 @@ pub fn action_named(mind: Option<&Mind>, command: &str) -> Option<Acting> {
             action: found.id.clone(),
             command: command.to_owned(),
             asks: found.asks.clone(),
+            row: found.row,
+            opens: found.opens.clone(),
+            starts: String::new(),
         })
     })
+}
+
+/// What a module's action may be the way to (`actions.<id>.opens`), each
+/// opened by the footer whichever door it was asked at — the window tells the
+/// footer the action by its own name (`buffer.rs`, `acted`). The loader takes
+/// no other name (`openable`, `nix/brain-modules.nix`): one more is a case
+/// here and a word there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opening {
+    /// The whole journal, followed live in a terminal of its own.
+    TheJournal,
+}
+
+/// What `opens` names, or `None` for a name nothing here opens.
+#[must_use]
+pub fn opening(opens: &str) -> Option<Opening> {
+    match opens {
+        "journal-follow" => Some(Opening::TheJournal),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,6 +1663,7 @@ mod tests {
             why_key: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
+            folds: std::collections::BTreeMap::new(),
         }
     }
 
@@ -2331,6 +2368,7 @@ mod tests {
                 why_key: String::new(),
                 screen_generation: 0,
                 actions: Vec::new(),
+                folds: std::collections::BTreeMap::new(),
             }],
             ..Mind::default()
         };
@@ -2378,17 +2416,46 @@ mod tests {
             why_key: String::new(),
             screen_generation: 0,
             actions: Vec::new(),
+            folds: std::collections::BTreeMap::new(),
         };
         task.actions.push(ronoctua_brain::mind::ActionState {
             id: "new".to_owned(),
             label: "cmd-fixture-watch-new".to_owned(),
             row: false,
             asks: Some("ask-fixture-watch-new".to_owned()),
+            opens: None,
+        });
+        task.actions.push(ronoctua_brain::mind::ActionState {
+            id: "row".to_owned(),
+            label: "cmd-fixture-watch-row".to_owned(),
+            row: true,
+            asks: None,
+            opens: None,
+        });
+        task.actions.push(ronoctua_brain::mind::ActionState {
+            id: "follow".to_owned(),
+            label: "cmd-fixture-watch-follow".to_owned(),
+            row: false,
+            asks: None,
+            opens: Some("fixture-open".to_owned()),
         });
         m.tasks.push(task);
         let found = action_named(Some(&m), "fixture-watch-new").expect("the action");
         assert_eq!(found.asks.as_deref(), Some("ask-fixture-watch-new"));
         assert_eq!(found.module, "fixture-watch");
+        assert!(!found.row && found.opens.is_none());
+        // WHAT REACHES THE LINE AND WHAT REACHES THE BRAIN IS THE MIND'S WORD.
+        let row = action_named(Some(&m), "fixture-watch-row").expect("the action");
+        assert!(row.row);
+        assert_eq!(
+            crate::brainlink::asked(&row, false, false),
+            crate::brainlink::Asked::NoRow
+        );
+        let follow = act_of(Some(&m), Some("fixture-watch follow")).expect("named");
+        assert_eq!(
+            crate::brainlink::asked(&follow, false, false),
+            crate::brainlink::Asked::Opens("fixture-open")
+        );
         assert!(action_named(Some(&m), "fixture-watch-old").is_none());
         assert!(action_named(Some(&m), "files-open").is_none());
         assert_eq!(
@@ -2406,5 +2473,54 @@ mod tests {
                 answer: Some("tomorrow at nine".to_owned())
             }
         );
+    }
+
+    /// FAILS IF: an action of the build's catalogue is the way to something
+    /// the footer does not open — an option that would say "no module offers
+    /// that" at both doors — or a name nothing opens is taken for one.
+    #[test]
+    fn every_action_that_opens_something_opens_it_here() {
+        let catalogue = ronoctua_brain::catalogue::catalogue();
+        let opens: Vec<&str> = catalogue
+            .actions()
+            .filter_map(|(_, action)| action.opens.as_deref())
+            .collect();
+        assert!(
+            !opens.is_empty(),
+            "no action opens anything; this proves nothing"
+        );
+        for name in opens {
+            assert!(
+                super::opening(name).is_some(),
+                "nothing here opens `{name}`"
+            );
+        }
+        assert_eq!(super::opening("monitor-btop"), None);
+    }
+
+    /// FAILS IF: `brain-act <module> <action>` before the footer's first mind
+    /// is sent to the module when the action is the way to something, or asks
+    /// nothing when it asks — the build's catalogue says what it is, as it
+    /// does for `<module>-<action>`.
+    #[test]
+    fn an_action_named_before_the_first_mind_is_what_the_catalogue_says() {
+        let catalogue = ronoctua_brain::catalogue::catalogue();
+        let (module, action) = catalogue
+            .actions()
+            .find(|(_, a)| a.opens.is_some())
+            .expect("no action opens anything; this proves nothing");
+        let named = format!("{} {}", module.id, action.id);
+        let acting = act_of(None, Some(&named)).expect("named");
+        assert_eq!(
+            crate::brainlink::asked(&acting, false, false),
+            crate::brainlink::Asked::Opens(action.opens.as_deref().expect("opens"))
+        );
+        let (module, action) = catalogue
+            .actions()
+            .find(|(_, a)| a.asks.is_some() && !a.row)
+            .expect("no action asks; this proves nothing");
+        let named = format!("{} {}", module.id, action.id);
+        let acting = act_of(None, Some(&named)).expect("named");
+        assert_eq!(acting.asks, action.asks);
     }
 }

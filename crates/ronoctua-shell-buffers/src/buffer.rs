@@ -194,6 +194,10 @@ struct Host {
     /// install made — started at the end of the turn by the door, off the
     /// loop (`Ui::launch_entry`), which says on THIS window what went wrong.
     to_launch: Vec<String>,
+    /// Commands for the footer to run at the end of the turn
+    /// (`Ui::tell_the_footer`): what a brain module's action is only the way
+    /// to. A window of the shell is not this process's to open.
+    to_tell: Vec<String>,
     /// A question to put on this window's line at the end of the turn
     /// (`Ui::ask`) — what a brain module's action asks before it is done: its
     /// id is the action's command, which the answer comes back to
@@ -730,6 +734,20 @@ impl Keyboards {
     }
 }
 
+/// One row of the module page delivered last, as far as acting on it goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PageRow {
+    /// Its id inside the module.
+    id: String,
+    /// The action a press runs, by id; empty for none.
+    act: String,
+    /// Its second action, by id; empty for none.
+    also: String,
+    /// What the question of its action opens with. It stops here: a component
+    /// has no use for it, so it never crosses the WIT.
+    starts: String,
+}
+
 /// What a buffer with [`ronoctua_protocol::Capability::Brain`] may act on.
 ///
 /// It owns no schedule. The unit `ronoctua-brain` owns it, this process is
@@ -763,9 +781,13 @@ struct Brain {
     /// different pages and an `act-row` index names the row that is drawn.
     shown_at: Option<u64>,
     /// The rows of the last module page delivered, counted across its
-    /// sections — `(row id, action id, second action id)` — what an
-    /// `act-row` (and an `act-row-also`) index names.
-    screen_rows: Vec<(String, String, String)>,
+    /// sections — what an `act-row` (and an `act-row-also`) index names.
+    screen_rows: Vec<PageRow>,
+    /// The ids of the sections of that page that fold: what a [`Knob::Fold`]
+    /// may name.
+    ///
+    /// [`Knob::Fold`]: ronoctua_protocol::Knob::Fold
+    screen_folds: Vec<String>,
     /// Where the page's answer comes back to the loop from its thread.
     screens: Option<calloop_channel::Sender<Paged>>,
     /// Where the brain's answer to a change comes back from its thread
@@ -845,6 +867,7 @@ impl Brain {
             asked_at: None,
             shown_at: None,
             screen_rows: Vec::new(),
+            screen_folds: Vec::new(),
             screens: None,
             answers: None,
             pending: None,
@@ -861,6 +884,33 @@ impl Brain {
             .as_ref()
             .and_then(|m| m.task(module))
             .map(|t| t.screen_generation)
+    }
+
+    /// Holds `mind`, and says whether it is news: the one already held is
+    /// not ([`Self::last`]).
+    ///
+    /// A mind of another civil day than the last forgets the page's ask:
+    /// `stamp.today` is worked out when a page crosses, so a page that does
+    /// not move says "today" about yesterday from midnight on. Its generation
+    /// has no reason to move, and the ask that follows is what brings the same
+    /// page back, dated by the new day.
+    fn heard(&mut self, mind: &ronoctua_brain::Mind) -> bool {
+        if self.last.as_ref() == Some(mind) {
+            return false;
+        }
+        let day = |at| {
+            let civil = ronoctua_files::when::civil(at, &self.zone);
+            (civil.year, civil.month, civil.day)
+        };
+        if self
+            .last
+            .as_ref()
+            .is_some_and(|m| day(m.now) != day(mind.now))
+        {
+            self.asked_at = None;
+        }
+        self.last = Some(mind.clone());
+        true
     }
 
     /// What a page that arrived becomes: the record to deliver, or `None`
@@ -889,15 +939,22 @@ impl Brain {
                     .sections
                     .iter()
                     .flat_map(|s| s.rows.iter())
-                    .map(|r| {
-                        (
-                            r.id.clone(),
-                            r.act.as_deref().unwrap_or_default().to_owned(),
-                            r.also.as_deref().unwrap_or_default().to_owned(),
-                        )
+                    .map(|r| PageRow {
+                        id: r.id.clone(),
+                        act: r.act.as_deref().unwrap_or_default().to_owned(),
+                        also: r.also.as_deref().unwrap_or_default().to_owned(),
+                        starts: r.starts.clone(),
                     })
                     .collect();
-                crate::mind_wire::screen_of(module, generation, screen, &self.zone, texts)
+                self.screen_folds = screen
+                    .sections
+                    .iter()
+                    .filter(|s| s.fold != ronoctua_brain::module::Fold::Never)
+                    .map(|s| s.id.to_string())
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                let now = self.last.as_ref().map_or(0, |m| m.now);
+                crate::mind_wire::screen_of(module, generation, screen, now, &self.zone, texts)
             }
             // NO PAGE IS A SENTENCE ON THE PAGE, never an empty one: the rows
             // go, and what the brain said takes their place. An ask NOBODY
@@ -911,6 +968,7 @@ impl Brain {
                     self.asked_at = None;
                 }
                 self.screen_rows.clear();
+                self.screen_folds.clear();
                 crate::mind_wire::refused_screen(
                     module,
                     generation,
@@ -920,20 +978,80 @@ impl Brain {
         })
     }
 
+    /// A preference for `task`, as the brain's socket carries it. `None` for
+    /// a section the page on screen does not fold, or a fold of any task but
+    /// the one that page is: refused for the reason a task is (`Host::tune`).
+    fn knob_of(&self, task: &str, knob: &ronoctua_protocol::Knob) -> Option<ronoctua_brain::Knob> {
+        use ronoctua_protocol::Knob;
+        Some(match knob {
+            Knob::IntervalDays(days) => ronoctua_brain::Knob::IntervalDays(*days),
+            Knob::PartOfDay(part) => {
+                ronoctua_brain::Knob::PartOfDay(crate::mind_wire::part_back(*part))
+            }
+            Knob::Enabled(on) => ronoctua_brain::Knob::Enabled(*on),
+            // `on` IS THE STATE THE SCREEN WANTS, and not a toggle — a toggle
+            // sent twice by a key that repeated would land back where it
+            // started with nobody the wiser.
+            Knob::Step(switch) => ronoctua_brain::Knob::Step {
+                id: switch.id.clone(),
+                on: switch.on,
+            },
+            Knob::ResetSteps => ronoctua_brain::Knob::ResetSteps,
+            Knob::Fold(section)
+                if self.watched.as_deref() == Some(task)
+                    && self.screen_folds.contains(&section.id) =>
+            {
+                ronoctua_brain::Knob::Fold {
+                    section: section.id.clone(),
+                    open: section.open,
+                }
+            }
+            Knob::Fold(_) => return None,
+        })
+    }
+
     /// One of a module's actions, as the last mind lists it.
     fn acting(&self, module: &str, action: &str) -> crate::brainlink::Acting {
-        let asks = self
+        let declared = self
             .last
             .as_ref()
             .and_then(|m| m.task(module))
-            .and_then(|t| t.actions.iter().find(|a| a.id == action))
-            .and_then(|a| a.asks.clone());
+            .and_then(|t| t.actions.iter().find(|a| a.id == action));
         crate::brainlink::Acting {
             module: module.to_owned(),
             action: action.to_owned(),
             command: format!("{module}-{action}"),
-            asks,
+            asks: declared.and_then(|a| a.asks.clone()),
+            row: declared.is_some_and(|a| a.row),
+            opens: declared.and_then(|a| a.opens.clone()),
+            starts: String::new(),
         }
+    }
+
+    /// The action of the followed module at an index of its list, which is
+    /// the list the page counted: the mind's, whole, row actions included.
+    fn acting_on_page(&self, target: u64) -> Option<crate::brainlink::Acting> {
+        let module = self.watched.as_deref()?;
+        let task = self.last.as_ref()?.task(module)?;
+        let action = task.actions.get(index_of(target)?)?;
+        Some(self.acting(module, &action.id))
+    }
+
+    /// The action of the followed module on the row at an index of the page,
+    /// the second one when `also`, with the row's id: `None` for a row that is
+    /// not on the page or has no such action.
+    fn acting_on_row(&self, target: u64, also: bool) -> Option<(crate::brainlink::Acting, String)> {
+        let module = self.watched.as_deref()?;
+        let row = self.screen_rows.get(index_of(target)?)?;
+        let action = if also { &row.also } else { &row.act };
+        if action.is_empty() {
+            return None;
+        }
+        let acting = crate::brainlink::Acting {
+            starts: row.starts.clone(),
+            ..self.acting(module, action)
+        };
+        Some((acting, row.id.clone()))
     }
 
     /// Takes a batch of the daemon's log into what this window holds.
@@ -1220,6 +1338,7 @@ pub fn host_it(
             queue_words,
             paste_wanted: false,
             to_launch: Vec::new(),
+            to_tell: Vec::new(),
             to_ask: None,
             to_say: None,
             keymap: d
@@ -2182,7 +2301,7 @@ impl Host {
     fn header(&self, ui: &mut Ui) -> Vec<ronoctua_render::Span> {
         // EACH SHORTCUT AS `LEADER Alt` REACHES IT — `⌥` and its one key, spelt
         // under the pointer — by the one rule every window's header keeps.
-        ui.hinted.offers_leader_alt(&[]);
+        ui.hinted.offers_leader_alt(&[crate::chrome::OF_A_BUFFER]);
         let texts = std::rc::Rc::clone(&ui.texts);
         let (pieces, carries) =
             crate::door::list::line_zero(ui, self.declared.pointed.clone(), |_| {
@@ -2683,6 +2802,7 @@ impl Host {
         b.asked_at = None;
         b.shown_at = None;
         b.screen_rows.clear();
+        b.screen_folds.clear();
         self.ask_screen();
     }
 
@@ -2775,41 +2895,26 @@ impl Host {
         let Some(b) = self.brain.as_ref() else {
             return;
         };
-        let (Some(module), Some((row, act, second))) = (
-            b.watched.clone(),
-            index_of(target).and_then(|n| b.screen_rows.get(n)).cloned(),
-        ) else {
-            tracing::warn!(target, "an action for a row that is not on the page");
+        let Some((acting, row)) = b.acting_on_row(target, also) else {
+            tracing::warn!(
+                target,
+                also,
+                "a row not on the page, or with no such action"
+            );
             return;
         };
-        let action = if also { second } else { act };
-        if action.is_empty() {
-            tracing::warn!(target, also, "a row with no such action was asked to act");
-            return;
-        }
-        let acting = b.acting(&module, &action);
         self.act(acting, Some(row));
     }
 
     /// One of the followed module's own actions, by its index in its list.
     fn act_page(&mut self, target: u64) {
-        let Some(b) = self.brain.as_ref() else {
+        let Some(b) = self.brain.as_ref().filter(|b| b.watched.is_some()) else {
             return;
         };
-        let Some(module) = b.watched.clone() else {
-            return;
-        };
-        let action = b
-            .last
-            .as_ref()
-            .and_then(|m| m.task(&module))
-            .and_then(|t| index_of(target).and_then(|n| t.actions.get(n)))
-            .map(|a| a.id.clone());
-        let Some(action) = action else {
+        let Some(acting) = b.acting_on_page(target) else {
             tracing::warn!(target, "an action that is not on the page");
             return;
         };
-        let acting = b.acting(&module, &action);
         self.act(acting, None);
     }
 
@@ -2855,31 +2960,25 @@ impl Host {
     }
 
     /// A module's action: sent at once, or — when it asks a question first —
-    /// the question on this window's line, and sent with its answer.
+    /// the question on this window's line, and sent with its answer. One that
+    /// is only the way to something else is the footer's to open, and the
+    /// brain never hears of it. What it comes to is [`acted`]'s.
     fn act(&mut self, acting: crate::brainlink::Acting, row: Option<String>) {
-        if acting.asks.is_some() {
-            // IN THE WORDS OF THE KEY ITS MODULE DECLARED, under the action's
-            // command — the footer's line asks the same way.
-            match crate::brainlink::question_of(&acting) {
-                Some((id, asks)) => {
-                    self.to_ask = Some(crate::line::Line::asking(id, asks));
-                    if let Some(b) = self.brain.as_mut() {
-                        b.pending = Some((acting, row));
-                    }
-                    self.owed = true;
-                }
-                None => {
-                    tracing::warn!(command = %acting.command, "no question for the action");
-                    self.to_say = Some(self.texts.t(crate::key::ECHO_BRAIN_NO_ACTION));
-                    self.owed = true;
-                }
+        match acted(&acting, row.clone()) {
+            Acted::Tell(command) => self.to_tell.push(command),
+            Acted::Say(said) => {
+                self.to_say = Some(self.texts.t(said));
+                self.owed = true;
             }
-            return;
+            Acted::Ask(line) => {
+                self.to_ask = Some(line);
+                if let Some(b) = self.brain.as_mut() {
+                    b.pending = Some((acting, row));
+                }
+                self.owed = true;
+            }
+            Acted::Send(ask) => self.put_brain(ask, Some(crate::key::ECHO_BRAIN_TAKEN)),
         }
-        self.put_brain(
-            act_ask(&acting, row, None),
-            Some(crate::key::ECHO_BRAIN_TAKEN),
-        );
     }
 
     /// Passes one of the buffer's task demands on to the brain, once the index
@@ -2943,7 +3042,6 @@ impl Host {
     /// and a step's state needs no default here either: the daemon turns "on"
     /// into an exception against the step it declared.
     fn tune(&mut self, setting: &ronoctua_protocol::Setting) {
-        use ronoctua_protocol::Knob;
         let Some(b) = self.brain.as_ref() else {
             return;
         };
@@ -2954,20 +3052,9 @@ impl Host {
             tracing::warn!(task = %setting.task, "a preference for a task that is not in the list");
             return;
         }
-        let knob = match &setting.knob {
-            Knob::IntervalDays(days) => ronoctua_brain::Knob::IntervalDays(*days),
-            Knob::PartOfDay(part) => {
-                ronoctua_brain::Knob::PartOfDay(crate::mind_wire::part_back(*part))
-            }
-            Knob::Enabled(on) => ronoctua_brain::Knob::Enabled(*on),
-            // `on` IS THE STATE THE SCREEN WANTS, and not a toggle — a toggle
-            // sent twice by a key that repeated would land back where it
-            // started with nobody the wiser.
-            Knob::Step(switch) => ronoctua_brain::Knob::Step {
-                id: switch.id.clone(),
-                on: switch.on,
-            },
-            Knob::ResetSteps => ronoctua_brain::Knob::ResetSteps,
+        let Some(knob) = b.knob_of(&setting.task, &setting.knob) else {
+            tracing::warn!(task = %setting.task, "a fold for a section the page does not have");
+            return;
         };
         // THE PAGE SHOWS THE CHANGE, so only a refusal is said: a cadence a
         // task does not keep, a step it does not have.
@@ -3033,10 +3120,9 @@ impl Host {
             // delivery calls into the component, and the component's answer is
             // a frame. A producer that repeats itself must not be able to spend
             // any of that.
-            if b.last.as_ref() == Some(mind) {
+            if !b.heard(mind) {
                 return;
             }
-            b.last = Some(mind.clone());
             let mut over = crate::mind_wire::mind_of(mind, &b.zone, &self.texts);
             // WHAT THIS WINDOW WAS OPENED ABOUT GOES FIRST — a mark's click
             // names its module — the arrangement the disks and keyboards
@@ -4379,6 +4465,9 @@ impl Host {
         for desktop in std::mem::take(&mut self.to_launch) {
             ui.launch_entry(&desktop);
         }
+        for command in std::mem::take(&mut self.to_tell) {
+            ui.tell_the_footer(&command, None);
+        }
         // A MODULE'S QUESTION, on this window's own line — the door routes
         // every key to it while it stands, and the answer comes back to
         // `answered`.
@@ -4419,6 +4508,42 @@ fn act_ask(
         action: acting.action.clone(),
         row,
         answer: answer.map(ToOwned::to_owned),
+    }
+}
+
+/// What one of a module's actions comes to at this window, and all
+/// [`Host::act`] does with it.
+#[derive(Debug, PartialEq)]
+enum Acted {
+    /// The footer is told the action BY ITS OWN NAME, and it opens what the
+    /// action is only the way to — as it does when it was asked there, so
+    /// the two doors open the same things and refuse the same ones.
+    Tell(String),
+    /// A sentence on this window's line: a row asked for with none, or a
+    /// question nobody declared.
+    Say(&'static str),
+    /// Its question on this window's line, in the words of the key its module
+    /// declared, under the action's command — the footer's line asks the
+    /// same way.
+    Ask(crate::line::Line),
+    /// The ask that does it, to the brain.
+    Send(ronoctua_brain::Ask),
+}
+
+/// What `acting`, asked on `row` or on none, comes to at this window.
+fn acted(acting: &crate::brainlink::Acting, row: Option<String>) -> Acted {
+    use crate::brainlink::Asked;
+    match crate::brainlink::asked(acting, row.is_some(), false) {
+        Asked::Opens(_) => Acted::Tell(acting.command.clone()),
+        Asked::NoRow => Acted::Say(crate::key::ECHO_BRAIN_CHOOSE_A_ROW),
+        Asked::Question => crate::brainlink::question_of(acting).map_or_else(
+            || {
+                tracing::warn!(command = %acting.command, "no question for the action");
+                Acted::Say(crate::key::ECHO_BRAIN_NO_ACTION)
+            },
+            Acted::Ask,
+        ),
+        Asked::Send => Acted::Send(act_ask(acting, row, None)),
     }
 }
 
@@ -4480,16 +4605,8 @@ mod tests {
             .collect()
     }
 
-    /// FAILS IF: an index a component hands back is read as anything but
-    /// 1-based with `0` for none, or an action is asked for with anything but
-    /// its module, its row and what was typed — or a module's action is found
-    /// with a question it did not declare.
-    #[test]
-    fn a_module_action_is_asked_as_the_mind_declared_it() {
-        assert_eq!(super::index_of(0), None);
-        assert_eq!(super::index_of(1), Some(0));
-        assert_eq!(super::index_of(3), Some(2));
-        let mut b = Brain::fresh();
+    /// A mind of one task, `fixture`, that offers `actions`.
+    fn a_mind_of_actions(actions: Vec<ronoctua_brain::mind::ActionState>) -> ronoctua_brain::Mind {
         let mut mind = ronoctua_brain::Mind::default();
         mind.tasks.push(ronoctua_brain::TaskState {
             kind: ronoctua_brain::Kind::Watch,
@@ -4509,19 +4626,36 @@ mod tests {
             does_key: String::new(),
             why_key: String::new(),
             screen_generation: 7,
-            actions: vec![ronoctua_brain::mind::ActionState {
-                id: "when".to_owned(),
-                label: "cmd-fixture-when".to_owned(),
-                row: true,
-                asks: Some("ask-fixture-when".to_owned()),
-            }],
+            actions,
+            folds: std::collections::BTreeMap::new(),
         });
-        b.last = Some(mind);
+        mind
+    }
+
+    /// FAILS IF: an index a component hands back is read as anything but
+    /// 1-based with `0` for none, or an action is asked for with anything but
+    /// its module, its row and what was typed — or a module's action is found
+    /// with a question it did not declare.
+    #[test]
+    fn a_module_action_is_asked_as_the_mind_declared_it() {
+        assert_eq!(super::index_of(0), None);
+        assert_eq!(super::index_of(1), Some(0));
+        assert_eq!(super::index_of(3), Some(2));
+        let mut b = Brain::fresh();
+        b.last = Some(a_mind_of_actions(vec![ronoctua_brain::mind::ActionState {
+            id: "when".to_owned(),
+            label: "cmd-fixture-when".to_owned(),
+            row: true,
+            asks: Some("ask-fixture-when".to_owned()),
+            opens: None,
+        }]));
         assert_eq!(b.generation_of("fixture"), Some(7));
         let acting = b.acting("fixture", "when");
         assert_eq!(acting.command, "fixture-when");
         assert_eq!(acting.asks.as_deref(), Some("ask-fixture-when"));
         assert_eq!(b.acting("fixture", "other").asks, None);
+        assert!(acting.row, "what the mind said of the action");
+        assert!(!b.acting("fixture", "other").row);
         assert_eq!(
             super::act_ask(&acting, Some("r-1".to_owned()), Some("tomorrow at nine")),
             ronoctua_brain::Ask::Act {
@@ -4531,6 +4665,64 @@ mod tests {
                 answer: Some("tomorrow at nine".to_owned()),
             }
         );
+    }
+
+    /// FAILS IF: an action that is only the way to something else is asked of
+    /// the brain at this door, on a row or on none, or the footer is told
+    /// anything but the action by its own name — the name the footer's own
+    /// door opens it under — or the mind's word on it is lost on the way here.
+    #[test]
+    fn an_action_that_opens_something_tells_the_footer_and_never_the_brain() {
+        use super::{Acted, acted};
+        let follow = |opens: Option<&str>| {
+            let mut b = Brain::fresh();
+            b.last = Some(a_mind_of_actions(vec![ronoctua_brain::mind::ActionState {
+                id: "follow".to_owned(),
+                label: "cmd-fixture-follow".to_owned(),
+                row: false,
+                asks: None,
+                opens: opens.map(ToOwned::to_owned),
+            }]));
+            b.watched = Some("fixture".to_owned());
+            b.acting_on_page(1).expect("the action")
+        };
+        let opening = follow(Some("fixture-open"));
+        let told = Acted::Tell("fixture-follow".to_owned());
+        assert_eq!(acted(&opening, None), told);
+        assert_eq!(acted(&opening, Some("r-1".to_owned())), told);
+        // AND WITHOUT IT, the same action is the brain's.
+        assert_eq!(
+            acted(&follow(None), None),
+            Acted::Send(ronoctua_brain::Ask::Act {
+                module: "fixture".to_owned(),
+                action: "follow".to_owned(),
+                row: None,
+                answer: None,
+            })
+        );
+    }
+
+    /// FAILS IF: a row's question opens without what the row starts it from
+    /// — a line to cut down typed again by hand — or a row's second action is
+    /// taken for its first, or a row with no such action is asked at all.
+    #[test]
+    fn a_row_starts_its_question_from_its_own_words() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut b = Brain::fresh();
+        b.watched = Some("fixture".to_owned());
+        let _ = b.page_arrived(&a_page(5), &texts).expect("the page");
+        b.screen_rows[0].also = "filter-line".to_owned();
+        let (acting, row) = b.acting_on_row(1, true).expect("the row");
+        assert_eq!(row, "row-5");
+        assert_eq!(acting.action, "filter-line");
+        assert_eq!(acting.starts, "what row-5 starts from");
+        assert_eq!(
+            b.acting_on_row(1, false).expect("the row").0.action,
+            "forget"
+        );
+        b.screen_rows[0].also.clear();
+        assert!(b.acting_on_row(1, true).is_none(), "no second action");
+        assert!(b.acting_on_row(2, false).is_none(), "past the page");
     }
 
     /// A page of the module `fixture` at `generation`, with one row.
@@ -4550,10 +4742,143 @@ mod tests {
                         tone: Tone::Quiet,
                         act: Some("forget".into()),
                         also: None,
+                        starts: format!("what row-{generation} starts from"),
+                        ..Row::default()
                     }],
+                    ..Section::default()
                 }],
+                ..Screen::default()
             },
         }
+    }
+
+    /// FAILS IF: the index a page sends is read against anything but the
+    /// followed module's list in the mind, row actions included — the list
+    /// `a_page_action_is_sent_by_its_place_in_the_list` counts in the page.
+    #[test]
+    fn an_action_of_a_page_is_read_from_the_mind_it_was_counted_in() {
+        let action = |id: &str, row: bool| ronoctua_brain::mind::ActionState {
+            id: id.to_owned(),
+            label: format!("cmd-fixture-{id}"),
+            row,
+            asks: None,
+            opens: None,
+        };
+        let mut b = Brain::fresh();
+        b.last = Some(a_mind_of_actions(vec![
+            action("seen", true),
+            action("ignore", true),
+            action("unignore", true),
+            action("seen-all", false),
+            action("filter", false),
+            action("follow", false),
+        ]));
+        assert!(
+            b.acting_on_page(4).is_none(),
+            "an action of a page nobody follows"
+        );
+        b.watched = Some("fixture".to_owned());
+        let acting = b.acting_on_page(4).expect("the fourth action");
+        assert_eq!(acting.action, "seen-all");
+        assert_eq!(acting.command, "fixture-seen-all");
+        assert!(b.acting_on_page(0).is_none(), "0 is none");
+        assert!(b.acting_on_page(7).is_none(), "past the list");
+    }
+
+    /// FAILS IF: a page drawn yesterday keeps saying "today" past midnight —
+    /// its generation does not move, so nothing would ask for it again — or
+    /// a mind of the same day asks for a page that did not change, or the day
+    /// is measured from anything but the last mind heard.
+    #[test]
+    fn a_new_day_asks_for_the_page_again() {
+        let day = 86_400;
+        let at = |now| ronoctua_brain::Mind {
+            now,
+            ..ronoctua_brain::Mind::default()
+        };
+        let mut b = Brain::fresh();
+        b.zone = ronoctua_files::when::Zone::utc();
+        // BEFORE THE FIRST MIND there is no day to have left.
+        b.asked_at = Some(6);
+        assert!(b.heard(&at(day + 3_600)), "the first mind is news");
+        assert_eq!(
+            b.asked_at,
+            Some(6),
+            "there was no day before the first mind"
+        );
+        assert!(!b.heard(&at(day + 3_600)), "the same mind is no news");
+        assert!(b.heard(&at(day + day - 1)));
+        assert_eq!(b.asked_at, Some(6), "the same day asked again");
+        assert!(b.heard(&at(day + day)));
+        assert_eq!(b.asked_at, None, "a new day did not ask for the page");
+        // AND IT IS THE DAY HELD NOW: the rest of it asks nothing.
+        b.asked_at = Some(6);
+        assert!(b.heard(&at(day + day + 1)));
+        assert_eq!(b.asked_at, Some(6), "every mind of a new day asked again");
+    }
+
+    /// FAILS IF: a fold for a section nothing draws reaches the person's file,
+    /// where it would sit for ever, or a section that folds cannot be folded.
+    #[test]
+    fn a_fold_is_for_a_section_of_the_page_on_screen() {
+        use ronoctua_brain::module::{Fold, Screen, Section};
+        use ronoctua_protocol::{Knob, SectionState};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut b = Brain::fresh();
+        b.watched = Some("fixture".to_owned());
+        let section = |id: &'static str, fold: Fold| Section {
+            id: id.into(),
+            fold,
+            ..Section::default()
+        };
+        let page = Paged::Screen {
+            module: "fixture".to_owned(),
+            generation: 1,
+            screen: Screen {
+                sections: vec![
+                    section("older", Fold::Shut),
+                    section("plain", Fold::Never),
+                    section("", Fold::Open),
+                ],
+                ..Screen::default()
+            },
+        };
+        let fold = |id: &str| {
+            Knob::Fold(SectionState {
+                id: id.to_owned(),
+                open: true,
+            })
+        };
+        assert_eq!(b.knob_of("fixture", &fold("older")), None, "no page yet");
+        b.page_arrived(&page, &texts).expect("the page");
+        assert_eq!(
+            b.knob_of("fixture", &fold("older")),
+            Some(ronoctua_brain::Knob::Fold {
+                section: "older".to_owned(),
+                open: true,
+            })
+        );
+        for refused in ["plain", "", "gone"] {
+            assert_eq!(b.knob_of("fixture", &fold(refused)), None, "{refused:?}");
+        }
+        // A SECTION OF THAT NAME is this page's: another task's file would
+        // keep it for a section its own page never had.
+        assert_eq!(b.knob_of("another", &fold("older")), None, "another task");
+        // AND A PAGE THAT DID NOT COME has no sections to fold.
+        b.page_arrived(
+            &Paged::Not {
+                module: "fixture".to_owned(),
+                asked: 2,
+                answer: crate::mind_wire::Answer::Unreachable,
+            },
+            &texts,
+        )
+        .expect("the refusal");
+        assert_eq!(
+            b.knob_of("fixture", &fold("older")),
+            None,
+            "a page that went away"
+        );
     }
 
     /// FAILS IF: a module's page answered OUT OF ORDER is delivered — the
@@ -4571,11 +4896,16 @@ mod tests {
         assert_eq!(newer.generation, 5);
         assert_eq!(
             b.screen_rows,
-            vec![("row-5".to_owned(), "forget".to_owned(), String::new())]
+            vec![PageRow {
+                id: "row-5".to_owned(),
+                act: "forget".to_owned(),
+                also: String::new(),
+                starts: "what row-5 starts from".to_owned(),
+            }]
         );
         assert!(b.page_arrived(&a_page(4), &texts).is_none());
         assert_eq!(
-            b.screen_rows[0].0, "row-5",
+            b.screen_rows[0].id, "row-5",
             "the late page's rows were kept"
         );
         // ANOTHER MODULE'S PAGE is not the page followed.

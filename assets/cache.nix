@@ -179,6 +179,25 @@
   # is long enough to answer "why did last week's rebuild fail?".
   buildLogDays = 30;
 
+  # WHAT THE JOURNAL KEEPS, in GiB and in days, whichever ends first (the
+  # owner's numbers, 2026-11-07).
+  #
+  # Left alone, systemd keeps a tenth of the disk up to 4 GiB and sets no age
+  # at all: 67 days at the 61 MiB a day measured here. The fixed looks back the
+  # code takes reach seven days; the one with no window is the journal's errors
+  # read from where that module stopped (by hand, or as it comes back on),
+  # which this age bounds. A month is what a person reading an old boot by hand
+  # asks of it.
+  journalMaxGiB = 1;
+  journalDays = 30;
+
+  # HOW MANY DAYS ONE JOURNAL FILE SPANS. systemd removes archived files only,
+  # each one whole, so a file has to close well before `journalDays` or the
+  # age limit reaches its old lines late, and takes its new ones with them
+  # (systemd's own span is a month). A week costs a week of precision at
+  # most; a day would be sixty files, 8 MiB each at the least.
+  journalFileDays = 7;
+
   # THE MOST ALL CARGO BUILD DIRECTORIES UNDER THE CACHE MAY WEIGH, in per
   # cent of their filesystem. It has to stay below what the goal leaves
   # (`100 - diskGoalPercent`), or the cargo tree alone could hold the disk

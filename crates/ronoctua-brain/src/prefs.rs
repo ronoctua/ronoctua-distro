@@ -130,6 +130,21 @@ pub struct Prefs {
     /// and four places the next module that starts something is forgotten.
     /// `{"quiet": true}` names nobody.
     pub quiet: bool,
+    /// The sections of each module's page the person opened or shut: by the
+    /// module's id, then by the section's, and `true` for open.
+    ///
+    /// # Why beside the tasks and not in an entry
+    ///
+    /// Because an entry decides every knob ([`Prefs::of_module`]), and it is
+    /// born with what the module ships today ([`Prefs::chosen_mut`]). Opening a
+    /// section chooses none of them, and an entry made for it would hold the
+    /// knobs at today's values, so a later distro's change would never reach
+    /// somebody who only looked at a page.
+    ///
+    /// The state chosen and not a flip like [`TaskPrefs::steps_flipped`]: which
+    /// way a section ships is the page's, built only when asked, and whoever
+    /// writes this ([`crate::wire::Knob::Fold`]) never sees it.
+    pub folds: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 impl Prefs {
@@ -157,13 +172,15 @@ impl Prefs {
     #[must_use]
     pub fn of_module(&self, manifest: &Manifest) -> TaskPrefs {
         let declared = manifest.defaults();
+        let folds = self.folds.get(manifest.id).cloned().unwrap_or_default();
         match self.tasks.get(manifest.id) {
-            None => declared,
+            None => TaskPrefs { folds, ..declared },
             Some(chosen) => TaskPrefs {
                 enabled: chosen.enabled,
                 interval_days: chosen.interval_days,
                 part_of_day: chosen.part_of_day,
                 steps_flipped: chosen.steps_flipped.clone(),
+                folds,
                 ..declared
             },
         }
@@ -178,6 +195,15 @@ impl Prefs {
         self.tasks
             .entry(manifest.id.to_owned())
             .or_insert_with(|| manifest.defaults())
+    }
+
+    /// Keeps which way the person left one section of a module's page. No
+    /// entry is made for it: see [`Prefs::folds`].
+    pub fn fold(&mut self, module: &str, section: &str, open: bool) {
+        self.folds
+            .entry(module.to_owned())
+            .or_default()
+            .insert(section.to_owned(), open);
     }
 }
 
@@ -322,6 +348,13 @@ pub struct TaskPrefs {
     /// be migrated or lost.
     #[serde(alias = "steps-off")]
     pub steps_flipped: BTreeSet<String>,
+    /// The sections of its page the person opened or shut, by the section's
+    /// id, and `true` for open.
+    ///
+    /// RESOLVED by [`Prefs::of_module`] from [`Prefs::folds`], and not written
+    /// with an entry.
+    #[serde(skip)]
+    pub folds: BTreeMap<String, bool>,
 }
 
 impl Default for TaskPrefs {
@@ -334,6 +367,7 @@ impl Default for TaskPrefs {
             runaway_minutes: 120,
             every_minutes: None,
             steps_flipped: BTreeSet::new(),
+            folds: BTreeMap::new(),
         }
     }
 }
@@ -598,6 +632,33 @@ mod tests {
         p.chosen_mut(&m).enabled = true;
         assert_eq!(p.of_module(&m), m.defaults());
         assert_eq!(p.tasks["fussy"].part_of_day, PartOfDay::Night);
+    }
+
+    #[test]
+    fn a_fold_is_read_with_the_knobs_and_pins_none_of_them() {
+        // THE DEFECT THIS CATCHES: a section opened made an entry, and an
+        // entry decides every knob, so what the distro ships tomorrow would
+        // never reach somebody who only looked at a page.
+        let today = fussy();
+        let mut p = Prefs::default();
+        p.fold("fussy", "old", true);
+        p.fold("fussy", "new", true);
+        p.fold("fussy", "new", false);
+        assert!(p.tasks.is_empty(), "a fold made an entry: {:?}", p.tasks);
+        assert_eq!(p.of_module(&today).folds.get("old"), Some(&true));
+        assert_eq!(p.of_module(&today).folds.get("new"), Some(&false));
+        let tomorrow = Manifest {
+            starts_off: !today.starts_off,
+            ..today
+        };
+        assert_eq!(p.of_module(&tomorrow).enabled, tomorrow.defaults().enabled);
+
+        // AND IT STANDS BESIDE AN ENTRY made for a knob, and in the file.
+        p.chosen_mut(&today).interval_days = 1;
+        assert_eq!(p.of_module(&today).folds.len(), 2);
+        let text = serde_json::to_string(&p).expect("encode");
+        let back: Prefs = serde_json::from_str(&text).expect("parse");
+        assert_eq!(back.of_module(&today).folds, p.of_module(&today).folds);
     }
 
     #[test]
