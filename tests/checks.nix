@@ -29594,7 +29594,22 @@ let
       # realized after the installation and kept out of every system's
       # closure — a store path of one in a unit would bring it back, and this
       # is what would say so.
-      for part in -claude-code- -unrar- -uade- -google-chrome- -vscode-1 -android-studio- -androidsdk \
+      #
+      # CLAUDE CODE BY ITS VERSION: every system carries the managed hook's
+      # drop-in (`/etc/claude-code/managed-settings.d/`, `nix/modules/llm.nix`),
+      # whose store name is `etc-claude-code-managed-settings.d-…` — a file of
+      # the system, not the part. So the name is asked with the version that
+      # follows it, and both sides are proved here: the part the plan names
+      # matches, and the drop-in does not.
+      grep -q -e "-claude-code-[0-9]" ${fullPlan} || {
+        echo "ERROR: -claude-code-[0-9] does not name the part the plan carries — did its name change?" >&2
+        failed=1
+      }
+      if echo "etc-claude-code-managed-settings.d-ronoctua.json" | grep -q -e "-claude-code-[0-9]"; then
+        echo "ERROR: -claude-code-[0-9] takes the managed hook's drop-in for the part" >&2
+        failed=1
+      fi
+      for part in "-claude-code-[0-9]" -unrar- -uade- -google-chrome- -vscode-1 -android-studio- -androidsdk \
                   -vlc- -flutter- -blender-5 -orca-slicer- -onlyoffice-desktopeditors- -libreoffice- \
                   -ronoctua-appimage- -noctua-icon-theme- -gotools- -pyright -go-1 \
                   -noctua-iosevka-ttf-3 -noctua-iosevka-woff2-; do
