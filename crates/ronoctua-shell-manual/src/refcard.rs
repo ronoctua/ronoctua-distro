@@ -77,7 +77,8 @@ pub struct Card {
     pub subtitle: Vec<Run>,
     /// The sections, in the card's order.
     pub sections: Vec<Section>,
-    /// The copyright notice, which goes everywhere the card goes.
+    /// The copyright notice. It goes everywhere the card's data goes, and the
+    /// window does not draw it (the owner, 2026-11-08).
     pub notice: Vec<Block>,
 }
 
@@ -190,7 +191,7 @@ pub fn card_in(root: &Path, language: &str) -> Result<Card, Missing> {
 pub enum Tone {
     /// The card's title, and a section's.
     Heading,
-    /// The version under the title, and the notice.
+    /// The version under the title, and a centred line.
     Quiet,
     /// What a key does.
     Does,
@@ -536,10 +537,10 @@ fn block_lines(block: &Block, width: u16, key_cells: u16) -> Vec<Line> {
 /// The card laid out in columns `width` cells wide and `height` lines tall,
 /// kept to what says `query` (any case; empty for all of it).
 ///
-/// The title and its version open the first column; the notice closes the
-/// last. A section goes whole where it fits, or opens the next column; one
-/// taller than a column is cut at a line, and its title said again on top of
-/// the next. No column opens on air.
+/// The title and its version open the first column; the notice is not drawn
+/// (the owner, 2026-11-08). A section goes whole where it fits, or opens the
+/// next column; one taller than a column is cut at a line, and its title said
+/// again on top of the next. No column opens on air.
 #[must_use]
 pub fn columns(card: &Card, width: u16, height: u16, query: &str) -> Vec<Vec<Line>> {
     let height = usize::from(height.max(2));
@@ -554,15 +555,6 @@ pub fn columns(card: &Card, width: u16, height: u16, query: &str) -> Vec<Vec<Lin
         let (title, body) = lines.split_at(title_lines.min(lines.len()));
         place(&mut columns, height, title, body.to_vec());
     }
-    let notice: Vec<Line> = card
-        .notice
-        .iter()
-        .flat_map(|b| match b {
-            Block::Note { text } => paragraph(&toned_as(text, Tone::Quiet), 0, width),
-            other => block_lines(other, width, 0),
-        })
-        .collect();
-    place(&mut columns, height, &[], notice);
     columns.retain(|c| !c.is_empty());
     columns
 }
@@ -717,12 +709,21 @@ mod tests {
 
     /// FAILS IF: a column is taller than asked, a line wider, a section cut
     /// that fits a column whole, a cut section's title not said again on
-    /// the next column, a column opens on air, or a row is lost.
+    /// the next column, a column opens on air, a row is lost, or the
+    /// copyright notice is drawn.
     #[test]
     fn the_columns_hold_every_row_inside_their_size() {
         let card = planted(6, 7);
         let (width, height) = (40, 24);
         let cols = columns(&card, width, height, "");
+        assert!(
+            !cols
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|p| p.text.contains("Copyright")),
+            "the notice is drawn"
+        );
         let mut rows = 0;
         for col in &cols {
             assert!(

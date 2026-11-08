@@ -17,7 +17,8 @@ never a card that silently loses a row.
 THE COPYRIGHT NOTICE COMES ALONG. The card is free under the GPL, with the
 special permission to distribute it formatted with the notice it carries
 (`\\copyrightnotice`); the notice is read out of the card's own definition and
-is the last thing the window draws.
+travels in the data, though the window does not draw it (the owner,
+2026-11-08).
 
 Out: one JSON document, format 1 —
 
