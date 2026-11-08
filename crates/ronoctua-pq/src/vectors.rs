@@ -71,7 +71,12 @@ fn unhex(text: &str) -> Vec<u8> {
         digits.len().is_multiple_of(2),
         "a vector holds an odd number of hex digits"
     );
-    digits.chunks_exact(2).map(|p| p[0] << 4 | p[1]).collect()
+    digits
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| p[0] << 4 | p[1])
+        .collect()
 }
 
 /// A text without its layout.

@@ -44,8 +44,11 @@ use smithay_client_toolkit::reexports::client::{
     Connection, Dispatch, QueueHandle,
     globals::GlobalList,
     protocol::{
-        wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
-        wl_data_source::WlDataSource, wl_seat::WlSeat, wl_surface::WlSurface,
+        wl_data_device::WlDataDevice,
+        wl_data_device_manager::{DndAction, WlDataDeviceManager},
+        wl_data_source::WlDataSource,
+        wl_seat::WlSeat,
+        wl_surface::WlSurface,
     },
 };
 
@@ -99,10 +102,7 @@ impl Carrying {
     /// gives a manager that cannot drag, and everything else goes on working.
     pub fn bind<D>(globals: &GlobalList, qh: &QueueHandle<D>) -> Option<Self>
     where
-        D: Dispatch<
-                smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::WlDataDeviceManager,
-                GlobalData,
-            > + 'static,
+        D: Dispatch<WlDataDeviceManager, GlobalData> + 'static,
     {
         match DataDeviceManagerState::bind(globals, qh) {
             Ok(manager) => Some(Self {

@@ -74,7 +74,13 @@ fn main() -> std::process::ExitCode {
         // OPAQUE PIXELS, and not bytes: an SVG that rasterises empty returns the
         // whole buffer with zero alpha — invisible over the footer's background, and
         // indistinguishable from "the icon has not arrived yet".
-        let opaque = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
+        let opaque = rgba
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count();
         let total = (SIDE * SIDE) as usize;
         if opaque * 100 < total * 5 {
             eprintln!("ERROR: `{name}` rasterised with {opaque}/{total} pixels visible");

@@ -158,10 +158,10 @@ impl Peak {
             self.seen += 2;
             rest = tail;
         }
-        for pair in rest.chunks_exact(2) {
+        for pair in rest.as_chunks::<2>().0 {
             // LITTLE-ENDIAN, which is what `pw-cat --format s16` writes and
             // what every machine this runs on is.
-            self.heard(i16::from_le_bytes([pair[0], pair[1]]));
+            self.heard(i16::from_le_bytes(*pair));
         }
         if rest.len() % 2 == 1 {
             self.spare = rest.last().copied();
@@ -201,8 +201,8 @@ impl Peak {
 #[must_use]
 pub fn level_of(block: &[u8]) -> u8 {
     let mut loudest = 0_i32;
-    for pair in block.chunks_exact(2) {
-        loudest = loudest.max(i32::from(i16::from_le_bytes([pair[0], pair[1]])).abs());
+    for pair in block.as_chunks::<2>().0 {
+        loudest = loudest.max(i32::from(i16::from_le_bytes(*pair)).abs());
     }
     crate::perceived(f64::from(loudest) / LOUDEST).min(100)
 }

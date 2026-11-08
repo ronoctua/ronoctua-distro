@@ -101,7 +101,7 @@ pub fn read(bytes: &[u8]) -> Result<(Header, Vec<Cue>), Damaged> {
     let mut cues: Vec<Cue> = Vec::new();
     // The text of a subtitle split over several blocks, until the last.
     let mut open: Option<(u16, Vec<u8>)> = None;
-    for block in bytes[GSI_BYTES..].chunks_exact(TTI_BYTES) {
+    for block in bytes[GSI_BYTES..].as_chunks::<TTI_BYTES>().0 {
         let extension = block[3];
         let comment = block[15] == 1;
         // User data extension blocks (`0xF0`–`0xFD`) hold no text.

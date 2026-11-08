@@ -335,8 +335,10 @@ fn shade(
     // iterator proves the length once.
     for (p, n) in mesh
         .positions
-        .chunks_exact(9)
-        .zip(mesh.normals.chunks_exact(3))
+        .as_chunks::<9>()
+        .0
+        .iter()
+        .zip(mesh.normals.as_chunks::<3>().0)
     {
         // PROJECTED FIRST, because the two rejections below are three
         // subtractions each and the lighting is a square root. Doing the
@@ -394,7 +396,7 @@ fn cage(
     // never nothing.
     #[allow(clippy::cast_precision_loss)]
     let half = (paint.wire * scale as f32 * 0.5).max(0.5);
-    for s in wires.segments.chunks_exact(6) {
+    for s in wires.segments.as_chunks::<6>().0 {
         let a = lens.project([s[0], s[1], s[2]]);
         let b = lens.project([s[3], s[4], s[5]]);
         stroke(depth, pixels, sw, sh, a, b, half, lens.radius, paint);
@@ -655,7 +657,12 @@ mod tests {
 
     /// How many samples have any paint on them at all.
     fn covered(r: &Rgba) -> usize {
-        r.pixels.chunks_exact(4).filter(|p| p[3] > 0).count()
+        r.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count()
     }
 
     #[test]
@@ -852,7 +859,9 @@ mod tests {
         // so the picture has more than one brightness in it.
         let tones: std::collections::BTreeSet<u8> = r
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0)
             .map(|p| p[0])
             .collect();

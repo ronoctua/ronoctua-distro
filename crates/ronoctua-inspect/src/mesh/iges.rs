@@ -470,7 +470,7 @@ mod tests {
         // A quarter arc of radius 10 about the origin, from (10,0) to (0,10).
         let w = wires(&file(GLOBAL, &[(100, "0.,0.,0.,10.,0.,0.,10.".to_owned())]));
         assert!(w.count() >= 8, "an arc is more than a chord: {}", w.count());
-        for p in w.segments.chunks_exact(3) {
+        for p in w.segments.as_chunks::<3>().0 {
             assert!(
                 p[0] >= -0.01 && p[1] >= -0.01,
                 "the arc left the quarter it was given: {p:?}"

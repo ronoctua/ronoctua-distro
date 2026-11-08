@@ -901,7 +901,7 @@ mod md5 {
             0x98BA_DCFEu32,
             0x1032_5476u32,
         );
-        for block in message.chunks_exact(64) {
+        for block in message.as_chunks::<64>().0 {
             let mut m = [0u32; 16];
             for (i, word) in m.iter_mut().enumerate() {
                 *word = u32::from_le_bytes([

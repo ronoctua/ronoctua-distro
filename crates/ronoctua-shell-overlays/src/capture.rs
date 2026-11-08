@@ -298,7 +298,7 @@ fn ppm(bytes: &[u8]) -> Option<Rgba> {
     }
     let rgb = bytes.get(at..at + (width as usize) * (height as usize) * 3)?;
     let mut pixels = Vec::with_capacity(rgb.len() / 3 * 4);
-    for p in rgb.chunks_exact(3) {
+    for p in rgb.as_chunks::<3>().0 {
         pixels.extend_from_slice(&[p[0], p[1], p[2], 255]);
     }
     Rgba::new(width, height, pixels)

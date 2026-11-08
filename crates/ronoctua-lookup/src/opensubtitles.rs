@@ -63,10 +63,8 @@ impl Moviehash {
 #[must_use]
 pub fn moviehash_of(size: u64, head: &[u8], tail: &[u8]) -> u64 {
     let sum = |bytes: &[u8]| {
-        bytes.chunks_exact(8).fold(0u64, |acc, word| {
-            let mut w = [0u8; 8];
-            w.copy_from_slice(word);
-            acc.wrapping_add(u64::from_le_bytes(w))
+        bytes.as_chunks::<8>().0.iter().fold(0u64, |acc, word| {
+            acc.wrapping_add(u64::from_le_bytes(*word))
         })
     };
     size.wrapping_add(sum(head)).wrapping_add(sum(tail))

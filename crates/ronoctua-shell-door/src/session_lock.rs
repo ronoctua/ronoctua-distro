@@ -219,8 +219,8 @@ where
         .ok()?;
     // XRGB8888 IS LITTLE-ENDIAN BGRX in memory, and opaque.
     let [r, g, b, _] = rgba;
-    for pixel in pool.mmap().chunks_exact_mut(4) {
-        pixel.copy_from_slice(&[b, g, r, 0xff]);
+    for pixel in pool.mmap().as_chunks_mut::<4>().0 {
+        *pixel = [b, g, r, 0xff];
     }
     let (wi, hi, si) = (
         i32::try_from(w).ok()?,

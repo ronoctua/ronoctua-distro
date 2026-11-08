@@ -389,8 +389,10 @@ fn add_mesh(
         };
         let points = accessor(doc, buffers, slot)?;
         let corners: Vec<[f32; 3]> = points
-            .chunks_exact(3)
-            .map(|c| through(at, [c[0], c[1], c[2]]))
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| through(at, *c))
             .collect();
         let order: Vec<usize> = match prim
             .get("indices")

@@ -11,7 +11,7 @@ description = "Where each colour of a line of code begins and ends. Zero depende
 # found` — an error naming neither the field nor the buffer.
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "MIT"
 publish = false
 

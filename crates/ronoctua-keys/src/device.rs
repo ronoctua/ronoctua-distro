@@ -121,7 +121,9 @@ impl Grabbed {
         }
         let whole = self.left.len() / EVENT * EVENT;
         let out = self.left[..whole]
-            .chunks_exact(EVENT)
+            .as_chunks::<EVENT>()
+            .0
+            .iter()
             .filter_map(|e| {
                 let kind = u16::from_ne_bytes([e[16], e[17]]);
                 let code = u16::from_ne_bytes([e[18], e[19]]);

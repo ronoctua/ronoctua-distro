@@ -5381,7 +5381,13 @@ mod tests {
         )
         .expect("Lucide's SVG did not rasterise");
         assert_eq!((rgba.width, rgba.height), (side, side));
-        let opaque = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 0).count();
+        let opaque = rgba
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count();
         assert!(
             opaque > 100,
             "the two-line cross rasterised with {opaque} visible pixels"

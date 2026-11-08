@@ -287,9 +287,7 @@ impl Line {
     /// A line that acts as a whole, `[from, to)`: every field and the gaps
     /// between them reach the same target.
     fn whole(mut self, target: Target, from: u16, to: u16) -> Self {
-        for t in &mut self.targets {
-            *t = Some(target);
-        }
+        self.targets.fill(Some(target));
         self.bands.push((from, to.max(from + 1), target));
         self
     }

@@ -167,7 +167,6 @@ pub fn unstage(runtime: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
 
     use super::*;
 

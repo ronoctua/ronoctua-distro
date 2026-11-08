@@ -1,4 +1,3 @@
-use std::os::unix::fs::MetadataExt as _;
 use std::time::Instant;
 
 use ronoctua_playlist::own::{Origin, Stream};

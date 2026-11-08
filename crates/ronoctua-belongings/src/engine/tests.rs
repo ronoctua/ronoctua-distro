@@ -20,7 +20,6 @@
 use std::cell::Cell;
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
-use std::os::unix::fs::PermissionsExt as _;
 
 use super::*;
 

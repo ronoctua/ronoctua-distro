@@ -988,7 +988,7 @@ pub(crate) fn verify_remuxed(
             .tags
             .iter()
             .find(|t| t.format() == want.format())
-            .map_or_else(Vec::new, &sorted);
+            .map_or_else(Vec::new, sorted);
         if got != sorted(want) {
             tracing::warn!(
                 format = ?want.format(),

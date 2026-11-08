@@ -299,8 +299,10 @@ impl Pack {
         let mut raw = vec![0_u8; (cells + 1) * 4];
         file.read_exact(&mut raw)?;
         let index: Vec<u32> = raw
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect();
 
         // THE PLACES ARE HELD AND THE SEGMENTS ARE NOT, and the difference is
@@ -314,7 +316,9 @@ impl Pack {
         let mut raw = vec![0_u8; places_count * 12];
         file.read_exact(&mut raw)?;
         let places: Vec<(i32, i32, u32)> = raw
-            .chunks_exact(12)
+            .as_chunks::<12>()
+            .0
+            .iter()
             .map(|c| {
                 let at = |o: usize| i32::from_le_bytes([c[o], c[o + 1], c[o + 2], c[o + 3]]);
                 #[allow(clippy::cast_sign_loss)]
@@ -435,7 +439,9 @@ impl Pack {
         let mut raw = vec![0_u8; count * 20];
         self.file.read_exact(&mut raw)?;
         Ok(raw
-            .chunks_exact(20)
+            .as_chunks::<20>()
+            .0
+            .iter()
             .map(|c| {
                 let n = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                 let at = |o: usize| {

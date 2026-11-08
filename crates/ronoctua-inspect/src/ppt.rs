@@ -112,8 +112,10 @@ fn walk(body: &[u8], on_a_slide: bool, depth: usize, out: &mut String) {
                 TEXT_CHARS => {
                     for c in char::decode_utf16(
                         inner
-                            .chunks_exact(2)
-                            .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|c| u16::from_le_bytes(*c)),
                     ) {
                         out.push(c.unwrap_or(char::REPLACEMENT_CHARACTER));
                     }

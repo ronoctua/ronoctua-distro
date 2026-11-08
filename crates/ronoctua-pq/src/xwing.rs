@@ -141,7 +141,7 @@ fn x_point(bytes: &[u8]) -> XPublic {
 /// encapsulation key passes FIPS 203's modulus check (every 12-bit
 /// coefficient below q) and the X25519 share is not of low order.
 pub(crate) fn public_is_valid(public: &[u8; PUBLIC_BYTES]) -> bool {
-    let canonical = public[..ML_KEM_T_BYTES].chunks_exact(3).all(|c| {
+    let canonical = public[..ML_KEM_T_BYTES].as_chunks::<3>().0.iter().all(|c| {
         let low = u16::from(c[0]) | (u16::from(c[1] & 0x0f) << 8);
         let high = (u16::from(c[1]) >> 4) | (u16::from(c[2]) << 4);
         low < ML_KEM_Q && high < ML_KEM_Q

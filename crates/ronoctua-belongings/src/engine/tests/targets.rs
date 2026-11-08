@@ -13,8 +13,6 @@
 //! and never written to a disk; a second sync asks nothing, and an identity
 //! that no longer opens the repository is forgotten and asks the passphrase.
 
-use std::os::unix::fs::PermissionsExt as _;
-
 use age::secrecy::ExposeSecret as _;
 
 use super::*;

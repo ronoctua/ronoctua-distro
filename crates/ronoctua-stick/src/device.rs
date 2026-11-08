@@ -228,8 +228,10 @@ pub fn swapped_names(swaps: &str) -> Vec<String> {
 pub fn loader_partuuid(bytes: &[u8]) -> Option<String> {
     let units: Vec<u16> = bytes
         .get(4..)?
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .take_while(|u| *u != 0)
         .collect();
     let text = String::from_utf16(&units).ok()?.to_ascii_lowercase();

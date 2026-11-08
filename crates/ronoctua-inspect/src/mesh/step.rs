@@ -872,7 +872,7 @@ mod tests {
             "the arc left the quadrant, so the whole circle was drawn: {:?}",
             w.bounds
         );
-        for s in w.segments.chunks_exact(3) {
+        for s in w.segments.as_chunks::<3>().0 {
             assert!(
                 s[0] >= -0.01 && s[1] >= -0.01,
                 "a point outside the quarter: {s:?}"
@@ -898,7 +898,7 @@ mod tests {
         // Going the other way round is three quarters of the circle, so it
         // reaches into the negative quadrants.
         assert!(
-            w.segments.chunks_exact(3).any(|s| s[0] < -1.0),
+            w.segments.as_chunks::<3>().0.iter().any(|s| s[0] < -1.0),
             "the reversed edge did not take the long way: {:?}",
             w.bounds
         );

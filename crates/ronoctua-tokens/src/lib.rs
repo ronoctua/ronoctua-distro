@@ -314,11 +314,9 @@ pub mod theme {
     /// theme finishes under it, and the next one is in the new.
     pub fn set(t: Theme) -> bool {
         let pages = super::counts::PAGES;
-        let was = CURRENT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
-                Some(t.index * pages + p % pages)
-            })
-            .unwrap_or_else(|p| p);
+        let was = CURRENT.update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+            t.index * pages + p % pages
+        });
         was / pages != t.index
     }
 
@@ -327,11 +325,9 @@ pub mod theme {
     /// it changed.
     pub fn set_ground(g: Ground) -> bool {
         let pages = super::counts::PAGES;
-        let was = CURRENT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
-                Some(p / pages * pages + g.position())
-            })
-            .unwrap_or_else(|p| p);
+        let was = CURRENT.update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+            p / pages * pages + g.position()
+        });
         was % pages != g.position()
     }
 
@@ -817,10 +813,7 @@ pub mod palettes {
                 data.len()
             ));
         }
-        let rgba = data
-            .chunks_exact(4)
-            .map(|c| [c[0], c[1], c[2], c[3]])
-            .collect();
+        let rgba = data.as_chunks::<4>().0.to_vec();
         Ok(Palettes {
             ids,
             light,

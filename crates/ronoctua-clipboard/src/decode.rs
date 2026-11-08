@@ -102,9 +102,9 @@ fn utf16(raw: &[u8], order: Order) -> Option<String> {
     if !raw.len().is_multiple_of(2) {
         return None;
     }
-    let units = raw.chunks_exact(2).map(|p| match order {
-        Order::Little => u16::from_le_bytes([p[0], p[1]]),
-        Order::Big => u16::from_be_bytes([p[0], p[1]]),
+    let units = raw.as_chunks::<2>().0.iter().map(|p| match order {
+        Order::Little => u16::from_le_bytes(*p),
+        Order::Big => u16::from_be_bytes(*p),
     });
     char::decode_utf16(units)
         .collect::<Result<String, _>>()

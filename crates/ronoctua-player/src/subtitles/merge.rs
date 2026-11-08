@@ -901,7 +901,7 @@ Dialogue: 2,0:00:01.00,0:00:03.00,Board,,0,0,0,,{\\pos(640,360)}SHOP\n";
         // antialiasing only darkens).
         let row_of = |want: usize| {
             let (mut sum, mut count) = (0_usize, 0_usize);
-            for (i, px) in out.stdout.chunks_exact(3).enumerate() {
+            for (i, px) in out.stdout.as_chunks::<3>().0.iter().enumerate() {
                 let others = (0..3)
                     .filter(|c| *c != want)
                     .map(|c| px[c])

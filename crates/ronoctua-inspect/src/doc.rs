@@ -166,8 +166,10 @@ fn pieces(text: &[u8], pcdt: &[u8]) -> Result<String, Refusal> {
             out.extend(
                 char::decode_utf16(
                     piece
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|c| u16::from_le_bytes(*c)),
                 )
                 .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)),
             );

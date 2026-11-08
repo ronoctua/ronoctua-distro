@@ -1782,7 +1782,7 @@ mod tests {
             self.opened.lock().expect("opened").push(args.to_vec());
             if self
                 .refusing
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
                 .is_ok()
             {
                 return Ok(Box::new(Blind));

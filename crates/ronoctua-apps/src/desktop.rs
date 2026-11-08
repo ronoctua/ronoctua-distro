@@ -136,9 +136,40 @@ pub fn list<'a>(fields: &[(&'a str, &'a str)], key: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
+/// A `string` value with the spec's five escapes undone: `\s`, `\n`, `\t`,
+/// `\r` and `\\`.
+///
+/// Any other `\` is kept with the character after it, for the reader that
+/// comes next — the quoting of `Exec` ([`crate::exec::tokenize`]) — and for a
+/// file that never escaped its backslashes (a Wine path).
+#[must_use]
+pub fn unescaped(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut cs = value.chars();
+    while let Some(c) = cs.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match cs.next() {
+            Some('s') => out.push(' '),
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{boolean, fields, list, localized, raw_bytes};
+    use super::{boolean, fields, list, localized, raw_bytes, unescaped};
 
     /// THE DEFECT THIS MODULE EXISTS TO PREVENT.
     ///
@@ -228,5 +259,14 @@ mod tests {
         let c = fields(f);
         assert_eq!(c.len(), 1);
         assert_eq!(raw_bytes(&c, "Name"), Some("Real"));
+    }
+
+    #[test]
+    fn the_five_escapes_are_undone_and_any_other_backslash_stays() {
+        assert_eq!(unescaped(r"a\sb\nc\td\re\\f"), "a b\nc\td\re\\f");
+        assert_eq!(
+            unescaped(r#"\"\$ C:\jogos\x.exe \"#),
+            r#"\"\$ C:\jogos\x.exe \"#
+        );
     }
 }

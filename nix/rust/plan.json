@@ -2,9 +2,9 @@
 "features":["ronoctua-software/draw","ronoctua-software/net","ronoctua-video-metrics/net"],
 "format":1,
 "host":"x86_64-unknown-linux-gnu",
-"inputs":"d7f3c9fbc1cf67d7bdef5937da529d4ed32fa3e48dd12d078c70b674968df0ae",
+"inputs":"9204ac5ac247c4f843a86cea7e4bbe84761253f874e200072d75612bfa51e8c4",
 "links":{"aws-lc-rs@1.18.1":"aws_lc_rs_1_18_1_sys","aws-lc-sys@0.45.0":"aws_lc_0_45_0","libsqlite3-sys@0.38.2":"sqlite3","prettyplease@0.3.0":"prettyplease03","rayon-core@1.13.0":"rayon-core","ring@0.17.14":"ring_core_0_17_14_","wasm-bindgen-shared@0.2.126":"wasm_bindgen"},
-"rustc":"1.97.1",
+"rustc":"1.99.1",
 "packages":{
 "ronoctua-apps":{"dir":"crates/ronoctua-apps","features":[],"links":null,"version":"0.1.0"},
 "ronoctua-archive":{"dir":"crates/ronoctua-archive","features":[],"links":null,"version":"0.1.0"},

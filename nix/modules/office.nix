@@ -53,9 +53,9 @@
 let
   installed = config.ronoctua.distroApps.installed;
   onlyoffice = pkgs.onlyoffice-desktopeditors;
-  # `fresh` and not `still`: the newest features and filters, which is what
-  # a person reaching for LibreOffice beside ONLYOFFICE comes for.
-  libreoffice = pkgs.libreoffice-fresh;
+  # One line: upstream merged `fresh` and `still` (nixpkgs 2026-08-11), and
+  # both names are now warning aliases of this one.
+  libreoffice = pkgs.libreoffice;
   onlyofficeEntry = "onlyoffice-desktopeditors.desktop";
 
   # THE MICROSOFT FORMATS BOTH SUITES CLAIM, each with the LibreOffice entry

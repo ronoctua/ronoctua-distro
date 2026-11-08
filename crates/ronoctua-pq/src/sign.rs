@@ -176,7 +176,7 @@ impl SigningKey {
             _ => None,
         };
         let mut seed = Zeroizing::new([0_u8; SEED_BYTES]);
-        for (i, pair) in digits.chunks_exact(2).enumerate() {
+        for (i, pair) in digits.as_chunks::<2>().0.iter().enumerate() {
             let (Some(high), Some(low)) = (value(pair[0]), value(pair[1])) else {
                 return Err(corrupt);
             };

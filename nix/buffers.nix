@@ -58,7 +58,7 @@ let
     [workspace.package]
     version = "0.1.0"
     edition = "2024"
-    rust-version = "1.90"
+    rust-version = "1.95"
     license = "MIT"
     publish = false
 

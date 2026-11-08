@@ -263,10 +263,10 @@ pub(crate) mod fixture {
         let s = ITEMS;
         let mut lemmas = vec![
             format!("house\t03549540-n{s}08028148-n{s}02733213-v"),
-            format!("home\t03264542-n"),
-            format!("put up\t02733213-v"),
-            format!("abode\t03264542-n"),
-            format!("family\t08028148-n"),
+            "home\t03264542-n".to_owned(),
+            "put up\t02733213-v".to_owned(),
+            "abode\t03264542-n".to_owned(),
+            "family\t08028148-n".to_owned(),
         ];
         let mut synsets = vec![
             format!(

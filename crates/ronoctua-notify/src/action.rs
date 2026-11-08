@@ -135,7 +135,9 @@ impl Action {
     /// itself was clicked"; it has no button and is left out.
     #[must_use]
     pub fn from_protocol(flat: &[String]) -> Vec<Self> {
-        flat.chunks_exact(2)
+        flat.as_chunks::<2>()
+            .0
+            .iter()
             .filter(|p| p[0] != "default")
             .map(|p| Self {
                 id: p[0].clone(),

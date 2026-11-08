@@ -1255,7 +1255,13 @@ mod tests {
         let covered = |height: u32, from: u32| {
             let rgba = super::paint(&band, 20, height, from, ronoctua_tokens::theme::palette())
                 .expect("a pixmap");
-            let lit = rgba.pixels.chunks_exact(4).filter(|p| p[3] > 128).count();
+            let lit = rgba
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[3] > 128)
+                .count();
             lit as f32 / (20.0 * height as f32)
         };
         // THE WHOLE BOX: the band is its bottom half.

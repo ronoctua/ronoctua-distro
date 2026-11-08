@@ -36,11 +36,21 @@ pub struct Context<'a> {
 
 /// Splits the line into tokens, honouring the spec's quotes.
 ///
-/// Inside double quotes, `\` escapes `"`, `` ` ``, `$` and `\`; outside them, a
-/// space separates. The spec also demands escaping the backslash itself when
-/// writing, and that is why `\\` becomes `\`.
+/// Two levels, in the spec's order: the escapes of every `string` value first
+/// ([`crate::desktop::unescaped`]: `\\` becomes `\`), then the quoting of
+/// `Exec` — inside double quotes, `\` escapes `"`, `` ` ``, `$` and `\`;
+/// outside them, a space separates. So a `"` or a `$` inside a quoted argument
+/// is written `\\"` or `\\$`.
+///
+/// # Why both levels
+///
+/// Undoing only the quoting read the `\\"` inside the quoted script of Emacs's
+/// `emacsclient.desktop` (`sh -c "if [ -n \\"\\$*\\" ]; … \\"\\$@\\" …" sh
+/// %F`) as an escaped `\` and a `"` that CLOSED the quotes: the shell got
+/// `\$@`, and Emacs opened a buffer named `$@`.
 #[must_use]
 pub fn tokenize(line: &str) -> Vec<String> {
+    let line = crate::desktop::unescaped(line);
     let mut out = Vec::new();
     let mut current = String::new();
     let mut has = false;
@@ -220,6 +230,29 @@ mod tests {
     fn the_backslash_escapes_inside_quotes_and_is_literal_outside() {
         assert_eq!(tokenize(r#""diz \"oi\"""#), [r#"diz "oi""#]);
         assert_eq!(tokenize(r"C:\jogos\x.exe"), [r"C:\jogos\x.exe"]);
+    }
+
+    /// THE DEFECT, SEEN ON SCREEN: Emacs opened a buffer named `$@`. The line
+    /// is the one Emacs 31 ships in `emacsclient.desktop`, byte for byte but
+    /// the program's path.
+    #[test]
+    fn a_quoted_script_keeps_its_quotes_and_its_dollars() {
+        let line = r#"sh -c "if [ -n \\"\\$*\\" ]; then exec emacsclient --alternate-editor= --reuse-frame \\"\\$@\\"; else exec emacsclient --alternate-editor= --create-frame; fi" sh %F"#;
+        let script = r#"if [ -n "$*" ]; then exec emacsclient --alternate-editor= --reuse-frame "$@"; else exec emacsclient --alternate-editor= --create-frame; fi"#;
+        let (p, args) = assemble(line, CTX).expect("there is a program");
+        assert_eq!(p, "sh");
+        assert_eq!(args, ["-c", script, "sh"]);
+        let two = ["/tmp/a.txt".to_owned(), "/tmp/b c.txt".to_owned()];
+        let (_, args) = assemble(line, Context { open: &two, ..CTX }).expect("there is a program");
+        assert_eq!(args, ["-c", script, "sh", "/tmp/a.txt", "/tmp/b c.txt"]);
+    }
+
+    /// The spec's own examples: a literal `\` in a quoted argument is four
+    /// backslashes in the file, and a literal `$` is `\\$`.
+    #[test]
+    fn the_string_escapes_come_before_the_quoting() {
+        assert_eq!(tokenize(r#""a\\\\b" "\\$HOME""#), [r"a\b", "$HOME"]);
+        assert_eq!(tokenize(r"prog a\sb"), ["prog", "a", "b"]);
     }
 
     #[test]

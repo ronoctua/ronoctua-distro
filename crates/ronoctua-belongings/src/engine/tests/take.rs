@@ -9,8 +9,6 @@
 //! passphrase, which it deletes however it ends — `false` for a file the
 //! repository does not keep, and a refusal for a wrong passphrase.
 
-use std::os::unix::fs::PermissionsExt as _;
-
 use super::*;
 
 /// A token as Cachix hands one out (a JWT's shape).

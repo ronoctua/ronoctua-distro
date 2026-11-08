@@ -156,8 +156,10 @@ impl<'a> Vault<'a> {
         // the ROOT ENTRY's own chain.
         vault.mini_fat = vault
             .chain(mini_first, None)?
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect();
         let directory = vault.chain(dir_first, None)?;
         let root = directory.get(..ENTRY).ok_or(Refusal::Failed)?;
@@ -243,7 +245,7 @@ impl<'a> Vault<'a> {
 
     /// The stream of that name, wherever the format put it.
     fn named(&self, want: &str) -> Result<Vec<u8>, Refusal> {
-        for entry in self.directory.chunks_exact(ENTRY) {
+        for entry in self.directory.as_chunks::<ENTRY>().0 {
             // TWO IS A STREAM. One is a storage — a folder — and five is the
             // root, which is the mini stream itself and never content.
             if entry[0x42] != 2 {
@@ -256,8 +258,10 @@ impl<'a> Vault<'a> {
                 continue;
             };
             let name: String = char::decode_utf16(
-                name.chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                name.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c)),
             )
             .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect();
