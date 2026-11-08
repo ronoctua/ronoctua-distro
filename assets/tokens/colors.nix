@@ -1607,4 +1607,23 @@
     text-alt = "warning.on-solid";
   };
 
+  # A QUESTION ON SCREEN — in a door and in the minibuffer, built once
+  # (`door::list::question_pieces`). It wore the shortcut line's prose, and the
+  # owner read it as one more hint: a question is the one line that WAITS for
+  # the person, and it asked for a colour that calls the eye and is a
+  # question's alone, and another one for what the person types (2026-11-08).
+  #
+  # Two FAMILIES, in every seed: a hue that must be free in each theme cannot
+  # be one recipe's shift of a family that already means something. Each seed
+  # puts them in the widest seats it had left, and the gates hold them apart
+  # from every other text (`QUESTION_APART` in `gen-theme.py`).
+  question = {
+    # THE QUESTION: the family's solid, the accent's own vividness — a colour
+    # that calls, and not a pastel.
+    asked = "question.solid";
+    # WHAT IS TYPED: read letter by letter while it is being written, so a
+    # loud text step, coloured — never the content's white.
+    typed = "reply.text-loud";
+  };
+
 }

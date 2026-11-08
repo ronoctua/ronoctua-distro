@@ -539,6 +539,16 @@ pub enum Register {
     /// the same. It does not light with its key: it is the same mark on every
     /// shortcut of a window, and the key is what the click presses.
     LeaderAlt,
+    /// A QUESTION — what [`crate::line::Line`] asks, in the minibuffer and in
+    /// a door — in a colour that is a question's alone (`question.asked`).
+    ///
+    /// It was `Prose`, the shortcut line's own words, and the owner read the
+    /// question as one more hint (2026-11-08): the one line that waits for
+    /// the person has to call the eye.
+    Asked,
+    /// WHAT THE PERSON TYPES into a question, in a colour of its own
+    /// (`question.typed`). It was `Said`, the key's ink.
+    Typed,
     /// THE CHORD THAT IS WAITING for its next key.
     ///
     /// Blue is what says where the next key goes, and that is not a matter of
@@ -561,6 +571,8 @@ impl Register {
             Self::Explain => tokens::color::TEXT_SUBTLE_EXPLAIN,
             Self::Said => tokens::color::TEXT_SUBTLE_STRONG,
             Self::Pending => tokens::color::STATE_ACCENT,
+            Self::Asked => tokens::color::QUESTION_ASKED,
+            Self::Typed => tokens::color::QUESTION_TYPED,
             Self::Inert => tokens::color::TEXT_SUBTLE_INERT,
             Self::KeyLit => tokens::color::TEXT_SUBTLE_LIT_KEY,
             Self::AlternateLit => tokens::color::TEXT_SUBTLE_LIT_ALTERNATE,
@@ -678,6 +690,28 @@ impl Piece {
         Self {
             text: text.into(),
             register: Register::Said,
+            id: None,
+            press: None,
+        }
+    }
+
+    /// A question, in its own colour ([`Register::Asked`]).
+    #[must_use]
+    pub fn asked(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Asked,
+            id: None,
+            press: None,
+        }
+    }
+
+    /// What the person types into a question ([`Register::Typed`]).
+    #[must_use]
+    pub fn typed(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            register: Register::Typed,
             id: None,
             press: None,
         }
@@ -3474,6 +3508,10 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             | Register::Separator
             | Register::Explain
             | Register::Said
+            // A QUESTION AND ITS ANSWER are sentences too, and what is typed
+            // is anybody's characters — a `+` in it is not a modifier.
+            | Register::Asked
+            | Register::Typed
             | Register::Pending
             | Register::Glyph
             | Register::Label

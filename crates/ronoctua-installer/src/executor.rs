@@ -32,7 +32,7 @@ use crate::model::Answers;
 use crate::plan::{
     ATTRIBUTE, Capture, HOST_NIX_PATH, HOST_NIX_WORK_PATH, INSTALL_ACCESS, LEFT_OUT_APPLIED,
     LET_HOST, LUKS_KEY_PATH, Origin, PASSWORD_HASH_PATH, Runner, SCRATCH, SEAL, SEAL_PASSPHRASE,
-    SWAPFILE_PATH, Step, TARGET_PASSWD, TOPLEVEL, WIFI_PROFILE_PATH, WRITE, aimed_flake,
+    SETTLE, SWAPFILE_PATH, Step, TARGET_PASSWD, TOPLEVEL, WIFI_PROFILE_PATH, WRITE, aimed_flake,
     belongings_path, deferred_marker, first_boot_record, host_nix, left_out_declined, leftovers,
     staged_declined, steps, target_user, wifi_profile,
 };
@@ -747,6 +747,9 @@ fn run_steps(r: &mut Answers, origin: &Origin, ver: &mut dyn FnMut(Event)) -> Re
                     ver(Event::Line(written));
                 }
             }
+            // NOTHING WRITTEN STAYS IN THE PAGE CACHE: `sync` waits until
+            // every filesystem — the target's and its ESP — holds it.
+            Some(SETTLE) => rustix::fs::sync(),
             Some(LET_HOST) => {
                 let config = step.command.get(1).context("a consent with no place")?;
                 let ids = person().with_context(context)?;

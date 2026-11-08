@@ -1122,6 +1122,9 @@ mod tests {
             "bluetooth-down",
             "keyboard-restore",
             "help",
+            // THE EMACS CARD, answered by the manuals' region closed
+            // (`manual_region::closed`), which opens its window.
+            "emacs-card",
             "mx-open",
             // THE LEADER'S THREE SETS: no sequence reaches them (the leader
             // is not a key of the tree), and the hint's click and `LEADER :`
@@ -1144,6 +1147,8 @@ mod tests {
             "screen-capture",
             "lock-screen",
             "monitor-btop",
+            // A FRAME OF THE EMACS DAEMON, `SUPER e`.
+            "emacs-frame",
             "journal-follow",
             "rescue-open",
             "monitor-bottom",
@@ -1332,6 +1337,8 @@ mod tests {
             "footer-settings-down",
             "footer-settings-enter",
             "footer-hours",
+            // AND THE PROCESSORS' GLANCE beside them, the same file's switch.
+            "footer-cpu",
             // THE "NO HEADER" MODE'S TWO SWITCHES (`footer_settings_commands`)
             // and the focused window's shortcuts by name — `LEADER Alt`
             // without the tap (`run_with`, `open_window_shortcuts`).

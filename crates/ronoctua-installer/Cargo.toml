@@ -57,6 +57,9 @@ ronoctua-protocol = { path = "../ronoctua-protocol" }
 # The deploy key, as a QR code the person's phone reads off the console.
 qrcode.workspace = true
 anyhow.workspace = true
+# `sync` (the last step): what the installer wrote is on the disk before it
+# says done.
+rustix = { workspace = true, features = [ "fs" ] }
 # `unstable-rendered-line-info`: `Paragraph::line_count`, the rows a text
 # takes WRAPPED BY WORDS as it is drawn — counting characters ÷ width
 # under-counts, and the last line (a refusal's end, the access's status)

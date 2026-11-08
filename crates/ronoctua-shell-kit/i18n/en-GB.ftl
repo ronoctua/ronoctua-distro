@@ -327,6 +327,7 @@ mode-player = player
 mode-software = software
 mode-camera-settings = camera settings
 mode-manual = manual
+mode-emacs-card = emacs card
 
 ## The way back, first on every view's line: Esc, and a click on it
 

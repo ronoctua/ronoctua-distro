@@ -179,6 +179,17 @@
       text-chroma = 0.65;
       text-shift = 0;
     };
+    # THE QUESTION AND WHAT IS TYPED INTO IT: the two widest seats this seed
+    # had left (`owl.nix` says why).
+    question = {
+      hue = 290;
+      chroma = 1.0;
+      text-chroma = 0.85;
+    };
+    reply = {
+      hue = 140;
+      text-chroma = 1.0;
+    };
     # THE DRAWER'S MARK (`modeline.drawer`): a faded green, the device blue's
     # quietness in another hue — a place windows are kept, not an alarm.
     drawer = {

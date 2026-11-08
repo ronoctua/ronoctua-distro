@@ -1029,7 +1029,13 @@ pub(crate) fn line_of(l: &Line<'_>) -> (Vec<ronoctua_render::Span>, Vec<Placed>)
         text: ronoctua_render::layout::elide_end(said, for_the_sentence),
         column: left,
         line: 0,
-        color: tokens::color::TEXT_PRIMARY,
+        // WHILE THE QUESTION IS UP the sentence IS the question, and it wears
+        // a question's colour (`question.asked`), as every door's does.
+        color: if l.cursor.is_some() {
+            tokens::color::QUESTION_ASKED
+        } else {
+            tokens::color::TEXT_PRIMARY
+        },
         edge: false,
         foot: false,
     });

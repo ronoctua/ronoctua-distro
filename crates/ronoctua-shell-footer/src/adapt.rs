@@ -495,6 +495,12 @@ pub struct Prefs {
     /// for and not one the footer puts up.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hours: bool,
+    /// Whether the FREE minibuffer does NOT say how busy the processors are
+    /// while they are very busy (`crate::cpu`). ABSENT IS SHOWN: the owner
+    /// asked for it (2026-11-08), a quiet glance that is there only while it
+    /// says something.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cpu_hidden: bool,
     /// When the build-switch glyph is drawn (`crate::build_switch::Show`, set
     /// on the dev page `crate::build_page`). ABSENT IS `Dev` — the distro
     /// default, the glyph only on a reference build.

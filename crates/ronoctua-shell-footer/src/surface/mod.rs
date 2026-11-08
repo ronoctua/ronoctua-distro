@@ -672,6 +672,18 @@ struct Footer {
     /// and its width on the minibuffer's line — it is a control: a click turns
     /// the page. Remembered for the reason `fold_control` is.
     page_control: Option<(u16, u16)>,
+    /// THE CLUSTER OF WHAT THE LINE SAYS, as it was drawn at the minibuffer's
+    /// right end — the band's own (`band::cluster`): the envelope, the opener,
+    /// the pie and the place in the queue. Its two controls are clicks, and
+    /// the pointer asks these cells. Remembered for the reason `fold_control`
+    /// is.
+    line_cluster: Vec<crate::band::Piece>,
+    /// How busy the processors are, read on the footer's second while their
+    /// glance is wanted (`crate::cpu`).
+    cpu: crate::cpu::Busy,
+    /// Where that glance was drawn on the minibuffer's line, as its first cell
+    /// and its width — a click opens the process monitor.
+    cpu_control: Option<(u16, u16)>,
     /// The opened band's scroll, as it was last DRAWN.
     ///
     /// Kept for the same reason `fold_control` is: the bar the pointer grabs
@@ -2916,6 +2928,9 @@ fn assemble(
         shortcuts_control: None,
         shortcuts_lit: false,
         page_control: None,
+        line_cluster: Vec::new(),
+        cpu: crate::cpu::Busy::default(),
+        cpu_control: None,
         fold_wrapped: 0,
         fold_scroll: ronoctua_design::Scroll {
             total: 0,
@@ -4739,6 +4754,17 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                 // countdown only moves when something else happens is a countdown
                 // that lies.
                 let on_the_band = state.notifications.showing().is_some();
+                // AND THE PROCESSORS, read on this same second while their
+                // glance is wanted — and forgotten while it is not (`crate::cpu`).
+                let labouring = if state.cpu_reads() {
+                    state.cpu.read(ronoctua_memory::machine::cpu_times(
+                        &ronoctua_memory::Places::default(),
+                    ))
+                } else {
+                    state.cpu.stop()
+                };
+                // AND THE MINIBUFFER'S, for what its line says (`band::cluster`).
+                let on_the_line = state.event_line.on_the_line().is_some();
                 // AND THE BRAIN'S COUNTDOWN RIDES THE SAME CLOCK, for the reason
                 // written just above about the pie: the brain sends the warning
                 // ONCE and the number on screen is `deadline - now`, so a line
@@ -4790,6 +4816,8 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                     || spoke
                     || blinking
                     || on_the_band
+                    || on_the_line
+                    || labouring
                     || counting
                     || updating
                     || glancing
@@ -7453,6 +7481,10 @@ impl Footer {
         // A SHORTCUT OF THE HINT LINE that was clicked: what its key would do.
         let mut hint_act: Option<crate::chrome::Act> = None;
         let mut page_click: Option<bool> = None;
+        // A CONTROL OF THE LINE'S CLUSTER — read it, or open it whole.
+        let mut cluster_hit: Option<crate::band::Hit> = None;
+        // THE PROCESSORS' GLANCE, which opens the process monitor.
+        let mut cpu_click = false;
         // AND WHETHER THE PRESS LANDED ON AN EMPTY MINIBUFFER, which opens the
         // shortcut list — see `on_the_empty_minibuffer`.
         let mut leader_click = false;
@@ -7562,8 +7594,14 @@ impl Footer {
                     // AND ON THE MINIBUFFER'S LINE an event said there stays
                     // while the hand is on it — reaching for its action takes
                     // longer than the three seconds it would otherwise have.
-                    // The clock that retires it reads this (`events_tick`).
-                    self.here.on_minibuffer = self.on_the_minibuffer(e.position.1);
+                    // The clock that retires it reads this (`events_tick`) —
+                    // and is asked AT ONCE when the hand comes or goes: the pie
+                    // becomes a pause under the hand, not a second later.
+                    let on_the_line = self.on_the_minibuffer(e.position.1);
+                    if on_the_line != self.here.on_minibuffer {
+                        self.here.on_minibuffer = on_the_line;
+                        held_changed |= self.line_held_or_let_go();
+                    }
                     // AND THE GLANCE'S CLOCK, by the same rule and for the
                     // same reason: what is being read is the line, and the
                     // gaps between its places are as much of it as the words.
@@ -7612,7 +7650,9 @@ impl Footer {
                     self.here.on_band = false;
                     held_changed |= self.hold_the_band_if_anyone_reads_it();
                     // AND THE MINIBUFFER'S, for the same reason.
-                    self.here.on_minibuffer = false;
+                    if std::mem::take(&mut self.here.on_minibuffer) {
+                        held_changed |= self.line_held_or_let_go();
+                    }
                     // AND THE GLANCE'S, for the reason just above: a pointer
                     // that leaves sends no motion on the way out, so a glance
                     // held at the edge would stay held for ever.
@@ -7787,6 +7827,19 @@ impl Footer {
                     // THE PAGE COUNTER, on the same line and at its right end.
                     if self.page_control_at(e.position.0, e.position.1) {
                         page_click = Some(true);
+                        continue;
+                    }
+                    // AND THE PROCESSORS' GLANCE, beside the hours.
+                    if self.cpu_control_at(e.position.0, e.position.1) {
+                        cpu_click = true;
+                        continue;
+                    }
+                    // AND THE LINE'S CLUSTER, in the counter's place.
+                    if let Some(hit) = self
+                        .line_cluster_at(e.position.0, e.position.1)
+                        .and_then(|p| p.hit)
+                    {
+                        cluster_hit = Some(hit);
                         continue;
                     }
                     // THE SHORTCUTS GLYPH, beside the chevron — a click hides or
@@ -7982,6 +8035,14 @@ impl Footer {
         }
         if let Some(forward) = page_click {
             self.page_clicked(forward);
+            return;
+        }
+        if let Some(hit) = cluster_hit {
+            self.line_cluster_clicked(hit);
+            return;
+        }
+        if cpu_click {
+            self.run_with("monitor-btop", None);
             return;
         }
 
@@ -8639,6 +8700,24 @@ impl Footer {
         self.open_foreign(&program, &args, cwd.as_deref());
     }
 
+    /// `emacs-frame` (`SUPER e`): a frame of the Emacs daemon, through the
+    /// distro's editor (`RONOCTUA_EMACS_EDITOR`, `nix/modules/emacs.nix`), which
+    /// starts the daemon's unit first — a frame asked of a daemon not running
+    /// would fail with nothing on screen. Without Emacs, said, as a file that
+    /// opens nothing is (`files-no-editor`).
+    fn open_an_emacs_frame(&mut self) {
+        match std::env::var("RONOCTUA_EMACS_EDITOR")
+            .ok()
+            .filter(|p| !p.is_empty())
+        {
+            Some(editor) => self.open_foreign(&editor, &["-c".to_owned()], None),
+            None => {
+                let m = self.texts.t(crate::key::FILES_NO_EDITOR);
+                self.echo_message(m);
+            }
+        }
+    }
+
     /// The buffers, as the locator's items.
     ///
     /// The label is what one types: the title when there is one, the `app_id`
@@ -8918,6 +8997,7 @@ impl Footer {
             // stays locked whatever becomes of this footer.
             "lock-screen" => self.lock_the_screen(),
             "monitor-btop" => self.open_monitor(BTOP_PATH, "RONOCTUA_BTOP"),
+            "emacs-frame" => self.open_an_emacs_frame(),
             "monitor-bottom" => self.open_monitor(BOTTOM_PATH, "RONOCTUA_BOTTOM"),
             // The glyph browser, in an `xdg_toplevel` of its own. The
             // component's path comes from Nix, and not from the PATH: a
@@ -11657,6 +11737,18 @@ impl Footer {
 
     /// Whether the free minibuffer shows the hours: asked for, the line drawn,
     /// nothing said on it and nothing holding it (`minibuffer_is_free`).
+    /// Whether the processors are read: the glance is on (`LEADER s r`) and
+    /// there is a minibuffer to say it on.
+    fn cpu_reads(&self) -> bool {
+        !self.modeline.cpu_hidden && self.shape.draws_minibuffer()
+    }
+
+    /// Whether the processors' glance is drawn now: read, very busy, and the
+    /// minibuffer free — the hours' own rule.
+    fn cpu_wanted(&self) -> bool {
+        self.cpu_reads() && self.minibuffer_is_free() && self.cpu.percent().is_some()
+    }
+
     fn hours_wanted(&self) -> bool {
         self.modeline.hours && self.shape.draws_minibuffer() && self.minibuffer_is_free()
     }
@@ -12163,6 +12255,18 @@ impl Footer {
         self.apply_geometry(self.interactivity());
     }
 
+    /// A hand came to the minibuffer's line or left it: its clock is asked
+    /// now (`events_tick`), so the pie turns into a pause under the hand and
+    /// back as it leaves — the band's at once. `true` when there is a line to
+    /// draw again.
+    fn line_held_or_let_go(&mut self) -> bool {
+        if self.events_tick(std::time::Instant::now()) {
+            self.close_the_drawer_of_an_empty_line();
+            return true;
+        }
+        self.event_line.on_the_line().is_some()
+    }
+
     /// The footer's second, for what is on the line: it goes when its time
     /// is up — never while a pointer rests on the line — and the next one
     /// takes the line when nothing else holds it. `true` if the line changed.
@@ -12225,7 +12329,15 @@ impl Footer {
     /// actions its catalogue entry offers (`chrome::Piece::action`).
     fn event_pieces(&self, e: &crate::events::Event) -> Vec<crate::chrome::Piece> {
         let actions = crate::events::actions_of(e, &self.book, self.command_registry, &self.texts);
-        crate::chrome::said_with_actions(e.summary(&self.texts), &actions)
+        // ITS GLYPH, as the band draws it: the catalogue's for its tag — the
+        // brain module's own, a skull for the journal's errors — or the
+        // generic one for its level. It was a sentence alone.
+        let n = crate::events::notification(e, &self.texts);
+        let p = self.book.decide(&n);
+        let glyph = p
+            .glyph
+            .unwrap_or_else(|| crate::band::generic_glyph(&p, n.urgency));
+        crate::chrome::said_with_actions(format!("{glyph} {}", e.summary(&self.texts)), &actions)
     }
 
     /// Which of the line's actions a click that presses `act` is on — by its
@@ -12286,6 +12398,14 @@ impl Footer {
     /// notification's action, which no command names — the band's own words
     /// for its button: a click picks it, and a click on the pick runs it.
     fn hint_said_under(&self, x: f64, y: f64) -> Option<String> {
+        // THE PROCESSORS' GLANCE says what it is, and where a click goes.
+        if self.cpu_control_at(x, y) {
+            return Some(self.texts.t(crate::key::FOOTER_CPU_ABOUT));
+        }
+        // THE LINE'S CLUSTER says what each of its cells is, the band's words.
+        if let Some(said) = self.line_cluster_at(x, y).and_then(|p| p.explain.clone()) {
+            return Some(said);
+        }
         if let Some(crate::chrome::Act::Offered(n)) = self.hint_act_under(x, y) {
             let label = self
                 .event_line
@@ -15409,6 +15529,66 @@ impl Footer {
         self.draw_and_paint();
     }
 
+    /// Whether `(x, y)` is on the processors' glance, counted from the border
+    /// it is drawn against (`chrome::at_the_edge`), as the counter is.
+    fn cpu_control_at(&self, x: f64, y: f64) -> bool {
+        let Some((at, wide)) = self.cpu_control else {
+            return false;
+        };
+        let Some(f) = self.metric() else {
+            return false;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(self.minibuffer_line()) {
+            return false;
+        }
+        crate::chrome::at_the_edge(x, f64::from(f.width), f.columns())
+            .is_some_and(|c| c >= at && c < at + wide)
+    }
+
+    /// The piece of the line's cluster at `(x, y)`, counted from the border
+    /// it is drawn against (`chrome::at_the_edge`), as the counter is.
+    fn line_cluster_at(&self, x: f64, y: f64) -> Option<&crate::band::Piece> {
+        let f = self.metric()?;
+        #[allow(clippy::cast_possible_truncation)]
+        if f.line_at(y as f32) != Some(self.minibuffer_line()) {
+            return None;
+        }
+        let cell = crate::chrome::at_the_edge(x, f64::from(f.width), f.columns())?;
+        self.line_cluster
+            .iter()
+            .find(|p| cell >= p.at && cell < p.at + layout::width(&p.text).max(1))
+    }
+
+    /// A control of the line's cluster was clicked — the band's two, for what
+    /// the LINE says: read takes it off (a notification read by hand, as the
+    /// band's envelope does; an event, done with), and open opens the
+    /// notification whole in the manager.
+    fn line_cluster_clicked(&mut self, hit: crate::band::Hit) {
+        let key = self
+            .event_line
+            .on_the_line()
+            .and_then(crate::events::Said::told)
+            .map(|t| t.notification.key());
+        match (hit, key) {
+            (crate::band::Hit::Read, Some(key)) => {
+                self.event_line.read(key);
+                self.desk_asked(crate::desk::Ask::Read(key));
+            }
+            (crate::band::Hit::Read, None) => {
+                let _ = self.event_line.done();
+            }
+            (crate::band::Hit::Open, Some(key)) => {
+                let _ = self.event_line.done();
+                self.run_with("notif-open", Some(&crate::desk::record_order(key)));
+            }
+            _ => return,
+        }
+        self.forget_the_line_under_the_pointer();
+        self.close_the_drawer_of_an_empty_line();
+        self.draw_and_paint();
+    }
+
     /// Whether `(x, y)` is on the page counter, counted from the border the
     /// counter is drawn against (`chrome::at_the_edge`).
     fn page_control_at(&self, x: f64, y: f64) -> bool {
@@ -17168,7 +17348,36 @@ impl Footer {
             // THE TEXT STOPS ONE CELL BEFORE WHATEVER STANDS AT THE RIGHT —
             // one arithmetic, `minibuffer_room`, for this screen and for the
             // narrowest one the event's actions are placed for.
-            let indicator_cells = indicator.as_deref().map(layout::width);
+            // THE CLUSTER OF WHAT THE LINE SAYS (the owner, 2026-11-08: the
+            // minibuffer had no pie, no counter and no pause) — the band's own
+            // (`band::cluster`), left of the chevron, in the inks measured on
+            // this line's ground: the key's for its controls, the hours' quiet
+            // one for its counts. It takes the counter's place, which an event
+            // on the line never has: the line is not paging then.
+            let cluster = if indicator.is_none() && self.echo.is_none() {
+                self.event_line.on_the_line().map(|said| {
+                    crate::band::cluster(
+                        columns,
+                        1,
+                        crate::band::Inks {
+                            control: tokens::color::TEXT_SUBTLE_STRONG,
+                            count: tokens::color::TEXT_SUBTLE_DEFAULT,
+                        },
+                        said.told().is_some(),
+                        self.event_line.clock(std::time::Instant::now()),
+                        self.event_line.position(),
+                        &crate::band::Words { texts: &self.texts },
+                    )
+                })
+            } else {
+                None
+            };
+            let cluster_cells = cluster.as_ref().map(|(_, right)| {
+                crate::chrome::from_the_edge(columns, 1)
+                    .saturating_sub(1)
+                    .saturating_sub(*right)
+            });
+            let indicator_cells = indicator.as_deref().map(layout::width).or(cluster_cells);
             // THE KIOSK'S ADDRESS, cut to the room the line gives its text with
             // the chevron's cell kept — the hand coming over the line brings the
             // chevron, and an address cut again under it would move under the
@@ -17212,7 +17421,10 @@ impl Footer {
             } else if let Some(q) = &question {
                 q.clone()
             } else if let Some(p) = &prompt_mx {
-                vec![crate::chrome::Piece::said(p.clone())]
+                // WHAT IS BEING TYPED — `M-x`, the launcher's query, a
+                // region's search — in the colour of what a person types into
+                // a question (`question.typed`), as every door draws it.
+                vec![crate::chrome::Piece::typed(p.clone())]
             } else if let Some(h) = &held_pieces {
                 // THE SEQUENCE BEING TYPED STAYS FIRST, when there is one: the
                 // leader's line is what was pressed, and the way back follows.
@@ -17483,7 +17695,10 @@ impl Footer {
                 if stacked {
                     (crate::chrome::from_the_edge(columns, 1), mini_line + 1)
                 } else {
-                    let col = indicator_at.or(chevron_at).map_or_else(
+                    // LEFT OF THE LINE'S CLUSTER too, when it stands in the
+                    // counter's place (`band::cluster`).
+                    let cluster_at = cluster.as_ref().map(|(_, left)| *left);
+                    let col = indicator_at.or(cluster_at).or(chevron_at).map_or_else(
                         || crate::chrome::from_the_edge(columns, 1),
                         |c| c.saturating_sub(2),
                     );
@@ -17638,6 +17853,19 @@ impl Footer {
                 }
             }
 
+            // AND THE LINE'S CLUSTER, in the counter's place (above).
+            let cluster = cluster.map(|(pieces, _)| pieces).unwrap_or_default();
+            for piece in &cluster {
+                spans.extend(glyph_and_text(
+                    &piece.text,
+                    piece.at,
+                    mini_line,
+                    piece.color,
+                    piece.edge,
+                ));
+            }
+            self.line_cluster = cluster;
+
             // THE HOURS, at the right end of the FREE minibuffer — asked for
             // (`LEADER s r`, `crate::footer_settings`), and only while nothing
             // is said on the line and nothing holds it: a clock over a sentence
@@ -17659,6 +17887,48 @@ impl Footer {
                         edge: true,
                         foot: false,
                     });
+                }
+            }
+
+            // AND THE PROCESSORS, while they labour, at the right end of the
+            // FREE minibuffer too — left of the hours when both are up, in the
+            // same quiet ink (`crate::cpu`).
+            self.cpu_control = None;
+            if at_rest
+                && !held.open
+                && indicator.is_none()
+                && self.cpu_wanted()
+                && let Some(percent) = self.cpu.percent()
+            {
+                let number = self.texts.t_args(
+                    crate::key::FOOTER_CPU_BUSY,
+                    &[("percent", ronoctua_i18n::Arg::Number(i64::from(percent)))],
+                );
+                let wide = 2 + layout::width(&number);
+                let clock = if self.clock_drawn {
+                    layout::width(&self.hours_now()) + 1
+                } else {
+                    0
+                };
+                if clock + wide < columns {
+                    let at = crate::chrome::from_the_edge(columns, clock + wide);
+                    spans.extend(glyph_and_text(
+                        &tokens::icon::CPU.to_string(),
+                        at,
+                        mini_line,
+                        tokens::color::TEXT_SUBTLE_DEFAULT,
+                        true,
+                    ));
+                    spans.push(ronoctua_render::Span {
+                        size: ronoctua_render::Size::Grid,
+                        text: number,
+                        column: at + 2,
+                        line: mini_line,
+                        color: tokens::color::TEXT_SUBTLE_DEFAULT,
+                        edge: true,
+                        foot: false,
+                    });
+                    self.cpu_control = Some((at, wide));
                 }
             }
 

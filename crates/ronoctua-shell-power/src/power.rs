@@ -264,7 +264,7 @@ impl View {
         let mut out = Vec::new();
         if let Some(action) = self.armed() {
             let name = texts.t(&format!("power-action-{}", action.id()));
-            out.push(crate::chrome::Piece::prose(
+            out.push(crate::chrome::Piece::asked(
                 texts.t_with(crate::key::POWER_ACTION_CONFIRM, &[("action", &name)]),
             ));
             out.push(crate::chrome::Piece::separator());

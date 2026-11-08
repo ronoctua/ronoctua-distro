@@ -91,6 +91,42 @@
         control("brain-act journal-errors seen-all")
         settled(lambda layout: layout and mark not in layout)
 
+    with subtest("asked for, a burst of errors is ONE notification of its lines, and the mark can go"):
+        # THE PERSON'S SWITCH, by name (`notify`): off as it ships.
+        control("brain-act journal-errors notify")
+        told_before = {e["seq"] for e in mind().get("events", [])}
+        plant(50)
+        plant(51)
+
+        def bursts():
+            return [
+                e for e in mind().get("events", [])
+                if e.get("tag") == "journal-errors-burst" and e["seq"] not in told_before
+            ]
+
+        # TOLD ONCE THE JOURNAL IS QUIET (ten seconds), and once: the two lines
+        # are one kind, said in one notification with its count.
+        for _ in range(60):
+            if bursts():
+                break
+            machine.sleep(duration=timedelta(seconds=1))
+        told = bursts()
+        assert len(told) == 1, f"the burst was told {len(told)} times: {told}"
+        said = json.dumps(told[0]["args"])
+        assert "a planted error number" in said, f"the burst does not say its lines: {said}"
+
+        # THE MARK, HIDDEN by the person's other switch, while the list still
+        # counts what is not seen.
+        control("brain-act journal-errors mark")
+        plant(52)
+        planted_is("heard with the mark hidden", lambda g: g["unseen"] >= 1)
+        machine.sleep(duration=timedelta(seconds=3))
+        settled(lambda layout: layout and mark not in layout)
+        control("brain-act journal-errors mark")
+        control("brain-act journal-errors notify")
+        control("brain-act journal-errors seen-all")
+        settled(lambda layout: layout and mark not in layout)
+
     with subtest("a line the shipped filter holds is counted on the filter and never on the mark"):
         def filtered():
             """The shipped default filter's record in the kept list, or None."""

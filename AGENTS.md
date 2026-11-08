@@ -562,8 +562,12 @@ OSC 7501, que o guardião lê.
   fecha — perguntado ANTES de qualquer efeito (`Ui::closing`), e um `Esc` segurado nunca fecha. Um
   buffer fecha na primeira página (`Effect::Close`). Ficam fora terminal, bloqueio, captura,
   redimensionador e coluna (`Content::confirms_closing`).
-- Sem cabeçalho (o padrão da distro), a linha 0 aparece só enquanto há uma frase ou uma pergunta
-  (`chrome::Carries::speaks`), e a lista desce uma linha nesse tempo; o que o ponteiro diz
+- Sem cabeçalho (o padrão da distro), o que a janela diz ou pergunta vai para uma área no PÉ dela
+  (`door::foot`, 2026-11-08): só enquanto existe, fundo próprio (`surface.header`), a mensagem
+  quebrada até `space.window.messageLines` com barra para o resto, a pizza do tempo que vira pausa
+  sob o ponteiro e o envelope que a tira; a janela é recontada no que sobra acima, antes do quadro.
+  Vale para a janela que diz pela porta (`list::line_zero`, `the_question`, `said_on_line_zero`) —
+  nunca a lê de `Ui::message` — e o terminal não perde linha. O que o ponteiro diz
   (`Carries::About`; num buffer, `Screen::point`) vai para o minibuffer do rodapé
   (`door::pointed_order`, ordem `pointed`).
 - Tecla nunca é texto no `.ftl`: sai do código (`bindings::taught`) + `bindings::label()`, num
@@ -632,6 +636,9 @@ OSC 7501, que o guardião lê.
 
 ### Perguntas, recusas e honestidade
 
+- Uma pergunta tem cor própria e o que se digita nela outra (`question.asked`, `question.typed`: duas
+  famílias em toda semente, longe de toda outra tinta pelos portões), e as teclas dela vão para a
+  borda direita (`door::list::question_pieces`, o construtor das duas portas).
 - Pergunta que aparece sozinha, ou sobre algo que não se desfaz, desenha o `não` primeiro; a que um
   clique abre nasce sob o ponteiro, o primeiro clique seleciona e o segundo responde (`aim::Aim`,
   `files::Picker::aimed`).
@@ -658,7 +665,8 @@ OSC 7501, que o guardião lê.
   `network-asks-with-a-pass`).
 - Todo evento do sistema e toda notificação que os filtros mostram são ditos na linha do minibuffer
   quando ela está livre, e vão para a faixa só quando ela está ocupada ou a fila tem quatro
-  (`events::route`, `events::deliver`).
+  (`events::route`, `events::deliver`). A linha tem o grupo da faixa (`band::cluster`: envelope,
+  abrir, pizza que vira pausa sob o ponteiro, posição na fila) e o glifo do catálogo, evento incluso.
 
 ### Comandos e teclas
 
@@ -671,7 +679,8 @@ OSC 7501, que o guardião lê.
   janela, `RET s` as configurações do terminal), `s` sistema (`s q` saídas e o bloqueio de tela, `s e` segurança, `s o`/`s x`
   containers/Incus, `s z` instalador, `s v` pertences, `s r` rodapé), `w` janela/buffer (a mesma
   coisa, inv. 4), `m` miscelânea (`m i` ícones), `c` clipboard, `d` acesso rápido
-  (`LEADER SPC` flutuando), `=` calculadora, `v` video-metrics, `/` desenvolvimento (`/ r`
+  (`LEADER SPC` flutuando), `=` calculadora, `v` video-metrics, `h` os manuais e `e` o cartão do Emacs (na tela inteira;
+  `SUPER e` é um frame do Emacs), `/` desenvolvimento (`/ r`
   redimensiona, `/ c` clona o repo, `/ a` contas LLM), `,` o buffer em foco, `g` o relance (`world-glance`). Em
   buffer, `, r` é `LEADER Alt r`; acorde não roda comando e letra sozinha é texto.
 - **Três conjuntos**, e a LEADER repetida na raiz anda por eles (`LEADER`/`LEADER LEADER`/`LEADER

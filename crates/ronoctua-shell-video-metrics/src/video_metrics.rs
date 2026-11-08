@@ -840,6 +840,8 @@ pub enum Done {
     Edited(Edit, Result<(), Why>),
     /// A channel added — its name — or why not.
     Added(Result<String, Unadded>),
+    /// The consent to ask YouTube could not be kept: the key of why.
+    NotLet(&'static str),
     /// Where a scan was asked.
     Scan(Scanned),
     /// What the player said to a video, or that nobody answered.
@@ -2231,7 +2233,9 @@ impl View {
             Done::Added(Err(Unadded::Refused(why))) => {
                 (long(texts.t(words::why_key(why))), Errand::Nothing)
             }
-            Done::Added(Err(Unadded::NotLet(k))) => (long(texts.t(k)), Errand::Nothing),
+            Done::Added(Err(Unadded::NotLet(k))) | Done::NotLet(k) => {
+                (long(texts.t(k)), Errand::Nothing)
+            }
             Done::Scan(Scanned::Brain) => (
                 normal(texts.t(key::VIDEO_METRICS_SCAN_ASKED)),
                 Errand::Nothing,

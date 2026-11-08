@@ -78,7 +78,7 @@ pub fn line_zero(
     // A SENTENCE TAKES THIS LINE, and then there is no shortcut on it to
     // point at. Decided BEFORE the list is measured, because the
     // explanation's row comes out of that measurement.
-    if let Some(text) = ui.message.clone() {
+    if let Some(text) = said_on_line_zero(ui).map(str::to_owned) {
         ui.hinted.say(None);
         return (vec![crate::chrome::Piece::said(text)], Carries::Said);
     }
@@ -97,16 +97,39 @@ pub fn line_zero(
 /// THE TYPED TEXT KEEPS ITS END. It is cut from the START to what the line
 /// has left after the question and the two keys, because its end is where
 /// the next letter goes: a line cut at its end would hide what the hand is
-/// doing. The question comes first and the keys after, the minibuffer's
-/// order — and at a width where not even that fits, the rest wraps into the
-/// header's drawer like any other line.
+/// doing. The question comes first, in its own colour, what is typed in
+/// another (`question.*`), and the keys at the RIGHT EDGE, away from both
+/// (the owner, 2026-11-08) — and at a width where they do not fit apart, they
+/// follow the answer and the rest wraps into the header's drawer like any
+/// other line.
 ///
 /// Public for a window that paints its own header (`hinted.head`) and asks
 /// this before its message and its shortcuts, as [`header_of`] does.
+///
+/// NONE WITH NO HEADER: the question is asked at the window's foot then
+/// (`door::foot`), and asking here is what tells the door this window says
+/// things through it.
 #[must_use]
 pub fn the_question(ui: &Ui) -> Option<Vec<crate::chrome::Piece>> {
+    if ui.hinted.is_hidden() {
+        ui.foot.routed.set(true);
+        return None;
+    }
     let line = ui.asking.as_ref()?;
     Some(question_pieces(line, &ui.texts, ui.columns))
+}
+
+/// THE MESSAGE FOR LINE 0, while there is one — and none with no header: it
+/// is said at the window's foot then (`door::foot`), and asking here is what
+/// tells the door this window says things through it. A window that builds
+/// its own line 0 asks this, never [`Ui::message`] itself.
+#[must_use]
+pub fn said_on_line_zero(ui: &Ui) -> Option<&str> {
+    if ui.hinted.is_hidden() {
+        ui.foot.routed.set(true);
+        return None;
+    }
+    ui.message.as_deref()
 }
 
 /// A question's line as pieces, `columns` wide: the ONE builder, which the
@@ -148,8 +171,8 @@ pub fn question_pieces(
         asked
     };
     let mut pieces = vec![
-        crate::chrome::Piece::prose(asked.clone()),
-        crate::chrome::Piece::said(typed.clone()),
+        crate::chrome::Piece::asked(asked.clone()),
+        crate::chrome::Piece::typed(typed.clone()),
     ];
     // WHAT THE QUESTION OFFERS for what is typed, after it — a zone's first
     // fits (`line::Line::offered`) — in the room the question, the typing
@@ -173,7 +196,16 @@ pub fn question_pieces(
             });
         }
     }
-    pieces.push(separator);
+    // THE KEYS AT THE RIGHT EDGE: the room the line has left between what is
+    // asked and typed (the offer included) and the keys becomes one blank
+    // run. With no room for at least a cell of air, the minibuffer's old
+    // order: a dot, then the keys.
+    let said: u16 = pieces.iter().map(|p| width(&p.text)).sum();
+    let wanted: u16 = keys.iter().map(|p| width(&p.text)).sum();
+    match usable.checked_sub(said + wanted).filter(|air| *air >= 2) {
+        Some(air) => pieces.push(crate::chrome::Piece::prose(" ".repeat(usize::from(air)))),
+        None => pieces.push(separator),
+    }
     pieces.extend(keys);
     pieces
 }

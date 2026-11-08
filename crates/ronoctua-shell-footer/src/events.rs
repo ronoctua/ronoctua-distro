@@ -601,11 +601,14 @@ pub const READ_IN: Duration = Duration::from_secs(1);
 /// The most a pointer resting on the line holds what it says, in its own
 /// times, counted from when it went up ([`Line::tick`]).
 ///
-/// The hold is for a hand reaching for an action or reading a long line; the
-/// minibuffer is the bottom row of the screen, where a pointer is often
+/// The hold is for a hand reaching for an action or reading a long line, and
+/// it is the band's: the clock STOPS, and the pie says so (2026-11-08). But
+/// the minibuffer is the bottom row of the screen, where a pointer is often
 /// PARKED, and with the bars hidden that row is the edge that reveals them. A
 /// hold with no end kept "a camera is open by …" up long after it closed,
-/// with the queue — the camera closing — stuck behind it.
+/// with the queue — the camera closing — stuck behind it. So a hand still
+/// there this long lets go, and holds again only once it has left and come
+/// back.
 pub const HELD_AT_MOST: u32 = 3;
 
 /// What is on the line: what, since when, until when — and which of its
@@ -614,7 +617,11 @@ pub const HELD_AT_MOST: u32 = 3;
 struct Up {
     said: Said,
     since: Instant,
-    until: Instant,
+    /// Its time, which a hand on the line stops ([`crate::echo::Countdown`]).
+    clock: crate::echo::Countdown,
+    /// A hand has held it for [`HELD_AT_MOST`] of its times: the clock runs
+    /// under it until it leaves.
+    parked: bool,
     /// The action a click picked, by its place among the line's actions —
     /// BORN ON THE FIRST, a question's `no`, each time something goes up:
     /// the line rises by itself, under a hand that may be clicking at
@@ -625,11 +632,12 @@ struct Up {
 
 impl Up {
     fn at(said: Said, now: Instant) -> Self {
-        let until = now + said.lasts();
+        let clock = crate::echo::Countdown::start(said.lasts(), now);
         Self {
             said,
             since: now,
-            until,
+            clock,
+            parked: false,
             pick: crate::aim::Aim::born(0),
         }
     }
@@ -794,19 +802,27 @@ impl Line {
     }
 
     /// The footer's second: what is on the line goes when its time is up —
-    /// not while a pointer rests on the line (`held`), and for a whole time
-    /// of its own after the hand leaves, but never past [`HELD_AT_MOST`] of
-    /// them from when it went up — and the next one takes the line when
-    /// nothing else holds it.
+    /// its clock STOPPED while a pointer rests on the line (`held`) and
+    /// running again from where it stopped once the hand leaves, the band's
+    /// rule, but a hand still there [`HELD_AT_MOST`] of its times after it
+    /// went up lets go — and the next one takes the line when nothing else
+    /// holds it.
     pub fn tick(&mut self, now: Instant, person: bool, held: bool) -> Ticked {
         let mut ticked = Ticked::default();
         if let Some(up) = self.on.as_mut() {
             let lasts = up.said.lasts();
-            if held {
-                let most = up.since + lasts * HELD_AT_MOST;
-                up.until = up.until.max(now + lasts).min(most);
+            if !held {
+                up.clock.release(now);
+                up.parked = false;
+            } else if !up.parked {
+                if now.saturating_duration_since(up.since) >= lasts * HELD_AT_MOST {
+                    up.clock.release(now);
+                    up.parked = true;
+                } else {
+                    up.clock.hold(now);
+                }
             }
-            if now >= up.until {
+            if up.clock.spent(now) {
                 ticked.expired = self.on.take().map(|up| up.said);
                 ticked.changed = true;
             }
@@ -849,7 +865,7 @@ impl Line {
             if read && !up.said.waits_for_an_answer() {
                 out.said = Some(up.said);
             } else {
-                let left = up.until.saturating_duration_since(now);
+                let left = up.clock.left(now);
                 let spent = up.said.lasts().saturating_sub(left);
                 out.to_the_band.push((up.said, spent));
             }
@@ -943,6 +959,23 @@ impl Line {
     #[must_use]
     pub fn waiting(&self) -> usize {
         self.waiting.len()
+    }
+
+    /// The time of what is on the line, for its pie: the eighths it has left,
+    /// and whether a hand holds it ([`band::cluster`](crate::band::cluster)).
+    #[must_use]
+    pub fn clock(&self, now: Instant) -> Option<(u8, bool)> {
+        self.on
+            .as_ref()
+            .map(|up| (up.clock.eighths(now), up.clock.held()))
+    }
+
+    /// Where what is on the line stands among what waits for it — the band's
+    /// counter, `(1, 1 + waiting)` — and nothing when nothing waits: a `1/1`
+    /// spends three columns saying nothing.
+    #[must_use]
+    pub fn position(&self) -> Option<(usize, usize)> {
+        (self.on.is_some() && !self.waiting.is_empty()).then(|| (1, 1 + self.waiting.len()))
     }
 
     /// Nothing on the line and nothing waiting.
@@ -1908,33 +1941,64 @@ mod tests {
     }
 
     /// FAILS IF: an event under the pointer expires while somebody is reading
-    /// it or reaching for its action, or stays for ever once the hand leaves.
+    /// it or reaching for its action, its pie does not say it is held, or it
+    /// comes back with more or less than it had when the hand came — the
+    /// band's rule, a clock that stops (2026-11-08).
     #[test]
-    fn the_pointer_on_the_line_holds_it() {
+    fn the_pointer_on_the_line_stops_its_clock() {
         let t0 = Instant::now();
         let mut line = Line::default();
         line.arrive(e(TOR_UP), false, t0);
         let step = on_screen();
+        assert!(!line.tick(t0 + step / 2, false, true).changed, "held");
         assert!(
-            !line.tick(t0 + step + step / 2, false, true).changed,
-            "held"
+            !line.tick(t0 + step * 2, false, true).changed,
+            "a hand that stays holds it past its time"
         );
-        assert!(line.on_the_line().is_some());
+        assert_eq!(line.clock(t0 + step * 2).map(|(_, held)| held), Some(true));
+        // THE HAND LEAVES at two and a quarter, and the half it had when it
+        // came runs from there: it is still up a quarter later…
+        let gone = t0 + step * 2 + step / 4;
+        assert!(!line.tick(gone, false, false).changed);
+        assert_eq!(line.clock(gone).map(|(_, held)| held), Some(false));
         assert!(
-            !line.tick(t0 + step * 2, false, false).changed,
-            "a whole time more after the hand"
+            !line.tick(gone + step / 4, false, false).changed,
+            "it had half its time left"
         );
+        // …and goes once that half has run.
         assert!(
-            line.tick(t0 + step * 3, false, false).changed,
+            line.tick(gone + step / 2 + Duration::from_millis(1), false, false)
+                .changed,
             "and then it goes"
         );
         assert!(line.is_empty());
     }
 
+    /// FAILS IF: the line's counter says `1/1` (three columns saying
+    /// nothing), or does not count what waits behind what it says — the
+    /// band's counter, on the minibuffer (2026-11-08).
+    #[test]
+    fn the_line_counts_what_waits_behind_it() {
+        let t0 = Instant::now();
+        let mut line = Line::default();
+        assert_eq!(line.position(), None);
+        line.arrive(e(CAMERA_IN_USE), false, t0);
+        assert_eq!(line.position(), None, "one alone is not counted");
+        line.arrive(e(TOR_UP), false, t0);
+        line.arrive(e(TAILNET_UP), false, t0);
+        assert_eq!(line.position(), Some((1, 3)));
+        assert_eq!(
+            line.clock(t0),
+            Some((8, false)),
+            "a whole pie when it goes up"
+        );
+    }
+
     /// FAILS IF: a pointer that never leaves the line — parked at the bottom
     /// of the screen, where the line is — holds an event past
     /// [`HELD_AT_MOST`] echoes from when it went up, and the one waiting
-    /// behind it with it.
+    /// behind it with it; or, let go of, the event loses the time it had, or
+    /// the parked hand holds it again.
     #[test]
     fn a_parked_pointer_holds_an_event_only_so_long() {
         let t0 = Instant::now();
@@ -1953,8 +2017,21 @@ mod tests {
                 now - t0
             );
         }
+        // LET GO OF at the cap, with the three quarters it had when the hand
+        // came, and not held again by the hand still parked there.
+        assert!(!line.tick(t0 + step * HELD_AT_MOST, false, true).changed);
+        assert_eq!(
+            line.clock(t0 + step * HELD_AT_MOST).map(|(_, held)| held),
+            Some(false)
+        );
         assert!(
-            line.tick(t0 + step * HELD_AT_MOST, false, true).changed,
+            !line
+                .tick(t0 + step * HELD_AT_MOST + step / 2, false, true)
+                .changed
+        );
+        assert!(
+            line.tick(t0 + step * HELD_AT_MOST + step, false, true)
+                .changed,
             "it goes"
         );
         assert_eq!(tag_of(line.on_the_line()), Some(TOR_UP));

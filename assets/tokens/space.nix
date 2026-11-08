@@ -1481,6 +1481,11 @@
     fastAccessWidthPx = 1100;
     fastAccessHeightPx = 720;
     columnHeightPx = 720;
+    # THE MESSAGE AT A WINDOW'S FOOT (2026-11-08): with no header, what a
+    # window says or asks is drawn under its list, on a ground of its own,
+    # and a long message wraps up to this many lines — the Brain page's own
+    # foot — with a bar for the rest. Never more than half the window.
+    messageLines = 6;
   };
 
   # THE TERMINAL THINKS IN CELLS (`crate::terminal`): its first size is a grid,

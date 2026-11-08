@@ -170,6 +170,131 @@ pub const fn countdown_glyph(left: u8) -> char {
     }
 }
 
+/// The two inks of the right-hand cluster ([`cluster`]): its CONTROLS (the
+/// envelope that reads it, the one that opens it whole) and its COUNTS (the
+/// pie of the time left and the place in the queue) — each line passes the
+/// ones measured on its own ground.
+#[derive(Debug, Clone, Copy)]
+pub struct Inks {
+    /// The envelope and the opener.
+    pub control: tokens::Color,
+    /// The pie and the place in the queue.
+    pub count: tokens::Color,
+}
+
+/// THE RIGHT-HAND CLUSTER OF A NOTIFICATION'S LINE — the band's, and the
+/// minibuffer's line when it says a notification or an event (the owner,
+/// 2026-11-08: the minibuffer had no pie, no counter and no pause).
+///
+/// From the edge inwards, after the `before` cells something else keeps
+/// there (the minibuffer's chevron): the control that reads it, the one that
+/// opens it whole (`open`, where there is a whole to open), the pie of the
+/// time left — a pause while a hand holds it (`clock`: the eighths left, and
+/// whether it is held) — and the place in the queue (`position`). Every one
+/// is placed by `chrome::from_the_edge` and carries `edge: true`, so the ink
+/// sits an exact cell from the border rather than a cell plus the grid's
+/// remainder, and the pointer asks the same way. Gives back the pieces and
+/// the cell the leftmost of them starts at — what the sentence stops before.
+#[must_use]
+pub fn cluster(
+    columns: u16,
+    before: u16,
+    inks: Inks,
+    open: bool,
+    clock: Option<(u8, bool)>,
+    position: Option<(usize, usize)>,
+    words: &Words<'_>,
+) -> (Vec<Piece>, u16) {
+    let mut pieces = Vec::new();
+    let mut taken = before;
+    // THE CONTROL IS THE FIRST THING ON THE RIGHT, at the edge.
+    //
+    // It sat at the LEFT margin and was a hollow circle, and both were wrong.
+    // The left margin is where the sentence starts, so the control pushed the
+    // words in and read as part of them; and a circle is a shape, not a verb —
+    // it says "here is a control" and leaves what it does to be guessed.
+    //
+    // An open envelope is the drawing everybody already reads as "read", and
+    // the screen's right edge is where a hand goes to dismiss something.
+    taken += if before == 0 { 1 } else { 2 };
+    let mut right = crate::chrome::from_the_edge(columns, taken);
+    pieces.push(Piece {
+        at: right,
+        text: tokens::icon::NOTIFICATION_MARK_READ.to_string(),
+        color: inks.control,
+        hit: Some(Hit::Read),
+        explain: Some(words.texts.t(crate::key::HINT_NOTIF_READ)),
+        edge: true,
+    });
+    // AND BESIDE IT, THE ONE THAT OPENS IT WHOLE, with a cell of air between
+    // the two: two glyphs of one family in touching cells read as one
+    // control.
+    if open {
+        taken += 2;
+        right = crate::chrome::from_the_edge(columns, taken);
+        pieces.push(Piece {
+            at: right,
+            text: tokens::icon::NOTIFICATION_OPEN.to_string(),
+            color: inks.control,
+            hit: Some(Hit::Open),
+            explain: Some(words.texts.t(crate::key::HINT_NOTIF_OPEN)),
+            edge: true,
+        });
+    }
+    if let Some((left, held)) = clock {
+        // THE SAME CELL SAYS BOTH THINGS: how much time is left, and that the
+        // time is not moving. A frozen pie and a running one are the same
+        // drawing for the second or two anybody watches, so the pointer's
+        // effect would be invisible exactly while it is in force — and the
+        // person would take their hand away to be sure, which is the one
+        // gesture that undoes it.
+        //
+        // The COLOUR does not change with it. Two signals for one state is how
+        // a row comes to twitch; the drawing is the state, and the message
+        // line says it in words.
+        let glyph = if held {
+            tokens::icon::PAUSE
+        } else {
+            countdown_glyph(left)
+        };
+        taken += 2;
+        right = crate::chrome::from_the_edge(columns, taken);
+        pieces.push(Piece {
+            at: right,
+            text: glyph.to_string(),
+            color: inks.count,
+            hit: None,
+            explain: Some(words.texts.t(if held {
+                crate::key::HINT_NOTIF_PAUSED
+            } else {
+                crate::key::HINT_NOTIF_COUNTDOWN
+            })),
+            edge: true,
+        });
+    }
+    if let Some((shown_now, total)) = position {
+        let text = words.texts.t_args(
+            crate::key::NOTIF_QUEUE_POSITION,
+            &[
+                ("shown", ronoctua_i18n::Arg::Number(shown_now as i64)),
+                ("total", ronoctua_i18n::Arg::Number(total as i64)),
+            ],
+        );
+        let w = layout::width(&text);
+        taken += w + 1;
+        right = crate::chrome::from_the_edge(columns, taken);
+        pieces.push(Piece {
+            at: right,
+            text,
+            color: inks.count,
+            hit: None,
+            explain: None,
+            edge: true,
+        });
+    }
+    (pieces, right)
+}
+
 /// The band, laid out.
 ///
 /// `fraction` is how much of its time the notification has left (1.0 → 0.0) and
@@ -226,100 +351,20 @@ pub fn lines(
 
     // THE RIGHT-HAND CLUSTER FIRST, because it decides how much room the
     // sentence gets. Laying the text out first and then discovering the pie
-    // does not fit is how a line comes to spill.
-    //
-    // From the edge inwards: the control, the pie, the counter. Every one of
-    // them is placed by `chrome::from_the_edge` and carries `edge: true`, so
-    // the ink sits an exact cell from the border rather than a cell plus the
-    // grid's remainder — and `at` below asks the pointer the same way.
-    let mut taken = 0u16;
-    let mut right;
-
-    // THE CONTROL IS THE FIRST THING ON THE RIGHT, at the edge.
-    //
-    // It sat at the LEFT margin and was a hollow circle, and both were wrong.
-    // The left margin is where the sentence starts, so the control pushed the
-    // words in and read as part of them; and a circle is a shape, not a verb —
-    // it says "here is a control" and leaves what it does to be guessed.
-    //
-    // An open envelope is the drawing everybody already reads as "read", and
-    // the screen's right edge is where a hand goes to dismiss something.
-    taken += 1;
-    right = crate::chrome::from_the_edge(columns, taken);
-    first.pieces.push(Piece {
-        at: right,
-        text: tokens::icon::NOTIFICATION_MARK_READ.to_string(),
-        color: tone,
-        hit: Some(Hit::Read),
-        explain: Some(words.texts.t(crate::key::HINT_NOTIF_READ)),
-        edge: true,
-    });
-
-    // AND BESIDE IT, THE ONE THAT OPENS IT WHOLE, with a cell of air between
-    // the two: two glyphs of one family in touching cells read as one
-    // control.
-    taken += 2;
-    right = crate::chrome::from_the_edge(columns, taken);
-    first.pieces.push(Piece {
-        at: right,
-        text: tokens::icon::NOTIFICATION_OPEN.to_string(),
-        color: tone,
-        hit: Some(Hit::Open),
-        explain: Some(words.texts.t(crate::key::HINT_NOTIF_OPEN)),
-        edge: true,
-    });
-
-    if let Some(f) = fraction {
-        // THE SAME CELL SAYS BOTH THINGS: how much time is left, and that the
-        // time is not moving. A frozen pie and a running one are the same
-        // drawing for the second or two anybody watches, so the pointer's
-        // effect would be invisible exactly while it is in force — and the
-        // person would take their hand away to be sure, which is the one
-        // gesture that undoes it.
-        //
-        // The COLOUR does not change with it. Two signals for one state is how
-        // a row comes to twitch; the drawing is the state, and the message
-        // line says it in words.
-        let glyph = if held {
-            tokens::icon::PAUSE
-        } else {
-            countdown_glyph(eighths(f))
-        };
-        taken += 2;
-        right = crate::chrome::from_the_edge(columns, taken);
-        first.pieces.push(Piece {
-            at: right,
-            text: glyph.to_string(),
-            color: tokens::color::NOTIFICATION_COUNTDOWN,
-            hit: None,
-            explain: Some(words.texts.t(if held {
-                crate::key::HINT_NOTIF_PAUSED
-            } else {
-                crate::key::HINT_NOTIF_COUNTDOWN
-            })),
-            edge: true,
-        });
-    }
-    if let Some((shown_now, total)) = position {
-        let text = words.texts.t_args(
-            crate::key::NOTIF_QUEUE_POSITION,
-            &[
-                ("shown", ronoctua_i18n::Arg::Number(shown_now as i64)),
-                ("total", ronoctua_i18n::Arg::Number(total as i64)),
-            ],
-        );
-        let w = layout::width(&text);
-        taken += w + 1;
-        right = crate::chrome::from_the_edge(columns, taken);
-        first.pieces.push(Piece {
-            at: right,
-            text,
-            color: tokens::color::NOTIFICATION_COUNTDOWN,
-            hit: None,
-            explain: None,
-            edge: true,
-        });
-    }
+    // does not fit is how a line comes to spill ([`cluster`]).
+    let (cluster, right) = cluster(
+        columns,
+        0,
+        Inks {
+            control: tone,
+            count: tokens::color::NOTIFICATION_COUNTDOWN,
+        },
+        true,
+        fraction.map(|f| (eighths(f), held)),
+        position,
+        words,
+    );
+    first.pieces.extend(cluster);
 
     // And now the sentence, in whatever is left.
     let room = right.saturating_sub(at).saturating_sub(1);

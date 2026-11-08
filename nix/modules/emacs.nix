@@ -236,6 +236,10 @@ in
       # is minimal, and a bare name fails far from its cause.
       systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACSCLIENT =
         "${emacsPkg}/bin/emacsclient";
+      # AND THE EDITOR ITSELF, for `SUPER e` (`emacs-frame`): a frame through
+      # the wrapper that starts the daemon's unit first, by its store path.
+      systemd.user.services.ronoctua-footer.environment.RONOCTUA_EMACS_EDITOR =
+        "${emacsEditor}/bin/ronoctua-emacs-editor";
 
       # THE SHELL'S EDITOR (`emacsEditor`), by its store path: `shellrc.sh`
       # is a file of the home and names no store path itself. Off with the

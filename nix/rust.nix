@@ -123,6 +123,9 @@
   wordsData,
   # The three icon tables in one directory (`nix/iconset.nix`), read at RUN time.
   iconset,
+  # GNU's Emacs reference card, a page to a column (`nix/emacs-refcard.nix`),
+  # read at RUN time.
+  emacsRefcard,
   # The calculator's unit table (`nix/unitsgen.nix`), compiled in.
   unitsRs,
 
@@ -920,6 +923,10 @@ let
     # Absence is a refusal the icons app draws (`icons-why-no-variable`), not an
     # error. `iconset-is-at-run-time` holds it here.
     RONOCTUA_ICONSET = "${iconset}";
+    # THE EMACS REFERENCE CARD (`LEADER e`, `LEADER h`), at run time for the
+    # same reason: an Emacs bump re-builds it, and no compilation reads it.
+    # Absence is a sentence the card's window says, not an error.
+    RONOCTUA_EMACS_REFCARD = "${emacsRefcard}";
 
     # NO UNRAR: it is UNFREE, and so a PART (`nix/modules/archives.nix`),
     # never in the system's closure nor in this wrapper's — a store path here

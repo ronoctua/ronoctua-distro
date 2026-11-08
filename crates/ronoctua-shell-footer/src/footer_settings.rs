@@ -53,6 +53,10 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
 /// The command that shows the hours on the free minibuffer, or stops.
 pub const HOURS_COMMAND: &str = "footer-hours";
 
+/// The command that says on the free minibuffer how busy the processors are
+/// while they labour, or stops (`crate::cpu`).
+pub const CPU_COMMAND: &str = "footer-cpu";
+
 /// The command that adapts the modeline to a kiosk, or stops — the one the
 /// kiosk's grid ran before it moved here.
 pub const KIOSK_COMMAND: &str = "modeline-adapt-kiosk";
@@ -85,6 +89,8 @@ pub enum Setting {
     Bars,
     /// The hours on the free minibuffer.
     Hours,
+    /// The processors, on the free minibuffer while they labour.
+    Cpu,
     /// The modeline adapting to a kiosk.
     Kiosk,
     /// The modeline adapting to a group of terminals: its tabs.
@@ -96,11 +102,13 @@ pub enum Setting {
 }
 
 impl Setting {
-    /// The six, in the order drawn. `Header` and `Shortcuts` are two rows of
-    /// one section (`heading`), so they sit last and together.
-    pub const ALL: [Self; 6] = [
+    /// The seven, in the order drawn. `Hours` and `Cpu` are two rows of one
+    /// section (the free minibuffer's), and so are `Header` and `Shortcuts`
+    /// (`heading`), so each pair sits together.
+    pub const ALL: [Self; 7] = [
         Self::Bars,
         Self::Hours,
+        Self::Cpu,
         Self::Kiosk,
         Self::Terminals,
         Self::Header,
@@ -113,6 +121,7 @@ impl Setting {
         match self {
             Self::Bars => crate::hidden::CYCLE_COMMAND,
             Self::Hours => HOURS_COMMAND,
+            Self::Cpu => CPU_COMMAND,
             Self::Kiosk => KIOSK_COMMAND,
             Self::Terminals => TERMINALS_COMMAND,
             Self::Header => HEADER_COMMAND,
@@ -128,6 +137,7 @@ impl Setting {
         match self {
             Self::Bars => prefs.hidden = crate::hidden::next_mode(prefs.hidden),
             Self::Hours => prefs.hours = !prefs.hours,
+            Self::Cpu => prefs.cpu_hidden = !prefs.cpu_hidden,
             Self::Kiosk => {
                 let on = prefs.adapts(crate::kiosk::ADAPTER);
                 prefs.adapt.insert(crate::kiosk::ADAPTER.to_owned(), !on);
@@ -147,7 +157,7 @@ impl Setting {
     const fn heading(self) -> &'static str {
         match self {
             Self::Bars => key::FOOTER_SETTINGS_BARS,
-            Self::Hours => key::FOOTER_SETTINGS_FREE,
+            Self::Hours | Self::Cpu => key::FOOTER_SETTINGS_FREE,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK,
             Self::Terminals => key::FOOTER_SETTINGS_TERMINALS,
             // ONE SECTION, TWO ROWS: the header and the keys it gives up are
@@ -161,6 +171,7 @@ impl Setting {
         match self {
             Self::Bars => key::FOOTER_SETTINGS_BARS_MODE,
             Self::Hours => key::FOOTER_SETTINGS_HOURS,
+            Self::Cpu => key::FOOTER_SETTINGS_CPU,
             Self::Kiosk => key::FOOTER_SETTINGS_KIOSK_ADAPT,
             Self::Terminals => key::FOOTER_SETTINGS_TERMINALS_ADAPT,
             Self::Header => key::FOOTER_SETTINGS_HEADER_HIDE,
@@ -185,6 +196,7 @@ impl Setting {
                 Some(Hidden::Cover) => key::FOOTER_SETTINGS_BARS_COVER,
             },
             Self::Hours => on(prefs.hours),
+            Self::Cpu => on(!prefs.cpu_hidden),
             Self::Kiosk => on(prefs.adapts(crate::kiosk::ADAPTER)),
             Self::Terminals => on(prefs.adapts(crate::terminal_tabs::ADAPTER)),
             // THE ROW NAMES THE HIDING: `on` is the hiding active (the distro
@@ -211,6 +223,7 @@ impl Setting {
                 )],
             )),
             Self::Hours => Some(texts.t(key::FOOTER_SETTINGS_HOURS_NOTE)),
+            Self::Cpu => Some(texts.t(key::FOOTER_SETTINGS_CPU_NOTE)),
             Self::Kiosk | Self::Terminals => None,
             Self::Header => Some(texts.t(key::FOOTER_SETTINGS_HEADER_NOTE)),
             Self::Shortcuts => Some(texts.t(key::FOOTER_SETTINGS_SHORTCUTS_NOTE)),
@@ -602,6 +615,7 @@ mod tests {
             [
                 crate::hidden::CYCLE_COMMAND,
                 HOURS_COMMAND,
+                CPU_COMMAND,
                 KIOSK_COMMAND,
                 TERMINALS_COMMAND,
                 HEADER_COMMAND,

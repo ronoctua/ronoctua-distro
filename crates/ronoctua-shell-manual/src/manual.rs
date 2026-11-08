@@ -45,11 +45,14 @@ pub enum Which {
     Shortcuts,
     /// The hand gestures, drawn.
     Gestures,
+    /// GNU's Emacs reference card (`crate::refcard`), on the whole screen in
+    /// columns: its row opens its window, from either door.
+    Emacs,
 }
 
 impl Which {
     /// Every manual, in the list's order.
-    pub const ALL: [Self; 2] = [Self::Shortcuts, Self::Gestures];
+    pub const ALL: [Self; 3] = [Self::Shortcuts, Self::Gestures, Self::Emacs];
 
     /// Its name in the list.
     #[must_use]
@@ -57,6 +60,7 @@ impl Which {
         match self {
             Self::Shortcuts => key::MANUAL_SHORTCUTS,
             Self::Gestures => key::MANUAL_GESTURES,
+            Self::Emacs => key::MANUAL_EMACS,
         }
     }
 
@@ -66,6 +70,7 @@ impl Which {
         match self {
             Self::Shortcuts => key::ABOUT_MANUAL_SHORTCUTS,
             Self::Gestures => key::ABOUT_MANUAL_GESTURES,
+            Self::Emacs => key::ABOUT_MANUAL_EMACS,
         }
     }
 
@@ -75,6 +80,7 @@ impl Which {
         match self {
             Self::Shortcuts => "shortcuts",
             Self::Gestures => "gestures",
+            Self::Emacs => "emacs",
         }
     }
 
@@ -90,6 +96,8 @@ impl Which {
         match self {
             Self::Shortcuts => aired(assemble(texts, chord)),
             Self::Gestures => aired(gestures(texts)),
+            // PAGES, drawn by its own window (`crate::refcard_window`).
+            Self::Emacs => Vec::new(),
         }
     }
 }
@@ -382,6 +390,9 @@ impl View {
     /// Opens the manual under the list's cursor, here.
     fn open_here(&mut self, texts: &Texts) -> Errand {
         match self.found(texts).get(self.cursor).copied() {
+            // THE CARD OPENS IN ITS WINDOW from either door: a page of it does
+            // not fit a region, and the window is the whole screen.
+            Some(Which::Emacs) => Errand::Window(Which::Emacs),
             Some(which) => {
                 self.which = Some(which);
                 Errand::Level
@@ -762,12 +773,20 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             id: "help",
             label: crate::key::CMD_HELP,
         },
+        // AND THE EMACS CARD, on the whole screen — the one manual with a key
+        // of its own, by the owner's word (2026-11-08): `LEADER e`.
+        ronoctua_cmd::Command {
+            id: "emacs-card",
+            label: crate::key::CMD_EMACS_CARD,
+        },
     ],
     bindings: &[
         // `h` for help, as in Doom — and a COMMAND, not a group: it opens the
         // list of manuals, which is where the help's content lives now, each
         // manual chosen there and none with a key of its own (the owner's rule).
         ("h", "help", None),
+        // `e` for Emacs: its reference card, on the whole screen.
+        ("e", "emacs-card", None),
     ],
     ..crate::bindings::Contribution::NONE
 };

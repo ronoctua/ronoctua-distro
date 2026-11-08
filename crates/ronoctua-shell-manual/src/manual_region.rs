@@ -33,11 +33,15 @@ struct Manuals {
 }
 
 /// What a command does with the manuals closed: `help` opens their list.
-fn closed(command: &str, _argument: Option<&str>, _way: &mut dyn Doorway) -> Closed {
-    if command == "help" {
-        Closed::Opens
-    } else {
-        Closed::NotMine
+fn closed(command: &str, _argument: Option<&str>, way: &mut dyn Doorway) -> Closed {
+    match command {
+        "help" => Closed::Opens,
+        // THE EMACS CARD, in its window on the whole screen (`LEADER e`).
+        "emacs-card" => {
+            way.open_window(vec!["manual".to_owned(), Which::Emacs.word().to_owned()]);
+            Closed::Taken
+        }
+        _ => Closed::NotMine,
     }
 }
 
@@ -377,6 +381,10 @@ mod tests {
         let mut w = way(&t);
         let mut m = open("help", None, &mut w);
         let _ = m.command("help", None, &mut w);
+        // TO THE SHORTCUTS, the longest of the manuals read here: the list is
+        // alphabetical, and the Emacs card first opens its own window.
+        let _ = m.key(key("<down>"), &mut w);
+        let _ = m.key(key("<down>"), &mut w);
         let _ = m.key(key("RET"), &mut w);
         w.owed.clear();
         for (notation, page) in [
@@ -394,7 +402,7 @@ mod tests {
         }
         w.owed.clear();
         let _ = m.key(key("C-w"), &mut w);
-        let opened = View::fresh().found(&t)[0];
+        let opened = View::fresh().found(&t)[2];
         assert_eq!(
             w.owed,
             vec![

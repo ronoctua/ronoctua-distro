@@ -66,6 +66,56 @@ pub fn cpu_pressure(p: &Places) -> Option<ronoctua_protocol::Pressure> {
         .map(crate::parse_pressure)
 }
 
+/// The processors' time since boot, from the first line of `/proc/stat`: how
+/// much of it was BUSY and how much there was, in the kernel's ticks — two of
+/// them a moment apart are how busy the machine was in between
+/// ([`CpuTimes::busy_percent_since`]). Idle and waiting on a disk are not busy;
+/// everything else is (`guest` is already inside `user`, so it is not counted
+/// twice).
+///
+/// `None` when the file is not there or its first line is not the sum line.
+#[must_use]
+pub fn cpu_times(p: &Places) -> Option<CpuTimes> {
+    let text = read(&p.procfs.join("stat"))?;
+    let line = text.lines().next()?;
+    let mut words = line.split_whitespace();
+    if words.next()? != "cpu" {
+        return None;
+    }
+    let ticks: Vec<u64> = words
+        .take(8)
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let [user, nice, system, idle, iowait, irq, softirq, steal] = ticks[..] else {
+        return None;
+    };
+    Some(CpuTimes {
+        busy: user + nice + system + irq + softirq + steal,
+        total: user + nice + system + idle + iowait + irq + softirq + steal,
+    })
+}
+
+/// The processors' time since boot, busy and all of it ([`cpu_times`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CpuTimes {
+    /// Ticks spent running something.
+    pub busy: u64,
+    /// Every tick, idle included.
+    pub total: u64,
+}
+
+impl CpuTimes {
+    /// How busy the processors were between `before` and this reading, in
+    /// percent of all of them — `None` when no time passed between the two.
+    #[must_use]
+    pub fn busy_percent_since(self, before: Self) -> Option<u8> {
+        let total = self.total.checked_sub(before.total).filter(|t| *t > 0)?;
+        let busy = self.busy.saturating_sub(before.busy).min(total);
+        u8::try_from(busy * 100 / total).ok()
+    }
+}
+
 /// Whether the machine is running off its battery right now.
 ///
 /// `None` when there is no battery at all — a desktop, a virtual machine —,
@@ -351,6 +401,40 @@ pub fn boot_id(p: &Places) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: idle or a disk's wait counts as busy, a reading with no
+    /// time between them answers anything, or a planted `/proc/stat` that is
+    /// not the sum line is read.
+    #[test]
+    fn the_processors_busy_time_is_read_from_two_readings() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-memory-stat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let places = Places {
+            procfs: dir.clone(),
+            ..Places::default()
+        };
+        std::fs::write(
+            dir.join("stat"),
+            "cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 1 2 3\n",
+        )
+        .unwrap();
+        let before = cpu_times(&places).expect("the sum line");
+        assert_eq!(
+            before,
+            CpuTimes {
+                busy: 150,
+                total: 1000
+            }
+        );
+        std::fs::write(dir.join("stat"), "cpu  190 0 50 800 60 0 0 0 0 0\n").unwrap();
+        let after = cpu_times(&places).expect("the sum line");
+        assert_eq!(after.busy_percent_since(before), Some(90));
+        assert_eq!(after.busy_percent_since(after), None);
+        std::fs::write(dir.join("stat"), "intr 1 2 3\n").unwrap();
+        assert_eq!(cpu_times(&places), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use crate::machine::tempdir;
 
     /// A `/proc` written by the test, which is the whole point of `Places`.

@@ -751,10 +751,11 @@ impl Content for Notifications {
         // The note is the same source as the footer's — the reason a switch
         // does nothing — so the two doors say the same sentence in the same
         // place.
-        let message = ui.message.is_some();
-        let said = ui
-            .message
-            .clone()
+        // THE ORDER'S MESSAGE, for line 0 — none with no header: the door
+        // says it at the window's foot then (`door::list::said_on_line_zero`).
+        let spoken = crate::door::list::said_on_line_zero(ui).map(str::to_owned);
+        let message = spoken.is_some();
+        let said = spoken
             .or_else(|| self.view.note(&ui.texts))
             // AND WHAT THE ROW UNDER THE POINTER HAS TO ADD: when the
             // notification arrived, and the whole of a sentence the row had to

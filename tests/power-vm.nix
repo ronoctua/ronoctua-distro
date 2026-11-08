@@ -45,8 +45,17 @@ pkgs.testers.runNixOSTest {
       imports = [
         ../nix/modules/base.nix
         ../nix/modules/power.nix
+        # THE RESCUE'S RULE IS THE ONE polkit rule of ours about leaving the
+        # machine, and it once answered the active session too: the footer
+        # read "challenge" and drew power-off as not available. Without it
+        # here, the subtest below proves a machine nobody ships.
+        ../nix/modules/rescue.nix
+        ../nix/modules/machine.nix
       ];
       _module.args.ronoctua = ronoctua;
+      # THE MACHINE'S VERB, which the rescue's units run (`rescue-vm.nix` sets
+      # it the same way).
+      ronoctua.machine.tool = ronoctua.machine;
 
       virtualisation.memorySize = 2048;
       virtualisation.cores = 2;
@@ -159,6 +168,24 @@ pkgs.testers.runNixOSTest {
           # `InteractiveAuthorizationRequired` name, which `refusal()` reads as
           # NotAuthorized. Never a hang.
           assert "NotAuthorized" in out or "interactive authentication" in out.lower(), out
+
+      with subtest("an active session may power off and reboot unasked; a process outside one is asked"):
+          # WHAT THE FOOTER READS (`Can*`, never interactive): "yes" is the row
+          # it can press, and anything else draws "not available".
+          for verb in ("CanPowerOff", "CanReboot"):
+              said = as_user(
+                  "busctl --system call org.freedesktop.login1 /org/freedesktop/login1 "
+                  "org.freedesktop.login1.Manager " + verb
+              ).strip()
+              assert said == 's "yes"', f"{verb} from the active session says {said}"
+          # AND THE RESCUE'S CONSOLE, a system unit with no session, still has
+          # to prove who it is: the rule answers it, logind's policy alone
+          # would not.
+          said = machine.succeed(
+              "systemd-run --uid=${nodes.machine.ronoctua.user} --pipe --wait --quiet busctl --system call "
+              "org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager CanPowerOff"
+          ).strip()
+          assert said == 's "challenge"', f"CanPowerOff from outside a session says {said}"
 
       with subtest("a monitor hears the calls to logind's manager, from before the footer's first read"):
           # BY PATH AND NOT BY `destination`: the broker takes a well-known name

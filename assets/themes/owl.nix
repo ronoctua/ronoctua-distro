@@ -157,6 +157,21 @@
       text-chroma = 0.65;
       text-shift = 0;
     };
+    # THE QUESTION (`question.asked`) AND WHAT THE PERSON TYPES INTO IT
+    # (`question.typed`), in every door and in the minibuffer. The owner asked
+    # for a colour that calls the eye and belongs to a question alone, and for
+    # another one for the answer: two families, each in the widest seat this
+    # seed had left (a magenta and a lime here), and the gates keep both apart
+    # from every other text on screen.
+    question = {
+      hue = 330;
+      chroma = 0.80;
+      text-chroma = 0.85;
+    };
+    reply = {
+      hue = 180;
+      text-chroma = 0.75;
+    };
     # THE DRAWER'S MARK (`modeline.drawer`): a faded green, the device blue's
     # quietness in another hue — a place windows are kept, not an alarm.
     drawer = {

@@ -227,6 +227,25 @@ fn of_path_by(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // AN EMACS BACKUP OR AUTO-SAVE IS THE FILE IT KEEPS ([`emacs_kept`]):
+    // `*~` alone says `application/x-trash`, which is not text, and the
+    // preview of `init.el~` was a refusal. Its kept name answers first; with
+    // no glob for that either, what the editor wrote is text when its bytes
+    // are — and otherwise the decorated name answers as it always did.
+    if let Some(kept) = emacs_kept(&name) {
+        if let Some(found) = named(kept) {
+            if found.sure {
+                return found.mime;
+            }
+            return settled(path, kept, found.mime, guard);
+        }
+        if read_content
+            && let Some(head) = head_by(path, guard)
+            && let Some(mime) = by_content(&head).or_else(|| plain_text(&head))
+        {
+            return mime;
+        }
+    }
     if let Some(found) = named(&name) {
         if found.sure {
             return found.mime;
@@ -240,6 +259,43 @@ fn of_path_by(
         .as_deref()
         .and_then(by_content)
         .unwrap_or(UNKNOWN)
+}
+
+/// The name an Emacs backup or auto-save keeps — Emacs's own
+/// `file-name-sans-versions`, and its `#…#`: `init.el~` and `init.el.~3~`
+/// (the numbered backups) keep `init.el`, and so does `#init.el#`. `None`
+/// for any other name, and for one with nothing left inside (`~`, `##`).
+///
+/// The lock, `.#init.el`, is not here: it is a symlink, and a link answers
+/// from its kind before any name is read.
+#[must_use]
+pub fn emacs_kept(name: &str) -> Option<&str> {
+    let kept = if let Some(inner) = name.strip_prefix('#').and_then(|n| n.strip_suffix('#')) {
+        inner
+    } else {
+        let bare = name.strip_suffix('~')?;
+        // NUMBERED FIRST: `init.el.~3~` is `init.el`, not `init.el.~3`.
+        match bare.rsplit_once(".~") {
+            Some((kept, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => kept,
+            _ => bare,
+        }
+    };
+    (!kept.is_empty()).then_some(kept)
+}
+
+/// `text/plain` for bytes that are UTF-8 with no NUL — the one guess made
+/// here, and only for what an editor wrote ([`emacs_kept`]): the database has
+/// no magic for plain text. A character cut at the end of the head is still
+/// text.
+fn plain_text(head: &[u8]) -> Option<&'static str> {
+    if head.is_empty() || head.contains(&0) {
+        return None;
+    }
+    match std::str::from_utf8(head) {
+        Ok(_) => Some("text/plain"),
+        Err(e) if e.error_len().is_none() => Some("text/plain"),
+        Err(_) => None,
+    }
 }
 
 /// The first bytes of `path`, read through `guard`: here outside `/private`;
@@ -629,6 +685,45 @@ fn in_set(set: &[char], c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_emacs_backup_keeps_the_name_it_saves() {
+        assert_eq!(emacs_kept("init.el~"), Some("init.el"));
+        assert_eq!(emacs_kept("init.el.~12~"), Some("init.el"));
+        assert_eq!(emacs_kept("#init.el#"), Some("init.el"));
+        assert_eq!(emacs_kept("notas~"), Some("notas"));
+        // A version-looking tail that is not one stays in the name.
+        assert_eq!(emacs_kept("a.~b~"), Some("a.~b"));
+        for not_one in ["init.el", ".#init.el", "~", "##", "#", "a#"] {
+            assert_eq!(emacs_kept(not_one), None, "{not_one}");
+        }
+    }
+
+    /// FAILS IF: an Emacs backup or auto-save answers `application/x-trash`
+    /// again — the preview of `init.el~` was a refusal — or a backup whose
+    /// kept name says nothing is called text without its bytes saying so.
+    #[test]
+    fn an_emacs_backup_is_the_type_of_what_it_keeps() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-mime-emacs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let elisp = by_name("init.el").expect("the database knows elisp");
+        for name in ["init.el~", "init.el.~3~", "#init.el#"] {
+            let p = file(name, b"(setq x 1)\n");
+            assert_eq!(of_path(&p, Kind::File, false), elisp, "{name}");
+            assert_eq!(of_path(&p, Kind::File, true), elisp, "{name}");
+        }
+        let notes = file("notas~", "café\n".as_bytes());
+        assert_eq!(of_path(&notes, Kind::File, true), "text/plain");
+        let blob = file("blob~", b"\x00\x01\x02binary");
+        assert_ne!(of_path(&blob, Kind::File, true), "text/plain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_glob_matcher_handles_what_the_database_actually_contains() {

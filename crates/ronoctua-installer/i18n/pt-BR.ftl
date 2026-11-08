@@ -169,6 +169,7 @@ inst-step-build = Construir o sistema que vai para o disco, com o swap medido
 inst-step-seed-parts = Copiar o que as partes precisam para chegar no primeiro boot
 inst-step-first-boot = Escrever o que o primeiro boot termina: os seus pertences
 inst-step-seal-passphrase = Selar no TPM a senha dos pertences para o primeiro boot
+inst-step-settle = Gravar tudo no disco antes de dizer que terminou
 inst-step-skipped = Nada a fazer aqui.
 
 ## Installer — the eighteenth question (the programs a full installation leaves out)

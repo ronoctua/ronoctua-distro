@@ -534,9 +534,15 @@ impl Hand {
         if let Edit::AddChannel(input) = &edit {
             return Done::Added(self.add(input));
         }
+        // THE CONSENT IS NOT THE CATALOGUE: a switch that could not be kept
+        // says why in the consent's own words (no home, a file it will not
+        // write over, a folder it cannot write), never "the catalogue could
+        // not be written" — which sent the person looking at the wrong file.
         if let Edit::Consent(on) = &edit {
-            let kept = self.let_hosts(*on).map_err(|_| Why::Failed);
-            return Done::Edited(edit, kept);
+            return match self.let_hosts(*on) {
+                Ok(()) => Done::Edited(edit, Ok(())),
+                Err(unkept) => Done::NotLet(crate::video_metrics_words::unkept_key(unkept)),
+            };
         }
         // HIDE AND DELETE are the two writes a reader may make, through the
         // catalogue's own short writer; everything else is the person's.

@@ -4226,6 +4226,7 @@ dependencies = [
  "ronoctua-tokens",
  "ronoctua-vt",
  "ronoctua-xdg",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "zeroize",
@@ -5440,6 +5441,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ronoctua-cmd",
+ "ronoctua-design",
  "ronoctua-files",
  "ronoctua-gestures",
  "ronoctua-i18n",

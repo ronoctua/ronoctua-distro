@@ -423,6 +423,12 @@
       kept = true;
       reason = "preference";
     };
+    # And the two switches they set: a notification for each burst of
+    # errors, and the mark on the modeline.
+    "config/brain/journal-errors/options.json" = {
+      kept = true;
+      reason = "preference";
+    };
     # The reminders a person set, birthdays among them: theirs to bring back.
     "config/brain/reminders/reminders.json" = {
       kept = true;

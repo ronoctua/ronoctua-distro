@@ -486,6 +486,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// FAILS IF: an EMPTY file — what a crash leaves of one renamed in
+    /// before its data reached the disk, the installer's on 2026-10-25 — is
+    /// refused like a broken one: every host stays refused and no switch can
+    /// let one in.
+    #[test]
+    fn an_empty_file_takes_the_first_consent() {
+        let dir = scratch("empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), b"").unwrap();
+        let store = store_at(Some(dir.clone()));
+        assert_eq!(let_hosts_in(&store, &["www.youtube.com"], true), Ok(()));
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(kept["hosts"]["www.youtube.com"], serde_json::json!(true));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// FAILS IF: a consent given in one door (or the daemon) is not heard
     /// by a door watching the file — it would go on drawing "Ask" for a host
     /// already let.

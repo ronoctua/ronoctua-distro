@@ -434,7 +434,9 @@ fn scroll_chords() -> Vec<Chord> {
         d("S-BS", "Shift+BackSpace", "wm-close-others"),
         d("C-BS", "Ctrl+BackSpace", "wm-close-all"),
         through_shell("r", "r", "apps-open"),
-        through_shell("e", "e", "files-window"),
+        // `e` IS EMACS (the owner, 2026-11-08): a frame of the daemon. The file
+        // manager the shipped file puts here is `LEADER . w`.
+        through_shell("e", "e", "emacs-frame"),
         d("S-c", "Shift+c", "wm-reload"),
         through_shell("S-x", "Shift+x", "session-quit"),
         // --- the scroll's direction ---

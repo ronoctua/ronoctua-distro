@@ -23,6 +23,8 @@ ronoctua-render = { path = "../ronoctua-render" }
 ronoctua-gestures = { path = "../ronoctua-gestures" }
 # The drawing rasterised (`notify::icon::from_svg`, the one SVG rasteriser).
 ronoctua-notify = { path = "../ronoctua-notify" }
+# The bar under the Emacs card's columns (`Scroll`, the one bar arithmetic).
+ronoctua-design = { path = "../ronoctua-design" }
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true
@@ -39,3 +41,7 @@ workspace = true
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
 env = ["RONOCTUA_KEYS_DIR"]
+# The Emacs reference card, built from the installed Emacs's own source
+# (`nix/emacs-refcard.nix`): read when the card is opened. Its tests name the
+# folder they plant (`refcard::pages_in`), so they run without it.
+run-env-absent = ["RONOCTUA_EMACS_REFCARD"]

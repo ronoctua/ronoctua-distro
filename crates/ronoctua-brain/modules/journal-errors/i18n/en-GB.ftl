@@ -99,3 +99,19 @@ journal-errors-reason-boot-version = systemd dislikes how NixOS spells a boot en
 journal-errors-reason-no-bluetooth = Bluetooth is off, so PipeWire goes on without it.
 journal-errors-reason-pipewire-priority = PipeWire could not raise its priority and runs at the normal one.
 journal-errors-reason-not-a-modem = ModemManager looked at a device that is not a modem.
+journal-errors-heading-options = Options
+journal-errors-about-section-options = What this watch does besides its list: tell you of new errors in a notification, and mark the modeline while some are not seen. Choose one to turn it on or off.
+journal-errors-option-notify = Notify me of new errors
+journal-errors-option-mark = Mark on the modeline
+journal-errors-on = on
+journal-errors-off = off
+cmd-journal-errors-notify = Turn the notification of new journal errors on or off
+cmd-journal-errors-mark = Show or hide the journal errors' mark on the modeline
+notif-journal-errors-burst-summary = { $count ->
+    [one] An error in the journal
+   *[other] { $count } errors in the journal
+    }
+notif-journal-errors-burst-body = { $more ->
+    [0] { $lines }
+   *[other] { $lines } …and { $more } more
+    }

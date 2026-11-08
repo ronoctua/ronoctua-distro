@@ -70,8 +70,9 @@ use serde::{Deserialize, Serialize};
 use ronoctua_store::Store;
 
 use crate::module::{
-    Act, Acted, Backfill, Birth, Cell, Ctx, Cursor, Entry, Face, Fact, Fold, Heard, Look, Manifest,
-    Mark, Match, Module, Pass, Passed, Row, Screen, Section, Source, Swatch, Tone, Watcher, Word,
+    Act, Acted, Arg, Backfill, Birth, Cell, Ctx, Cursor, Entry, Event, Face, Fact, Fold, Heard,
+    Look, Manifest, Mark, Match, Module, Pass, Passed, Row, Screen, Section, Source, Swatch, Tone,
+    Watcher, Word,
 };
 use crate::moment::Moment;
 
@@ -85,6 +86,22 @@ const IGNORED_FILE: &str = "ignored.json";
 
 /// What is filtered, under its config directory.
 const FILTERS_FILE: &str = "filters.json";
+
+/// The person's two switches, beside them ([`OptionsFile`]).
+const OPTIONS_FILE: &str = "options.json";
+
+/// A BURST is over once the journal has said no error for this long — then
+/// its errors go out in one notification.
+const BURST_QUIET_S: Moment = 10;
+
+/// And no notification follows the last sooner than this: a machine that
+/// errs without pause is one notification every few minutes, with what it
+/// said since, and not a stream.
+const BURST_GAP_S: Moment = 300;
+
+/// The most lines one notification lists — the last kinds heard; the rest is
+/// a count.
+const BURST_MOST: usize = 8;
 
 /// How long a change of the list waits before it is written, in seconds — so
 /// a burst of a thousand lines is one write.
@@ -120,6 +137,8 @@ struct JournalErrors {
     /// What is filtered: the person's file (their snippets and which shipped
     /// ones they turned off).
     filters: Store<FiltersFile>,
+    /// The person's two switches: their file.
+    options: Store<OptionsFile>,
     /// This boot, in the journal's spelling; empty when it could not be read,
     /// and then every kind is this boot's.
     boot: String,
@@ -167,6 +186,41 @@ struct State {
     followed_from: Option<Cursor>,
     /// What the last pass found.
     last_run: Option<LastRun>,
+    /// The person's switches, as their file said at start or they last set.
+    options: OptionsFile,
+    /// Since when the core has been bringing what happens as it happens —
+    /// what a burst is made of. A line written before it (the read back to
+    /// this boot's start, a pass) is never in a notification.
+    live_since: Option<Moment>,
+    /// The errors of the burst still to be told, one a kind — its latest
+    /// line, and how many times it came — the last kinds heard, at most
+    /// [`BURST_MOST`].
+    burst: Vec<(Kind, String, u64)>,
+    /// How many more kinds the burst heard than it lists.
+    burst_more: u64,
+    /// When the burst's last error came.
+    burst_last: Option<Moment>,
+    /// When the last burst was told.
+    told_at: Option<Moment>,
+}
+
+/// THE PERSON'S TWO SWITCHES (2026-11-08): a notification for each burst of
+/// errors — off, for a person who opts in, as the watch itself is — and the
+/// mark on the modeline, on, for one who wants only the notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct OptionsFile {
+    notify: bool,
+    mark: bool,
+}
+
+impl Default for OptionsFile {
+    fn default() -> Self {
+        Self {
+            notify: false,
+            mark: true,
+        }
+    }
 }
 
 /// What the last pass found, for the page to say.
@@ -306,7 +360,9 @@ impl JournalErrors {
     fn keeping(state_dir: Option<PathBuf>, config_dir: Option<PathBuf>, boot: String) -> Self {
         let list: ListFile = read(state_dir.as_deref(), LIST_FILE);
         let ignored_store = Store::at(config_dir.clone(), IGNORED_FILE);
-        let filters_store = Store::at(config_dir, FILTERS_FILE);
+        let filters_store = Store::at(config_dir.clone(), FILTERS_FILE);
+        let options_store: Store<OptionsFile> = Store::at(config_dir, OPTIONS_FILE);
+        let options = options_store.read();
         // A FILE THAT DOES NOT PARSE is read as nothing — `read` says so in the
         // log, loud — and is never written over (see `act`).
         let ignored: IgnoredFile = ignored_store
@@ -363,6 +419,7 @@ impl JournalErrors {
             state_dir,
             ignored: ignored_store,
             filters: filters_store,
+            options: options_store,
             boot,
             state: Mutex::new(State {
                 book,
@@ -372,9 +429,89 @@ impl JournalErrors {
                 owed: list.owed,
                 followed: list.followed.zip(list.followed_moment),
                 followed_from: list.followed_from,
+                options,
                 ..State::default()
             }),
         }
+    }
+
+    /// Changes the person's switches with `change`, over what their file
+    /// says now — one that does not parse is left as it is and refused.
+    fn switch(&self, state: &mut State, change: impl FnOnce(&mut OptionsFile)) -> Acted {
+        let Some(mut options) = self.options.parsed() else {
+            return Acted::Refused(super::why::UNREADABLE);
+        };
+        change(&mut options);
+        if let Err(e) = self.options.write(&options) {
+            tracing::warn!(error = %e, "the journal's errors' options could not be kept");
+            return Acted::Refused(super::why::UNREADABLE);
+        }
+        state.options = options;
+        Acted::Done
+    }
+
+    /// One error of now, into the burst: a kind already in it counts once
+    /// more and says its latest line, a new one goes last — and past
+    /// [`BURST_MOST`], the oldest makes room and is counted among the rest.
+    fn into_the_burst(state: &mut State, kind: Kind, line: String, now: Moment) {
+        if let Some((_, said, n)) = state.burst.iter_mut().find(|(k, _, _)| *k == kind) {
+            *said = line;
+            *n += 1;
+        } else {
+            if state.burst.len() >= BURST_MOST {
+                state.burst.remove(0);
+                state.burst_more += 1;
+            }
+            state.burst.push((kind, line, 1));
+        }
+        state.burst_last = Some(now);
+    }
+
+    /// When the burst is to be told: the journal quiet for
+    /// [`BURST_QUIET_S`], and [`BURST_GAP_S`] since the last one. `None`
+    /// with nothing in it.
+    fn burst_due(state: &State) -> Option<Moment> {
+        let last = state.burst_last.filter(|_| !state.burst.is_empty())?;
+        let quiet = last + BURST_QUIET_S;
+        Some(state.told_at.map_or(quiet, |t| quiet.max(t + BURST_GAP_S)))
+    }
+
+    /// ONE NOTIFICATION for the burst: how many errors, and each kind's line
+    /// — the last ones detected — with a count of the kinds past the list.
+    fn tell_the_burst(state: &mut State, ctx: &Ctx, now: Moment) {
+        let count: u64 = state.burst.iter().map(|(_, _, n)| n).sum::<u64>() + state.burst_more;
+        let lines = state
+            .burst
+            .iter()
+            .map(|(_, l, _)| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        tracing::info!(
+            count,
+            kinds = state.burst.len(),
+            "a burst of the journal's errors, told"
+        );
+        ctx.tell(
+            Event::of(&super::event::BURST)
+                .with(
+                    "count",
+                    Arg::Number(i64::try_from(count).unwrap_or(i64::MAX)),
+                )
+                .with("lines", Arg::Text(lines))
+                .with(
+                    "more",
+                    Arg::Number(i64::try_from(state.burst_more).unwrap_or(i64::MAX)),
+                ),
+        );
+        Self::forget_the_burst(state);
+        state.told_at = Some(now);
+    }
+
+    /// The burst, emptied.
+    fn forget_the_burst(state: &mut State) {
+        state.burst.clear();
+        state.burst_more = 0;
+        state.burst_last = None;
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -533,6 +670,33 @@ fn key(k: &'static str) -> Cell {
 /// The second an entry was written, by the journal's clock.
 fn second_of(entry: &Entry, now: Moment) -> Moment {
     i64::try_from(entry.realtime_us / 1_000_000).unwrap_or(now)
+}
+
+/// The page's options: the two switches, each a row whose press turns it.
+fn options_rows(options: OptionsFile) -> Vec<Row> {
+    let on = |yes: bool| {
+        key(if yes {
+            super::key::JOURNAL_ERRORS_ON
+        } else {
+            super::key::JOURNAL_ERRORS_OFF
+        })
+    };
+    vec![
+        Row {
+            id: "notify".to_owned(),
+            label: key(super::key::JOURNAL_ERRORS_OPTION_NOTIFY),
+            value: on(options.notify),
+            act: Some(Word::Borrowed(super::action::NOTIFY.id)),
+            ..Row::default()
+        },
+        Row {
+            id: "mark".to_owned(),
+            label: key(super::key::JOURNAL_ERRORS_OPTION_MARK),
+            value: on(options.mark),
+            act: Some(Word::Borrowed(super::action::MARK.id)),
+            ..Row::default()
+        },
+    ]
 }
 
 /// The colour of how grave a kind is: the legend's, and one meaning in every
@@ -741,8 +905,10 @@ impl Module for JournalErrors {
             screen: state.generation,
             ..Face::default()
         };
-        // A MARK ONLY WHILE SOMETHING IS NOT SEEN YET (invariant 14).
-        if unseen > 0 {
+        // A MARK ONLY WHILE SOMETHING IS NOT SEEN YET (invariant 14) — and
+        // while the person keeps it: one who wants only the notifications
+        // turns it off, and the page still counts.
+        if unseen > 0 && state.options.mark {
             face.marks.push(Mark {
                 id: super::mark::UNSEEN,
                 tone: if state.book.worst_unseen() == Some(Severity::Critical) {
@@ -903,6 +1069,14 @@ impl Module for JournalErrors {
             fold: Fold::Shut,
             ..Section::default()
         });
+        sections.push(Section {
+            id: "options".into(),
+            heading: super::key::JOURNAL_ERRORS_HEADING_OPTIONS.into(),
+            about: super::key::JOURNAL_ERRORS_ABOUT_SECTION_OPTIONS.into(),
+            rows: options_rows(state.options),
+            fold: Fold::Open,
+            ..Section::default()
+        });
         Screen {
             sections,
             legend: legend(),
@@ -924,7 +1098,24 @@ impl Module for JournalErrors {
         // THE PAGE'S OWN, needing no row: mark everything seen, or add a filter
         // from what the person typed — from nothing, or from a line of a row
         // they cut down, which is the same filter.
-        if action == super::action::SEEN_ALL.id {
+        if action == super::action::NOTIFY.id || action == super::action::MARK.id {
+            let notify = action == super::action::NOTIFY.id;
+            let acted = self.switch(&mut state, |o| {
+                if notify {
+                    o.notify = !o.notify;
+                } else {
+                    o.mark = !o.mark;
+                }
+            });
+            if acted != Acted::Done {
+                return acted;
+            }
+            // A BURST WAITING to be told goes with the notifications turned
+            // off: switched on again, only what comes from then on is told.
+            if !state.options.notify {
+                Self::forget_the_burst(&mut state);
+            }
+        } else if action == super::action::SEEN_ALL.id {
             state.book.see_all();
         } else if action == super::action::FILTER.id || action == super::action::FILTER_LINE.id {
             let answer = act.answer.as_deref().unwrap_or("");
@@ -1017,15 +1208,18 @@ impl Watcher for JournalErrors {
         ]
     }
 
-    fn started(&self, _now: Moment, ctx: &Ctx) {
+    fn started(&self, now: Moment, ctx: &Ctx) {
         let mut state = self.state();
         state.on = true;
+        state.live_since = Some(now);
         Self::moved(&mut state, ctx);
     }
 
     fn stopped(&self, now: Moment, ctx: &Ctx) {
         let mut state = self.state();
         state.on = false;
+        state.live_since = None;
+        Self::forget_the_burst(&mut state);
         state.left_moment = Some(now);
         // NOW, because off is the one state with no wake: the core tells a
         // module on, and what waited would wait until it came back.
@@ -1146,6 +1340,16 @@ impl Watcher for JournalErrors {
                 state.behind = true;
                 match state.book.hear(entry, at) {
                     rules::Heard::New | rules::Heard::Again => {
+                        // INTO THE BURST, when the person asked to be told and
+                        // the line is of now and not read back from before.
+                        if state.options.notify && state.live_since.is_some_and(|s| at >= s) {
+                            Self::into_the_burst(
+                                &mut state,
+                                Kind::of(entry),
+                                rules::shown_of(entry),
+                                now,
+                            );
+                        }
                         let soon = now + WRITE_AFTER_S;
                         state.write_at = Some(state.write_at.map_or(soon, |at| at.min(soon)));
                         Self::moved(&mut state, ctx);
@@ -1162,6 +1366,9 @@ impl Watcher for JournalErrors {
             Heard::Wake => {
                 if state.write_at.is_some_and(|at| at <= now) {
                     self.write_what_waits(&mut state, ctx);
+                }
+                if Self::burst_due(&state).is_some_and(|at| at <= now) {
+                    Self::tell_the_burst(&mut state, ctx, now);
                 }
             }
             Heard::Lost { why, .. } => {
@@ -1180,8 +1387,12 @@ impl Watcher for JournalErrors {
     }
 
     fn next_wake(&self, _now: Moment) -> Option<Moment> {
-        // A CLOCK ONLY WHILE SOMETHING WAITS: THE FILE, OR THE PAGE.
-        self.state().write_at
+        // A CLOCK ONLY WHILE SOMETHING WAITS: THE FILE, THE PAGE, OR A BURST.
+        let state = self.state();
+        match (state.write_at, Self::burst_due(&state)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
@@ -1335,6 +1546,108 @@ mod tests {
             .filter(|g| g.message.contains(what))
             .map(|g| g.count)
             .sum()
+    }
+
+    /// The events a wake at `now` tells, after the lines heard.
+    fn wake_at(m: &JournalErrors, now: Moment) -> Vec<crate::module::Event> {
+        let (ctx, kept) = Ctx::kept(super::super::ID, now);
+        m.heard(Heard::Wake, &ctx);
+        kept.events().into_iter().map(|(_, e)| e).collect()
+    }
+
+    /// FAILS IF: a burst of errors is told before the journal is quiet, or in
+    /// more than one notification, or without its lines — the last ones
+    /// detected — and its count; a second burst comes sooner than the gap; or
+    /// anything is told while the person did not ask for it.
+    #[test]
+    fn a_burst_of_errors_is_one_notification_once_the_journal_is_quiet() {
+        let m = errors();
+        let start = fixtures::AT;
+        let (ctx, _) = Ctx::kept(super::super::ID, start);
+        m.started(start, &ctx);
+        // NOT ASKED FOR: heard, listed, and told to nobody.
+        assert!(hear(
+            &m,
+            &ctx,
+            &written(1, 3, "a.service", "the disk is gone")
+        ));
+        assert!(
+            wake_at(&m, start + 60).is_empty(),
+            "told without being asked"
+        );
+        assert_eq!(m.state().options, OptionsFile::default());
+        m.state().options.notify = true;
+        let (ctx, _) = Ctx::kept(super::super::ID, start + 100);
+        for (n, unit, said) in [
+            (101, "a.service", "the disk 7 is gone"),
+            (102, "b.service", "the disk 7 is gone"),
+            (103, "a.service", "the disk 9 is gone"),
+        ] {
+            assert!(hear(&m, &ctx, &written(n, 3, unit, said)));
+        }
+        assert_eq!(
+            JournalErrors::burst_due(&m.state()),
+            Some(start + 100 + BURST_QUIET_S)
+        );
+        assert!(
+            wake_at(&m, start + 105).is_empty(),
+            "told while it still came"
+        );
+        let told = wake_at(&m, start + 100 + BURST_QUIET_S);
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].tag, super::super::event::BURST.tag);
+        let arg = |name: &str| {
+            told[0]
+                .args
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, a)| a.clone())
+        };
+        assert_eq!(arg("count"), Some(Arg::Number(3)));
+        let Some(Arg::Text(lines)) = arg("lines") else {
+            panic!("no lines: {told:?}");
+        };
+        assert_eq!(lines.lines().count(), 2, "one line a kind: {lines}");
+        assert!(lines.contains("a.service") && lines.contains("b.service"));
+        assert!(
+            lines.contains("disk 9"),
+            "a kind says its latest line: {lines}"
+        );
+        assert_eq!(
+            JournalErrors::burst_due(&m.state()),
+            None,
+            "a clock with nothing to tell"
+        );
+        // THE NEXT BURST WAITS FOR THE GAP, and then tells what came since.
+        let (ctx, _) = Ctx::kept(super::super::ID, start + 130);
+        assert!(hear(
+            &m,
+            &ctx,
+            &written(130, 3, "c.service", "out of memory")
+        ));
+        assert!(wake_at(&m, start + 150).is_empty(), "sooner than the gap");
+        let told = wake_at(&m, start + 100 + BURST_QUIET_S + BURST_GAP_S);
+        assert_eq!(told.len(), 1);
+    }
+
+    /// FAILS IF: what is read back from before the watch began — the boot's
+    /// start, a pass — is told as if it happened now, or the mark stays when
+    /// the person turned it off (the page still counting).
+    #[test]
+    fn what_came_before_is_never_told_and_the_mark_can_go() {
+        let m = errors();
+        m.state().options.notify = true;
+        let (ctx, _) = Ctx::kept(super::super::ID, fixtures::AT + 1000);
+        m.started(fixtures::AT + 1000, &ctx);
+        assert!(hear(&m, &ctx, &written(1, 3, "a.service", "boom")));
+        assert!(
+            wake_at(&m, fixtures::AT + 2000).is_empty(),
+            "the past was told"
+        );
+        assert_eq!(marks(&m).len(), 1);
+        m.state().options.mark = false;
+        assert!(marks(&m).is_empty(), "the mark the person turned off");
+        assert_eq!(m.state().book.unseen(), 1, "and the page stopped counting");
     }
 
     #[test]
@@ -1839,7 +2152,7 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_its_nine_sections_each_saying_what_it_is() {
+    fn a_page_is_its_ten_sections_each_saying_what_it_is() {
         let m = errors();
         let (ctx, _) = Ctx::kept(super::super::ID, 100);
         // ONE ROW IN EACH, so none is the empty one the page would leave out.
@@ -1877,6 +2190,7 @@ mod tests {
                 ("ignored", Fold::Shut),
                 ("filtered", Fold::Shut),
                 ("filtered-idle", Fold::Shut),
+                ("options", Fold::Open),
             ]
         );
         for s in &screen.sections {

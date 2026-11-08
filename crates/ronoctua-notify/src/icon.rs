@@ -399,6 +399,10 @@ pub enum Fit {
     /// For whoever is **choosing** the size: the Lucide preview says "24 px"
     /// and has to draw 24 px, otherwise the adjustment has no visible effect at all.
     Natural,
+    /// `side` is the HEIGHT, reached whatever the document's size, and the
+    /// width follows: a page read on a screen — the Emacs reference card's —
+    /// is drawn at the screen's height, never at its paper's and stretched.
+    Height,
 }
 
 /// An SVG rasterised, at the final size.
@@ -426,6 +430,7 @@ pub fn from_svg(bytes: &[u8], side: u32, fit: Fit) -> Option<Rgba> {
     let fits = (side as f32 / sz.width()).min(side as f32 / sz.height());
     let scale = match fit {
         Fit::Fill => fits,
+        Fit::Height => side as f32 / sz.height(),
         // NEVER ENLARGE. A 24 px document enlarged to fill the box is
         // the same image as a 512 px one — and that was exactly the defect.
         Fit::Natural => fits.min(1.0),
@@ -433,7 +438,7 @@ pub fn from_svg(bytes: &[u8], side: u32, fit: Fit) -> Option<Rgba> {
     let round_it = |v: f32| (v.round() as u32).max(1);
     let (width, height) = match fit {
         Fit::Fill => (side, side),
-        Fit::Natural => (round_it(sz.width() * scale), round_it(sz.height() * scale)),
+        Fit::Natural | Fit::Height => (round_it(sz.width() * scale), round_it(sz.height() * scale)),
     };
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
     let dx = (width as f32 - sz.width() * scale) / 2.0;

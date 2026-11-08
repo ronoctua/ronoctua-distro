@@ -3543,11 +3543,12 @@ impl Player {
         }
         .or_else(|| under_control.and_then(|id| crate::chrome::hint_sentence(id, &ui.texts)));
         let question = crate::door::list::the_question(ui);
-        let (pieces, carries) = match (question, &ui.message, pointed) {
+        let (pieces, carries) = match (question, crate::door::list::said_on_line_zero(ui), pointed)
+        {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
             (Some(q), _, _) => (q, crate::chrome::Carries::Question),
             (None, Some(t), _) => (
-                vec![crate::chrome::Piece::said(t.clone())],
+                vec![crate::chrome::Piece::said(t.to_owned())],
                 crate::chrome::Carries::Said,
             ),
             (None, None, Some(said)) => (

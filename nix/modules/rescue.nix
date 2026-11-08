@@ -285,9 +285,17 @@ in
         ) {
           return polkit.Result.AUTH_SELF_KEEP;
         }
-        // Leaving the machine, which logind owns rather than the unit manager.
+        // Leaving the machine, which logind owns rather than the unit manager
+        // — and only from OUTSIDE an active local session: the console on its
+        // VT is a system unit with no session, which logind's own policy
+        // refuses. The person's graphical session already has
+        // `allow_active: yes`, and answering it here turned that into a
+        // question nothing in the session can ask: the footer's power view
+        // (which never asks) read "challenge" and drew power-off as not
+        // available.
         if (
           subject.user == "${user}" &&
+          !(subject.local && subject.active) &&
           (action.id == "org.freedesktop.login1.power-off" ||
            action.id == "org.freedesktop.login1.reboot" ||
            action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||

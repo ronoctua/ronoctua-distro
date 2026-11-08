@@ -87,8 +87,11 @@ impl Manual {
     /// footer's region calls too (`manual::carry_out`), on this door's page.
     fn apply(&mut self, ui: &mut Ui, errand: Errand) {
         // THE ONE KEY THIS DOOR HAS NOT GOT: `C-w` takes a manual into a
-        // window, and this is it.
-        if matches!(errand, Errand::Nothing | Errand::Window(_)) {
+        // window, and this is it — but the Emacs card has a window of its own,
+        // on the whole screen, which its row opens from here too.
+        if matches!(errand, Errand::Nothing)
+            || matches!(errand, Errand::Window(w) if w != Which::Emacs)
+        {
             return;
         }
         match crate::manual::carry_out(errand, ui) {

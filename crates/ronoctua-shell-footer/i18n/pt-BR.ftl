@@ -14,6 +14,7 @@ cmd-buffer-terminal-external = Abrir terminal externo
 cmd-monitor-btop = Monitor de processos (btop)
 cmd-journal-follow = Journal do sistema ao vivo (journalctl)
 cmd-monitor-bottom = Monitor de processos (bottom)
+cmd-emacs-frame = Um frame do Emacs
 
 ## which-key prefix groups
 
@@ -1012,6 +1013,11 @@ footer-settings-bars-note = Escondidas, as barras voltam na borda de baixo da te
 footer-settings-free = O minibuffer livre
 footer-settings-hours = Horas
 footer-settings-hours-note = A hora, à direita do minibuffer, enquanto nada mais é dito nele.
+cmd-footer-cpu = Dizer no minibuffer livre o quanto os processadores trabalham quando estão muito ocupados, ou parar
+footer-settings-cpu = Processadores
+footer-settings-cpu-note = O quanto os processadores trabalham, à direita do minibuffer, só enquanto estão muito ocupados e nada mais é dito nele.
+footer-cpu-busy = { $percent }%
+footer-cpu-about = Os processadores estão muito ocupados: isto deles, nos últimos segundos. Um clique abre o monitor de processos.
 footer-settings-kiosk = Quiosque
 footer-settings-kiosk-adapt = Adaptar a modeline a um quiosque
 footer-settings-terminals = Terminais

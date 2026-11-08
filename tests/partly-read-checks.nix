@@ -102,6 +102,8 @@
                                                     " page, whose cells carry a key with no arguments",
         "config/brain/journal-errors/ignored.json": "read leniently by the brain's daemon and shown by the module's"
                                                     " page, whose cells carry a key with no arguments",
+        "config/brain/journal-errors/options.json": "read leniently by the brain's daemon and shown by the module's"
+                                                    " page, whose cells carry a key with no arguments",
         "config/files-sidebar.json": "the sidebar has no line for a sentence, by design (`files::side_fields`)",
         "config/index.json": "shown by a brain module's page, whose cells carry a key with no arguments",
         "config/keyboards.json": "shown by a buffer: the host hands it `Boards` through the WIT, which has no field"

@@ -2550,7 +2550,7 @@ impl View {
                 Some(q) => {
                     out.push(RecordLine {
                         text: texts.t_with(key::MACHINE_APPROVE_QUESTION, &args),
-                        color: tokens::color::TEXT_PRIMARY,
+                        color: tokens::color::QUESTION_ASKED,
                         target: None,
                         whole: true,
                     });
@@ -3415,7 +3415,7 @@ impl View {
             Some(q) => {
                 out.push(RecordLine {
                     text: texts.t(what.question_key()),
-                    color: tokens::color::TEXT_PRIMARY,
+                    color: tokens::color::QUESTION_ASKED,
                     target: None,
                     whole: true,
                 });

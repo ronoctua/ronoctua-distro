@@ -532,6 +532,15 @@ pub const INSTALL_ACCESS: &str = "install-access";
 /// consent, and every fetch of the restore and of every sync asks it.
 pub const LET_HOST: &str = "let-host";
 
+/// An internal command: everything written reaches the disk (`sync`) — the
+/// LAST step, so "done" means on the disk and not in the page cache.
+///
+/// Without it, the person's restart after the installer said "done" was the
+/// only flush, and a machine powered off instead lost what the last steps
+/// wrote: on 2026-10-25 a `consent.json` renamed in with no data, and a
+/// `belongings.json` never renamed in at all — both still root's.
+pub const SETTLE: &str = "settle";
+
 /// An internal command: seal the Wi-Fi password into the TPM.
 ///
 /// It is not [`WRITE`] because it is not writing content the installer
@@ -1210,6 +1219,13 @@ pub fn steps(r: &Answers, origin: &Origin) -> Vec<Step> {
         vec![SEAL_PASSPHRASE.into(), first_boot_directory()],
         true,
     ));
+    // AND THE DISK HOLDS IT ALL before the installer says "done": the last
+    // step, whatever came before ([`SETTLE`]).
+    sequence.push(Step::root(
+        key::INST_STEP_SETTLE,
+        vec![SETTLE.into()],
+        false,
+    ));
     // THERE IS NO TPM STEP FOR THE DISK, and its absence is the decision
     // rather than an omission: `systemd-cryptenroll --tpm2-pcrs=7+11+12+15`
     // could not deliver what it named without a measured UKI.
@@ -1603,6 +1619,10 @@ mod tests {
         );
         let sealed = at(&plan, key::INST_STEP_SEAL_PASSPHRASE);
         assert!(record < sealed);
+        // AND THE LAST STEP PUTS IT ALL ON THE DISK, after every write.
+        let last = plan.last().expect("a plan with no steps");
+        assert_eq!(last.label, key::INST_STEP_SETTLE);
+        assert_eq!(last.command, [SETTLE.to_owned()]);
         assert_eq!(
             plan[sealed].command,
             [SEAL_PASSPHRASE.to_owned(), first_boot_directory()]

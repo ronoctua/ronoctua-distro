@@ -171,3 +171,15 @@ módulo. O glifo da caveira é só dela: na lista de tarefas o módulo continua 
 
 Um journal que o cérebro não consegue ler é dito na página, com as palavras do núcleo, em vez de uma
 lista vazia que pareceria uma máquina sem erros.
+
+## As duas opções (2026-11-08)
+
+A marca pode ser escondida (`mark`, ligada de fábrica), para quem quer só as notificações: a página
+continua contando o que não foi visto. E os erros podem virar notificação (`notify`, desligada de
+fábrica, como o próprio módulo): os erros ouvidos ao vivo formam uma RAJADA, e quando o journal fica
+dez segundos sem erro novo sai UMA notificação com a linha de cada tipo da rajada — os últimos
+detectados, não os não vistos — e quantos foram, com a caveira da marca. A próxima espera ao menos
+cinco minutos depois da anterior, e leva o que chegou nesse tempo: uma máquina que erra sem parar é
+uma notificação a cada poucos minutos, não uma enxurrada. O que foi relido de antes de a vigia
+começar (o começo do boot, uma passada à mão) nunca é notificado: não aconteceu agora. As duas
+escolhas são da pessoa (`options.json`, no diretório de configuração, pelo `ronoctua-store`).

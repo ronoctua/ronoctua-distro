@@ -422,6 +422,16 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Default> Store<T> {
                 return nothing(true, Some(Trouble::Unreadable(e.to_string())));
             }
         };
+        // AN EMPTY FILE HOLDS NOTHING TO LOSE, so it reads as no file: the
+        // default, and no trouble — and then a writer may write over it
+        // ([`Store::parsed`]). It is what a crash leaves of a file renamed in
+        // before its data reached the disk (the installer's `consent.json`,
+        // 2026-10-25): refusing it as "not JSON" kept every host refused, and
+        // every switch that would have let one in failed.
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            tracing::warn!(path = %path.display(), "the store is empty; reading the default");
+            return nothing(true, None);
+        }
         let doc = match Node::parse(&bytes) {
             Ok(doc) => doc,
             Err(e) => {
@@ -691,6 +701,16 @@ mod tests {
         std::fs::write(dir.join("y.json"), b"{ not json").unwrap();
         assert_eq!(s.parsed(), None);
         assert!(s.read().is_empty());
+
+        // AN EMPTY FILE is not broken either: it holds nothing to lose, so a
+        // writer may write over it — and the write lands.
+        for empty in [&b""[..], b"  \n"] {
+            std::fs::write(dir.join("y.json"), empty).unwrap();
+            assert_eq!(s.parsed(), Some(Vec::new()));
+            assert!(s.reading().whole());
+            s.write(&vec!["two".to_owned()]).unwrap();
+            assert_eq!(s.parsed(), Some(vec!["two".to_owned()]));
+        }
 
         // AND A STORE THAT KEEPS NOTHING is not "broken" either: there is no
         // file to lose, so a writer may proceed and write nowhere.

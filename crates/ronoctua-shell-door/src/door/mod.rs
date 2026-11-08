@@ -29,6 +29,7 @@
 //! about touch still answers a finger.
 
 pub mod compose;
+pub mod foot;
 pub mod handlers;
 pub mod keys;
 pub mod list;
@@ -99,8 +100,11 @@ pub struct Ui {
     pub scale: i32,
     /// Columns of text, net of both margins.
     pub columns: u16,
-    /// Lines of text the window holds.
+    /// Lines of text the window's CONTENT holds — the window's, less the
+    /// area at its foot while it says or asks something ([`foot`]).
     pub lines: u16,
+    /// Lines of text the whole window holds, the foot's included.
+    pub all_lines: u16,
     /// The margin inside the window, in cells.
     pub margin: u16,
     /// What the last order said, on line 0 instead of the keys.
@@ -125,6 +129,8 @@ pub struct Ui {
     pub offset: usize,
     /// The header: the line that teaches the keys, and its drawer.
     pub hinted: crate::chrome::Hinted,
+    /// WHAT THE WINDOW SAYS AND ASKS AT ITS FOOT, with no header ([`foot`]).
+    pub foot: foot::Foot,
     /// Where the list's BAR was drawn on the last frame, if one was.
     ///
     /// The pointer asks this and nothing else about whether it is on the bar,
@@ -681,7 +687,7 @@ impl Ui {
     #[must_use]
     pub fn for_tests(texts: ronoctua_i18n::Texts) -> Self {
         let mut ui = Self::detached(texts, (900, 600), 1).expect("a socket pair");
-        (ui.columns, ui.lines) = (80, 24);
+        (ui.columns, ui.lines, ui.all_lines) = (80, 24, 24);
         ui
     }
 
@@ -709,6 +715,7 @@ impl Ui {
             scale,
             columns: 80,
             lines: 24,
+            all_lines: 24,
             margin: 1,
             message: None,
             said: 0,
@@ -718,6 +725,7 @@ impl Ui {
             offset: 0,
             hinted: crate::chrome::Hinted::default(),
             room: crate::chrome::Room::default(),
+            foot: foot::Foot::default(),
             conn,
             surface,
             pointer_seat: 0,
@@ -936,7 +944,10 @@ impl Ui {
         self.columns = tokens::metrics::columns(usable.max(0.0), size);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let lines = (self.height as f32 / line).floor().max(0.0) as u16;
-        self.lines = lines;
+        self.all_lines = lines;
+        // THE FOOT'S ROWS ARE NOT THE CONTENT'S: a window lays itself out in
+        // what is left above the message it says ([`foot`]).
+        self.lines = lines.saturating_sub(self.foot.rows);
     }
 }
 
@@ -1377,12 +1388,15 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
     };
     content.paint(ui, &mut canvas);
     let Canvas {
-        spans,
+        mut spans,
         mut under,
         mut over,
         pictures,
         ..
     } = canvas;
+    // WHAT THE WINDOW SAYS OR ASKS, at its foot, over nothing the window drew:
+    // its rows were taken from the window's before it painted ([`foot`]).
+    foot::paint(ui, &mut spans, &mut under, &mut over, bars);
     // THE SWEEP ITSELF, over the letters it covers (`crate::text_select`).
     if let Some(sel) = selection {
         let f = ui.frame(0);
@@ -2195,11 +2209,15 @@ pub fn pointed_order(pid: u32, seq: u64, said: Option<&str>) -> String {
     format!("pointed {pid} {seq} {said}").trim_end().to_owned()
 }
 
-/// THE ONE-SHOT TIMER OF A SENTENCE SAID ([`Ui::say`]), hung on the door's
-/// loop once the turn is over (`Door::settle`): after `lasts` of its class,
-/// it takes that sentence off the line — only if it is still the one there
-/// ([`Ui::expire`]) — and drops itself. `ui_of` reaches the line from what
-/// the loop holds. Nothing owed, nothing hung.
+/// THE CLOCK OF A SENTENCE SAID ([`Ui::say`]), hung on the door's loop once
+/// the turn is over (`Door::settle`): it starts the sentence's
+/// [`crate::echo::Countdown`] of `lasts` of its class and wakes once per
+/// eighth of it — the pie at the window's foot walks a step ([`foot`]) — and
+/// when the time is up takes that sentence off the line, only if it is still
+/// the one there ([`Ui::expire`]), and drops itself. A pointer resting on the
+/// message stops the countdown, and the clock waits with it. `ui_of` reaches
+/// the line from what the loop holds. Nothing owed, nothing hung; nothing
+/// ticks once the sentence is gone.
 ///
 /// A function of the loop and not of the door, so a test hangs it on a loop
 /// of its own and sees it fire.
@@ -2212,11 +2230,30 @@ pub(crate) fn hang_the_echo<D: 'static>(
     let Some((mine, text, class)) = ui.echo_owed.take() else {
         return;
     };
+    let now = std::time::Instant::now();
+    let clock = crate::echo::Countdown::start(lasts(class), now);
+    ui.foot.clock = Some((mine, clock));
     let armed = handle.insert_source(
-        calloop::timer::Timer::from_duration(lasts(class)),
+        calloop::timer::Timer::from_duration(clock.next_step(now)),
         move |_, (), held: &mut D| {
-            ui_of(held).expire(mine, &text);
-            calloop::timer::TimeoutAction::Drop
+            let ui = ui_of(held);
+            let now = std::time::Instant::now();
+            match ui.foot.clock.filter(|(m, _)| *m == mine) {
+                Some((_, c)) if !c.spent(now) && ui.message.as_deref() == Some(&*text) => {
+                    // A STEP OF THE PIE, drawn only where there is one.
+                    if ui.foot.rows > 0 {
+                        ui.ask_paint();
+                    }
+                    calloop::timer::TimeoutAction::ToDuration(c.next_step(now))
+                }
+                _ => {
+                    ui.expire(mine, &text);
+                    if ui.foot.clock.is_some_and(|(m, _)| m == mine) {
+                        ui.foot.clock = None;
+                    }
+                    calloop::timer::TimeoutAction::Drop
+                }
+            }
         },
     );
     if let Err(e) = armed {
@@ -2313,6 +2350,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             scale: 1,
             columns: 80,
             lines: 24,
+            all_lines: 24,
             margin,
             message: None,
             said: 0,
@@ -2322,6 +2360,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             offset: 0,
             hinted: fresh_hinted(&content),
             room: crate::chrome::Room::default(),
+            foot: foot::Foot::default(),
             conn: conn.clone(),
             surface: shell.wl_surface().clone(),
             pointer_seat: 0,
@@ -2895,6 +2934,15 @@ impl<C: Content> Door<C> {
             }
         }
         self.ui.last_orders_sent(!untaken);
+        // THE FOOT'S ROWS, taken from the window's BEFORE the frame: a message
+        // or a question came or went, or wraps to more lines — the window is
+        // laid out again in what is left above it ([`foot`]).
+        let wanted = foot::wanted(&self.ui);
+        if wanted != self.ui.foot.rows {
+            self.ui.foot.rows = wanted;
+            self.ui.size_owed = true;
+            self.ui.owed = true;
+        }
         if std::mem::take(&mut self.ui.size_owed) {
             self.take_the_size();
         }
@@ -2917,7 +2965,14 @@ impl<C: Content> Door<C> {
             // keys went to, and the only place left to say it (the owner's
             // ask: *"as informações devem aparecer no minibuffer"*). Quietly,
             // as the state is: a report nobody asked for.
-            let pointed = self.ui.hinted.pointed().map(str::to_owned);
+            // AND WHAT A CONTROL OF THE FOOT has to say ([`foot`]): the same
+            // line, the same place.
+            let pointed = self
+                .ui
+                .foot
+                .pointed()
+                .or_else(|| self.ui.hinted.pointed())
+                .map(str::to_owned);
             if pointed != self.pointed_told.0 {
                 let seq = self.pointed_told.1 + 1;
                 Self::report_to_the_footer(pointed_order(
@@ -3619,6 +3674,16 @@ fn pointer_into<C: Content>(
     // is the Back button.
     let mut acts: Vec<Option<(Option<&'static str>, crate::chrome::Act)>> = Vec::new();
     for e in events {
+        // THE FOOT FIRST — what the window says or asks under its list is the
+        // door's, and so is a pointer on it ([`foot::pointer`]).
+        match foot::pointer(ui, e) {
+            foot::Took::Passed => {}
+            foot::Took::Kept => continue,
+            foot::Took::Pressed(id, act) => {
+                acts.push(Some((id, act)));
+                continue;
+            }
+        }
         // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
         // is the door's (`chrome::Hinted::light_at`).
         let lights = match e.kind {
@@ -3806,6 +3871,21 @@ impl<C: Content> Detached<C> {
     /// (`Ui::retake_the_size`).
     pub fn turn(&mut self) {
         self.content.each_turn(&mut self.ui);
+        // THE CLOCK OF A SENTENCE SAID, started as `hang_the_echo` starts it —
+        // with no loop to take the sentence off: a photograph is an instant,
+        // and its foot shows the pie that instant has ([`foot`]).
+        if let Some((mine, _, class)) = self.ui.echo_owed.take() {
+            self.ui.foot.clock = Some((
+                mine,
+                crate::echo::Countdown::start(class.lasts(), std::time::Instant::now()),
+            ));
+        }
+        // THE FOOT'S ROWS, as `Door::settle` takes them ([`foot`]).
+        let wanted = foot::wanted(&self.ui);
+        if wanted != self.ui.foot.rows {
+            self.ui.foot.rows = wanted;
+            self.ui.size_owed = true;
+        }
         if std::mem::take(&mut self.ui.size_owed) {
             self.lay_out();
         }
@@ -3948,8 +4028,16 @@ impl<C: Content> Detached<C> {
         // AND ONCE MORE IF THE HEADER'S DRAWER JUST OPENED, as `Door::settle`
         // paints twice: its height is only known inside the frame that drew
         // it, and a photograph of the first frame showed the drawer open with
-        // none of its lines. It answers once (`Hinted::settled`).
-        if self.ui.hinted.settled() {
+        // none of its lines. It answers once (`Hinted::settled`). AND IF THE
+        // FRAME WAS THE FIRST TO SAY THROUGH THE DOOR what the foot now wants
+        // rows for ([`foot`]): the window is laid out again above it.
+        let wanted = foot::wanted(&self.ui);
+        let foot_moved = wanted != self.ui.foot.rows;
+        if foot_moved {
+            self.ui.foot.rows = wanted;
+            self.lay_out();
+        }
+        if self.ui.hinted.settled() || foot_moved {
             composed = compose(
                 &mut self.content,
                 &mut self.ui,
@@ -4234,6 +4322,37 @@ mod tests {
         }
     }
 
+    /// FAILS IF: a question is drawn in the shortcut line's colours again —
+    /// the owner read it as one more hint — or its keys follow what is typed
+    /// when the line has room to stand them at its right edge (2026-11-08).
+    #[test]
+    fn a_question_wears_its_colours_and_its_keys_stand_at_the_edge() {
+        use crate::chrome::Register;
+        use ronoctua_render::layout::width;
+        let mut ui = ui();
+        ui.ask(Line::new("software-web-new", false, Some("abc")));
+        let pieces = list::the_question(&ui).expect("a question");
+        assert_eq!(pieces[0].register, Register::Asked);
+        assert_eq!(pieces[1].register, Register::Typed);
+        assert_eq!(pieces[1].text, "abc");
+        // A BLANK RUN, then the keys — and the line ends where a hint may.
+        let air = pieces
+            .iter()
+            .position(|p| !p.text.is_empty() && p.text.trim().is_empty())
+            .expect("no air between the answer and the keys");
+        assert!(pieces[air + 1..].iter().any(|p| p.press.is_some()));
+        let drawn: u16 = pieces.iter().map(|p| width(&p.text)).sum();
+        assert_eq!(drawn, ui.columns - crate::fold::WIDTH);
+        // TOO NARROW to stand apart: the keys follow, after a dot.
+        let narrow = list::question_pieces(ui.asking.as_ref().unwrap(), &ui.texts, 24);
+        assert!(narrow.iter().any(|p| p.register == Register::Separator));
+        assert!(
+            narrow
+                .iter()
+                .all(|p| p.text.is_empty() || !p.text.trim().is_empty())
+        );
+    }
+
     /// THE END OF WHAT IS TYPED STAYS ON THE LINE, however long it gets: it
     /// is where the next letter goes.
     #[test]
@@ -4244,7 +4363,7 @@ mod tests {
         let pieces = list::the_question(&ui).expect("a question");
         let typed = pieces
             .iter()
-            .find(|p| p.register == crate::chrome::Register::Said)
+            .find(|p| p.register == crate::chrome::Register::Typed)
             .expect("the typed text");
         assert!(typed.text.ends_with("/end"), "{}", typed.text);
         assert!(
@@ -4401,25 +4520,31 @@ mod tests {
         }
     }
 
-    /// FAILS IF: with no header the list does not make room for line 0 while
-    /// a sentence is on it, or keeps the room once it is gone.
+    /// FAILS IF: with no header a sentence or a question takes line 0 again —
+    /// the list moving down a line while it is up — instead of the window's
+    /// foot (`foot`, the owner's ask of 2026-11-08), or the foot does not want
+    /// the line once the window has said it through the door.
     #[test]
-    fn with_no_header_the_list_moves_down_while_a_sentence_is_up() {
-        let t = std::rc::Rc::clone(&ui().texts);
+    fn with_no_header_a_sentence_is_said_at_the_foot_and_the_list_stays() {
         let mut ui = ui();
         ui.hinted.hide_header(true);
-        assert_eq!(ui.first_of_list(), 0);
-        let said = [crate::chrome::Piece::said("it was saved")];
-        let _ = ui
-            .hinted
-            .head(&said, crate::chrome::Carries::Said, 1, 40, &t);
-        assert_eq!(
-            ui.first_of_list(),
-            1,
-            "the sentence took the list's first line"
+        ui.say("it was saved".to_owned());
+        let (pieces, carries) = list::line_zero(&mut ui, None, |_| Vec::new());
+        assert!(!carries.speaks(), "line 0 said {pieces:?}");
+        let t = std::rc::Rc::clone(&ui.texts);
+        let _ = ui.hinted.head(&pieces, carries, 1, 40, &t);
+        assert_eq!(ui.first_of_list(), 0, "the list moved for the sentence");
+        assert_eq!(foot::wanted(&ui), 1, "the foot does not say it");
+        ui.ask(crate::line::Line::new("software-web-new", false, None));
+        assert!(
+            list::the_question(&ui).is_none(),
+            "the question took line 0"
         );
-        let _ = ui.hinted.head(&[], crate::chrome::Carries::Keys, 1, 40, &t);
-        assert_eq!(ui.first_of_list(), 0);
+        assert_eq!(foot::wanted(&ui), 1);
+        // WITH A HEADER, line 0 says it, as it always did.
+        ui.hinted.hide_header(false);
+        assert!(list::the_question(&ui).is_some());
+        assert_eq!(foot::wanted(&ui), 0);
     }
 
     /// A window that closes on `ESC` as most do (`Errand::Close`, which is

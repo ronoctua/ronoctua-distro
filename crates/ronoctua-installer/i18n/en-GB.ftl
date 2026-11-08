@@ -169,6 +169,7 @@ inst-step-build = Build the system the disk gets, with its swap measured
 inst-step-seed-parts = Copy what the parts need to arrive on the first boot
 inst-step-first-boot = Write what the first boot finishes: your belongings
 inst-step-seal-passphrase = Seal the belongings' passphrase in the TPM for the first boot
+inst-step-settle = Write everything to the disk before it is said done
 inst-step-skipped = Nothing to do here.
 
 ## Installer — the eighteenth question (the programs a full installation leaves out)

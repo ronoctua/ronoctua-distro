@@ -1304,6 +1304,18 @@ def page_roles(page_tokens: dict[str, "Resolved"], base_tokens: dict[str, "Resol
     # Ghostty fragment and it never disagree.
     page_tokens["terminal.background"] = page_tokens["surface.chrome"]
 
+#: Where a question is drawn: the minibuffer, a window's page, and the foot
+#: of a window with no header.
+QUESTION_GROUNDS = ("surface.chrome", "surface.buffer", "surface.base", "surface.header")
+#: A QUESTION'S TWO COLOURS ARE ITS OWN (the owner, 2026-11-08: "uma cor
+#: chamativa e exclusiva"): each is held apart from the NEAREST ink of the whole
+#: palette, on every page — one finding per role, naming the neighbour. The
+#: film's lanes are not on a page and the inverse ink is never beside one.
+QUESTION_ROLES = ("question.asked", "question.typed")
+QUESTION_INKS = ("text.", "state.", "notification.", "modeline.", "brain.", "mark.", "glance.", "alert.text", "player.", "capture.")
+QUESTION_NOT_INKS = ("player.lane", "text.inverse")
+QUESTION_APART = (0.06, 0.07)
+
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
     ("text.primary", (*SIX_GROUNDS, "surface.selection", *RAISED_GROUNDS), 75, 82),
@@ -1341,6 +1353,12 @@ CONTRAST_GATES = (
     # grounds and be told apart from the accent they sit in (distance below).
     ("text.match-here", (*SIX_GROUNDS[:4],), 60, 65),
     ("text.heading", ("surface.selection",), 45, 50),
+    # A QUESTION (`question.*`, 2026-11-08) on every ground one is asked on:
+    # the minibuffer's chrome, a window's page, and the area at the foot of a
+    # window with no header (`surface.header`). The question is a solid — a
+    # colour that calls — and what is typed is read letter by letter.
+    ("question.asked", QUESTION_GROUNDS, 45, 47),
+    ("question.typed", QUESTION_GROUNDS, 60, 62),
     ("text.subtle.strong", ("surface.chrome",), 40, 45),
     ("text.subtle.default", ("surface.chrome",), 18, 20),
     ("text.subtle.faint", ("surface.chrome",), 7, 8),
@@ -1657,6 +1675,9 @@ LIGHT_DISTANCE_FLOORS = {
 #: Pairs that must be TOLD APART: (a, b, Fail below, Warn below), in ΔE_ok.
 DISTANCE_GATES = (
     ("surface.base", "surface.chrome", 0.10, 0.15),
+    # THE QUESTION AND WHAT IS TYPED INTO IT: two colours, side by side on one
+    # line, and each must read as itself.
+    ("question.asked", "question.typed", 0.15, 0.20),
     # The desk is the ALTERNATIVE to the absolute one (black, or white in a
     # light theme): one the eye cannot tell from it is a choice that does
     # nothing. And the footer and a window both stand on it, so each needs an
@@ -2218,6 +2239,10 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
         low, band = LIGHT_DISTANCE_FLOORS.get((a, b), (fail, warn)) if light else (fail, warn)
         v = de(a, b)
         findings.append(Finding(_level(v, low, band), "distance", f"{a} vs {b}", v, f"ΔE ≥ {low} (warn < {band})"))
+    for role in QUESTION_ROLES:
+        inks = [k for k in tokens if k.startswith(QUESTION_INKS) and not k.startswith(QUESTION_NOT_INKS) and k not in QUESTION_ROLES]
+        v, nearest = min((de(role, k), k) for k in inks)
+        findings.append(Finding(_level(v, *QUESTION_APART), "distance", f"{role} vs its nearest ink ({nearest})", v, f"ΔE ≥ {QUESTION_APART[0]} (warn < {QUESTION_APART[1]})"))
     for a, b, fail, warn in NEAR_GATES if light and base else ():
         v = de(a, b)
         findings.append(Finding(_level(v, fail, warn), "desk", f"{a} vs {b}", v, f"ΔE ≥ {fail} (warn < {warn})"))

@@ -141,7 +141,7 @@ impl Question {
         };
         let separator = || Run::of(&Piece::separator());
         vec![
-            Run::of(&Piece::said(said)),
+            Run::of(&Piece::asked(said)),
             separator(),
             answer(no, false),
             separator(),

@@ -17496,6 +17496,8 @@ mod tests {
                 crate::chrome::Register::Prose
                 | crate::chrome::Register::Explain
                 | crate::chrome::Register::Said
+                | crate::chrome::Register::Asked
+                | crate::chrome::Register::Typed
                 | crate::chrome::Register::Pending
                 | crate::chrome::Register::Glyph
                 | crate::chrome::Register::Label

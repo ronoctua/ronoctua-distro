@@ -1120,6 +1120,9 @@ let
       # swap name the ninth, as `TAB 0` and `TAB m 0` do.
       INSTEAD = {
           "super+0": ["command workspace-all"],
+          # AND `e` IS EMACS (the owner, 2026-11-08): a frame of the daemon.
+          # The file manager the shipped file puts here is `LEADER . w`.
+          "super+e": ["command emacs-frame"],
           "shift+super+0": steps(
               "move container to workspace number 9; workspace number 9"
           ),
@@ -3218,6 +3221,10 @@ let
 
       shell = rust.shell;
       iconSuperpack = self.packages.${system}.noctua-icon-theme;
+      # THE RESCUE'S RULE is imported (`power-vm.nix`): its console and the
+      # machine's verb, which its units run.
+      rescue = rust.rescue;
+      machine = rust.machine;
     };
   };
 
@@ -11694,7 +11701,12 @@ let
     # scrolls nothing; the terminal's grid is the program's. Each exception is
     # PROVED: the day one of them keeps an offset of its own, it is a list.
     EXCEPT = {"files_window.rs", "icons_window.rs", "fast_access_window.rs"}
-    NOT_A_LIST = {"camera_window.rs", "terminal.rs"}
+    # AND THE EMACS CARD IS COLUMNS, NOT A LIST: its pages side by side, paged
+    # sideways by a bar of their own across them (`Scroll::bar_across`),
+    # recorded (`canvas.bar`) and grabbed where it is drawn (`holds`,
+    # `offset_at`) — and it keeps no `ui.offset`, which is what the proof below
+    # asks of every window here.
+    NOT_A_LIST = {"camera_window.rs", "terminal.rs", "refcard_window.rs"}
     # THE ICONS APP IS THE SECOND EXCEPTION, and for the manager's reason: a
     # GRID and a PAGE, not one list — the grid's bar counts rows of items
     # (`Grid::scroll`), the page's counts its rows. Both are laid out by the

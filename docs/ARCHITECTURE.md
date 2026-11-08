@@ -2741,11 +2741,12 @@ topo do `draw_and_paint`, porque toda mudança do que segura a linha acaba num q
 jeitos de tomar a linha é a lista que esquece um. Com só a gaveta aberta, o evento que está na linha
 fica: a gaveta o está mostrando.
 
-**O ponteiro segura o evento, por um tempo.** Com a mão sobre a linha ele não sai, e fica mais um
-tempo de eco depois que ela sai: alcançar a ação leva mais que os três segundos que ele teria. Mas no
+**O ponteiro segura o evento, por um tempo.** Com a mão sobre a linha o relógio PARA, e a pizza vira
+pausa (2026-11-08, a regra da faixa): ele volta com o tempo que tinha quando a mão chegou. Mas no
 máximo `HELD_AT_MOST` ecos (três) desde que subiu: a linha é a última da tela, onde um ponteiro
 costuma ficar PARADO, e com as barras ocultas ela é a borda que as revela — segurar sem fim deixava
-"uma câmera está aberta" na tela muito depois de ela fechar, com a fila parada atrás.
+"uma câmera está aberta" na tela muito depois de ela fechar, com a fila parada atrás. Passado o teto
+o relógio corre sob a mão parada, e só segura de novo depois que ela sai e volta.
 
 **A gaveta fecha com a linha.** Aberta para ler um evento ou um eco inteiro, ela ficava aberta depois
 que ele saía — em repouso nada a fecha senão o chevron, e o rodapé em repouso não tem teclado para o
@@ -3794,9 +3795,10 @@ uma enquanto pergunta, e o `Ui` de toda porta também (`Ui::asking`, aberta por 
   caractere de controle não se digita.
 - **As duas portas desenham a pergunta com as mesmas peças** (`door::list::question_pieces`): a
   pergunta (`ask-<id>`), o texto — cortado no começo, porque o fim é onde a próxima letra entra — e
-  `ESC` e `RET` como cliques (inv. 19), explicados sob o ponteiro (`about-line-*`). Na janela é a
-  linha 0, no lugar da mensagem e dos atalhos; no rodapé é a linha do minibuffer. O rodapé
-  desenhava a pergunta como prosa, cortada no fim, e ela só se respondia pelo teclado.
+  `ESC` e `RET` como cliques (inv. 19), explicados sob o ponteiro (`about-line-*`), na borda direita
+  quando cabem afastados. Na janela com cabeçalho é a linha 0; sem ele, a área do pé (`door::foot`);
+  no rodapé é a linha do minibuffer. O rodapé desenhava a pergunta como prosa, cortada no fim, e ela
+  só se respondia pelo teclado.
 - **Colar não espera ninguém, e cola o que está copiado agora.** `C-v` na linha, ou `Ui::paste`
   pedido pela janela, lê a seleção viva numa thread com prazo e teto (`pasting.rs`), e o texto volta
   pelo canal da porta — e só para a pergunta para a qual foi lido. O rodapé lê do mesmo jeito, pelo

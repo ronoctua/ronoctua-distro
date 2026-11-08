@@ -123,6 +123,34 @@
     run = {
       whileOff = true;
     };
+    # AND THE PERSON'S TWO SWITCHES (2026-11-08), each a row of the page's
+    # options and a command by name: a notification for each burst of errors
+    # (off until asked for), and the mark on the modeline (on until hidden,
+    # for somebody who wants only the notifications).
+    notify = { };
+    mark = { };
+  };
+
+  # A BURST OF ERRORS, told in ONE notification once the journal has been
+  # quiet a few seconds, and no sooner than a few minutes after the last —
+  # only while the person asked for it (`notify`), and never for what was
+  # read back from before the watch began. Its lines are the errors of that
+  # burst, the last ones detected, not what is still unseen. A skull, the
+  # mark's own glyph.
+  events = {
+    burst = {
+      notification = {
+        show = "full";
+        life = "long";
+        loud = false;
+        level = 50;
+        icon = "md-skull";
+        tags = [
+          "journal-errors"
+          "system"
+        ];
+      };
+    };
   };
 
   uses = [

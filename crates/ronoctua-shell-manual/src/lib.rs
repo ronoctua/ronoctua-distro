@@ -13,8 +13,8 @@
 #![deny(unsafe_code)]
 
 // THE FOUNDATION, by the names these modules already use (`crate::chrome::…`).
-use ronoctua_shell_door::{door, region};
-use ronoctua_shell_kit::{actions, bindings, chrome, echo, fields, line, minibuffer};
+use ronoctua_shell_door::{door, photo, region};
+use ronoctua_shell_kit::{actions, bars, bindings, chrome, echo, fields, line, minibuffer, wheel};
 // What only the tests name: the doorway they build.
 #[cfg(test)]
 use ronoctua_shell_door::sudo;
@@ -25,6 +25,8 @@ pub mod key;
 pub mod manual;
 pub mod manual_region;
 pub mod manual_window;
+pub mod refcard;
+pub mod refcard_window;
 
 /// THE MANUALS' WINDOW the binary runs by name: `ronoctua-shell manual`
 /// opens on their list, as `LEADER h` does, and `manual <word>` on one of
@@ -32,6 +34,13 @@ pub mod manual_window;
 pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[ronoctua_shell_kit::doors::Door {
     name: "manual",
     run: manuals_door,
+}];
+
+/// THE EMACS CARD'S CAMERA (`photograph --door emacs-card --scene <folder>`),
+/// over a card as `nix/emacs-refcard.nix` builds it.
+pub const CAMERAS: &[ronoctua_shell_door::photo::Camera] = &[ronoctua_shell_door::photo::Camera {
+    door: "emacs-card",
+    take: refcard_window::camera,
 }];
 
 /// `ronoctua-shell manual [<word>]` — a word that names no manual is
@@ -48,5 +57,10 @@ fn manuals_door(words: &ronoctua_shell_kit::doors::Words) -> anyhow::Result<()> 
             ),
         },
     };
+    // THE EMACS CARD IS PAGES, not lines: a window of its own, on the whole
+    // screen (`refcard_window`).
+    if which == Some(manual::Which::Emacs) {
+        return refcard_window::host_it().context("host the Emacs reference card");
+    }
     manual_window::host_it(which).context("host the manuals")
 }

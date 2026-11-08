@@ -1013,11 +1013,15 @@ impl Content for CameraWindow {
         // mouse button does to it.
         let texts = ui.texts.clone();
         let question = crate::door::list::the_question(ui);
-        let (pieces, carries) = match (question, &ui.message, self.button_under) {
+        let (pieces, carries) = match (
+            question,
+            crate::door::list::said_on_line_zero(ui),
+            self.button_under,
+        ) {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
             (Some(q), _, _) => (q, crate::chrome::Carries::Question),
             (None, Some(t), _) => (
-                vec![crate::chrome::Piece::said(t.clone())],
+                vec![crate::chrome::Piece::said(t.to_owned())],
                 crate::chrome::Carries::Said,
             ),
             (None, None, Some(id)) => (

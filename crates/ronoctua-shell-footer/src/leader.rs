@@ -1085,6 +1085,12 @@ pub const BASE: Contribution = Contribution {
             id: "monitor-btop",
             label: key::CMD_MONITOR_BTOP,
         },
+        // A FRAME OF THE EMACS DAEMON — `SUPER e`, the chord (the owner,
+        // 2026-11-08), and `LEADER :` by name.
+        Command {
+            id: "emacs-frame",
+            label: key::CMD_EMACS_FRAME,
+        },
         // THE JOURNAL, FOLLOWED LIVE, as the system's tool beside the two
         // monitors: `LEADER :` reaches it by name. A module's option opens the
         // same thing (`Action::opens`, `Footer::opened`).
@@ -1642,6 +1648,10 @@ pub const BASE: Contribution = Contribution {
             label: key::CMD_FOOTER_HOURS,
         },
         Command {
+            id: "footer-cpu",
+            label: key::CMD_FOOTER_CPU,
+        },
+        Command {
             id: "footer-hide-header",
             label: key::CMD_FOOTER_HIDE_HEADER,
         },
@@ -1950,6 +1960,9 @@ pub const BASE: Contribution = Contribution {
         // THE HOURS OF THE FREE MINIBUFFER, on or off by name: a row of the
         // footer's settings (`LEADER s r`), whose `RET` is the view's own key.
         "footer-hours",
+        // AND THE PROCESSORS on the free minibuffer while they labour, on or
+        // off by name — the row beside the hours (`crate::cpu`).
+        "footer-cpu",
         // THE "NO HEADER" MODE AND ITS SHORTCUTS, on or off by name: two more
         // rows of the footer's settings (`LEADER s r`). The shortcuts toggle is
         // also the glyph beside the minibuffer's chevron (`crate::surface`).

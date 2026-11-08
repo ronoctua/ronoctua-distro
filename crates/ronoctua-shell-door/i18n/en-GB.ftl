@@ -86,6 +86,7 @@ brain-proceed = start now
 # What the doors say when a daemon refused, and what the window cannot do.
 door-no-footer = The footer could not be reached to run this
 door-esc-again = { $keys } again closes this window
+door-message-dismiss = take the message off
 notif-bluetooth-pairing-body = Open Bluetooth to answer.
 notif-action-bluetooth-accept = Yes, pair it
 notif-action-bluetooth-refuse = No, refuse it

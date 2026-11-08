@@ -630,6 +630,10 @@
       # time (`RONOCTUA_ICONSET`, `atRunTime` in `nix/rust.nix`), the glyph
       # index naming the brain modules' glyph tokens too (`brainGlyphs`, the
       # catalogue's measured glyphs). See `nix/iconset.nix`.
+      # GNU's Emacs reference card for the Emacs the system installs, a page
+      # to a column, for the card window (`RONOCTUA_EMACS_REFCARD`).
+      emacsRefcard = pkgs.callPackage ./nix/emacs-refcard.nix { emacs = pkgs.emacs-pgtk; };
+
       iconset = pkgs.callPackage ./nix/iconset.nix {
         glyphdb = glyphdb.db;
         lucidedb = lucidedb.db;
@@ -856,7 +860,12 @@
         # (`RONOCTUA_BRAIN_CATALOGUE`, keyed like the palettes and the texts).
         inherit brainCatalogue;
 
-        inherit wordsData iconset unitsRs;
+        inherit
+          wordsData
+          iconset
+          unitsRs
+          emacsRefcard
+          ;
 
         inherit belongingsRs;
 

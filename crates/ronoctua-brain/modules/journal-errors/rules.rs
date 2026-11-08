@@ -383,6 +383,13 @@ fn is_made_up(word: &str) -> bool {
         && (word.bytes().any(|b| b.is_ascii_digit()) || changes >= 3)
 }
 
+/// What one entry says, as its row and a filter read it: `<unit>: <the
+/// message's first line>` — the line a burst's notification says.
+#[must_use]
+pub fn shown_of(entry: &Entry) -> String {
+    line(&Kind::of(entry).who, headline(&said(entry)))
+}
+
 /// The line a row shows and a filter is matched against: `<who>: <message>`,
 /// or the message alone when nothing said it — the journal's own line, as
 /// `journalctl` prints it. The message alone too when it already opens with
