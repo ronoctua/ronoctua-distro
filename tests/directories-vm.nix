@@ -74,7 +74,10 @@ pkgs.testers.runNixOSTest {
     services.nginx = {
       enable = true;
       appendHttpConfig = ''
-        log_format directories '$msec $host $request_method "$request_uri"';
+        # `$msec` IS WHEN THE LINE IS WRITTEN — the END of a request, and a
+        # stream's ends whenever its transfer does. Less `$request_time`, it
+        # is when the request BEGAN, which is the order a player keeps.
+        log_format directories '$msec $request_time $host $request_method "$request_uri"';
         server {
           listen 443 ssl;
           server_name _;
@@ -118,13 +121,13 @@ pkgs.testers.runNixOSTest {
         ))
 
     def asked(log="directories"):
-        """What the server was asked: (time, host, method, address)."""
+        """What the server was asked: (when it began, host, method, address)."""
         text = hosts.succeed(f"cat /var/log/nginx/{log}.log || true")
         out = []
         for line in text.splitlines():
-            m = re.match(r'(\S+) (\S+) (\S+) "([^"]*)"', line)
+            m = re.match(r'(\S+) (\S+) (\S+) (\S+) "([^"]*)"', line)
             if m:
-                out.append((float(m[1]), m[2], m[3], m[4]))
+                out.append((float(m[1]) - float(m[2]), m[3], m[4], m[5]))
         return out
 
     def let_hosts(names):

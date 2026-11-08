@@ -8,7 +8,8 @@
 //! `host.nix`, `facter.json`, `person/`, `local/`) with the distro as an
 //! input that follows the `release` branch. Its path reaches a program by
 //! `RONOCTUA_MACHINE_DIR` (one name: `machine-dir-has-one-name`), and
-//! [`Places::dir`] carries it from there.
+//! [`Places::dir`] carries it from there. Which GitHub branches its lock
+//! follows, and where it holds them, is [`followed`]'s to read.
 //!
 //! # The verbs ([`Verb`], the CLI's and the units')
 //!
@@ -83,6 +84,7 @@ pub mod build;
 mod disarm;
 mod disk;
 pub mod dry;
+pub mod followed;
 mod hold;
 mod loader;
 mod migrate;
@@ -137,6 +139,9 @@ pub const DISTRO_INPUT: &str = "ronoctua";
 /// it than the system the profile names is a jump no live switch takes
 /// ([`Applying`]).
 pub const NIXPKGS_INPUT: &str = "nixpkgs";
+
+/// The machine directory's lock, beside its `flake.nix`.
+pub const LOCK: &str = "flake.lock";
 
 /// The lock the running system was built from (a copy of `flake.lock`,
 /// under [`Places::state`]).
@@ -791,7 +796,7 @@ pub fn state(places: &Places) -> Result<MachineState, Refusal> {
 /// own: the VM's, a test's). What the update's page offers to hold.
 #[must_use]
 pub fn distro_revision(places: &Places) -> Option<String> {
-    let lock = std::fs::read(places.dir.join("flake.lock")).ok()?;
+    let lock = std::fs::read(places.dir.join(LOCK)).ok()?;
     disk::locked_rev(&lock, DISTRO_INPUT)
 }
 
@@ -801,7 +806,7 @@ pub fn distro_revision(places: &Places) -> Option<String> {
 /// sudo door. `false` with no lock. What the update's page says of it.
 #[must_use]
 pub fn follows_a_checkout(places: &Places) -> bool {
-    std::fs::read(places.dir.join("flake.lock")).is_ok_and(|lock| aim::follows_a_checkout(&lock))
+    std::fs::read(places.dir.join(LOCK)).is_ok_and(|lock| aim::follows_a_checkout(&lock))
 }
 
 /// Root, and root's lock of the person's data — what every verb that may

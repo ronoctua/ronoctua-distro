@@ -2273,7 +2273,10 @@ impl Host {
 
     /// What the frame just rendered declared for the header — and what the
     /// socket answers `keymap` with from now on: the `LEADER Alt` shortcuts
-    /// taught now (`Host::taught_now`).
+    /// taught now (`Host::taught_now`), each with the words the component
+    /// gave it and the sentence it declared (`ipc::keymap_line`) — and the
+    /// footer told when that CHANGED, so the window in front is drawn as it
+    /// is and not as it was when the focus came to it.
     fn declared(&mut self) {
         self.declared =
             crate::chrome::declared(&self.list, &self.keymap, &mut self.interned, &self.texts);
@@ -2282,13 +2285,37 @@ impl Host {
             .teaching
             .iter()
             .filter(|t| t.control)
-            .filter_map(|t| t.command.map(|id| format!("{} {id}", t.keys)))
+            .filter_map(|t| {
+                let id = t.command?;
+                Some(crate::ipc::keymap_line(
+                    &t.keys,
+                    id,
+                    Some(&self.texts.t(t.says)),
+                    self.declared.explains(id, &self.texts).as_deref(),
+                ))
+            })
             .collect::<Vec<_>>()
             .join("\n");
-        if let Ok(mut answer) = self.taught_now.lock()
-            && *answer != now
-        {
+        let changed = self.taught_now.lock().is_ok_and(|mut answer| {
+            if *answer == now {
+                return false;
+            }
             *answer = now;
+            true
+        });
+        if changed {
+            self.tell_the_footer_its_shortcuts();
+        }
+    }
+
+    /// Tells the footer this window's shortcuts CHANGED
+    /// (`ipc::shortcuts_order`): it reads them again from the socket when
+    /// this is the window in front. Silent without a footer, for the reason
+    /// [`Host::tell_the_footer`] gives.
+    fn tell_the_footer_its_shortcuts(&self) {
+        let order = crate::ipc::shortcuts_order(std::process::id());
+        if let Err(e) = crate::ipc::send_it(&order) {
+            tracing::debug!(error = %e, "no footer to tell the shortcuts to");
         }
     }
 
@@ -4252,7 +4279,7 @@ impl Content for Host {
 
     /// The sentence under the pointer is what the component declared
     /// (`about`): its `cmd-<id>` is the short word on the line.
-    fn explains(&self, id: &'static str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    fn explains(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
         self.declared.explains(id, texts)
     }
 

@@ -452,7 +452,7 @@ Cada serviço externo tem um crate só que fala com ele; o resto do código pede
 | yt-dlp: toda linha de comando dele | `ronoctua-ytdlp` |
 | keyd | `ronoctua-keyboards` |
 | arquivos de preferência | `ronoctua-store`, sobre o `ronoctua-xdg` |
-| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`); o espelho da declaração da pessoa (`$XDG_STATE_HOME/ronoctua/person/`), a preparação dela para o root e o razão do reconciliador (`declared-applied.json`) | `ronoctua-software` (cobram `one-software-boundary` e `reconcile-touches-only-the-ledger`) |
+| perfil Nix da pessoa, Flatpak, AppImage, Waydroid, web apps do Chrome (o `Local State`); o espelho da declaração da pessoa (`$XDG_STATE_HOME/ronoctua/person/`), a preparação dela para o root e o razão do reconciliador (`declared-applied.json`); e, no GitHub, a ponta das branches que a máquina segue | `ronoctua-software` (cobram `one-software-boundary` e `reconcile-touches-only-the-ledger`) |
 | o Chrome em execução: a extensão, o native messaging, o `Preferences` de um perfil e as janelas quiosque | `ronoctua-browser` |
 | o consentimento por host (`consent.json`) e o `Pass` de toda requisição | `ronoctua-consent` (cobram `the-network-waits-for-consent` e `network-asks-with-a-pass`) |
 | MyMemory, DeepL, LibreTranslate, o WordNet offline e o Wiktionary | `ronoctua-words` (cobra `words-ask-with-a-pass`) |
@@ -669,7 +669,10 @@ OSC 7501, que o guardião lê.
   refresh`), que pergunta ao `api.github.com` e baixa do `github.com` — os dois hosts que o Nix já
   pergunta para mover o nixpkgs —: vai num `Pass` de atualizador declarado
   (`ronoctua_consent::Updater`), cunhado só para esses hosts e pedido só por esse caminho (cobra
-  `network-asks-with-a-pass`).
+  `network-asks-with-a-pass`). E (2026-11-08) a linha da janela de atualização que diz se há
+  atualização, que pergunta ao `api.github.com` se as branches que o flake da máquina segue andaram
+  além do lock dela: vai num `Pass` de atualizador declarado cunhado só para esse host e pedido só
+  por esse caminho (`ronoctua_software::heads`).
 - Todo evento do sistema e toda notificação que os filtros mostram são ditos na linha do minibuffer
   quando ela está livre, e vão para a faixa só quando ela está ocupada ou a fila tem quatro
   (`events::route`, `events::deliver`). A linha tem o grupo da faixa (`band::cluster`: envelope,

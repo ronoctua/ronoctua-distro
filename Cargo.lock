@@ -5850,6 +5850,7 @@ dependencies = [
  "ronoctua-shell-door",
  "ronoctua-shell-kit",
  "ronoctua-shell-update-words",
+ "ronoctua-software",
  "ronoctua-tokens",
  "ronoctua-xdg",
  "serde",

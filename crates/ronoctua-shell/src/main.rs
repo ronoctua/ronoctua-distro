@@ -275,8 +275,16 @@ fn main() -> Result<()> {
                 .context("usage: ronoctua-shell buffer-keymap <pid>")?
                 .parse::<u32>()
                 .context("the pid has to be a number")?;
-            for (keys, id) in ipc::buffer_keymap(pid).context("read the buffer's keymap")? {
-                println!("{keys} {id}");
+            for s in ipc::buffer_keymap(pid).context("read the buffer's keymap")? {
+                println!(
+                    "{}",
+                    ipc::keymap_line(
+                        &s.keys,
+                        &s.command,
+                        s.words.as_deref(),
+                        s.sentence.as_deref()
+                    )
+                );
             }
             return Ok(());
         }

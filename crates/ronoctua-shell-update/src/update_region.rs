@@ -48,6 +48,13 @@ pub enum Back {
     /// What came of an approval of a brain module of the person's, asked
     /// through the door's sudo gate (`crate::approval`).
     Approve(crate::approval::Came),
+    /// What GitHub said of the branches the machine's flake follows
+    /// (`ronoctua_software::heads`), or the lock's refusal — with the number
+    /// of the question it answers (`Open::heads_asked`).
+    Heads(
+        u64,
+        Result<Vec<ronoctua_software::heads::Heard>, ronoctua_software::heads::Unread>,
+    ),
 }
 
 /// Where a key or a click of a door reaches past it.
@@ -92,6 +99,10 @@ pub struct Open {
     machine_waiting: usize,
     /// Approvals asked, whose verdict has not come.
     approve_waiting: usize,
+    /// How many times GitHub was asked for the heads: each answer comes back
+    /// with the number of its question, and one older than the last asked is
+    /// dropped — a slow answer never says over a newer one.
+    heads_asked: u64,
 }
 
 impl std::fmt::Debug for Open {
@@ -134,6 +145,7 @@ impl Open {
             parts_waiting: 0,
             machine_waiting: 0,
             approve_waiting: 0,
+            heads_asked: 0,
         }
     }
 
@@ -237,15 +249,80 @@ impl Open {
                     way.say(said, crate::echo::Echo::Long);
                     way.repaint();
                 }
+                // WHAT GITHUB SAID: the status line says it. Data, so it moves
+                // no page — and only the answer to the last question asked.
+                Back::Heads(asked, came) => {
+                    if asked == self.heads_asked {
+                        self.view.heads_came(came);
+                        way.repaint();
+                    }
+                }
             }
         }
         lines
     }
 
+    /// Whether an update is there, asked of GitHub on a NAMED thread — the
+    /// heads of the branches the machine's lock follows, as the machine's
+    /// own updater, no consent asked (`ronoctua_software::heads`) — whose
+    /// answer comes back to this door, numbered: a question asked after it
+    /// makes it stale. `again`: the person asked, or the lock moved, and a
+    /// head kept longer than a minute is asked again. A photograph's door
+    /// asks nothing; nothing asks on a clock.
+    pub fn check_the_heads(&mut self, again: bool) {
+        let Some(post) = self.post().filter(|_| self.reach == Reach::Machine) else {
+            return;
+        };
+        let Ok(roots) = ronoctua_software::Roots::of_session() else {
+            tracing::warn!("no home: whether an update is there is not asked");
+            return;
+        };
+        let cache = ronoctua_software::appimage::github_cache(&roots);
+        let lock = crate::update_window::record_places()
+            .machine_dir
+            .join(ronoctua_software::heads::LOCK);
+        let asked = self.heads_asked + 1;
+        let born = std::thread::Builder::new()
+            .name("update-heads".to_owned())
+            .spawn(move || {
+                let heard = if again {
+                    ronoctua_software::heads::look_again(&lock, &cache)
+                } else {
+                    ronoctua_software::heads::look(&lock, &cache)
+                };
+                let _ = post.send(Back::Heads(asked, heard));
+            });
+        match born {
+            Ok(_) => {
+                self.heads_asked = asked;
+                self.view.heads_asked();
+            }
+            Err(e) => tracing::error!(error = %e, "could not start the heads' thread"),
+        }
+    }
+
+    /// The reports, the records and the pages' values read again when a
+    /// file moved — and GitHub asked again when the machine's lock moved
+    /// under what it said, past the copy kept a quarter of an hour (the
+    /// person's own re-check): a head kept from before the update is judged
+    /// against the lock the update moved. Whether something did.
+    pub fn reread_if_moved(&mut self) -> bool {
+        let moved = self.view.reread_if_moved();
+        if self.view.heads_are_stale() {
+            self.check_the_heads(true);
+        }
+        moved
+    }
+
     /// The brain spoke: its mind is kept — the countdown's answers read it —
+    /// what it says of this task drawn (the status, the actions, the keys),
     /// and a run this door asked for is followed in it. Whether that asked
-    /// the question on a metered way out.
+    /// the question on a metered way out — what the brain says of the task
+    /// is data, and moves no page.
     pub fn heard_the_mind(&mut self, mind: ronoctua_brain::Mind, way: &mut dyn Doorway) -> bool {
+        if self.view.heard_the_brain(&mind) {
+            way.repaint();
+        }
         self.mind = Some(mind);
         self.heard_the_brain(way)
     }
@@ -479,17 +556,33 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
                 crate::belongings::WINDOW_COMMAND
             )),
         },
+        // THE COUNTDOWN'S ANSWERS, for THIS update only: the brain answers
+        // whatever it announced, and a key of the update's must never skip
+        // or stop another task's — with nothing of this one counting down or
+        // running, the footer's sentence that nothing is about to happen.
         Errand::Answer(proceeding) => match &mut open.reach {
             Reach::Machine => {
+                let ours = open
+                    .mind
+                    .as_ref()
+                    .filter(|m| crate::update_window::answers_this_update(m, proceeding));
                 say(
                     way,
-                    crate::brainlink::answer(open.mind.as_ref(), proceeding),
+                    match ours {
+                        Some(mind) => crate::brainlink::answer(Some(mind), proceeding),
+                        None => crate::key::ECHO_BRAIN_IDLE,
+                    },
                 );
             }
             Reach::Kept(asked) => asked.push(format!(
                 "would have answered the countdown: {}",
                 if proceeding { "proceed" } else { "abort" }
             )),
+        },
+        // THE STATUS LINE'S SECOND CLICK: GitHub asked again.
+        Errand::Recheck => match &mut open.reach {
+            Reach::Machine => open.check_the_heads(true),
+            Reach::Kept(asked) => asked.push("would have asked GitHub for the heads".to_owned()),
         },
         Errand::Cache(e) => cache_errand(e, open, way),
         Errand::Follow(e) => follow_errand(e, open, way),
@@ -914,7 +1007,7 @@ impl Region for UpdateRegion {
     /// ITS REPORTS LOOKED AT, one `stat` per file, on the footer's second —
     /// the window's beat.
     fn tick(&mut self, _: std::time::Instant, way: &mut dyn Doorway) -> bool {
-        let moved = self.open.view.reread_if_moved();
+        let moved = self.open.reread_if_moved();
         if moved {
             way.repaint();
         }
@@ -922,11 +1015,14 @@ impl Region for UpdateRegion {
     }
 
     /// THE TWO JOURNALS, each on a thread of its own, for as long as the page
-    /// is shown — a photograph's footer follows nothing.
+    /// is shown — and whether an update is there, asked once each time it
+    /// is (a head GitHub said in the last quarter of an hour is said from
+    /// its copy). A photograph's footer follows and asks nothing.
     fn shown(&mut self, way: &mut dyn Doorway) {
         self.on_the_step = true;
         if !way.photographing() {
             self.open.follow_the_journals();
+            self.open.check_the_heads(false);
         }
     }
 
@@ -1133,6 +1229,57 @@ mod tests {
             "the end did not follow: {:?}",
             w.owed
         );
+    }
+
+    /// FAILS IF: what GitHub said, handed back to either door's inbox, does
+    /// not reach the status line and draw it again — or moves the page —, or
+    /// a photograph's door asks GitHub at all, its re-check kept instead.
+    #[test]
+    fn what_github_said_reaches_the_status_and_a_photograph_asks_nothing() {
+        use crate::update_window::{Status, Unchecked};
+        let mut r = region();
+        r.open.check_the_heads(false);
+        assert_eq!(r.open.view.status(), Status::Unasked, "a photograph asked");
+        carry_out(Errand::Recheck, &mut r.open, &mut way());
+        assert_eq!(
+            r.open.would_have(),
+            vec!["would have asked GitHub for the heads".to_owned()]
+        );
+        r.open.inbox = Some(Inbox::new(crate::wake::Wake::new(|| {})));
+        let post = r.open.post().expect("an inbox");
+        assert!(post.send(Back::Heads(
+            0,
+            Err(ronoctua_software::heads::Unread::NoLock)
+        )));
+        let mut w = way();
+        r.woken(&mut w);
+        assert_eq!(r.open.view.status(), Status::Unchecked(Unchecked::NoLock));
+        assert!(w.owed.contains(&Effect::Repaint), "{:?}", w.owed);
+        assert!(
+            !w.owed.iter().any(|e| matches!(e, Effect::Page(_))),
+            "what GitHub said moved the page: {:?}",
+            w.owed
+        );
+    }
+
+    /// FAILS IF: an answer to an older question of the heads says over the
+    /// answer to a newer one — the slow first look that times out offline
+    /// after the person's re-check came back up to date.
+    #[test]
+    fn an_older_answer_of_the_heads_never_says_over_a_newer_one() {
+        use crate::update_window::{Status, Unchecked};
+        let mut r = region();
+        r.open.inbox = Some(Inbox::new(crate::wake::Wake::new(|| {})));
+        let post = r.open.post().expect("an inbox");
+        // TWO QUESTIONS ASKED; the second's answer comes first.
+        r.open.heads_asked = 2;
+        assert!(post.send(Back::Heads(2, Ok(Vec::new()))));
+        assert!(post.send(Back::Heads(
+            1,
+            Err(ronoctua_software::heads::Unread::Unreadable)
+        )));
+        r.woken(&mut way());
+        assert_eq!(r.open.view.status(), Status::Unchecked(Unchecked::Nothing));
     }
 
     /// FAILS IF: what came of root's netrc is not said in the door that asked,

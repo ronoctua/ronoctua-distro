@@ -207,7 +207,7 @@ about-brain-interval = Passa para a próxima cadência em que esta tarefa roda.
 about-brain-window = Passa para a próxima parte do dia em que esta tarefa pode rodar.
 about-brain-reset-steps = Devolve todo passo desta tarefa ao que a distro traz.
 about-brain-proceed = Começa agora a tarefa em contagem regressiva, sem esperar a contagem.
-about-brain-abort = Para a tarefa que está rodando ou em contagem regressiva.
+about-brain-abort = Adia para a próxima hora dela a tarefa em contagem regressiva, ou interrompe a que está rodando.
 about-brain-log = Mostra o registro do próprio brain enquanto ele é escrito — cada tick, o que ele decidiu, cada aviso e erro — ou volta.
 about-brain-row-also = Faz a outra coisa que a linha sob o cursor oferece, com o nome que aparece embaixo, no fim da página.
 # AS LINHAS DA AGENDA. Cada uma é o NOME de um campo, então cada uma é um

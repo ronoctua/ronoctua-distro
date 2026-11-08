@@ -49,10 +49,12 @@ use ronoctua_tokens as tokens;
 
 /// What a click on a piece of the strip does.
 ///
-/// Every one has a key: the countdown's two and the notice's three are
-/// registered commands with a sequence of their own inside the brain's buffer,
-/// drawn on the strip itself, and the `+N` is `brain-open` — `LEADER b`. The
-/// mouse reaches nothing the keyboard does not.
+/// Every one is a registered command ([`Hit::command`]) the keyboard reaches:
+/// by name from anywhere (`LEADER :`), and after `LEADER Alt` in a window that
+/// publishes it — the brain's own buffer, the update's window while its run
+/// counts down — whose key the strip then draws beside the control
+/// ([`Words::published`]). The `+N` is `brain-open` — `LEADER b`. The mouse
+/// reaches nothing the keyboard does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     /// Not now.
@@ -81,6 +83,23 @@ pub enum Hit {
     More,
 }
 
+impl Hit {
+    /// The command it runs — what a click on it runs
+    /// (`Footer::brain_clicked`), and the command whose key the window in
+    /// front may give after `LEADER Alt` ([`Words::published`]).
+    #[must_use]
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Abort => "brain-abort",
+            Self::Proceed => "brain-proceed",
+            Self::Act => "brain-act",
+            Self::Dismiss => "brain-dismiss",
+            Self::Snooze => "brain-snooze",
+            Self::More => "brain-open",
+        }
+    }
+}
+
 /// One drawn piece of the strip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
@@ -107,6 +126,10 @@ pub struct Piece {
     /// are placed by `chrome::from_the_edge` and found by
     /// `chrome::at_the_edge`.
     pub edge: bool,
+    /// Whether it is a control's KEY — `⌥` and the one key the window in
+    /// front gives it ([`key_of`]) — which the pointer resting on it spells
+    /// out ([`Words::spelt`]), as the free line spells a window's shortcut.
+    pub key: bool,
 }
 
 /// The strip, laid out.
@@ -126,21 +149,25 @@ pub struct Words<'a> {
     pub texts: &'a ronoctua_i18n::Texts,
     /// The machine's zone, for a notice's moments.
     pub zone: &'a ronoctua_files::when::Zone,
-    /// How `brain-abort` is typed — the brain's own `, a`.
+    /// THE SHORTCUTS OF THE WINDOW IN FRONT, as it publishes them
+    /// (`ipc::Shortcut`) — where a control's key comes from, and the only
+    /// place ([`key_of`]).
     ///
-    /// It comes from OUTSIDE because whoever knows it is whoever defines the
-    /// bind (`crate::leader`), and a line that wrote it again would be a
-    /// second answer to "which key stops it".
-    pub abort_keys: &'a str,
-    /// The same, for `brain-proceed`.
-    pub proceed_keys: &'a str,
-    /// And the notice's three: its first control, putting it away, putting it
-    /// off — `, n`, `, x` and `, z` in the brain's buffer.
-    pub act_keys: &'a str,
-    /// See [`Words::act_keys`].
-    pub dismiss_keys: &'a str,
-    /// See [`Words::act_keys`].
-    pub snooze_keys: &'a str,
+    /// # Why a key is drawn only when the window in front gives it
+    ///
+    /// The strip drew `[, a] not now`, the brain's own buffer's sequence,
+    /// whatever window was in front — and the owner read the `,` off the
+    /// screen: the line appears by itself over any window, and in any window
+    /// but the brain's that sequence is a comma and a letter typed into it.
+    /// What answers a control from the keyboard is `LEADER Alt` and the key
+    /// the window in front gives its command, so that key is drawn, as the
+    /// free line draws the window's shortcuts (`⌥a`) — when the window gives
+    /// one, and nothing but the words when it does not.
+    pub published: &'a [crate::ipc::Shortcut],
+    /// The control whose key the pointer rests on, drawn SPELT — the words
+    /// the glyph stands for and the key, `SUPER ALT a` — as the free line
+    /// spells a window's shortcut under the hand (`chrome::leader_alt_text`).
+    pub spelt: Option<Hit>,
 }
 
 /// WHAT THE STRIP SHOWS, out of one mind: the countdown, and every notice in
@@ -273,6 +300,7 @@ fn mark(line: &mut Line, row: u16) {
         hit: None,
         explain: None,
         edge: false,
+        key: false,
     });
 }
 
@@ -291,28 +319,28 @@ fn countdown_line(
     // THE RIGHT-HAND CLUSTER FIRST, because it decides how much room the
     // sentence gets. Laying the text out first and then discovering the
     // controls do not fit is how a line comes to spill — `band.rs` records it,
-    // and the answer is the same here. From the edge inwards: proceed, abort,
-    // the pie — each placed by `chrome::from_the_edge` and carrying
-    // `edge: true`.
+    // and the answer is the same here. From the edge inwards: proceed, the
+    // mark between, abort, the pie — each placed by `chrome::from_the_edge`
+    // and carrying `edge: true`.
     let mut right = crate::chrome::from_the_edge(columns, 0);
     right = control(
         line,
         row,
         right,
-        words.proceed_keys,
+        key_of(words, Hit::Proceed).as_deref(),
         &words.texts.t(crate::key::BRAIN_BAND_PROCEED),
         Hit::Proceed,
-        words.texts.t(crate::key::CMD_BRAIN_PROCEED),
+        words.texts.t(crate::key::HINT_BRAIN_PROCEED),
     );
-    right = right.saturating_sub(tokens::space::MODELINE_SEGMENTGAP);
+    right = separate(line, row, right);
     right = control(
         line,
         row,
         right,
-        words.abort_keys,
+        key_of(words, Hit::Abort).as_deref(),
         &words.texts.t(crate::key::BRAIN_BAND_ABORT),
         Hit::Abort,
-        words.texts.t(crate::key::CMD_BRAIN_ABORT),
+        words.texts.t(crate::key::HINT_BRAIN_ABORT),
     );
 
     // THE PIE, and it is `band::countdown_glyph` and not a second one: the
@@ -327,6 +355,7 @@ fn countdown_line(
         hit: None,
         explain: Some(words.texts.t(crate::key::HINT_BRAIN_COUNTDOWN)),
         edge: true,
+        key: false,
     });
 
     // AND THE SENTENCE, in whatever is left. The subject is the TASK'S OWN
@@ -349,6 +378,7 @@ fn countdown_line(
         hit: None,
         explain: None,
         edge: false,
+        key: false,
     });
 }
 
@@ -413,6 +443,7 @@ fn notice_line(
                 hit: Some(Hit::More),
                 explain: Some(words.texts.t(crate::key::HINT_BRAIN_MORE)),
                 edge: true,
+                key: false,
             });
             right = start.saturating_sub(tokens::space::MODELINE_SEGMENTGAP);
         }
@@ -420,10 +451,9 @@ fn notice_line(
     // THE CONTROLS, each only when the notice offers it — an alarm that may
     // not be put away draws no button that would — and each only while the
     // sentence keeps its floor.
-    let mut offered: Vec<(&str, String, Hit, String)> = Vec::new();
+    let mut offered: Vec<(String, Hit, String)> = Vec::new();
     if n.dismiss {
         offered.push((
-            words.dismiss_keys,
             words.texts.t(crate::key::BRAIN_BAND_DISMISS),
             Hit::Dismiss,
             words.texts.t(crate::key::CMD_BRAIN_DISMISS),
@@ -431,7 +461,6 @@ fn notice_line(
     }
     if let Some(minutes) = n.snooze.first() {
         offered.push((
-            words.snooze_keys,
             words.texts.t_args(
                 crate::key::BRAIN_BAND_SNOOZE,
                 &[("minutes", ronoctua_i18n::Arg::Number(i64::from(*minutes)))],
@@ -448,19 +477,31 @@ fn notice_line(
             .and_then(|m| m.task(&posted.module))
             .map(|t| t.actions.as_slice());
         let label = crate::mind_wire::control_label(&posted.module, first, offered_by);
-        offered.push((
-            words.act_keys,
-            words.texts.t(&label),
-            Hit::Act,
-            words.texts.t(&label),
-        ));
+        offered.push((words.texts.t(&label), Hit::Act, words.texts.t(&label)));
     }
-    for (keys, label, hit, explain) in offered {
-        let width = layout::width(&format!("[{keys}]")) + 1 + layout::width(&label);
+    // ONE MARK BETWEEN EACH TWO, and the gap before the sentence after the
+    // last — what is measured against the floor is the control with the mark
+    // that would come with it, its key NOT spelt: a control that gave way
+    // when the hand spelt its key would leave the hand, and come back.
+    let plain = Words {
+        spelt: None,
+        ..*words
+    };
+    let mut placed = false;
+    for (label, hit, explain) in offered {
+        let key = key_of(words, hit);
+        let width = control_width(key_of(&plain, hit).as_deref(), &label)
+            + if placed { separator_width() } else { 0 };
         if right.saturating_sub(width) <= floor {
             break;
         }
-        right = control(line, row, right, keys, &label, hit, explain);
+        if placed {
+            right = separate(line, row, right);
+        }
+        right = control(line, row, right, key.as_deref(), &label, hit, explain);
+        placed = true;
+    }
+    if placed {
         right = right.saturating_sub(tokens::space::MODELINE_SEGMENTGAP);
     }
     // AND THE SENTENCE: the module's key and its values, made in the person's
@@ -479,45 +520,102 @@ fn notice_line(
         hit: None,
         explain: None,
         edge: false,
+        key: false,
     });
 }
 
-/// One control — the bracketed key and the label — placed with its right edge
-/// at `right` on `row`. Gives back the cell its left edge landed on.
+/// The key a control is drawn with: the one the window in front gives its
+/// command after `LEADER Alt` ([`Words::published`]), drawn as the free line
+/// draws that window's shortcuts — the glyph and the one key, `⌥a`
+/// (`chrome::leader_alt_text`), a buffer's `, a` being `a`, spelt out under
+/// the pointer ([`Words::spelt`]) — and `None` when that window gives the
+/// command no key.
+fn key_of(words: &Words<'_>, hit: Hit) -> Option<String> {
+    let shortcut = words
+        .published
+        .iter()
+        .find(|s| s.command == hit.command())?;
+    Some(crate::chrome::leader_alt_text(
+        &crate::surface::key_on_the_line(&shortcut.keys),
+        words.spelt == Some(hit),
+    ))
+}
+
+/// How many cells a control takes: its key and a cell of air, when it has
+/// one, and its label.
+fn control_width(key: Option<&str>, label: &str) -> u16 {
+    key.map_or(0, |k| layout::width(k) + 1) + layout::width(label)
+}
+
+/// The mark between two controls side by side — the hint line's own dot,
+/// with its air (`chrome::Piece::separator`): words with no key between them
+/// read as one phrase, the owner's word on the notification band, whose
+/// actions take the same mark. Placed with its right edge at `right`; gives
+/// back the cell its left edge landed on. Not a control: the pointer finds
+/// nothing on it.
+fn separate(line: &mut Line, row: u16, right: u16) -> u16 {
+    let text = crate::chrome::Piece::separator().text;
+    let start = right.saturating_sub(layout::width(&text));
+    line.pieces.push(Piece {
+        row,
+        at: start,
+        text,
+        color: tokens::color::BRAIN_DIM,
+        hit: None,
+        explain: None,
+        edge: true,
+        key: false,
+    });
+    start
+}
+
+/// How many cells [`separate`] takes.
+fn separator_width() -> u16 {
+    layout::width(&crate::chrome::Piece::separator().text)
+}
+
+/// One control — its key, when the window in front gives it one
+/// ([`key_of`]), and the label — placed with its right edge at `right` on
+/// `row`. Gives back the cell its left edge landed on.
 ///
-/// TWO pieces and not one, because the two are coloured differently: the key is
-/// `brain.dim` and the label is `brain.text`, which is what that token says it
-/// is for. Both carry the same `hit` and the same explanation, so the pointer
-/// answers the same thing over either half.
+/// TWO pieces with a key, because the two are coloured differently: the key
+/// is `brain.dim` and the label is `brain.text`, which is what that token says
+/// it is for. Both carry the same `hit` and the same explanation, so the
+/// pointer answers the same thing over either half.
 fn control(
     line: &mut Line,
     row: u16,
     right: u16,
-    keys: &str,
+    key: Option<&str>,
     label: &str,
     hit: Hit,
     explain: String,
 ) -> u16 {
-    let bracketed = format!("[{keys}]");
-    let width = layout::width(&bracketed) + 1 + layout::width(label);
-    let start = right.saturating_sub(width);
+    let start = right.saturating_sub(control_width(key, label));
+    // THE LABEL AFTER THE KEY AND ITS CELL OF AIR, when there is a key —
+    // both counted from `start`, which only ever comes from the border.
+    let key_cells = key.map_or(0, |k| layout::width(k) + 1);
+    if let Some(key) = key {
+        line.pieces.push(Piece {
+            row,
+            at: start,
+            text: key.to_owned(),
+            color: tokens::color::BRAIN_DIM,
+            hit: Some(hit),
+            explain: Some(explain.clone()),
+            edge: true,
+            key: true,
+        });
+    }
     line.pieces.push(Piece {
         row,
-        at: start,
-        text: bracketed.clone(),
-        color: tokens::color::BRAIN_DIM,
-        hit: Some(hit),
-        explain: Some(explain.clone()),
-        edge: true,
-    });
-    line.pieces.push(Piece {
-        row,
-        at: start + layout::width(&bracketed) + 1,
+        at: start + key_cells,
         text: label.to_owned(),
         color: tokens::color::BRAIN_TEXT,
         hit: Some(hit),
         explain: Some(explain),
         edge: true,
+        key: false,
     });
     start
 }
@@ -1311,32 +1409,60 @@ mod tests {
         }
     }
 
-    // FROM THE CONSTANTS THE KEYMAP BINDS, so that the day the keys move the
-    // fixture moves with them: written as literals, this test went on proving
-    // that `SPC s a` was drawn for a fortnight after `s a` stopped existing.
-    static ABORT: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::leader::BRAIN_ABORT_KEYS.to_owned());
-    static PROCEED: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::leader::BRAIN_PROCEED_KEYS.to_owned());
-    static ACT: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::leader::BRAIN_NOTICE_KEYS.to_owned());
-    static DISMISS: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::leader::BRAIN_DISMISS_KEYS.to_owned());
-    static SNOOZE: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::leader::BRAIN_SNOOZE_KEYS.to_owned());
     static ZONE: std::sync::LazyLock<ronoctua_files::when::Zone> =
         std::sync::LazyLock::new(ronoctua_files::when::Zone::utc);
 
+    /// The strip's words with no window in front that publishes anything.
     fn bundle(t: &ronoctua_i18n::Texts) -> Words<'_> {
         Words {
             texts: t,
             zone: &ZONE,
-            abort_keys: &ABORT,
-            proceed_keys: &PROCEED,
-            act_keys: &ACT,
-            dismiss_keys: &DISMISS,
-            snooze_keys: &SNOOZE,
+            published: &[],
+            spelt: None,
         }
+    }
+
+    /// A shortcut a window publishes: its keys and its command.
+    fn shortcut(keys: &str, command: &str) -> crate::ipc::Shortcut {
+        crate::ipc::Shortcut {
+            keys: keys.to_owned(),
+            command: command.to_owned(),
+            ..crate::ipc::Shortcut::default()
+        }
+    }
+
+    /// What the brain's own buffer publishes while a countdown runs and a
+    /// notice stands — its sequences under `,`, which `LEADER Alt` types for
+    /// the person.
+    static THE_BRAINS: std::sync::LazyLock<Vec<crate::ipc::Shortcut>> =
+        std::sync::LazyLock::new(|| {
+            [
+                (", a", "brain-abort"),
+                (", p", "brain-proceed"),
+                (", n", "brain-act"),
+                (", x", "brain-dismiss"),
+                (", z", "brain-snooze"),
+                (", r", "brain-run"),
+            ]
+            .iter()
+            .map(|(k, c)| shortcut(k, c))
+            .collect()
+        });
+
+    /// The words with a window in front that publishes `published`.
+    fn in_front<'a>(
+        t: &'a ronoctua_i18n::Texts,
+        published: &'a [crate::ipc::Shortcut],
+    ) -> Words<'a> {
+        Words {
+            published,
+            ..bundle(t)
+        }
+    }
+
+    /// `⌥` and a key, as the free line draws a window's shortcut.
+    fn alt(key: &str) -> String {
+        crate::chrome::leader_alt_text(key, false)
     }
 
     /// A notice of a fictional module, at `level`, raised at `since`, offering
@@ -1462,11 +1588,16 @@ mod tests {
             assert!(got.contains(&h), "{h:?} is not on the strip: {got:?}");
         }
         let drawn: String = line.pieces.iter().map(|p| p.text.as_str()).collect();
-        for keys in [&*ACT, &*DISMISS, &*SNOOZE] {
-            assert!(
-                drawn.contains(&format!("[{keys}]")),
-                "{keys} is not taught: {drawn}"
-            );
+        // NO WINDOW IN FRONT GIVES THEM A KEY: the words alone.
+        for key in ["n", "x", "z"] {
+            assert!(!drawn.contains(&alt(key)), "{key} is taught: {drawn}");
+        }
+        // AND WITH THE BRAIN'S BUFFER IN FRONT, the key it gives each.
+        let brains = in_front(&t, &THE_BRAINS);
+        let keyed = lines(&Shown::of(Some(&full)), 160, 0, &brains).expect("a strip");
+        let keyed: String = keyed.pieces.iter().map(|p| p.text.as_str()).collect();
+        for key in ["n", "x", "z"] {
+            assert!(keyed.contains(&alt(key)), "{key} is not taught: {keyed}");
         }
         // THE SNOOZE SAYS HOW LONG, in the language's own words.
         assert!(
@@ -1525,27 +1656,109 @@ mod tests {
         }
     }
 
+    /// FAILS IF: the countdown's two controls stop being reachable and
+    /// saying what they do, a key is drawn beside one that the window in
+    /// front does not give its command — `, a`, a comma and a letter typed
+    /// into any window but the brain's, is what the strip used to draw — or
+    /// the key that window gives is not drawn as `LEADER Alt` reaches it.
     #[test]
     fn the_two_controls_are_reachable_and_say_what_they_do() {
         // THE MOUSE REACHES NOTHING THE KEYBOARD DOES NOT. Both targets are
-        // registered commands, both are drawn with the sequence that runs them,
-        // and both explain themselves on the message line — never in a tooltip
-        // (invariant 14).
+        // registered commands (`LEADER :`), and both explain themselves on the
+        // message line — never in a tooltip (invariant 14).
         let t = words();
-        let w = bundle(&t);
         let m = a_mind(Some(announced(60, 1_000)), Vec::new());
-        let line = lines(&Shown::of(Some(&m)), 120, 940, &w).expect("the line went away");
+        // NO WINDOW IN FRONT ANSWERS THEM: the words alone, a control each.
+        let line = lines(&Shown::of(Some(&m)), 120, 940, &bundle(&t)).expect("the line went away");
         for hit in [Hit::Abort, Hit::Proceed] {
             let mine: Vec<&Piece> = line.pieces.iter().filter(|p| p.hit == Some(hit)).collect();
-            assert_eq!(mine.len(), 2, "{hit:?} does not have the key and the label");
+            assert_eq!(mine.len(), 1, "{hit:?} drew a key nobody gives it");
             assert!(
                 mine.iter().all(|p| p.explain.is_some()),
                 "{hit:?} does not say what it does"
             );
         }
         let drawn: String = line.pieces.iter().map(|p| p.text.as_str()).collect();
-        assert!(drawn.contains(&format!("[{}]", *ABORT)), "{drawn}");
-        assert!(drawn.contains(&format!("[{}]", *PROCEED)), "{drawn}");
+        // THE CONTROLS' OWN PIECES, for the sentence is the fixture's.
+        let controls: String = line
+            .pieces
+            .iter()
+            .filter(|p| p.hit.is_some())
+            .map(|p| p.text.as_str())
+            .collect();
+        assert!(!controls.contains(','), "a comma on the strip: {controls}");
+        assert!(
+            !controls.contains('['),
+            "a bracketed key on the strip: {controls}"
+        );
+        assert!(
+            drawn.contains(&t.t(crate::key::BRAIN_BAND_ABORT)),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains(&t.t(crate::key::BRAIN_BAND_PROCEED)),
+            "{drawn}"
+        );
+        // A WINDOW IN FRONT THAT GIVES THEM KEYS — a native window's one key,
+        // and a buffer's sequence under `,` — has them drawn, `⌥` and the key.
+        let flat = [shortcut("p", "brain-proceed"), shortcut("a", "brain-abort")];
+        for published in [&flat[..], &THE_BRAINS[..]] {
+            let w = in_front(&t, published);
+            let line = lines(&Shown::of(Some(&m)), 120, 940, &w).expect("the line went away");
+            for (hit, key) in [(Hit::Abort, "a"), (Hit::Proceed, "p")] {
+                let mine: Vec<&Piece> = line.pieces.iter().filter(|p| p.hit == Some(hit)).collect();
+                assert_eq!(mine.len(), 2, "{hit:?} does not have the key and the label");
+                assert_eq!(mine[0].text, alt(key), "{hit:?}");
+            }
+            let controls: String = line
+                .pieces
+                .iter()
+                .filter(|p| p.hit.is_some())
+                .map(|p| p.text.as_str())
+                .collect();
+            assert!(!controls.contains(','), "a comma on the strip: {controls}");
+        }
+        // AND THE KEY UNDER THE POINTER IS SPELT OUT, as the free line spells
+        // a window's shortcut — that one and no other.
+        let under = Words {
+            spelt: Some(Hit::Abort),
+            ..in_front(&t, &flat)
+        };
+        let line = lines(&Shown::of(Some(&m)), 120, 940, &under).expect("a line");
+        let keys: Vec<(Option<Hit>, &str)> = line
+            .pieces
+            .iter()
+            .filter(|p| p.key)
+            .map(|p| (p.hit, p.text.as_str()))
+            .collect();
+        let spelt = crate::chrome::leader_alt_text("a", true);
+        assert_eq!(
+            keys,
+            vec![
+                (Some(Hit::Proceed), alt("p").as_str()),
+                (Some(Hit::Abort), spelt.as_str())
+            ]
+        );
+        // AND ONLY ITS OWN: a window that gives one of the two keys gives the
+        // other nothing.
+        let one = [shortcut("a", "brain-abort")];
+        let line = lines(&Shown::of(Some(&m)), 120, 940, &in_front(&t, &one)).expect("a line");
+        assert_eq!(
+            line.pieces
+                .iter()
+                .filter(|p| p.hit == Some(Hit::Proceed))
+                .count(),
+            1
+        );
+        assert_eq!(
+            line.pieces
+                .iter()
+                .filter(|p| p.hit == Some(Hit::Abort))
+                .count(),
+            2
+        );
+        let w = bundle(&t);
+        let line = lines(&Shown::of(Some(&m)), 120, 940, &w).expect("the line went away");
         // The margin carries the mark, and it is not a control.
         let first = line.pieces.first().unwrap();
         assert_eq!(first.at, tokens::space::MODELINE_EDGELEFT);
@@ -1590,7 +1803,7 @@ mod tests {
     #[test]
     fn a_control_is_picked_by_what_it_acts_on() {
         let t = words();
-        let w = bundle(&t);
+        let w = in_front(&t, &THE_BRAINS);
         let m = a_mind(Some(announced(60, 1_000)), vec![a_notice(Level::Alarm, 5)]);
         let shown = Shown::of(Some(&m));
         let proceed = subject_of(&shown, Hit::Proceed).expect("the countdown");

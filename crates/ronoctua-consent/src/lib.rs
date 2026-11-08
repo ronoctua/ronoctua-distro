@@ -39,13 +39,15 @@
 //! The owner's exception (`AGENTS.md`): the system's declared updaters do
 //! not wait for the person's consent — they are the machine keeping itself at
 //! the newest version (invariant 6), not a program of ours asking a host on
-//! the person's behalf. Nix and nix-flatpak never reach this crate; the one
-//! of ours is [`Updater::DistroAppImages`], the follow of the distro's
-//! AppImages to their vendor's GitHub releases, which asks the two hosts Nix
-//! already asks to move nixpkgs. [`pass_for_updater`] mints its pass through
-//! the same one `mint`, for the updater's OWN hosts only — the closed table
-//! here lets them, never a file — and `network-asks-with-a-pass` names the
-//! one function that asks for it.
+//! the person's behalf. Nix and nix-flatpak never reach this crate; ours are
+//! two: [`Updater::DistroAppImages`], the follow of the distro's AppImages to
+//! their vendor's GitHub releases, which asks the two hosts Nix already asks
+//! to move nixpkgs, and [`Updater::MachineBranches`], the update window's
+//! question of whether the GitHub branches the machine's flake follows moved
+//! past its lock, which asks the API alone. [`pass_for_updater`] mints their
+//! pass through the same one `mint`, for the updater's OWN hosts only — the
+//! closed table here lets them, never a file — and `network-asks-with-a-pass`
+//! names the one function that asks for it.
 //!
 //! # Read at the moment of asking
 //!
@@ -208,6 +210,13 @@ pub enum Updater {
     /// download is fetched from — the two Nix already asks to move nixpkgs
     /// (a `github:` input).
     DistroAppImages,
+    /// The heads of the GitHub branches the machine's flake follows (its
+    /// lock's `original` nodes: nixpkgs' `nixos-unstable`, the distro's
+    /// `release`), asked by the update window's line that says whether an
+    /// update is there (`ronoctua_software::heads`): the API alone, the
+    /// host Nix asks to move those inputs. The owner's exception of
+    /// 2026-11-08.
+    MachineBranches,
 }
 
 impl Updater {
@@ -217,6 +226,7 @@ impl Updater {
     pub const fn hosts(self) -> &'static [&'static str] {
         match self {
             Self::DistroAppImages => &["api.github.com", "github.com"],
+            Self::MachineBranches => &["api.github.com"],
         }
     }
 }
@@ -466,6 +476,26 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FAILS IF: the update window's question of the machine's branches is
+    /// minted a pass for any host but the API — the download host its
+    /// sibling updater asks included — or waits for the person's consent.
+    #[test]
+    fn the_machine_branches_are_asked_of_the_api_alone() {
+        let updater = Updater::MachineBranches;
+        assert_eq!(updater.hosts(), ["api.github.com"]);
+        let pass = pass_for_updater(updater, "API.GitHub.com.").expect("its one host");
+        assert!(pass.covers("api.github.com"));
+        for other in ["github.com", "objects.githubusercontent.com", "example.org"] {
+            assert_eq!(
+                pass_for_updater(updater, other),
+                Err(NotLet {
+                    host: other.to_owned()
+                }),
+                "{other}"
+            );
+        }
     }
 
     #[test]

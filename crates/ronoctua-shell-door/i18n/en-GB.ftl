@@ -76,9 +76,10 @@ brain-why-off = Switched off
 # on the next beat, and the person would answer the same question every half
 # minute.
 echo-brain-postponed = Not now — it comes back at its next moment
+echo-brain-stopped = Stopped — what it already did stays done
 echo-brain-proceeding = Starting now
 echo-brain-idle = There is nothing about to happen
-brain-abort = stop
+brain-abort = not now
 brain-proceed = start now
 
 ## Power — the battery, the charger, the profile and sleep (LEADER s p)

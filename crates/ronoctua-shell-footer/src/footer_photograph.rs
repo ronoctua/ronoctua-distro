@@ -55,7 +55,11 @@ usage: ronoctua-shell photograph --door footer [options] [steps]
   --tone <word>         the state's tone: standard, accent, success, warning
                         or error                       (default: standard)
   --states <id:key,...> the states it lists, for LEADER w s
-  --local <keys>=<id>   a binding of its `,` group — repeatable
+  --local <keys>=<id>[<TAB>words[<TAB>sentence]]
+                        one of its shortcuts — repeatable — with what the
+                        window says of it, as its socket carries it; what
+                        is left out is said as a window says it by
+                        default: the id's short word, and its sentence
   --screens <scene>     a reading of the screens: one, two, stacked or dark
   --entry <text>        an entry of the clipboard's history, newest first —
                         repeatable
@@ -226,7 +230,7 @@ struct Asked {
     state: Option<String>,
     tone: ronoctua_protocol::Tone,
     states: Vec<(String, char)>,
-    local: Vec<(String, String)>,
+    local: Vec<crate::ipc::Shortcut>,
     screens: Option<String>,
     entries: Vec<String>,
     mind: Option<std::path::PathBuf>,
@@ -362,10 +366,21 @@ fn parse(words: &[String]) -> Result<Asked> {
                 let raw = value()?;
                 // AT THE LAST `=`: an id never holds one, and a key may — the
                 // camera's `=` and a kiosk's are keys after `LEADER Alt`.
-                let (keys, id) = raw
+                // AND THE WORDS AND THE SENTENCE AFTER A TAB EACH, as the
+                // window's socket carries them (`ipc::keymap_line`): a key
+                // never holds a tab.
+                let mut said = raw.split('\t');
+                let head = said.next().unwrap_or_default();
+                let (keys, id) = head
                     .rsplit_once('=')
                     .with_context(|| format!("`--local` wants `<keys>=<id>`, not `{raw}`"))?;
-                me.local.push((keys.to_owned(), id.to_owned()));
+                let mut next = || said.next().filter(|t| !t.is_empty()).map(str::to_owned);
+                me.local.push(crate::ipc::Shortcut {
+                    keys: keys.to_owned(),
+                    command: id.to_owned(),
+                    words: next(),
+                    sentence: next(),
+                });
             }
             "--screens" => me.screens = Some(value()?),
             "--entry" => me.entries.push(value()?),
@@ -623,7 +638,7 @@ fn run(words: &[String], composition: &crate::Composition) -> Result<()> {
     // state and its `,` group come from (`ipc::buffer_socket_path`).
     if window.is_some() && (asked.state.is_some() || !asked.local.is_empty()) {
         let path = crate::ipc::buffer_socket_path(NO_PROCESS.unsigned_abs())?;
-        buffer::serve(&path, buffer::Answers::of(&asked))?;
+        buffer::serve(&path, buffer::Answers::of(&asked, &texts))?;
     }
     let screens = asked
         .screens
@@ -782,10 +797,29 @@ mod buffer {
     }
 
     impl Answers {
-        pub(super) fn of(asked: &super::Asked) -> Self {
+        /// THE SHORTCUTS SAID AS A WINDOW SAYS THEM (`ipc::keymap_line`):
+        /// what the scene gave each, and what it did not as a window says it
+        /// by default — the id read as a text key, a window's short word, and
+        /// its sentence (`chrome::hint_sentence`).
+        pub(super) fn of(asked: &super::Asked, texts: &ronoctua_i18n::Texts) -> Self {
             let mut keymap = String::new();
-            for (keys, id) in &asked.local {
-                keymap.push_str(&format!("{keys} {id}\n"));
+            for s in &asked.local {
+                let id = s.command.as_str();
+                let words = s
+                    .words
+                    .clone()
+                    .or_else(|| texts.has(id).then(|| texts.t(id)));
+                let sentence = s
+                    .sentence
+                    .clone()
+                    .or_else(|| crate::chrome::hint_sentence(id, texts));
+                keymap.push_str(&crate::ipc::keymap_line(
+                    &s.keys,
+                    id,
+                    words.as_deref(),
+                    sentence.as_deref(),
+                ));
+                keymap.push('\n');
             }
             let mut states = String::new();
             if let Some(now) = asked.state.as_ref() {
@@ -1037,6 +1071,8 @@ mod tests {
             "f s=save",
             "--local",
             "==camera-param-more",
+            "--local",
+            "a=brain-abort\tnot now\tPuts it off.",
             "--leader",
             "--key",
             "w",
@@ -1050,13 +1086,24 @@ mod tests {
             a.states,
             vec![("browse".to_owned(), 'b'), ("permission".to_owned(), 'p')]
         );
+        let pairs: Vec<(&str, &str)> = a
+            .local
+            .iter()
+            .map(|s| (s.keys.as_str(), s.command.as_str()))
+            .collect();
         assert_eq!(
-            a.local,
+            pairs,
             vec![
-                ("f s".to_owned(), "save".to_owned()),
-                ("=".to_owned(), "camera-param-more".to_owned())
+                ("f s", "save"),
+                ("=", "camera-param-more"),
+                ("a", "brain-abort")
             ]
         );
+        // THE WORDS AND THE SENTENCE, when the scene gives them, after a tab
+        // each — as the window's socket carries them.
+        assert_eq!(a.local[0].words, None);
+        assert_eq!(a.local[2].words.as_deref(), Some("not now"));
+        assert_eq!(a.local[2].sentence.as_deref(), Some("Puts it off."));
         assert_eq!(a.steps.len(), 3);
         assert_eq!(a.steps[0], Step::Leader);
         assert_eq!(a.steps[2], Step::Command("clipboard-open".to_owned()));

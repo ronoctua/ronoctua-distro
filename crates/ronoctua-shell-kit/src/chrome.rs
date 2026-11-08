@@ -1723,6 +1723,21 @@ pub fn bindings_of_hint(
         .collect()
 }
 
+/// The WORDS a hint says beside the shortcut `id` — the piece of that id that
+/// is not its key, trimmed of the space it carries before it
+/// ([`hint_of_marked`], [`taught_pieces`]). What the window calls the
+/// shortcut, sent with it to the footer (`ipc::keymap_line`) so the footer's
+/// line and its `LEADER Alt` list say it as the window's header does. `None`
+/// for an id the hint has no words for.
+#[must_use]
+pub fn hint_words(pieces: &[Piece], id: &str) -> Option<String> {
+    pieces
+        .iter()
+        .find(|p| p.id == Some(id) && !p.is_a_key())
+        .map(|p| p.text.trim().to_owned())
+        .filter(|words| !words.is_empty())
+}
+
 /// The DIRECT keys behind a hint's shortcuts — what the door bars from the
 /// keyboard ([`barred`]), so a shortcut runs by `LEADER Alt` and by nothing
 /// else.

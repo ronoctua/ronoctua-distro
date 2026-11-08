@@ -40,6 +40,10 @@ ronoctua-cachix = { path = "../ronoctua-cachix" }
 # and the units the person starts — the library alone, never root's
 # realizer.
 ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
+# WHETHER AN UPDATE IS THERE: the heads of the GitHub branches the machine's
+# flake follows, asked on a thread as the machine's own updater
+# (`ronoctua_software::heads`), against the revisions its lock holds.
+ronoctua-software = { path = "../ronoctua-software", features = [ "net" ] }
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true

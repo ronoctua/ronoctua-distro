@@ -91,6 +91,8 @@ pub mod declare;
 pub mod flathub;
 #[cfg(feature = "net")]
 pub mod github;
+#[cfg(feature = "net")]
+pub mod heads;
 #[cfg(feature = "draw")]
 pub mod icons;
 #[cfg(feature = "net")]

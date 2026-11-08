@@ -209,7 +209,7 @@ about-brain-interval = Step to the next cadence this task runs at.
 about-brain-window = Step to the next part of the day this task may run in.
 about-brain-reset-steps = Put every step of this task back as the distro ships it.
 about-brain-proceed = Start the task that is counting down now, without waiting for the count.
-about-brain-abort = Stop the task that is running or counting down.
+about-brain-abort = Put the task that is counting down off to its next moment, or stop the one that is running.
 about-brain-log = Show the brain's own log as it is written — every tick, what it decided, every warning and error — or go back.
 about-brain-row-also = Do the other thing the row under the cursor offers, as the foot of this page names it.
 # THE SCHEDULE'S ROWS. Each is a field's NAME, so each is a noun phrase — and

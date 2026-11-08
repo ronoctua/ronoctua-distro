@@ -33,12 +33,16 @@
 //!    this system that legitimately takes twenty minutes.
 //! 2. **The door**, [`begin`]. The brain when it is there, systemd when it is
 //!    not. The brain is a scheduler, not a gatekeeper.
-//! 3. **The view**, [`View`]: the steps with their verdicts, what the step
-//!    under the cursor is, and the two journals live. Both doors show it —
+//! 3. **The view**, [`View`]: on top, the status — whether an update is
+//!    there, asked of GitHub on a thread ([`status_of`]) — and the actions
+//!    one does here, each a row; then what the focused line is, the steps
+//!    with their verdicts and the two journals live. Both doors show it —
 //!    the footer's region (`LEADER s u u`) as one list, the window
 //!    (`LEADER s u w`) in two halves — with the same keys, every one a click:
-//!    the steps, the output, `u` to start the update now and `a` and `p` to
-//!    answer the brain's countdown, with the footer's sentences.
+//!    the arrows over the head's lines and the steps, `TAB` between them,
+//!    the output, `u` to start the update now, and `a` and `p` to answer
+//!    this update's countdown or stop its run — each taught only while it
+//!    means something ([`View::taught`]).
 //! 4. **The window**, which lays the view out in its two halves.
 //!
 //! Together in one file because they are the halves of one feature, and
@@ -332,6 +336,11 @@ impl Followed {
             Heard::Waiting
         }
     }
+}
+
+/// When `path` last moved, if it is there.
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Now, in Unix seconds.
@@ -999,22 +1008,30 @@ pub fn cursor_explains(
 // THE VIEW — both doors
 // ---------------------------------------------------------------------------
 
-/// The keys the update teaches, in both doors — every one a click.
+/// The keys the update teaches while nothing of it is under way, in both
+/// doors — every one a click.
 ///
-/// The step cursor on the arrows; the output a page at a time on `C-j` and
-/// `C-k` and back to its end on `G`; and the three things one DOES here: `u`
-/// starts the update now — `LEADER s u n`'s command — and `a` and `p` answer
-/// the brain's countdown, the band's two buttons and the brain buffer's
-/// `, a` and `, p`.
+/// The arrows walk ONE list: the head's lines that act (the status, the
+/// actions, the records' rows), then the steps; `TAB` jumps between the two,
+/// each keeping its place. The output a page at a time on `C-j` and `C-k` and
+/// back to its end on `G`; `u` starts the update now — `LEADER s u n`'s
+/// command — and the three pages on their letters.
+///
+/// A KEY IS TAUGHT ONLY WHILE IT MEANS SOMETHING (the owner, 2026-11-08: `u`
+/// and the countdown's "start now" side by side read as two words for one
+/// thing). So each state of the update has its table — this one, the
+/// queue's ([`OF_THE_QUEUE`]), the countdown's ([`OF_THE_COUNTDOWN`]) and
+/// the run's ([`OF_THE_RUN`]) — and [`View::taught`] picks the one that is
+/// true now; both doors read a key by all of them ([`press_of_key`]).
 pub const OF_THE_VIEW: &[(&str, &str)] = &[
     ("<down>", "system-update-next-step"),
     ("<up>", "system-update-previous-step"),
+    ("TAB", "system-update-section"),
+    ("S-TAB", "system-update-section"),
     ("C-j", "system-update-output-down"),
     ("C-k", "system-update-output-up"),
     ("G", "system-update-output-end"),
     ("u", START),
-    ("a", ABORT),
-    ("p", PROCEED),
     // THE PERSON'S BINARY CACHE, a page of this view (`crate::binary_cache`):
     // `c` turns the view to it and back.
     ("c", crate::binary_cache::OPEN),
@@ -1025,6 +1042,63 @@ pub const OF_THE_VIEW: &[(&str, &str)] = &[
     // they wait for, turns the view to it and back.
     ("d", crate::parts::OPEN),
 ];
+
+/// The keys while the update waits in the brain's queue, not yet announced:
+/// [`OF_THE_VIEW`]'s without `u` — asking again for a run that is asked for
+/// already means nothing, and its row says why.
+pub const OF_THE_QUEUE: &[(&str, &str)] = &[
+    ("<down>", "system-update-next-step"),
+    ("<up>", "system-update-previous-step"),
+    ("TAB", "system-update-section"),
+    ("S-TAB", "system-update-section"),
+    ("C-j", "system-update-output-down"),
+    ("C-k", "system-update-output-up"),
+    ("G", "system-update-output-end"),
+    ("c", "binary-cache-open"),
+    ("f", "distro-follow-open"),
+    ("d", "distro-parts-open"),
+];
+
+/// The keys while the brain counts down to THIS update: `p` skips the
+/// countdown, `a` puts the run off to its next moment — the band's two
+/// buttons, by the brain's own commands (`brain-proceed`, `brain-abort`), so
+/// that with this window in front `LEADER Alt` and the key answer the band,
+/// and the band draws the key beside each (the footer's `brain::Words`).
+pub const OF_THE_COUNTDOWN: &[(&str, &str)] = &[
+    ("<down>", "system-update-next-step"),
+    ("<up>", "system-update-previous-step"),
+    ("TAB", "system-update-section"),
+    ("S-TAB", "system-update-section"),
+    ("C-j", "system-update-output-down"),
+    ("C-k", "system-update-output-up"),
+    ("G", "system-update-output-end"),
+    ("p", PROCEED),
+    ("a", ABORT),
+    ("c", "binary-cache-open"),
+    ("f", "distro-follow-open"),
+    ("d", "distro-parts-open"),
+];
+
+/// The keys while THIS update runs: `a` stops it.
+pub const OF_THE_RUN: &[(&str, &str)] = &[
+    ("<down>", "system-update-next-step"),
+    ("<up>", "system-update-previous-step"),
+    ("TAB", "system-update-section"),
+    ("S-TAB", "system-update-section"),
+    ("C-j", "system-update-output-down"),
+    ("C-k", "system-update-output-up"),
+    ("G", "system-update-output-end"),
+    ("a", "system-update-stop"),
+    ("c", "binary-cache-open"),
+    ("f", "distro-follow-open"),
+    ("d", "distro-parts-open"),
+];
+
+/// Every state's table: what both doors read a key by ([`press_of_key`]),
+/// and what the window keeps from the keyboard whatever it teaches now
+/// (`UpdateWindow::barred_keys`) — a physical `u` never starts an update.
+pub const OF_EVERY_STATE: &[&[(&str, &str)]] =
+    &[OF_THE_VIEW, OF_THE_QUEUE, OF_THE_COUNTDOWN, OF_THE_RUN];
 
 /// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
 /// (`chrome::leader_alt_key`): the end of the output is `<end>`, where its own
@@ -1075,10 +1149,16 @@ pub const OPEN: &str = "system-update-open";
 /// The command that opens the view in a window — the door the modeline's
 /// mark opens (`update_mark::WATCH`, which the footer runs).
 pub const WATCH: &str = crate::update_mark::WATCH;
-/// The countdown's "not now" — or "stop it", once it runs.
-pub const ABORT: &str = "brain-abort";
-/// The countdown's "start now".
+/// The countdown's "start now": the brain's countdown skipped — the band's
+/// own command, which this view teaches only while THIS update counts down.
 pub const PROCEED: &str = "brain-proceed";
+/// The countdown's "not now": the run counting down put off to its next
+/// moment — the band's own command, likewise.
+pub const ABORT: &str = "brain-abort";
+/// THIS update, running, stopped.
+pub const STOP: &str = "system-update-stop";
+/// `TAB`: between the head's lines that act and the steps.
+const SECTION: &str = "system-update-section";
 
 /// The update's three commands, which the leader registers with its own
 /// (`KEYS`) without spelling one of them.
@@ -1310,8 +1390,12 @@ pub enum Press {
     Abort,
     /// Start now what is counting down.
     Proceed,
+    /// `TAB`: between the head's lines that act and the steps, each keeping
+    /// its place.
+    Section,
     /// `RET`: answers the question on battery with the answer under the
-    /// cursor. On a step there is nothing more to do than the cursor did.
+    /// cursor; on a head line, does what its second click does. On a step
+    /// there is nothing more to do than the cursor did.
     Enter,
     /// Out — and, with the question open, its "no".
     Escape,
@@ -1328,7 +1412,10 @@ pub enum Press {
 
 /// A key, as the view's press — the one reader both doors call.
 ///
-/// By its whole notation through [`OF_THE_VIEW`], and three that are not
+/// By its whole notation through EVERY state's table ([`OF_EVERY_STATE`]):
+/// what a state does not teach is still read, and the view answers it as
+/// that state answers it — the countdown's answers with nothing of this
+/// update counting down say so. And three that are not
 /// taught and that both doors read the same way: `Esc` and `q` close, `j` and
 /// `k` walk the steps as the arrows do, and the arrows under `Ctrl` move the
 /// output as `C-j` and `C-k` do — the letters are what is taught, because a
@@ -1350,8 +1437,9 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
     let notation = key.notation();
     // THE VIEW'S KEYS FIRST: a page's key that shares the view's notation
     // (`d` back to the steps) is the view's key; the parts' page adds one.
-    let id = OF_THE_VIEW
+    let id = OF_EVERY_STATE
         .iter()
+        .flat_map(|t| t.iter())
         .chain(OF_THE_PARTS)
         .find(|(taught, _)| *taught == notation)
         .map(|(_, id)| *id)?;
@@ -1361,8 +1449,9 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<Press> {
         "system-update-output-down" => Press::OutputDown,
         "system-update-output-up" => Press::OutputUp,
         "system-update-output-end" => Press::OutputEnd,
+        SECTION => Press::Section,
         START => Press::Start,
-        ABORT => Press::Abort,
+        ABORT | STOP => Press::Abort,
         PROCEED => Press::Proceed,
         crate::binary_cache::OPEN => Press::Cache,
         crate::follow::OPEN => Press::Follow,
@@ -1431,6 +1520,10 @@ pub enum Errand {
     Approve(crate::approval::Waiting),
     /// A sentence of this crate's, said in the door.
     Say(&'static str),
+    /// Ask GitHub again where the branches the machine's flake follows are
+    /// (`ronoctua_software::heads::look_again`): the status line's second
+    /// click, and its `RET`.
+    Recheck,
     /// The view closes.
     Close,
 }
@@ -1439,13 +1532,21 @@ pub enum Errand {
 /// painting, the pointer and the footer's click read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
+    /// The status line, on top, while it says GitHub's answer: the first
+    /// click puts the focus there, the second asks GitHub again
+    /// ([`Errand::Recheck`]).
+    Status,
+    /// One of the things one does here, a row under the status: the first
+    /// click puts the focus there, the second does it (invariant 19).
+    Action(Action),
     /// A step: the cursor goes there.
     Step(usize),
     /// An answer to the question — `true` is yes. The first click puts the
     /// cursor on it, the second answers (invariant 19).
     Answer(bool),
-    /// The belongings, whose conflicts a line counts: one click opens them,
-    /// as a key the line teaches does.
+    /// The belongings, whose conflicts a line counts: the first click puts
+    /// the focus there, the second opens them, as `RET` and the key the line
+    /// teaches do.
     Belongings,
     /// A row of the page the view is turned to (the binary cache's, or the
     /// apps' that follow their releases), by its index: the first click puts
@@ -1454,17 +1555,531 @@ pub enum Target {
     /// An answer of the binary cache page's grave question — `true` is yes.
     PageAnswer(bool),
     /// A gesture of the machine's the records offer: a click asks it there,
-    /// under the hand — the no first (`crate::machine_gesture`).
+    /// under the hand — the no first (`crate::machine_gesture`) —, and takes
+    /// the focus.
     Gesture(crate::machine_gesture::Gesture),
     /// An answer to a gesture's question — `true` is yes: a click picks it,
     /// and a click on the pick answers.
     GestureAnswer(bool),
     /// A brain module of the person's that waits, by its place among them:
-    /// a click asks to approve it there, the no first (`crate::approval`).
+    /// a click asks to approve it there, the no first (`crate::approval`),
+    /// and takes the focus.
     Approve(usize),
     /// An answer to an approval's question — `true` is yes: a click picks
     /// it, and a click on the pick answers.
     ApproveAnswer(bool),
+}
+
+impl Target {
+    /// Whether what it does answers a run — skips its countdown, puts it
+    /// off, stops it: done only where the person put the focus.
+    #[must_use]
+    pub const fn changes_the_run(self) -> bool {
+        matches!(
+            self,
+            Self::Action(Action::StartNow | Action::NotNow | Action::Stop)
+        )
+    }
+}
+
+/// One thing one does here — a row under the status line, labelled with the
+/// same short word its key teaches (`texts.t(id)`), so the keyboard and the
+/// mouse reach the same deed by the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// The whole update, now ([`START`]).
+    Start,
+    /// Skip the brain's countdown of this update ([`PROCEED`]).
+    StartNow,
+    /// Put this update, counting down, off to its next moment ([`ABORT`]).
+    NotNow,
+    /// Stop this update, running ([`STOP`]).
+    Stop,
+    /// The binary cache's page (`crate::binary_cache`).
+    Cache,
+    /// The page of the apps that follow their releases (`crate::follow`).
+    Follow,
+    /// The parts' page (`crate::parts`).
+    Parts,
+}
+
+impl Action {
+    /// Its id: the command, or the view's key, whose short word labels it.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Start => START,
+            Self::StartNow => PROCEED,
+            Self::NotNow => ABORT,
+            Self::Stop => STOP,
+            Self::Cache => crate::binary_cache::OPEN,
+            Self::Follow => crate::follow::OPEN,
+            Self::Parts => crate::parts::OPEN,
+        }
+    }
+
+    /// What the register says it does, under the actions, while the focus
+    /// is on it.
+    const fn does(self) -> &'static str {
+        match self {
+            Self::Start => module::key::SYSTEM_UPDATE_START_DOES,
+            Self::StartNow => module::key::SYSTEM_UPDATE_PROCEED_DOES,
+            Self::NotNow => module::key::SYSTEM_UPDATE_ABORT_DOES,
+            Self::Stop => module::key::ABOUT_SYSTEM_UPDATE_STOP,
+            Self::Cache => key::BINARY_CACHE_DOES,
+            Self::Follow => key::DISTRO_FOLLOW_DOES,
+            Self::Parts => key::DISTRO_PARTS_DOES,
+        }
+    }
+}
+
+/// Where the keys walk from: a line of the head that acts — by what it
+/// takes, never by its place, for lines come and go with the state — or the
+/// steps, at their own cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    /// A line of the head.
+    Head(Target),
+    /// The steps, at [`View::cursor`].
+    Steps,
+}
+
+/// Where the update stands in the brain — which of the four tables the view
+/// teaches ([`View::taught`]) and which actions it offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Run {
+    /// Nothing of it is under way.
+    Idle,
+    /// It waits in the brain's queue, not yet announced.
+    Queued,
+    /// The brain counts down to it.
+    CountingDown,
+    /// It runs.
+    Running,
+}
+
+/// What the brain says of THIS task — taken from each mind it publishes, so
+/// both doors draw the same status and offer the same actions without
+/// keeping the whole mind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Brain {
+    /// It runs now.
+    pub running: bool,
+    /// The brain counts down to it now.
+    pub announced: bool,
+    /// It waits in the queue.
+    pub queued: bool,
+    /// What stopped it the last time its moment came, if anything.
+    pub hold: Option<ronoctua_brain::Hold>,
+    /// The newest run that RAN — worked or failed, a run the person
+    /// stopped aside — failed.
+    pub failed: bool,
+    /// When the newest run that worked ended, in Unix seconds.
+    pub worked: Option<i64>,
+    /// Its next moment, in Unix seconds; `0` when there is none.
+    pub next: i64,
+}
+
+impl Brain {
+    /// What `mind` says of the update.
+    #[must_use]
+    pub fn of(mind: &ronoctua_brain::Mind) -> Self {
+        use ronoctua_brain::task::OutcomeKind;
+        let task = mind.task(module::ID);
+        // THE RUNS, NEWEST FIRST: the last and the few before it. A run the
+        // person stopped (`aborted`) is the person's decision, not a failure,
+        // and says nothing of whether the machine updates.
+        let runs: Vec<&ronoctua_brain::RunRecord> = task
+            .map(|t| t.last.iter().chain(t.history.iter()).collect())
+            .unwrap_or_default();
+        let ran = runs.iter().find(|r| {
+            r.kind == OutcomeKind::Done || (r.kind == OutcomeKind::Failed && r.why != ABORTED)
+        });
+        Self {
+            running: mind.running == module::ID,
+            announced: mind
+                .announcement
+                .as_ref()
+                .is_some_and(|a| a.task == module::ID),
+            queued: mind.queue.iter().any(|q| q == module::ID),
+            hold: task.and_then(|t| t.hold),
+            failed: ran.is_some_and(|r| r.kind == OutcomeKind::Failed),
+            worked: runs
+                .iter()
+                .find(|r| r.kind == OutcomeKind::Done)
+                .map(|r| r.ended),
+            next: task.map_or(0, |t| t.next),
+        }
+    }
+
+    /// Where the update stands.
+    #[must_use]
+    pub const fn run(&self) -> Run {
+        if self.running {
+            Run::Running
+        } else if self.announced {
+            Run::CountingDown
+        } else if self.queued {
+            Run::Queued
+        } else {
+            Run::Idle
+        }
+    }
+}
+
+/// The brain's word for a run the person stopped (`RunRecord::why`).
+const ABORTED: &str = "aborted";
+
+/// Whether a countdown's answer reaches THIS update: `proceeding` skips the
+/// countdown only of this one, and stopping puts off this one counting down
+/// (nothing else running) or stops this one running. The brain answers
+/// whatever it announced (`brainlink::answer_of`), and a key of this view
+/// must never answer another task's countdown.
+#[must_use]
+pub fn answers_this_update(mind: &ronoctua_brain::Mind, proceeding: bool) -> bool {
+    let announced = mind
+        .announcement
+        .as_ref()
+        .is_some_and(|a| a.task == module::ID);
+    if proceeding {
+        announced
+    } else {
+        mind.running == module::ID || (announced && mind.running.is_empty())
+    }
+}
+
+/// What GitHub said of the branches the machine's flake follows, as the view
+/// keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Heads {
+    /// Asked on a thread; nothing came back yet.
+    Asking,
+    /// What came back: each branch's head, or the lock's refusal.
+    Came(Result<Vec<ronoctua_software::heads::Heard>, ronoctua_software::heads::Unread>),
+}
+
+/// Which inputs a newer head was found for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Moved {
+    /// The distro's branch.
+    Distro,
+    /// nixpkgs'.
+    Nixpkgs,
+    /// Both.
+    Both,
+}
+
+/// Why it could not be told whether an update is there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unchecked {
+    /// No network.
+    Offline,
+    /// GitHub's hourly allowance is spent.
+    RateLimited,
+    /// GitHub did not answer with a commit.
+    Other,
+    /// The machine has no flake of its own, so no lock.
+    NoLock,
+    /// Its lock does not read — the whole file, or the node of an input
+    /// that names a GitHub branch: nobody was asked, and the fault is this
+    /// machine's.
+    Unreadable,
+    /// Its lock follows no branch on GitHub.
+    Nothing,
+    /// The update moves this input, and it follows no branch on GitHub to
+    /// ask about: only the update itself can tell.
+    Unasked(ronoctua_software::heads::Input),
+}
+
+impl Unchecked {
+    /// The reason, said inside the status's sentence.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Offline => module::key::SYSTEM_UPDATE_UNCHECKED_OFFLINE,
+            Self::RateLimited => module::key::SYSTEM_UPDATE_UNCHECKED_RATE_LIMITED,
+            Self::Other => module::key::SYSTEM_UPDATE_UNCHECKED_OTHER,
+            Self::NoLock => module::key::SYSTEM_UPDATE_UNCHECKED_NO_LOCK,
+            Self::Unreadable => module::key::SYSTEM_UPDATE_UNCHECKED_UNREADABLE,
+            Self::Nothing => module::key::SYSTEM_UPDATE_UNCHECKED_NOTHING,
+            Self::Unasked(ronoctua_software::heads::Input::Distro) => {
+                module::key::SYSTEM_UPDATE_UNCHECKED_UNASKED_DISTRO
+            }
+            Self::Unasked(ronoctua_software::heads::Input::Nixpkgs) => {
+                module::key::SYSTEM_UPDATE_UNCHECKED_UNASKED_NIXPKGS
+            }
+        }
+    }
+}
+
+/// What the status line says — one, by [`status_of`]'s precedence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// The update runs.
+    Running,
+    /// The brain counts down to it.
+    CountingDown,
+    /// It waits in the brain's queue — held by this, when something holds it.
+    Queued(Option<ronoctua_brain::Hold>),
+    /// A new system waits for the restart.
+    Restart {
+        /// That restart has no way back but the boot menu — no boot trial
+        /// is armed —, and no record says so with its reason (the machine's
+        /// `no_trial`): the status line says it, once.
+        menu_only: bool,
+    },
+    /// The last run failed.
+    Failed,
+    /// The machine is held at a revision: updates leave the inputs alone.
+    Held,
+    /// GitHub is being asked.
+    Checking,
+    /// A newer head of these branches is there.
+    Available(Moved),
+    /// Every branch is where the lock holds it.
+    UpToDate,
+    /// It could not be told, and why.
+    Unchecked(Unchecked),
+    /// Nobody asked yet (a test's view, a photograph's).
+    Unasked,
+}
+
+/// What the status line says, by precedence: the brain's run (running,
+/// counting down, queued or held), then what waits for the person (a new
+/// system for the restart), what went wrong (the last run failed), what the
+/// person chose (a hold) — and only then GitHub's answer. Pure.
+#[must_use]
+pub fn status_of(
+    brain: Option<&Brain>,
+    records: &module::Records,
+    heads: Option<&Heads>,
+) -> Status {
+    if let Some(b) = brain {
+        match b.run() {
+            Run::Running => return Status::Running,
+            Run::CountingDown => return Status::CountingDown,
+            Run::Queued => return Status::Queued(b.hold),
+            Run::Idle => {}
+        }
+    }
+    if let Some(next) = &records.staged {
+        return Status::Restart {
+            menu_only: !next.guarded && records.no_trial.is_none(),
+        };
+    }
+    if brain.is_some_and(|b| b.failed) {
+        return Status::Failed;
+    }
+    if records.hold.is_some() {
+        return Status::Held;
+    }
+    heads.map_or(Status::Unasked, online)
+}
+
+/// What GitHub's answer says: a branch that moved is an update, whatever
+/// another one could not answer; every branch where the lock holds it is
+/// none; and one that could not answer, with none moved, is "could not
+/// check" — never "up to date" — and why: GitHub's refusal, this machine's
+/// lock, or an input the update moves that no branch on GitHub says.
+fn online(heads: &Heads) -> Status {
+    use ronoctua_software::heads::{Input, Standing, Unlearnt, Unread};
+    let heard = match heads {
+        Heads::Asking => return Status::Checking,
+        Heads::Came(Err(Unread::NoLock)) => return Status::Unchecked(Unchecked::NoLock),
+        Heads::Came(Err(Unread::Unreadable)) => return Status::Unchecked(Unchecked::Unreadable),
+        Heads::Came(Ok(heard)) => heard,
+    };
+    let moved = |input: Input| {
+        heard.iter().any(|h| {
+            h.input == input
+                && h.head
+                    .as_ref()
+                    .is_ok_and(|head| head.standing() == Standing::Moved)
+        })
+    };
+    match (moved(Input::Distro), moved(Input::Nixpkgs)) {
+        (true, true) => return Status::Available(Moved::Both),
+        (true, false) => return Status::Available(Moved::Distro),
+        (false, true) => return Status::Available(Moved::Nixpkgs),
+        (false, false) => {}
+    }
+    if heard.is_empty() {
+        return Status::Unchecked(Unchecked::Nothing);
+    }
+    match heard
+        .iter()
+        .find_map(|h| h.head.as_ref().err().map(|e| (h.input, e)))
+    {
+        None => Status::UpToDate,
+        Some((_, Unlearnt::Lock)) => Status::Unchecked(Unchecked::Unreadable),
+        Some((input, Unlearnt::Unasked)) => Status::Unchecked(Unchecked::Unasked(input)),
+        Some((_, Unlearnt::Asked(failure))) => Status::Unchecked(match failure.refusal {
+            Some(ronoctua_software::Refusal::Offline) => Unchecked::Offline,
+            Some(ronoctua_software::Refusal::RateLimited) => Unchecked::RateLimited,
+            _ => Unchecked::Other,
+        }),
+    }
+}
+
+impl Status {
+    /// Its sentence's key.
+    const fn key(self) -> &'static str {
+        use ronoctua_brain::Hold;
+        match self {
+            Self::Running => module::key::SYSTEM_UPDATE_STATUS_RUNNING,
+            Self::CountingDown => module::key::SYSTEM_UPDATE_STATUS_COUNTING_DOWN,
+            Self::Queued(None) => module::key::SYSTEM_UPDATE_STATUS_QUEUED,
+            Self::Queued(Some(Hold::Ram)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_RAM,
+            Self::Queued(Some(Hold::Cpu)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_CPU,
+            Self::Queued(Some(Hold::Battery)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_BATTERY,
+            Self::Queued(Some(Hold::Busy)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_BUSY,
+            Self::Queued(Some(Hold::Network)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_NETWORK,
+            Self::Queued(Some(Hold::Asleep)) => module::key::SYSTEM_UPDATE_STATUS_WAITING_ASLEEP,
+            Self::Restart { menu_only: false } => module::key::SYSTEM_UPDATE_STATUS_RESTART,
+            Self::Restart { menu_only: true } => {
+                module::key::SYSTEM_UPDATE_STATUS_RESTART_UNGUARDED
+            }
+            Self::Failed => module::key::SYSTEM_UPDATE_STATUS_FAILED,
+            Self::Held => module::key::SYSTEM_UPDATE_STATUS_HELD,
+            Self::Checking => module::key::SYSTEM_UPDATE_STATUS_CHECKING,
+            Self::Available(Moved::Distro) => module::key::SYSTEM_UPDATE_STATUS_AVAILABLE_DISTRO,
+            Self::Available(Moved::Nixpkgs) => module::key::SYSTEM_UPDATE_STATUS_AVAILABLE_NIXPKGS,
+            Self::Available(Moved::Both) => module::key::SYSTEM_UPDATE_STATUS_AVAILABLE_BOTH,
+            Self::UpToDate => module::key::SYSTEM_UPDATE_STATUS_UP_TO_DATE,
+            Self::Unchecked(_) => module::key::SYSTEM_UPDATE_STATUS_UNCHECKED,
+            Self::Unasked => module::key::SYSTEM_UPDATE_STATUS_UNASKED,
+        }
+    }
+
+    /// Its colour, by what it means: what went wrong is danger, what waits
+    /// for the person — an update to take, a restart — is a warning, all
+    /// well is success, what is under way is the strongest text, and what
+    /// only informs is quieter text. Never the accent: that is the cursor's
+    /// (the status line is a control).
+    #[must_use]
+    pub const fn color(self) -> tokens::Color {
+        match self {
+            Self::Running | Self::CountingDown => tokens::color::TEXT_PRIMARY,
+            Self::Queued(_) | Self::Held | Self::Unchecked(_) | Self::Unasked => {
+                tokens::color::TEXT_SECONDARY
+            }
+            Self::Available(_) | Self::Restart { .. } => tokens::color::STATE_WARNING,
+            Self::Failed => tokens::color::STATE_ERROR,
+            Self::Checking => tokens::color::TEXT_DIM,
+            Self::UpToDate => tokens::color::STATE_SUCCESS,
+        }
+    }
+
+    /// Whether it is GitHub's answer — asking, an update there, none, could
+    /// not tell, nobody asked yet —, the only status the line is a control
+    /// for: asking again changes nothing a status of the brain's or of the
+    /// machine's says.
+    #[must_use]
+    pub const fn is_online(self) -> bool {
+        matches!(
+            self,
+            Self::Checking
+                | Self::Available(_)
+                | Self::UpToDate
+                | Self::Unchecked(_)
+                | Self::Unasked
+        )
+    }
+
+    /// Its sentence — and, when one is known, the day the system last
+    /// updated, in the zone and the shape the person reads dates in.
+    #[must_use]
+    pub fn sentence(
+        self,
+        worked: Option<i64>,
+        zone: &ronoctua_files::when::Zone,
+        texts: &ronoctua_i18n::Texts,
+    ) -> String {
+        let mut said = match self {
+            Self::Unchecked(why) => texts.t_with(self.key(), &[("why", &texts.t(why.key()))]),
+            _ => texts.t(self.key()),
+        };
+        if let Some(at) = worked {
+            let when = crate::chrome::when_text(at, zone, false, texts);
+            said.push(' ');
+            said.push_str(&texts.t_with(
+                module::key::SYSTEM_UPDATE_STATUS_LAST,
+                &[("when", when.as_str())],
+            ));
+        }
+        said
+    }
+}
+
+/// What the three pages' rows say beside their names: the binary cache, the
+/// follow of releases and how many parts are on their way — each read off
+/// the one file a page reads first, so the head says it without opening it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Glance {
+    /// The cache the person names.
+    pub cache: ronoctua_cachix::settings::Named,
+    /// Whether the distro's apps follow their releases.
+    pub follow: crate::follow::Choice,
+    /// How many of the machine's parts are not here yet.
+    pub parts: usize,
+}
+
+/// Where the glance is read: the person's copy of the binary cache, their
+/// copy of the follow, and the parts' records.
+#[derive(Debug, Clone)]
+pub struct GlancePlaces {
+    /// The binary cache's copy (`binary_cache::Places::mirror`).
+    cache: Option<PathBuf>,
+    /// The follow's copy (`follow::Places::mirror`).
+    follow: Option<PathBuf>,
+    /// The parts' records (`parts::Places::records`).
+    records: PathBuf,
+}
+
+impl GlancePlaces {
+    /// This person's and this machine's — the pages' own places.
+    #[must_use]
+    pub fn here() -> Self {
+        Self {
+            cache: crate::binary_cache::Places::here().mirror,
+            follow: crate::follow::Places::here().mirror,
+            records: crate::parts::Places::here().records,
+        }
+    }
+
+    /// When each thing the glance reads last moved. A record renamed into
+    /// place moves its folder.
+    #[must_use]
+    pub fn stamp(&self) -> Vec<Option<std::time::SystemTime>> {
+        let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        [
+            self.cache.clone(),
+            self.follow.clone(),
+            Some(self.records.clone()),
+        ]
+        .iter()
+        .map(|p| p.as_deref().and_then(mtime))
+        .collect()
+    }
+
+    /// What they say now: two small files and a folder of a few records.
+    #[must_use]
+    pub fn read(&self) -> Glance {
+        use ronoctua_parts::record::Phase;
+        Glance {
+            cache: self
+                .cache
+                .as_deref()
+                .map_or_else(Default::default, ronoctua_cachix::settings::read),
+            follow: self
+                .follow
+                .as_deref()
+                .map_or_else(Default::default, crate::follow::Choice::read),
+            parts: ronoctua_parts::record::read_all(&self.records)
+                .iter()
+                .filter(|r| matches!(r.phase, Phase::Arriving | Phase::Waiting | Phase::NeedsYou))
+                .count(),
+        }
+    }
 }
 
 /// What a question of the view is about: what a run asked for BY HAND would
@@ -1491,17 +2106,43 @@ pub struct Question {
     pub yes: bool,
 }
 
-/// One line at the top of the view — the question or the second register,
-/// then what the machine's records say — placed and coloured, with what a
-/// click on it takes.
+/// One line at the top of the view — the status, the actions, the question
+/// or what the focused thing is, then what the machine's records say —
+/// placed and coloured, with what a click on it takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopLine {
-    /// What it says, already wrapped to the width.
+    /// What it says from the line's first cell, already wrapped to the
+    /// width — an action's label.
     pub text: String,
-    /// Its colour: the cursor's on an answer, danger's on what costs.
+    /// Its colour: the cursor's on the focus and on an answer, danger's on
+    /// what costs.
     pub color: tokens::Color,
     /// What a click on it takes, when anything.
     pub target: Option<Target>,
+    /// What else the line draws, each at its own cell counted from the
+    /// line's first: an action's value, and the window's name at the right
+    /// end of the status while the window wears no header.
+    pub beside: Vec<Piece>,
+}
+
+impl TopLine {
+    /// The line as the footer's fields, from `left`: what it says, then what
+    /// it draws beside — an empty piece is no piece.
+    #[must_use]
+    pub fn fields(&self, left: u16) -> Vec<crate::fields::Field> {
+        std::iter::once((0, &self.text, self.color))
+            .chain(self.beside.iter().map(|p| (p.at, &p.text, p.color)))
+            .filter(|(_, text, _)| !text.is_empty())
+            .map(|(at, text, color)| crate::fields::Field {
+                at: left + at,
+                text: text.clone(),
+                color,
+                hit: crate::fields::Hit::Nothing,
+                explain: None,
+                ink: crate::fields::Ink::Grid,
+            })
+            .collect()
+    }
 }
 
 /// The update, as both doors show it: the declared steps, what the two
@@ -1556,6 +2197,31 @@ pub struct View {
     /// An approval said yes to whose verdict has not come: no row takes a
     /// click meanwhile.
     approval_asked: bool,
+    /// What the brain last said of this task; `None` while it has said
+    /// nothing (no brain, a test's view).
+    brain: Option<Brain>,
+    /// What GitHub said of the branches the machine's flake follows; `None`
+    /// while nobody asked.
+    heads: Option<Heads>,
+    /// The machine's lock and when it last moved — none for a test's or a
+    /// photograph's view. An update that moved it makes what GitHub said
+    /// stale: the door asks again ([`View::heads_are_stale`]).
+    lock: Option<(PathBuf, Option<std::time::SystemTime>)>,
+    /// The heads were said before the lock last moved.
+    stale_heads: bool,
+    /// What the pages' rows say beside their names.
+    glance: Glance,
+    /// Where it is read, and when each thing last moved — none for a test's
+    /// or a photograph's view, which reads nothing of the machine.
+    glance_places: Option<(GlancePlaces, Vec<Option<std::time::SystemTime>>)>,
+    /// The zone the status's date is drawn in.
+    zone: ronoctua_files::when::Zone,
+    /// Whether the keys walk the steps; otherwise a line of the head.
+    on_steps: bool,
+    /// The line of the head the PERSON put the focus on, by what it takes —
+    /// a key or a first click; `None` where the view opens. A line that went
+    /// away gives the focus back to where it rests ([`View::focus`]).
+    head_focus: Option<Target>,
 }
 
 /// The parts' page as the view holds it: the page, what it read, where it
@@ -1648,6 +2314,16 @@ impl View {
         v.approvals = crate::approval::Readings::read(&places);
         let stamp = places.stamp();
         v.approval_places = Some((places, stamp));
+        let glance = GlancePlaces::here();
+        v.glance = glance.read();
+        let stamp = glance.stamp();
+        v.glance_places = Some((glance, stamp));
+        let lock = record_places()
+            .machine_dir
+            .join(ronoctua_software::heads::LOCK);
+        let moved = modified(&lock);
+        v.lock = Some((lock, moved));
+        v.zone = ronoctua_files::when::Zone::read_from(std::path::Path::new("/etc/localtime"));
         v
     }
 
@@ -1682,7 +2358,40 @@ impl View {
             approval_places: None,
             approval: None,
             approval_asked: false,
+            brain: None,
+            heads: None,
+            lock: None,
+            stale_heads: false,
+            glance: Glance::default(),
+            glance_places: None,
+            zone: ronoctua_files::when::Zone::utc(),
+            on_steps: false,
+            head_focus: None,
         }
+    }
+
+    /// The same view over what the brain says of this task — a test's, a
+    /// photograph's.
+    #[must_use]
+    pub const fn with_brain(mut self, brain: Brain) -> Self {
+        self.brain = Some(brain);
+        self
+    }
+
+    /// The same view over what GitHub said — a test's, a photograph's.
+    #[must_use]
+    pub fn with_heads(mut self, heads: Heads) -> Self {
+        self.heads = Some(heads);
+        self
+    }
+
+    /// The same view over these pages' values — a test's, a photograph's:
+    /// read once, never again.
+    #[must_use]
+    pub fn with_glance(mut self, glance: Glance) -> Self {
+        self.glance = glance;
+        self.glance_places = None;
+        self
     }
 
     /// The same view over these records, the belongings taught by `keys`.
@@ -1807,8 +2516,10 @@ impl View {
         crate::chrome::hint_of(self.taught(), texts)
     }
 
-    /// The keys this view teaches now: the steps', or the page's it is
-    /// turned to.
+    /// The keys this view teaches now: the page's it is turned to, or the
+    /// table of where the update stands — `u` only while it can start, the
+    /// countdown's two answers only while this update counts down, `a` to
+    /// stop only while it runs.
     #[must_use]
     pub const fn taught(&self) -> &'static [(&'static str, &'static str)] {
         if self.cache.is_some() {
@@ -1818,7 +2529,276 @@ impl View {
         } else if self.parts.is_some() {
             OF_THE_PARTS
         } else {
-            OF_THE_VIEW
+            match self.run() {
+                Run::Idle => OF_THE_VIEW,
+                Run::Queued => OF_THE_QUEUE,
+                Run::CountingDown => OF_THE_COUNTDOWN,
+                Run::Running => OF_THE_RUN,
+            }
+        }
+    }
+
+    /// Where the update stands in the brain — idle while the brain has
+    /// said nothing.
+    #[must_use]
+    pub const fn run(&self) -> Run {
+        match &self.brain {
+            Some(b) => b.run(),
+            None => Run::Idle,
+        }
+    }
+
+    /// What the status line says now ([`status_of`]).
+    #[must_use]
+    pub fn status(&self) -> Status {
+        status_of(self.brain.as_ref(), &self.records, self.heads.as_ref())
+    }
+
+    /// The brain spoke: what it says of this task is kept. Whether that
+    /// changed anything the view draws.
+    ///
+    /// AN ANSWER TO A RUN THAT WENT AWAY IS FORGOTTEN: the focus the person
+    /// put on "not now" or "stop" ends with that countdown or that run, so
+    /// the next one never finds the cursor waiting there — data from the
+    /// brain never moves the cursor onto what changes a run.
+    pub fn heard_the_brain(&mut self, mind: &ronoctua_brain::Mind) -> bool {
+        let now = Some(Brain::of(mind));
+        if now == self.brain {
+            return false;
+        }
+        self.brain = now;
+        if let Some(t) = self.head_focus
+            && t.changes_the_run()
+            && !self.head_targets().contains(&t)
+        {
+            self.head_focus = None;
+        }
+        true
+    }
+
+    /// GitHub is being asked again.
+    pub fn heads_asked(&mut self) {
+        self.heads = Some(Heads::Asking);
+        self.stale_heads = false;
+    }
+
+    /// What GitHub said came back.
+    pub fn heads_came(
+        &mut self,
+        came: Result<Vec<ronoctua_software::heads::Heard>, ronoctua_software::heads::Unread>,
+    ) {
+        self.heads = Some(Heads::Came(came));
+    }
+
+    /// Whether what GitHub said was said against a lock that has moved
+    /// since — an update moved the branches' revisions — and is to be asked
+    /// again; taken.
+    pub const fn heads_are_stale(&mut self) -> bool {
+        std::mem::replace(&mut self.stale_heads, false)
+    }
+
+    /// The actions under the status line, in the update's state: start it,
+    /// answer its countdown or stop it — then the three pages.
+    #[must_use]
+    pub fn actions(&self) -> Vec<Action> {
+        let mut out = match self.run() {
+            Run::Idle | Run::Queued => vec![Action::Start],
+            Run::CountingDown => vec![Action::StartNow, Action::NotNow],
+            Run::Running => vec![Action::Stop],
+        };
+        out.extend([Action::Cache, Action::Follow, Action::Parts]);
+        out
+    }
+
+    /// Whether `action` can act now: "update now" cannot while the update
+    /// already waits in the queue — its row is drawn refusing, and says why.
+    const fn acts(&self, action: Action) -> bool {
+        !matches!((action, self.run()), (Action::Start, Run::Queued))
+    }
+
+    /// The lines of the head that act and that the keys walk, in order: the
+    /// status while it says GitHub's answer ([`Status::is_online`]), the
+    /// actions, then the records' rows — the conflicts, the machine's
+    /// gestures, the modules that wait. None while a question holds the
+    /// cursor: an answer is the question's, never a step of the walk.
+    #[must_use]
+    pub fn head_targets(&self) -> Vec<Target> {
+        if self.questioned() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.status().is_online() {
+            out.push(Target::Status);
+        }
+        out.extend(self.actions().into_iter().map(Target::Action));
+        out.extend(self.record_targets());
+        out
+    }
+
+    /// The records' rows that take a click now, in the order they are said
+    /// ([`View::record_sentences`] draws each with its target).
+    fn record_targets(&self) -> Vec<Target> {
+        use crate::machine_gesture::Gesture;
+        let r = &self.records;
+        let mut out = Vec::new();
+        if r.conflicts > 0 {
+            out.push(Target::Belongings);
+        }
+        if r.trial == Some(module::TrialOutcome::Failed)
+            && !r.again
+            && self.gesture_takes(Gesture::TryAgain)
+        {
+            out.push(Target::Gesture(Gesture::TryAgain));
+        }
+        if r.hold.is_some() {
+            if self.gesture_takes(Gesture::LetGo) {
+                out.push(Target::Gesture(Gesture::LetGo));
+            }
+        } else if r.revision.is_some() && self.gesture_takes(Gesture::Hold) {
+            out.push(Target::Gesture(Gesture::Hold));
+        }
+        if self.quiet() {
+            for (n, w) in self.approvals.waiting.iter().enumerate() {
+                if !self.approvals.approved_as_shown(w) {
+                    out.push(Target::Approve(n));
+                }
+            }
+        }
+        out
+    }
+
+    /// Where the keys walk from now: the steps, or a line of the head — the
+    /// one the person put the focus on while it is there, else where it
+    /// rests ([`View::resting_focus`]).
+    #[must_use]
+    pub fn focus(&self) -> Focus {
+        if self.on_steps {
+            return Focus::Steps;
+        }
+        let targets = self.head_targets();
+        self.head_focus
+            .filter(|t| targets.contains(t))
+            .or_else(|| self.resting_focus(&targets))
+            .map_or(Focus::Steps, Focus::Head)
+    }
+
+    /// Where the focus rests when the person put it on no line that is
+    /// there: "update now" while it is offered, else the status line while
+    /// it is a control, else the binary cache's row.
+    ///
+    /// NEVER AN ANSWER THAT CHANGES A RUN — start now, not now, stop. The
+    /// view opens while a run is under way, and a countdown or a run begins
+    /// under a resting focus: landing there by itself, the focus would make
+    /// a `RET`, or the click that only selects, stop a rebuild the person
+    /// never chose to answer.
+    fn resting_focus(&self, targets: &[Target]) -> Option<Target> {
+        let start = Target::Action(Action::Start);
+        [start, Target::Status, Target::Action(Action::Cache)]
+            .into_iter()
+            .filter(|t| *t != start || self.acts(Action::Start))
+            .find(|t| targets.contains(t))
+    }
+
+    /// Whether the focus is on `target`'s line — the cursor's colour, never
+    /// while a question holds the cursor. Every line a control is wrapped
+    /// to asks the same, so they light together.
+    fn focused(&self, target: Target) -> bool {
+        !self.questioned() && self.focus() == Focus::Head(target)
+    }
+
+    /// Whether the steps wear the cursor: the focus is on them and no
+    /// question holds it.
+    #[must_use]
+    pub fn on_the_steps(&self) -> bool {
+        !self.questioned() && self.focus() == Focus::Steps
+    }
+
+    /// An arrow: ONE list, the head's lines that act and then the steps —
+    /// down from the last of the head is the first step, up from the first
+    /// step the last of the head.
+    fn walk(&mut self, down: bool) -> Errand {
+        let targets = self.head_targets();
+        let last = self.steps.len().saturating_sub(1);
+        match self.focus() {
+            Focus::Steps if !down && self.cursor == 0 && !targets.is_empty() => {
+                self.on_steps = false;
+                self.head_focus = targets.last().copied();
+            }
+            Focus::Steps => {
+                self.on_steps = true;
+                self.cursor = if down {
+                    (self.cursor + 1).min(last)
+                } else {
+                    self.cursor.saturating_sub(1)
+                };
+            }
+            Focus::Head(at) => {
+                let n = targets.iter().position(|t| *t == at).unwrap_or(0);
+                if down && n + 1 >= targets.len() {
+                    if !self.steps.is_empty() {
+                        self.on_steps = true;
+                        self.cursor = 0;
+                    }
+                } else {
+                    let next = if down { n + 1 } else { n.saturating_sub(1) };
+                    self.head_focus = targets.get(next).copied();
+                }
+            }
+        }
+        Errand::Moved
+    }
+
+    /// `TAB`: the other section — the head's lines, or the steps — each at
+    /// the place it was left.
+    const fn section(&mut self) -> Errand {
+        self.on_steps = !self.on_steps;
+        Errand::Moved
+    }
+
+    /// The wheel over the steps: the step cursor moves by one, and the
+    /// focus goes to the steps.
+    pub fn wheel_steps(&mut self, down: bool) -> Errand {
+        self.on_steps = true;
+        self.cursor = if down {
+            (self.cursor + 1).min(self.steps.len().saturating_sub(1))
+        } else {
+            self.cursor.saturating_sub(1)
+        };
+        Errand::Moved
+    }
+
+    /// What an action does — its second click, its `RET` and its key.
+    fn act(&mut self, action: Action) -> Errand {
+        match action {
+            // BELOW THE BATTERY FLOOR, A RUN BY HAND ASKS FIRST — the no
+            // first — where a scheduled one would wait for the charger. And
+            // one already in the queue is not asked for twice: why is said.
+            Action::Start if !self.acts(Action::Start) => {
+                Errand::Say(module::key::SYSTEM_UPDATE_START_QUEUED)
+            }
+            Action::Start => {
+                if self.ask_on_battery() {
+                    Errand::Moved
+                } else {
+                    Errand::Start
+                }
+            }
+            Action::StartNow => Errand::Answer(true),
+            Action::NotNow | Action::Stop => Errand::Answer(false),
+            Action::Cache => self.toggle_cache(),
+            Action::Follow => self.toggle_follow(),
+            Action::Parts => self.toggle_parts(),
+        }
+    }
+
+    /// `RET` on the line the focus is on: what its second click does. On a
+    /// step there is nothing more to do than the cursor did.
+    fn enter(&mut self) -> Errand {
+        match self.focus() {
+            Focus::Steps => Errand::Nothing,
+            Focus::Head(Target::Status) => Errand::Recheck,
+            Focus::Head(Target::Action(a)) => self.act(a),
+            Focus::Head(other) => self.clicked(other),
         }
     }
 
@@ -2660,6 +3640,25 @@ impl View {
         // AND THE PERSON'S MODULES THAT WAIT: the report, the approvals and
         // the approval's verdict, each one `stat`.
         moved |= self.approvals_reread();
+        // THE PAGES' VALUES beside their actions, the same way.
+        if let Some((places, stamp)) = self.glance_places.as_mut() {
+            let now = places.stamp();
+            if now != *stamp {
+                *stamp = now;
+                self.glance = places.read();
+                moved = true;
+            }
+        }
+        // THE LOCK MOVED — an update moved the branches' revisions: what
+        // GitHub said, or is saying, was said against the old ones, and is
+        // asked again.
+        if let Some((lock, stamp)) = self.lock.as_mut() {
+            let now = modified(lock);
+            if now != *stamp {
+                *stamp = now;
+                self.stale_heads = self.heads.is_some();
+            }
+        }
         let now = report_stamp();
         if now == self.stamp {
             return moved;
@@ -2806,29 +3805,22 @@ impl View {
             }
         }
         match press {
-            Press::Down => {
-                self.cursor = (self.cursor + 1).min(self.steps.len().saturating_sub(1));
-                Errand::Moved
-            }
-            Press::Up => {
-                self.cursor = self.cursor.saturating_sub(1);
-                Errand::Moved
-            }
+            // ONE LIST: the head's lines that act, then the steps.
+            Press::Down => self.walk(true),
+            Press::Up => self.walk(false),
+            // A QUESTION HOLDS THE CURSOR: there is no other section to go
+            // to until it is answered.
+            Press::Section if self.questioned() => Errand::Nothing,
+            Press::Section => self.section(),
             Press::OutputUp => Errand::Output(Output::Up),
             Press::OutputDown => Errand::Output(Output::Down),
             Press::OutputEnd => Errand::Output(Output::End),
-            // BELOW THE BATTERY FLOOR, A RUN BY HAND ASKS FIRST — the no
-            // first — where a scheduled one would wait for the charger.
-            Press::Start => {
-                if self.ask_on_battery() {
-                    Errand::Moved
-                } else {
-                    Errand::Start
-                }
-            }
+            Press::Start => self.act(Action::Start),
+            // THE COUNTDOWN'S ANSWERS: the door answers only this update's
+            // (`answers_this_update`), and says so otherwise.
             Press::Abort => Errand::Answer(false),
             Press::Proceed => Errand::Answer(true),
-            Press::Enter => Errand::Nothing,
+            Press::Enter => self.enter(),
             Press::Escape => Errand::Close,
             Press::Cache => self.toggle_cache(),
             Press::Follow => self.toggle_follow(),
@@ -2838,16 +3830,32 @@ impl View {
         }
     }
 
-    /// The head of the view, wrapped to `room`: the question while it is
-    /// asked — its sentence, "no", "yes" — or else the second register; then
-    /// what the machine's records say, each line only when it says
-    /// something. Notes are WRAPPED, never cut.
+    /// The head of the view, wrapped to `room` ([`View::top_lines_with`] with no
+    /// name at the status's end — the footer's region has no header to hide).
     #[must_use]
     pub fn top_lines(&self, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<TopLine> {
+        self.top_lines_with(room, None, texts)
+    }
+
+    /// The head of the view, wrapped to `room`: on a page, the page's; else
+    /// the STATUS — whether an update is there, what the brain is doing
+    /// with it — with `title` at its right end (the window's name, while it
+    /// wears no header), a line of air, the ACTIONS one does here, a line of
+    /// air, then the question while it is asked or what the focused thing
+    /// is; then what the machine's records say, each line only when it says
+    /// something. Notes are WRAPPED, never cut.
+    #[must_use]
+    pub fn top_lines_with(
+        &self,
+        room: u16,
+        title: Option<&str>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<TopLine> {
         let line = |text: String, color, target| TopLine {
             text,
             color,
             target,
+            beside: Vec::new(),
         };
         // THE BINARY CACHE'S PAGE: its grave question, or what the row under
         // its cursor is.
@@ -2885,7 +3893,15 @@ impl View {
                 .map(|h| line(h.text, h.color, None))
                 .collect();
         }
-        let mut out = Vec::new();
+        let mut out = self.status_lines(room, title, texts);
+        // AIR, then THE ACTIONS — the same short words their keys teach —
+        // then air again: three subjects, and hierarchy is colour and air,
+        // never size.
+        out.push(line(String::new(), tokens::color::TEXT_SECONDARY, None));
+        for action in self.actions() {
+            out.push(self.action_line(action, room, texts));
+        }
+        out.push(line(String::new(), tokens::color::TEXT_SECONDARY, None));
         if let Some(q) = self.asking {
             let asked = match q.cost {
                 Cost::Battery(Some(percent)) => texts.t_args(
@@ -2934,28 +3950,41 @@ impl View {
                 ));
             }
         } else {
-            for said in self.register_lines(room, texts) {
-                out.push(line(said, tokens::color::TEXT_SECONDARY, None));
+            // WHAT THE FOCUSED THING IS — the second register: a sentence,
+            // and under a step the command it runs, quieter.
+            for (said, color) in self.register(texts) {
+                for wrapped in crate::chrome::note_lines(&said, room) {
+                    out.push(line(wrapped, color, None));
+                }
             }
         }
-        // A LINE OF AIR between what the cursor's step is and what the
-        // machine's records say: two subjects, and hierarchy is colour and
-        // air, never size. Only when there is a record to say.
+        // A LINE OF AIR between what the focused thing is and what the
+        // machine's records say: two subjects. Only when there is a record
+        // to say.
         let records = self.record_sentences(texts);
-        if !records.is_empty() && !out.is_empty() {
+        if !records.is_empty() {
             out.push(line(String::new(), tokens::color::TEXT_SECONDARY, None));
         }
         for said in records {
+            // THE FOCUS ON A RECORD'S ROW is the cursor's colour, as on an
+            // action — on every line the sentence is wrapped to, and on both
+            // lines of one control (the hold's sentence and the row that lets
+            // it go).
+            let color = if said.target.is_some_and(|t| self.focused(t)) {
+                crate::chrome::Kind::Setting.tones(true).0
+            } else {
+                said.color
+            };
             // A SENTENCE IS WRAPPED WHOLE; an answer is one line, as the
             // run's question draws its answers.
             if said.whole {
                 for wrapped in crate::chrome::note_lines(&said.text, room) {
-                    out.push(line(wrapped, said.color, said.target));
+                    out.push(line(wrapped, color, said.target));
                 }
             } else {
                 out.push(line(
                     layout::elide_end(&said.text, room),
-                    said.color,
+                    color,
                     said.target,
                 ));
             }
@@ -2963,10 +3992,196 @@ impl View {
         out
     }
 
-    /// The second register's lines in the footer's region: WRAPPED, never
-    /// cut — a note is read whole.
+    /// The status, wrapped — in the room left of `title` when there is one,
+    /// which is drawn at the right end of its first line in the quietest
+    /// tone the window has: whose window this is, said once the header that
+    /// said it is hidden. While it says GitHub's answer the line is a
+    /// control: the first click focuses it, the second asks GitHub again.
+    fn status_lines(
+        &self,
+        room: u16,
+        title: Option<&str>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<TopLine> {
+        let status = self.status();
+        let said = status.sentence(self.brain.and_then(|b| b.worked), &self.zone, texts);
+        let color = if self.focused(Target::Status) {
+            tokens::color::TEXT_HERE_ACTS
+        } else {
+            status.color()
+        };
+        // THE NAME TAKES THE RIGHT END only while it leaves the sentence at
+        // least half the line, and ends where a step's verdict ends.
+        let name = title.and_then(|t| {
+            let cells = layout::width(t);
+            let at = room.checked_sub(EDGE_RIGHT + cells)?;
+            (cells + COLUMN_GAP <= room / 2).then(|| Piece {
+                at,
+                text: t.to_owned(),
+                color: tokens::color::TEXT_DIM,
+            })
+        });
+        let wrap = name
+            .as_ref()
+            .map_or(room, |n| n.at.saturating_sub(COLUMN_GAP));
+        let target = (!self.questioned() && status.is_online()).then_some(Target::Status);
+        crate::chrome::note_lines(&said, wrap)
+            .into_iter()
+            .enumerate()
+            .map(|(n, text)| TopLine {
+                text,
+                color,
+                target,
+                beside: if n == 0 {
+                    name.clone().into_iter().collect()
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect()
+    }
+
+    /// An action's row: its short word — and a page's value beside it, in
+    /// the value's column — drawn as a setting, the focus the cursor's
+    /// colour; one that cannot act now drawn refusing. No click while a
+    /// question holds the cursor.
+    fn action_line(&self, action: Action, room: u16, texts: &ronoctua_i18n::Texts) -> TopLine {
+        let kind = if self.acts(action) {
+            crate::chrome::Kind::Setting
+        } else {
+            crate::chrome::Kind::Disabled
+        };
+        let focused = self.focused(Target::Action(action));
+        let (value, tint) = self.glance_of(action, texts);
+        let fields = crate::chrome::tinted(
+            crate::chrome::field_pair(0, room, &texts.t(action.id()), &value, kind, focused),
+            tint,
+            focused,
+        );
+        let mut pieces = fields.into_iter().map(|f| Piece {
+            at: f.at,
+            text: f.text,
+            color: f.color,
+        });
+        let label = pieces.next();
+        TopLine {
+            text: label.as_ref().map_or_else(String::new, |p| p.text.clone()),
+            color: label.map_or(kind.tones(focused).0, |p| p.color),
+            target: (!self.questioned()).then_some(Target::Action(action)),
+            beside: pieces.collect(),
+        }
+    }
+
+    /// A page's value beside its action, and the colour of a state it says
+    /// (a copy that does not read); nothing beside the update's own.
+    fn glance_of(
+        &self,
+        action: Action,
+        texts: &ronoctua_i18n::Texts,
+    ) -> (String, Option<tokens::Color>) {
+        use ronoctua_cachix::settings::Named;
+        let unreadable = Some(tokens::color::STATE_WARNING);
+        match action {
+            Action::Cache => match &self.glance.cache {
+                Named::None => (texts.t(key::BINARY_CACHE_NONE), None),
+                Named::Cache(c) => (
+                    texts.t_with(
+                        match c.visibility {
+                            ronoctua_person::options::Visibility::Public => {
+                                key::BINARY_CACHE_GLANCE_PUBLIC
+                            }
+                            ronoctua_person::options::Visibility::Private => {
+                                key::BINARY_CACHE_GLANCE_PRIVATE
+                            }
+                        },
+                        &[("name", c.name.as_str())],
+                    ),
+                    None,
+                ),
+                Named::Unreadable => (texts.t(key::BINARY_CACHE_COPY_UNREADABLE), unreadable),
+                Named::Newer => (texts.t(key::BINARY_CACHE_COPY_NEWER), unreadable),
+            },
+            Action::Follow => match self.glance.follow {
+                crate::follow::Choice::On => (texts.t(key::DISTRO_FOLLOW_ON), None),
+                crate::follow::Choice::Off => (texts.t(key::DISTRO_FOLLOW_OFF), None),
+                crate::follow::Choice::Unreadable => {
+                    (texts.t(key::DISTRO_FOLLOW_COPY_UNREADABLE), unreadable)
+                }
+                crate::follow::Choice::Newer => {
+                    (texts.t(key::DISTRO_FOLLOW_COPY_NEWER), unreadable)
+                }
+            },
+            Action::Parts => (
+                texts.t_args(
+                    key::DISTRO_PARTS_GLANCE,
+                    &[(
+                        "count",
+                        ronoctua_i18n::Arg::Number(
+                            i64::try_from(self.glance.parts).unwrap_or(i64::MAX),
+                        ),
+                    )],
+                ),
+                None,
+            ),
+            Action::Start | Action::StartNow | Action::NotNow | Action::Stop => {
+                (String::new(), None)
+            }
+        }
+    }
+
+    /// The second register: what the focused thing is, as sentences and
+    /// their tones — a step's sentence (why it was skipped, declined or
+    /// refused with it) and, quieter, the command it runs; what an action
+    /// does, or why it cannot now; what the status line is and what asking
+    /// again does, with the next moment the brain has for the update; what
+    /// choosing a record's row does.
+    fn register(&self, texts: &ronoctua_i18n::Texts) -> Vec<(String, tokens::Color)> {
+        let said = |k: &str| vec![(texts.t(k), tokens::color::TEXT_SECONDARY)];
+        match self.focus() {
+            Focus::Steps => self.steps.get(self.cursor).map_or_else(Vec::new, |step| {
+                let (verdict, _) = self.verdicts.of_step(step.id);
+                vec![
+                    (
+                        cursor_explains(step, &verdict, texts),
+                        tokens::color::TEXT_SECONDARY,
+                    ),
+                    // THE COMMAND IS DATA, drawn as it is written: a command
+                    // line is not translated.
+                    (step.command.to_owned(), tokens::color::TEXT_DIM),
+                ]
+            }),
+            Focus::Head(Target::Status) => {
+                let mut sentence = texts.t(module::key::SYSTEM_UPDATE_STATUS_DOES);
+                if let Some(next) = self.brain.map(|b| b.next).filter(|n| *n > 0) {
+                    let when = crate::chrome::when_text(next, &self.zone, false, texts);
+                    sentence.push(' ');
+                    sentence.push_str(&texts.t_with(
+                        module::key::SYSTEM_UPDATE_STATUS_NEXT,
+                        &[("when", when.as_str())],
+                    ));
+                }
+                vec![(sentence, tokens::color::TEXT_SECONDARY)]
+            }
+            Focus::Head(Target::Action(a)) if !self.acts(a) => {
+                said(module::key::SYSTEM_UPDATE_START_QUEUED)
+            }
+            Focus::Head(Target::Action(a)) => said(a.does()),
+            Focus::Head(Target::Belongings) => said(module::key::SYSTEM_UPDATE_REGISTER_BELONGINGS),
+            Focus::Head(Target::Gesture(_) | Target::Approve(_)) => {
+                said(module::key::SYSTEM_UPDATE_REGISTER_ASKS)
+            }
+            Focus::Head(_) => Vec::new(),
+        }
+    }
+
+    /// The second register's lines: WRAPPED, never cut — a note is read
+    /// whole. What a test reads the head against.
+    #[cfg(test)]
     fn register_lines(&self, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<String> {
-        crate::chrome::note_lines(&self.explains(texts).unwrap_or_default(), room)
+        self.register(texts)
+            .into_iter()
+            .flat_map(|(said, _)| crate::chrome::note_lines(&said, room))
+            .collect()
     }
 
     /// How many rows the footer's region is: the head (the question or the
@@ -3028,6 +4243,12 @@ impl View {
         {
             return n;
         }
+        // THE FOCUS: the first line of the head it is on, or the step.
+        if let Focus::Head(at) = self.focus()
+            && let Some(n) = head.iter().position(|l| l.target == Some(at))
+        {
+            return n;
+        }
         head.len() + self.cursor
     }
 
@@ -3055,14 +4276,7 @@ impl View {
             let rows = head
                 .iter()
                 .map(|said| RegionRow {
-                    fields: vec![crate::fields::Field {
-                        at: left,
-                        text: said.text.clone(),
-                        color: said.color,
-                        hit: crate::fields::Hit::Nothing,
-                        explain: None,
-                        ink: crate::fields::Ink::Grid,
-                    }],
+                    fields: said.fields(left),
                     target: said.target,
                 })
                 .chain(page.into_iter().map(|l| RegionRow {
@@ -3074,6 +4288,7 @@ impl View {
             return rows.skip(skip).take(take).collect();
         }
         let steps_at = head.len();
+        let on_the_steps = self.on_the_steps();
         let air_at = steps_at + self.steps.len();
         let output_at = air_at + 1;
         let total = air_at + 1 + self.scrollback.amount().max(1);
@@ -3089,7 +4304,7 @@ impl View {
         for n in skip..total.min(skip.saturating_add(take)) {
             let row = if let Some(said) = head.get(n) {
                 RegionRow {
-                    fields: vec![field(0, said.text.clone(), said.color)],
+                    fields: said.fields(left),
                     target: said.target,
                 }
             } else if n < air_at {
@@ -3098,9 +4313,9 @@ impl View {
                 let (verdict, seconds) = self.verdicts.of_step(step.id);
                 let mut pieces = step_row(step, &verdict, seconds, room, texts);
                 // THE NAME IS THE LAST PIECE, and the cursor is its colour —
-                // while no question holds the cursor.
+                // while the focus is on the steps and no question holds it.
                 if at == self.cursor
-                    && !self.questioned()
+                    && on_the_steps
                     && let Some(name) = pieces.last_mut()
                 {
                     name.color = crate::chrome::Kind::ListedFact.tones(true).0;
@@ -3145,20 +4360,58 @@ impl View {
 
     /// A click on what a line takes, in either door.
     ///
-    /// A STEP: the cursor goes there, and what the step is is said. There is
-    /// nothing else to do to a step here — switching one on or off belongs
-    /// to the brain's screen, where the choice is written down — so a second
-    /// click, like `RET`, does nothing more (invariant 19).
+    /// THE STATUS AND AN ACTION: the first click puts the focus there and
+    /// says what it is, the second does what `RET` does — asks GitHub again,
+    /// does the action (invariant 19).
+    ///
+    /// A STEP: the focus goes to the steps and the cursor there, and what the
+    /// step is is said. There is nothing else to do to a step here —
+    /// switching one on or off belongs to the brain's screen, where the
+    /// choice is written down — so a second click, like `RET`, does nothing
+    /// more.
     ///
     /// AN ANSWER: the first click puts the cursor on it, the second answers,
-    /// as `RET` does. THE BELONGINGS' LINE: one click opens them — it is the
-    /// key the line teaches.
+    /// as `RET` does. THE BELONGINGS' LINE the same: the first click puts
+    /// the focus there, the second opens them. A gesture's or a module's row
+    /// asks at once, under the hand — asking is not doing — and takes the
+    /// focus as well.
+    ///
+    /// AN ANSWER TO THE RUN — start now, not now, stop — is done by a click
+    /// only where the PERSON put the focus, by a key or a first click; never
+    /// where it rests by itself ([`View::resting_focus`]).
     pub fn clicked(&mut self, target: Target) -> Errand {
+        // A LINE OF THE HEAD THAT ACTS is where the focus goes — and a
+        // second click on the focused one does what it does.
+        if matches!(
+            target,
+            Target::Status
+                | Target::Action(_)
+                | Target::Belongings
+                | Target::Gesture(_)
+                | Target::Approve(_)
+        ) {
+            if !self.head_targets().contains(&target) {
+                return Errand::Nothing;
+            }
+            let again = self.focus() == Focus::Head(target)
+                && (!target.changes_the_run() || self.head_focus == Some(target));
+            self.on_steps = false;
+            self.head_focus = Some(target);
+            match target {
+                Target::Status if again => return Errand::Recheck,
+                Target::Action(a) if again => return self.act(a),
+                Target::Belongings if again => return Errand::OpenBelongings,
+                Target::Status | Target::Action(_) | Target::Belongings => return Errand::Moved,
+                _ => {}
+            }
+        }
         match target {
+            Target::Status | Target::Action(_) | Target::Belongings => Errand::Nothing,
             Target::Step(n) => {
-                if n >= self.steps.len() || n == self.cursor {
+                if n >= self.steps.len() || (n == self.cursor && self.on_steps) {
                     return Errand::Nothing;
                 }
+                self.on_steps = true;
                 self.cursor = n;
                 Errand::Moved
             }
@@ -3170,7 +4423,6 @@ impl View {
                 }
                 None => Errand::Nothing,
             },
-            Target::Belongings => Errand::OpenBelongings,
             Target::Page(n) => match (self.cache.as_mut(), self.follow.as_mut()) {
                 (Some(c), _) => {
                     let e = c.page.clicked(n, &c.readings);
@@ -3295,7 +4547,13 @@ impl View {
         // A SYSTEM SET FOR THE NEXT BOOT: the update did its work, and the
         // machine uses it from the restart — said before the trial that guards
         // that restart, and promising its way back only when one is armed.
-        if let Some(next) = &r.staged {
+        // Not when the status line says it already, with what the trial
+        // promises or does not (`Status::Restart`).
+        if let Some(next) = r
+            .staged
+            .as_ref()
+            .filter(|_| !matches!(self.status(), Status::Restart { .. }))
+        {
             out.push(note(
                 texts.t(if next.guarded {
                     module::key::SYSTEM_UPDATE_RECORDS_STAGED
@@ -3345,7 +4603,8 @@ impl View {
         if let Some(hold) = &r.hold {
             // THE REVISION AS GIT ABBREVIATES IT, and the day it was held: the
             // record's whole stamp is a machine's way of writing a date. The
-            // sentence is the let-go's control, with the row under it.
+            // sentence is the let-go's control, with the row under it; what a
+            // hold means is the status line's to say (`Status::Held`).
             let rev: String = hold.rev.chars().take(REV_SHOWN).collect();
             let since = hold.since.split('T').next().unwrap_or_default();
             let lets_go = self
@@ -3609,6 +4868,9 @@ pub fn host_it() -> Result<()> {
         // the door's wake (`Content::woken`) — and root's netrc's verdict.
         let mut open = Open::new(View::read(), Reach::Machine, Some(w.wake()));
         open.follow_the_journals();
+        // AND WHETHER AN UPDATE IS THERE, asked once as the window opens —
+        // again only when the person asks, or when an update moved the lock.
+        open.check_the_heads(false);
 
         // THE BRAIN'S MIND, for the countdown's two answers: what `a` sends
         // depends on whether a run is announced or already running, and only
@@ -3627,7 +4889,7 @@ pub fn host_it() -> Result<()> {
             .insert_source(
                 timer::Timer::from_duration(BEAT),
                 |_, (), door: &mut Door<UpdateWindow>| {
-                    if door.content.open.view.reread_if_moved() {
+                    if door.content.open.reread_if_moved() {
                         door.ui.ask_paint();
                     }
                     timer::TimeoutAction::ToDuration(BEAT)
@@ -3752,7 +5014,21 @@ usage: ronoctua-shell photograph --door update-scene --scene <file> [options] [s
                              \"here\": [\"<a missing download's output>\"]},
                            \"approvals\": {\"waiting\": [{\"id\": \"my-…\",
                                \"hash\": \"sha256-…\"}],
-                             \"approved\": {\"my-…\": \"sha256-…\"}}}
+                             \"approved\": {\"my-…\": \"sha256-…\"}},
+                           \"brain\": {\"running\": true, \"announced\": true,
+                             \"queued\": true, \"hold\": \"battery\",
+                             \"last\": {\"kind\": \"done\" | \"failed\",
+                               \"ended\": <epoch>},
+                             \"worked\": <epoch>, \"next\": <epoch>},
+                           \"heads\": \"checking\" | \"no-lock\" | \"unreadable\"
+                             | {\"ronoctua\": \"moved\" | \"same\" | \"<refusal>\",
+                                \"nixpkgs\": …}}
+                        `brain`: what the brain says of the update (any
+                        field may be left out; a `done` last run is also
+                        when it last worked); `heads`: what GitHub said of
+                        the branches the machine's flake follows — a branch
+                        that moved, one where the lock holds it, or a
+                        refusal (`offline`, `rate-limited`, `tool-failed`…);
                         `metered`: the brain holds the run a `u` asks for,
                         for a metered way out; `cache`: the view opens on the
                         binary cache's page, over these readings; `follow`:
@@ -3787,6 +5063,127 @@ Steps — walked in the order they appear:
         follow: Option<FollowScene>,
         parts: Option<PartsScene>,
         approvals: Option<ApprovalsScene>,
+        brain: Option<BrainScene>,
+        heads: Option<serde_json::Value>,
+    }
+
+    /// What the brain says of the update, as the scene says it.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct BrainScene {
+        running: bool,
+        announced: bool,
+        queued: bool,
+        hold: Option<String>,
+        last: Option<LastScene>,
+        worked: Option<i64>,
+        next: i64,
+    }
+
+    /// The update's last run, as the scene says it.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LastScene {
+        kind: String,
+        ended: i64,
+    }
+
+    impl BrainScene {
+        fn brain(self) -> Result<super::Brain> {
+            use ronoctua_brain::Hold;
+            let hold = match self.hold.as_deref() {
+                None => None,
+                Some(word) => Some(
+                    [
+                        Hold::Ram,
+                        Hold::Cpu,
+                        Hold::Battery,
+                        Hold::Busy,
+                        Hold::Network,
+                        Hold::Asleep,
+                    ]
+                    .into_iter()
+                    .find(|h| h.word() == word)
+                    .with_context(|| format!("`hold` is a word of the brain's, not `{word}`"))?,
+                ),
+            };
+            let (failed, done) = match &self.last {
+                None => (false, None),
+                Some(l) if l.kind == "done" => (false, Some(l.ended)),
+                Some(l) if l.kind == "failed" => (true, None),
+                Some(l) => bail!("`last.kind` is done or failed, not `{}`", l.kind),
+            };
+            Ok(super::Brain {
+                running: self.running,
+                announced: self.announced,
+                queued: self.queued,
+                hold,
+                failed,
+                worked: done.or(self.worked),
+                next: self.next,
+            })
+        }
+    }
+
+    /// What GitHub said, as the scene says it: a word for the whole answer,
+    /// or one per input of the machine's flake.
+    fn heads_of(said: &serde_json::Value) -> Result<super::Heads> {
+        use ronoctua_software::heads::{Branch, Head, Heard, Input, Unlearnt, Unread};
+        const LOCKED: &str = "0000000000000000000000000000000000000000";
+        const NEWER: &str = "1111111111111111111111111111111111111111";
+        if let Some(word) = said.as_str() {
+            return Ok(match word {
+                "checking" => super::Heads::Asking,
+                "no-lock" => super::Heads::Came(Err(Unread::NoLock)),
+                "unreadable" => super::Heads::Came(Err(Unread::Unreadable)),
+                other => bail!(
+                    "`heads` is checking, no-lock, unreadable or one word per input, not `{other}`"
+                ),
+            });
+        }
+        let by_input = said
+            .as_object()
+            .context("`heads` is a word or one word per input")?;
+        let mut heard = Vec::new();
+        for (name, word) in by_input {
+            let input = Input::ALL
+                .into_iter()
+                .find(|i| i.name() == name)
+                .with_context(|| format!("`heads.{name}` is not an input the update moves"))?;
+            let word = word
+                .as_str()
+                .with_context(|| format!("`heads.{name}` is a word"))?;
+            let head = |sha: &str| Head {
+                branch: Branch {
+                    input,
+                    owner: "owner".to_owned(),
+                    repo: "repo".to_owned(),
+                    branch: "branch".to_owned(),
+                    locked: LOCKED.to_owned(),
+                },
+                sha: sha.to_owned(),
+            };
+            heard.push(Heard {
+                input,
+                head: match word {
+                    "moved" => Ok(head(NEWER)),
+                    "same" => Ok(head(LOCKED)),
+                    "unasked" => Err(Unlearnt::Unasked),
+                    "lock" => Err(Unlearnt::Lock),
+                    refusal => Err(Unlearnt::Asked(ronoctua_software::Failure::refused(
+                        serde_json::from_value(serde_json::Value::String(refusal.to_owned()))
+                            .with_context(|| {
+                                format!(
+                                    "`heads.{name}` is moved, same, unasked, lock or a refusal, \
+                                     not `{refusal}`"
+                                )
+                            })?,
+                    ))),
+                },
+            });
+        }
+        heard.sort_by_key(|h| h.input);
+        Ok(super::Heads::Came(Ok(heard)))
     }
 
     /// The person's brain modules that wait, as the scene says them: the
@@ -4082,9 +5479,17 @@ Steps — walked in the order they appear:
             r
         });
         let approvals = scene.approvals.take().map(ApprovalsScene::readings);
+        let brain = scene.brain.take().map(BrainScene::brain).transpose()?;
+        let heads = scene.heads.take().as_ref().map(heads_of).transpose()?;
         let mut w = window_of_records(scene);
         if let Some(readings) = approvals {
             w.open.view = w.open.view.clone().with_approvals(readings);
+        }
+        if let Some(brain) = brain {
+            w.open.view = w.open.view.clone().with_brain(brain);
+        }
+        if let Some(heads) = heads {
+            w.open.view = w.open.view.clone().with_heads(heads);
         }
         if let Some(readings) = cache {
             w.open.view = w.open.view.clone().with_cache(readings);
@@ -4138,6 +5543,14 @@ Steps — walked in the order they appear:
         w.open.view = view;
         w.open.held_metered = scene.metered;
         w
+    }
+
+    /// The window a scene file describes, as `shoot` builds it — for a test.
+    #[cfg(test)]
+    pub(super) fn window_for_tests(asked: &Asked) -> Result<UpdateWindow> {
+        let file = asked.scene.as_ref().context("a scene")?;
+        let raw = std::fs::read_to_string(file)?;
+        window_of(serde_json::from_str(&raw)?)
     }
 
     pub(super) fn shoot(asked: &Asked) -> Result<()> {
@@ -4281,12 +5694,26 @@ impl UpdateWindow {
     }
 
     /// The brain spoke: its mind is kept — the countdown's answers read it —
-    /// and a run this window asked for is followed in it: held for a metered
-    /// way out, the question, the no first.
+    /// what it says of the update drawn, and a run this window asked for is
+    /// followed in it: held for a metered way out, the question, the no
+    /// first. The head is counted again either way: the status and the
+    /// actions follow the brain.
     fn mind_arrived(&mut self, ui: &mut Ui, mind: ronoctua_brain::Mind) {
-        if self.open.heard_the_mind(mind, ui) {
-            self.measure(ui);
-        }
+        let _ = self.open.heard_the_mind(mind, ui);
+        self.measure(ui);
+    }
+
+    /// The head as this window draws it: the view's, with the window's name
+    /// at the status's right end while the window wears no header — the
+    /// one list the painting, the pointer and `measure` read.
+    fn head(&self, ui: &Ui) -> Vec<TopLine> {
+        let name = ui
+            .hinted
+            .is_hidden()
+            .then(|| ui.texts.t(module::key::CMD_SYSTEM_UPDATE));
+        self.open
+            .view
+            .top_lines_with(ui.columns, name.as_deref(), &ui.texts)
     }
 
     /// What a photograph's window would have asked past the door, in order,
@@ -4334,7 +5761,7 @@ impl UpdateWindow {
     /// and never an ellipsis.
     fn measure(&mut self, ui: &Ui) {
         self.lines = ui.lines.saturating_sub(ui.first_of_list());
-        let wrapped = self.open.view.top_lines(ui.columns, &ui.texts).len();
+        let wrapped = self.head(ui).len();
         self.register = u16::try_from(wrapped)
             .unwrap_or(u16::MAX)
             .clamp(1, self.lines.saturating_sub(2).max(1));
@@ -4424,11 +5851,7 @@ impl UpdateWindow {
             return Some(Target::Page(row));
         }
         let n = self.head_at(ui, y)?;
-        self.open
-            .view
-            .top_lines(ui.columns, &ui.texts)
-            .get(n)
-            .and_then(|l| l.target)
+        self.head(ui).get(n).and_then(|l| l.target)
     }
 
     /// The row a target is lit as under the pointer: a step by its index, a
@@ -4439,9 +5862,7 @@ impl UpdateWindow {
             Target::Step(n) => Some(n),
             Target::Page(n) => Some(PAGE_ROWS + n),
             other => self
-                .open
-                .view
-                .top_lines(ui.columns, &ui.texts)
+                .head(ui)
                 .iter()
                 .position(|l| l.target == Some(other))
                 .map(|n| self.open.view.steps().len() + n),
@@ -4587,8 +6008,50 @@ impl Content for UpdateWindow {
         &[LEADER_ALT_KEYS]
     }
 
+    /// EVERY STATE'S TABLE, kept from the keyboard: the view reads `u`, `a`
+    /// and `p` whatever the update's state, while the line teaches each only
+    /// where it means something — a physical `u` never starts an update,
+    /// queued or not. Not while the file picker is up: its letters are its.
+    fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
+        if self.open.view.picking() {
+            return crate::chrome::shortcut_keys(&Content::hint(self, ui), self.leader_alt_keys());
+        }
+        crate::chrome::table_keys(
+            OF_EVERY_STATE
+                .iter()
+                .flat_map(|t| t.iter())
+                .chain(OF_THE_PAGE)
+                .chain(OF_THE_FOLLOW)
+                .chain(OF_THE_PARTS)
+                .map(|r| r.0),
+        )
+    }
+
     fn hint(&self, ui: &Ui) -> Vec<crate::chrome::Piece> {
         self.open.view.hint(&ui.texts)
+    }
+
+    /// EVERY ACTION SAYS WHAT IT DOES — what its line says under the actions
+    /// (`Action::does`), under the pointer on the header and beside it in the
+    /// footer — where the registry's sentence for its command is a label
+    /// (`cmd-system-update`, `cmd-brain-abort`). Every other key, the
+    /// registry's or the view's (`chrome::hint_sentence`).
+    fn explains(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        match [
+            Action::Start,
+            Action::StartNow,
+            Action::NotNow,
+            Action::Stop,
+            Action::Cache,
+            Action::Follow,
+            Action::Parts,
+        ]
+        .into_iter()
+        .find(|a| a.id() == id)
+        {
+            Some(answer) => Some(texts.t(answer.does())),
+            None => crate::chrome::hint_sentence(id, texts),
+        }
     }
 
     fn resized(&mut self, ui: &mut Ui) {
@@ -4662,7 +6125,7 @@ impl Content for UpdateWindow {
         // either lights both — what a click takes is the sentence, and the
         // seat carries the line it rests on.
         let steps_len = self.open.view.steps().len();
-        let heads = self.open.view.top_lines(columns, &texts);
+        let heads = self.head(ui);
         let target_of_row = |row: Option<usize>| {
             row.and_then(|r| r.checked_sub(steps_len))
                 .and_then(|h| heads.get(h))
@@ -4687,6 +6150,12 @@ impl Content for UpdateWindow {
             canvas
                 .spans
                 .push(span(head.text.clone(), margin, y, head.color));
+            // AN ACTION'S VALUE, and the window's name with no header.
+            for piece in &head.beside {
+                canvas
+                    .spans
+                    .push(span(piece.text.clone(), margin + piece.at, y, piece.color));
+            }
         }
 
         // THE PAGE THE VIEW IS TURNED TO, in place of the steps and the
@@ -4760,8 +6229,9 @@ impl Content for UpdateWindow {
             // a bar's.
             // WHILE THE QUESTION ON BATTERY IS ASKED the cursor is on its
             // answers, and no step wears the cursor's band — nor while a
-            // gesture of the machine's, or an approval, is asked.
-            let band = if row == self.open.view.cursor() && !self.open.view.questioned() {
+            // gesture of the machine's, or an approval, is asked, nor while
+            // the focus is on a line of the head.
+            let band = if row == self.open.view.cursor() && self.open.view.on_the_steps() {
                 Some(tokens::color::SURFACE_SELECTION)
             } else {
                 canvas
@@ -4879,11 +6349,14 @@ impl UpdateWindow {
                         header = true;
                         continue;
                     }
+                    // WHAT THE KEY DOES, in the window's own words
+                    // (`Content::explains`) — the same sentence the footer
+                    // says beside it.
                     let texts = ui.texts.clone();
                     let now = ui
                         .hinted
                         .under(e.position.0, e.position.1)
-                        .and_then(|id| crate::chrome::hint_sentence(id, &texts));
+                        .and_then(|id| Content::explains(self, id, &texts));
                     explained |= ui.hinted.say(now);
                     if hand.dragging {
                         dragged =
@@ -4979,14 +6452,14 @@ impl UpdateWindow {
                 // THE WHEEL DOES WHAT THE ARROW DOES, on whichever half it is
                 // resting over — the rule this project applies to every
                 // pointer: a second meaning would be a door only the mouse
-                // knows about.
+                // knows about. Over the steps it walks THE STEPS, and puts
+                // the focus there: the arrows' list starts above them.
                 //
                 // AND IT DOES IT ONCE. `by` is LINES, which is what a viewport
                 // moves; this half moves a CURSOR, and a cursor's unit is the
                 // arrow's — one. Three steps per notch on a list of eight
                 // would cross it in three turns of the wheel.
-                let press = if by > 0 { Press::Down } else { Press::Up };
-                let errand = self.open.view.key(press);
+                let errand = self.open.view.wheel_steps(by > 0);
                 self.apply(ui, errand);
             } else {
                 let moved = i64::try_from(self.output_up)
@@ -5453,6 +6926,8 @@ mod tests {
         assert_eq!(key("u"), Some(Press::Start));
         assert_eq!(key("a"), Some(Press::Abort));
         assert_eq!(key("p"), Some(Press::Proceed));
+        assert_eq!(key("TAB"), Some(Press::Section));
+        assert_eq!(key("S-TAB"), Some(Press::Section));
         assert_eq!(key("ESC"), Some(Press::Escape));
         assert_eq!(key("q"), Some(Press::Escape));
         assert_eq!(key("j"), Some(Press::Down));
@@ -5461,7 +6936,7 @@ mod tests {
         for chord in ["C-u", "M-a", "C-p", "C-q", "M-j"] {
             assert_eq!(key(chord), None, "`{chord}` was taken for its letter");
         }
-        for (taught, id) in OF_THE_VIEW {
+        for (taught, id) in OF_EVERY_STATE.iter().flat_map(|t| t.iter()) {
             assert!(
                 key(taught).is_some(),
                 "`{taught}` ({id}) is taught and reads as nothing"
@@ -5469,18 +6944,21 @@ mod tests {
         }
     }
 
-    /// WHAT A KEY ASKS FOR is the same errand in both doors: the cursor moves
-    /// inside the steps, the output moves on each door's own page, and the
-    /// three deeds are errands the door carries out with the same sentences.
+    /// WHAT A KEY ASKS FOR is the same errand in both doors: the arrows walk
+    /// one list — the head's lines that act, then the steps —, the output
+    /// moves on each door's own page, and the deeds are errands the door
+    /// carries out with the same sentences.
     #[test]
     fn a_key_is_one_errand_in_both_doors() {
         let mut v = a_view();
         let last = v.steps().len() - 1;
+        assert_eq!(v.focus(), Focus::Head(Target::Action(Action::Start)));
         assert_eq!(v.key(Press::Up), Errand::Moved);
-        assert_eq!(v.cursor(), 0);
-        for _ in 0..v.steps().len() + 3 {
+        assert_eq!(v.focus(), Focus::Head(Target::Status));
+        for _ in 0..v.steps().len() + 10 {
             v.key(Press::Down);
         }
+        assert_eq!(v.focus(), Focus::Steps);
         assert_eq!(v.cursor(), last, "the cursor walked past the last step");
         assert_eq!(v.key(Press::OutputUp), Errand::Output(Output::Up));
         assert_eq!(v.key(Press::OutputDown), Errand::Output(Output::Down));
@@ -5507,6 +6985,226 @@ mod tests {
         );
     }
 
+    /// FAILS IF: the arrows do not walk one list — the status, the actions,
+    /// then the steps, and from the first step back up to the last line of
+    /// the head —, `TAB` does not jump between the two keeping each one's
+    /// place, the focus is kept by a line's place rather than by what it
+    /// takes (a line that goes away gives it back to where it rests), or it
+    /// rests by itself on an answer that changes a run.
+    #[test]
+    fn the_keys_walk_the_head_then_the_steps_and_tab_keeps_each_place() {
+        let mut v = a_view();
+        let head = v.head_targets();
+        assert_eq!(
+            head,
+            [
+                Target::Status,
+                Target::Action(Action::Start),
+                Target::Action(Action::Cache),
+                Target::Action(Action::Follow),
+                Target::Action(Action::Parts),
+            ]
+        );
+        for want in &head[2..] {
+            v.key(Press::Down);
+            assert_eq!(v.focus(), Focus::Head(*want));
+        }
+        v.key(Press::Down);
+        assert_eq!((v.focus(), v.cursor()), (Focus::Steps, 0), "below the head");
+        v.key(Press::Up);
+        assert_eq!(
+            v.focus(),
+            Focus::Head(Target::Action(Action::Parts)),
+            "up from the first step"
+        );
+        // TAB: to the steps, where they were left — and back to the line of
+        // the head it was on.
+        v.key(Press::Section);
+        v.key(Press::Down);
+        v.key(Press::Down);
+        assert_eq!((v.focus(), v.cursor()), (Focus::Steps, 2));
+        v.key(Press::Section);
+        assert_eq!(v.focus(), Focus::Head(Target::Action(Action::Parts)));
+        v.key(Press::Section);
+        assert_eq!((v.focus(), v.cursor()), (Focus::Steps, 2));
+        // BY WHAT IT TAKES: on "update now", a countdown begins — the line is
+        // gone, and the focus rests on the binary cache's row: never on the
+        // countdown's answers, nor on a run's stop, by itself. A view that
+        // opens on the queue rests there too: its "update now" refuses.
+        v.key(Press::Section);
+        assert_eq!(v.clicked(Target::Action(Action::Start)), Errand::Moved);
+        let queued = Brain {
+            queued: true,
+            ..Brain::default()
+        };
+        for brain in [
+            Brain {
+                announced: true,
+                ..queued
+            },
+            Brain {
+                running: true,
+                ..Brain::default()
+            },
+        ] {
+            let resting = v.clone().with_brain(brain);
+            assert_eq!(
+                resting.focus(),
+                Focus::Head(Target::Action(Action::Cache)),
+                "{brain:?}"
+            );
+        }
+        for brain in [
+            queued,
+            Brain {
+                announced: true,
+                ..queued
+            },
+            Brain {
+                running: true,
+                ..Brain::default()
+            },
+        ] {
+            assert_eq!(
+                a_view().with_brain(brain).focus(),
+                Focus::Head(Target::Action(Action::Cache)),
+                "{brain:?}: where the view opens"
+            );
+        }
+        // A STATUS THAT IS NOT GITHUB'S ANSWER is no control: the arrows
+        // pass it by.
+        let failed = a_view().with_brain(Brain {
+            failed: true,
+            ..Brain::default()
+        });
+        assert_eq!(failed.status(), Status::Failed);
+        assert_eq!(failed.head_targets()[0], Target::Action(Action::Start));
+        // A QUESTION HOLDS THE CURSOR: no line of the head is walked, and
+        // TAB goes nowhere.
+        let mut asked = a_view().on_charge(flat());
+        asked.key(Press::Start);
+        assert!(asked.head_targets().is_empty());
+        assert_eq!(asked.key(Press::Section), Errand::Nothing);
+    }
+
+    /// FAILS IF: the first click on the status line or an action does
+    /// anything but put the focus there, the second (or `RET`) does not do
+    /// what it does — ask GitHub again, start, answer the countdown, stop,
+    /// turn to a page —, an action that cannot act now does instead of
+    /// saying why, or a click on a step does not take the focus to the
+    /// steps.
+    #[test]
+    fn the_second_click_and_ret_do_what_the_line_does() {
+        // THE FOCUS ELSEWHERE FIRST: a click on the line the focus is on is
+        // the second click already, as on any list's cursor row.
+        let twice = |v: &mut View, target: Target| {
+            let _ = v.clicked(Target::Step(0));
+            assert_eq!(
+                v.clicked(target),
+                Errand::Moved,
+                "{target:?}: the first click"
+            );
+            assert_eq!(v.focus(), Focus::Head(target));
+            v.clicked(target)
+        };
+        let mut v = a_view();
+        assert_eq!(twice(&mut v, Target::Status), Errand::Recheck);
+        assert_eq!(v.key(Press::Enter), Errand::Recheck, "RET on the status");
+        assert_eq!(twice(&mut v, Target::Action(Action::Start)), Errand::Start);
+        assert_eq!(v.key(Press::Enter), Errand::Start);
+        assert_eq!(twice(&mut v, Target::Action(Action::Cache)), Errand::Moved);
+        assert!(v.cache_page().is_some(), "the second click opened no page");
+        let mut v = a_view();
+        assert_eq!(twice(&mut v, Target::Action(Action::Follow)), Errand::Moved);
+        assert!(v.follow_page().is_some());
+        let mut v = a_view();
+        assert_eq!(twice(&mut v, Target::Action(Action::Parts)), Errand::Moved);
+        assert!(v.parts_page().is_some());
+        // THE COUNTDOWN'S TWO, and the run's stop.
+        let mut v = a_view().with_brain(Brain {
+            announced: true,
+            queued: true,
+            ..Brain::default()
+        });
+        assert_eq!(
+            twice(&mut v, Target::Action(Action::StartNow)),
+            Errand::Answer(true)
+        );
+        assert_eq!(
+            twice(&mut v, Target::Action(Action::NotNow)),
+            Errand::Answer(false)
+        );
+        assert_eq!(
+            v.clicked(Target::Action(Action::Start)),
+            Errand::Nothing,
+            "a line that is not there"
+        );
+        let mut v = a_view().with_brain(Brain {
+            running: true,
+            ..Brain::default()
+        });
+        assert_eq!(
+            twice(&mut v, Target::Action(Action::Stop)),
+            Errand::Answer(false)
+        );
+        assert_eq!(v.key(Press::Enter), Errand::Answer(false));
+        // QUEUED: "update now" is there, refusing, and says why.
+        let mut v = a_view().with_brain(Brain {
+            queued: true,
+            ..Brain::default()
+        });
+        assert_eq!(
+            twice(&mut v, Target::Action(Action::Start)),
+            Errand::Say(module::key::SYSTEM_UPDATE_START_QUEUED)
+        );
+        // ON THE LINE THE FOCUS IS ON, the first click is the second: the
+        // view opens on "update now".
+        assert_eq!(
+            a_view().clicked(Target::Action(Action::Start)),
+            Errand::Start
+        );
+        // NOT ON A RUN'S ANSWER THE PERSON NEVER CHOSE. A view that opens on
+        // a run stops nothing with its `RET` or its first click on "stop";
+        // only the second, on the line the first chose, stops it.
+        let running = Brain {
+            running: true,
+            ..Brain::default()
+        };
+        let mut v = a_view().with_brain(running);
+        assert_ne!(v.key(Press::Enter), Errand::Answer(false), "RET stopped it");
+        let mut v = a_view().with_brain(running);
+        assert_eq!(v.clicked(Target::Action(Action::Stop)), Errand::Moved);
+        assert_eq!(
+            v.clicked(Target::Action(Action::Stop)),
+            Errand::Answer(false)
+        );
+        // AND THE PERSON'S CHOICE ENDS WITH ITS RUN: the next run finds the
+        // focus resting, not on its stop.
+        let mut v = a_view();
+        let _ = v.heard_the_brain(&a_mind(module::ID, &[]));
+        assert_eq!(v.clicked(Target::Action(Action::Stop)), Errand::Moved);
+        assert_eq!(v.focus(), Focus::Head(Target::Action(Action::Stop)));
+        let _ = v.heard_the_brain(&a_mind("", &[]));
+        let _ = v.heard_the_brain(&a_mind(module::ID, &[]));
+        assert_ne!(v.focus(), Focus::Head(Target::Action(Action::Stop)));
+        assert_ne!(v.key(Press::Enter), Errand::Answer(false), "RET stopped it");
+        // THE STATUS LINE IS NO CONTROL while it says the brain's or the
+        // machine's state: no click asks GitHub again.
+        let mut v = a_view().with_brain(Brain {
+            failed: true,
+            ..Brain::default()
+        });
+        assert_eq!(v.clicked(Target::Status), Errand::Nothing);
+        assert_eq!(v.clicked(Target::Status), Errand::Nothing);
+        // A STEP: the focus goes to the steps.
+        let mut v = a_view();
+        assert_eq!(v.clicked(Target::Step(0)), Errand::Moved);
+        assert_eq!((v.focus(), v.cursor()), (Focus::Steps, 0));
+        assert_eq!(v.clicked(Target::Step(0)), Errand::Nothing);
+        assert_eq!(v.wheel_steps(true), Errand::Moved);
+        assert_eq!(v.cursor(), 1);
+    }
+
     /// THE FOOTER'S REGION IS ONE LIST — the register, the steps, air and the
     /// output — and a window of it is the same rows as the whole, cut: the
     /// footer builds only what it draws, and the count says the same as the
@@ -5518,7 +7216,10 @@ mod tests {
         let steps = v.steps().len();
         let whole = v.region_rows(0, usize::MAX, 80, &t);
         assert_eq!(whole.len(), v.region_len(80, &t));
-        let register = v.region_cursor(80, &t);
+        let register = whole
+            .iter()
+            .position(|r| r.target == Some(Target::Step(0)))
+            .expect("the steps are drawn");
         assert!(register >= 1, "the second register has no line");
         for (i, row) in whole.iter().enumerate().skip(register).take(steps) {
             assert_eq!(
@@ -5577,6 +7278,11 @@ mod tests {
                 })
                 .collect()
         };
+        assert!(
+            lit(&v).is_empty(),
+            "a step wears the cursor while the focus is on the head"
+        );
+        v.key(Press::Section);
         assert_eq!(lit(&v), vec![0]);
         // THE STEP'S PLACE AMONG THE STEPS moves by one; the head above them
         // is the new step's sentence, which wraps to its own length.
@@ -5628,13 +7334,96 @@ mod tests {
         let (w, ui) = a_window();
         let hint = w.hint(&ui);
         let words: String = hint.iter().map(|p| p.text.clone()).collect();
-        for id in [START, ABORT, PROCEED, "system-update-output-end"] {
+        for id in [START, SECTION, "system-update-output-end"] {
             assert!(
                 words.contains(&ui.texts.t(id)),
                 "`{id}` is not taught: {words}"
             );
         }
         assert!(w.header_keys(), "the header's drawer is not this window's");
+    }
+
+    /// FAILS IF: a key is taught where it means nothing — `u` while the
+    /// update waits in the queue or runs, the countdown's answers with no
+    /// countdown of this update, the stop with nothing of it running — or
+    /// a key one of them reads is not kept from the keyboard in every
+    /// state (a physical `u` must never start an update), or one of them is
+    /// not one key after `LEADER Alt`.
+    #[test]
+    fn each_state_teaches_its_own_keys_and_the_keyboard_is_kept_from_all() {
+        let ids = |v: &View| -> Vec<&str> { v.taught().iter().map(|(_, id)| *id).collect() };
+        let state = |brain: Brain| a_view().with_brain(brain);
+        let idle = a_view();
+        assert!(ids(&idle).contains(&START));
+        for absent in [PROCEED, ABORT, STOP] {
+            assert!(!ids(&idle).contains(&absent), "idle teaches {absent}");
+        }
+        let queued = state(Brain {
+            queued: true,
+            ..Brain::default()
+        });
+        assert_eq!(queued.taught(), OF_THE_QUEUE);
+        for absent in [START, PROCEED, ABORT, STOP] {
+            assert!(!ids(&queued).contains(&absent), "queued teaches {absent}");
+        }
+        let counting = state(Brain {
+            announced: true,
+            queued: true,
+            ..Brain::default()
+        });
+        assert_eq!(counting.taught(), OF_THE_COUNTDOWN);
+        assert!(ids(&counting).contains(&PROCEED) && ids(&counting).contains(&ABORT));
+        assert!(!ids(&counting).contains(&START) && !ids(&counting).contains(&STOP));
+        let running = state(Brain {
+            running: true,
+            ..Brain::default()
+        });
+        assert_eq!(running.taught(), OF_THE_RUN);
+        assert!(ids(&running).contains(&STOP));
+        for absent in [START, PROCEED, ABORT] {
+            assert!(!ids(&running).contains(&absent), "running teaches {absent}");
+        }
+        // EVERY STATE'S LETTERS ARE KEPT FROM THE KEYBOARD, whatever is
+        // taught now.
+        let union: Vec<ronoctua_keymap::Key> = ["u", "a", "p", "c", "f", "d", "G", "C-j"]
+            .iter()
+            .map(|n| ronoctua_keymap::Key::parse(n).expect("a key"))
+            .collect();
+        for brain in [
+            Brain::default(),
+            Brain {
+                queued: true,
+                ..Brain::default()
+            },
+            Brain {
+                announced: true,
+                queued: true,
+                ..Brain::default()
+            },
+            Brain {
+                running: true,
+                ..Brain::default()
+            },
+        ] {
+            let (mut w, ui) = a_window();
+            w.open.view = w.open.view.clone().with_brain(brain);
+            let barred = w.barred_keys(&ui);
+            for k in &union {
+                assert!(
+                    barred.contains(k),
+                    "{brain:?}: `{}` reaches the view",
+                    k.notation()
+                );
+            }
+            assert!(
+                !barred.contains(&ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Down)),
+                "an arrow is barred"
+            );
+        }
+        // AND EVERY TABLE IS ONE KEY AFTER `LEADER Alt`.
+        if let Err(wrong) = crate::chrome::leader_alt_census(OF_EVERY_STATE, &[LEADER_ALT_KEYS]) {
+            panic!("{wrong}");
+        }
     }
 
     /// THE COUNTDOWN IS ANSWERED HERE, with the footer's sentence: with no
@@ -5657,8 +7446,61 @@ mod tests {
             Some(ui.texts.t(crate::key::ECHO_BRAIN_IDLE).as_str())
         );
         assert!(ui.orders().is_empty(), "an answer went to the footer");
+        // ANOTHER TASK COUNTING DOWN is not this update's to answer: the
+        // same sentence, and nothing sent.
+        let mut other = a_mind("", &["brain-test-other"]);
+        other.announcement = Some(ronoctua_brain::Announcement {
+            task: "brain-test-other".to_owned(),
+            total_seconds: 60,
+            deadline: 100,
+            why: "due".to_owned(),
+        });
+        let _ = w.open.heard_the_mind(other, &mut ui);
+        for press in ["p", "a"] {
+            ui.message = None;
+            typed(&mut w, &mut ui, press);
+            assert_eq!(
+                ui.message.as_deref(),
+                Some(ui.texts.t(crate::key::ECHO_BRAIN_IDLE).as_str()),
+                "`{press}` answered another task's countdown"
+            );
+        }
         typed(&mut w, &mut ui, "ESC");
         assert!(ui.quit);
+    }
+
+    /// FAILS IF: a countdown's answer reaches another task than this update
+    /// — its countdown skipped or put off, its run stopped — or does not
+    /// reach this one: counting down (start now, not now) or running (stop).
+    #[test]
+    fn the_countdowns_answers_are_this_updates_alone() {
+        let announce = |m: &mut ronoctua_brain::Mind, task: &str| {
+            m.announcement = Some(ronoctua_brain::Announcement {
+                task: task.to_owned(),
+                total_seconds: 60,
+                deadline: 100,
+                why: "due".to_owned(),
+            });
+        };
+        let mut ours = a_mind("", &[module::ID]);
+        announce(&mut ours, module::ID);
+        assert!(answers_this_update(&ours, true));
+        assert!(answers_this_update(&ours, false));
+        let mut theirs = a_mind("", &["brain-test-other"]);
+        announce(&mut theirs, "brain-test-other");
+        assert!(!answers_this_update(&theirs, true));
+        assert!(!answers_this_update(&theirs, false));
+        let running = a_mind(module::ID, &[]);
+        assert!(!answers_this_update(&running, true), "nothing counts down");
+        assert!(answers_this_update(&running, false));
+        // OURS ANNOUNCED WHILE ANOTHER RUNS: the stop would be the other's.
+        let mut busy = a_mind("brain-test-other", &[module::ID]);
+        announce(&mut busy, module::ID);
+        assert!(!answers_this_update(&busy, false));
+        assert!(!answers_this_update(
+            &a_mind("brain-test-other", &[]),
+            false
+        ));
     }
 
     /// A PHOTOGRAPH'S WINDOW STARTS NOTHING (`photograph --door update`): its
@@ -5719,8 +7561,9 @@ mod tests {
     }
 
     /// THE WINDOW'S SECOND REGISTER IS WRAPPED WHOLE, as the footer's region
-    /// wraps it, and the step rows start under its last line — where the
-    /// pointer finds them too.
+    /// wraps it — the step's sentence and, under it, the command it runs —
+    /// and the step rows start under the head's last line, where the pointer
+    /// finds them too.
     ///
     /// THE DEFECT THIS CATCHES: the window cut the sentence with an ellipsis
     /// at its width, so the end of it — the trim's says what a rehearsal
@@ -5728,6 +7571,9 @@ mod tests {
     #[test]
     fn the_windows_second_register_is_wrapped_whole_and_the_rows_follow_it() {
         let (mut w, mut ui) = a_window();
+        // A NARROW WINDOW, so the longest sentence wraps.
+        ui.columns = 40;
+        typed(&mut w, &mut ui, "TAB");
         let longest = (0..w.open.view.steps().len())
             .max_by_key(|&n| ui.texts.t(w.open.view.steps()[n].does_key).len())
             .expect("steps");
@@ -5736,17 +7582,34 @@ mod tests {
         }
         assert_eq!(w.open.view.cursor(), longest);
         let wrapped = w.open.view.register_lines(ui.columns, &ui.texts);
-        assert!(
-            wrapped.len() > 1,
-            "the longest sentence fits one line: {wrapped:?}"
+        let step = &w.open.view.steps()[longest];
+        let sentence = crate::chrome::note_lines(
+            &w.open.view.explains(&ui.texts).expect("a sentence"),
+            ui.columns,
         );
-        assert_eq!(usize::from(w.register), wrapped.len());
+        assert!(
+            sentence.len() > 1,
+            "the longest sentence fits one line: {sentence:?}"
+        );
         let words = |s: &str| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
         assert_eq!(
             words(&wrapped.join(" ")),
-            words(&w.open.view.explains(&ui.texts).expect("a sentence")),
-            "the register is not the whole sentence"
+            words(&format!(
+                "{} {}",
+                w.open.view.explains(&ui.texts).expect("a sentence"),
+                step.command
+            )),
+            "the register is not the whole sentence and the command"
         );
+        // EVERY LINE OF IT IS IN THE HEAD, in order, and the head is what
+        // the window counts.
+        let head: Vec<String> = w.head(&ui).into_iter().map(|l| l.text).collect();
+        assert!(
+            head.windows(wrapped.len())
+                .any(|run| run == wrapped.as_slice()),
+            "{head:?}"
+        );
+        assert_eq!(usize::from(w.register), head.len());
         let line_px = f64::from(tokens::metrics::line_height(tokens::text::size()));
         let middle = |line: u16| (f64::from(line) + 0.5) * line_px;
         let first = ui.first_of_list() + w.register;
@@ -5754,7 +7617,7 @@ mod tests {
         assert_eq!(
             w.at(&ui, 10.0, middle(first - 1)),
             None,
-            "the register's last line is a step"
+            "the head's last line is a step"
         );
         assert_eq!(
             w.output_top(),
@@ -5780,6 +7643,7 @@ mod tests {
         assert_eq!(w.output_up, page);
         typed(&mut w, &mut ui, "G");
         assert_eq!(w.output_up, 0);
+        typed(&mut w, &mut ui, "TAB");
         typed(&mut w, &mut ui, "<down>");
         typed(&mut w, &mut ui, "<down>");
         assert_eq!(w.open.view.cursor(), 2);
@@ -5929,7 +7793,9 @@ mod tests {
             .join("\n");
         for needle in [
             "SUPER s v",
-            &t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED),
+            // A SYSTEM THAT WAITS, said by the status line — its only way
+            // back by the machine's reason for arming no trial, below.
+            &t.t(module::key::SYSTEM_UPDATE_STATUS_RESTART),
             &t.t(key::MACHINE_TRIAL_FAILED),
             &t.t(key::MACHINE_NO_TRIAL_NOT_IN_MENU),
             "613862c ",
@@ -5975,35 +7841,69 @@ mod tests {
             region.contains(&t.t(key::MACHINE_TRIAL_FAILED)) && region.contains("SUPER s v"),
             "{region}"
         );
+        // THE CONFLICTS' LINE: the first click selects it, the second opens
+        // the belongings, as `RET` does (invariant 19).
         let mut v = v;
+        assert_eq!(v.clicked(Target::Belongings), Errand::Moved);
+        assert_eq!(v.focus(), Focus::Head(Target::Belongings));
         assert_eq!(v.clicked(Target::Belongings), Errand::OpenBelongings);
-        // A SYSTEM THAT WAITS WITH ITS TRIAL ARMED is promised its way back;
-        // one with none (above) is not.
-        let mut guarded = every_record();
-        guarded.staged = guarded
-            .staged
-            .map(|n| module::NextBoot { guarded: true, ..n });
-        let said: Vec<String> = a_view()
-            .with_records(guarded, "SUPER s v".to_owned())
+        assert_eq!(v.key(Press::Enter), Errand::OpenBelongings);
+        // ONCE: the status line says the system that waits, so its record
+        // line is not said under it — and a restart with no way back but the
+        // boot menu is said by the machine's reason when it gives one, else
+        // by the status line. A status that says something else (a run)
+        // leaves the record to say it, its trial promised or not.
+        let records_of = |guarded: bool, why: Option<module::NoTrial>, brain: Option<Brain>| {
+            let mut r = every_record();
+            r.staged = r.staged.map(|n| module::NextBoot { guarded, ..n });
+            r.no_trial = why;
+            let mut v = a_view().with_records(r, "SUPER s v".to_owned());
+            if let Some(b) = brain {
+                v = v.with_brain(b);
+            }
+            v.top_lines(200, &t)
+                .into_iter()
+                .map(|l| l.text)
+                .collect::<Vec<String>>()
+        };
+        let staged = t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED);
+        let unguarded = t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED);
+        let restart = t.t(module::key::SYSTEM_UPDATE_STATUS_RESTART);
+        let menu_only = t.t(module::key::SYSTEM_UPDATE_STATUS_RESTART_UNGUARDED);
+        let why = Some(module::NoTrial::NotInMenu);
+        for (guarded, why, status) in [
+            (true, None, &restart),
+            (false, why, &restart),
+            (false, None, &menu_only),
+        ] {
+            let said = records_of(guarded, why, None);
+            assert!(said.contains(status), "{guarded} {why:?}: {said:?}");
+            assert!(
+                !said.contains(&staged) && !said.contains(&unguarded),
+                "said twice: {said:?}"
+            );
+        }
+        let running = Some(Brain {
+            running: true,
+            ..Brain::default()
+        });
+        let said = records_of(true, None, running);
+        assert!(said.contains(&staged) && !said.contains(&unguarded));
+        let said = records_of(false, why, running);
+        assert!(said.contains(&unguarded) && !said.contains(&staged));
+        // AND NOTHING THERE IS NOTHING SAID: the head ends with the register.
+        let quiet = a_view();
+        let head: Vec<String> = quiet
             .top_lines(200, &t)
             .into_iter()
             .map(|l| l.text)
             .collect();
-        assert!(said.contains(&t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED)));
-        assert!(!said.contains(&t.t(module::key::SYSTEM_UPDATE_RECORDS_STAGED_UNGUARDED)));
-        // AND NOTHING THERE IS NOTHING SAID.
-        let quiet = a_view();
-        assert_eq!(quiet.top_lines(200, &t), {
-            let mut only_register = Vec::new();
-            for said in quiet.register_lines(200, &t) {
-                only_register.push(TopLine {
-                    text: said,
-                    color: tokens::color::TEXT_SECONDARY,
-                    target: None,
-                });
-            }
-            only_register
-        });
+        let register = quiet.register_lines(200, &t);
+        assert_eq!(
+            head[head.len() - register.len()..],
+            register[..],
+            "something is said under the register: {head:?}"
+        );
     }
 
     /// A PHOTOGRAPH'S WINDOW STARTS NOTHING ON BATTERY EITHER, and opens no
@@ -6021,8 +7921,10 @@ mod tests {
         typed(&mut w, &mut ui, "u");
         typed(&mut w, &mut ui, "<down>");
         typed(&mut w, &mut ui, "RET");
-        let errand = w.open.view.clicked(Target::Belongings);
-        w.apply(&mut ui, errand);
+        for _ in 0..2 {
+            let errand = w.open.view.clicked(Target::Belongings);
+            w.apply(&mut ui, errand);
+        }
         let kept = w.would_have();
         assert_eq!(kept.len(), 2, "{kept:?}");
         assert!(kept[0].contains("on battery"), "{kept:?}");
@@ -6228,7 +8130,14 @@ mod tests {
             answers[0].text,
             t.t(module::key::SYSTEM_UPDATE_ANSWER_NO_METERED)
         );
-        let said: String = head
+        // THE QUESTION, from its first line: the status and the actions
+        // stand above it.
+        let asked = crate::chrome::note_lines(&t.t(module::key::SYSTEM_UPDATE_ASK_METERED), 80);
+        let from = head
+            .iter()
+            .position(|l| l.text == asked[0])
+            .expect("the question is asked");
+        let said: String = head[from..]
             .iter()
             .map(|l| l.text.clone())
             .collect::<Vec<_>>()
@@ -6586,6 +8495,61 @@ mod tests {
             .collect()
     }
 
+    /// FAILS IF: a record's row the keys walk onto — the conflicts, a
+    /// gesture, a module that waits — does not wear the cursor's colour,
+    /// one of the lines its sentence is wrapped to stays dark, or another
+    /// line wears it too: the focus would be nowhere on the screen, and
+    /// `RET` would act on a line nobody could see was chosen.
+    #[test]
+    fn a_records_row_under_the_focus_wears_the_cursor_on_every_line() {
+        let t = texts();
+        let mut v = a_view()
+            .with_records(
+                module::Records {
+                    conflicts: 2,
+                    ..failed_unheld()
+                },
+                "SUPER s v".to_owned(),
+            )
+            .with_approvals(two_waiting());
+        let cursor = crate::chrome::Kind::Setting.tones(true).0;
+        let records = [
+            Target::Belongings,
+            Target::Gesture(crate::machine_gesture::Gesture::TryAgain),
+            Target::Gesture(crate::machine_gesture::Gesture::Hold),
+            Target::Approve(0),
+        ];
+        assert_eq!(v.head_targets()[5..], records, "the walk's records");
+        // FROM "update now", WHERE IT RESTS, to the last page's row.
+        for _ in 0..3 {
+            v.key(Press::Down);
+        }
+        let mut wrapped = false;
+        for want in records {
+            v.key(Press::Down);
+            assert_eq!(v.focus(), Focus::Head(want));
+            // NARROW, so every sentence is wrapped to more than one line.
+            let head = v.top_lines(30, &t);
+            let lit: Vec<Option<Target>> = head
+                .iter()
+                .filter(|l| l.color == cursor)
+                .map(|l| l.target)
+                .collect();
+            let lines = head.iter().filter(|l| l.target == Some(want)).count();
+            wrapped |= lines > 1;
+            assert_eq!(lit, vec![Some(want); lines.max(1)], "{want:?}: {head:?}");
+            // AND THE FOOTER'S REGION, the same lines.
+            let rows = v.region_rows(0, head.len(), 30, &t);
+            assert!(
+                rows.iter()
+                    .filter(|r| r.target == Some(want))
+                    .all(|r| r.fields.first().is_some_and(|f| f.color == cursor)),
+                "{want:?}: the region's lines are dark"
+            );
+        }
+        assert!(wrapped, "no record's sentence was wrapped to two lines");
+    }
+
     /// A machine whose last trial failed, not held, on a revision.
     fn failed_unheld() -> module::Records {
         module::Records {
@@ -6637,11 +8601,7 @@ mod tests {
                 .iter()
                 .find(|(_, target)| *target == Some(Target::Gesture(Gesture::Hold)))
                 .expect("a hold row");
-            assert!(
-                hold.0.contains("613862c ") || hold.0.contains("613862c:"),
-                "{}",
-                hold.0
-            );
+            assert!(hold.0.contains("613862c"), "{}", hold.0);
             assert!(
                 !hold.0.contains("613862c5"),
                 "the revision was not shortened"
@@ -7004,5 +8964,533 @@ mod tests {
             "{kept:?}"
         );
         assert!(ui.orders().is_empty(), "the footer was told");
+    }
+
+    // -----------------------------------------------------------------------
+    // THE TOP: THE STATUS, THE ACTIONS
+    // -----------------------------------------------------------------------
+
+    /// What GitHub said: each input moved, still, or refused.
+    fn heard(
+        distro: Option<Result<bool, ronoctua_software::Refusal>>,
+        nixpkgs: Option<Result<bool, ronoctua_software::Refusal>>,
+    ) -> Heads {
+        use ronoctua_software::heads::{Branch, Head, Heard, Input};
+        let locked = "0000000000000000000000000000000000000000";
+        let one = |input: Input, said: Result<bool, ronoctua_software::Refusal>| Heard {
+            input,
+            head: match said {
+                Ok(moved) => Ok(Head {
+                    branch: Branch {
+                        input,
+                        owner: "o".to_owned(),
+                        repo: "r".to_owned(),
+                        branch: "b".to_owned(),
+                        locked: locked.to_owned(),
+                    },
+                    sha: if moved {
+                        "1111111111111111111111111111111111111111".to_owned()
+                    } else {
+                        locked.to_owned()
+                    },
+                }),
+                Err(refusal) => Err(ronoctua_software::heads::Unlearnt::Asked(
+                    ronoctua_software::Failure::refused(refusal),
+                )),
+            },
+        };
+        Heads::Came(Ok(distro
+            .map(|d| one(Input::Distro, d))
+            .into_iter()
+            .chain(nixpkgs.map(|n| one(Input::Nixpkgs, n)))
+            .collect()))
+    }
+
+    /// FAILS IF: the status line's precedence is not the brain's run
+    /// (running, counting down, queued and why), then a system that waits
+    /// for the restart, a run that failed, a hold — and only then what
+    /// GitHub said: an input that moved is an update whatever another could
+    /// not answer, none moved and all answering is up to date, none moved
+    /// and one refusing is "could not check" with its reason, never "up to
+    /// date". Or a stopped run reads as a failed one.
+    #[test]
+    fn the_status_says_the_first_thing_that_is_true() {
+        use ronoctua_brain::Hold;
+        use ronoctua_software::Refusal;
+        use ronoctua_software::heads::Unlearnt;
+        let records = module::Records::default();
+        let staged = module::Records {
+            staged: Some(module::NextBoot {
+                toplevel: String::new(),
+                guarded: true,
+            }),
+            ..module::Records::default()
+        };
+        let held = module::Records {
+            hold: Some(module::HeldAt {
+                rev: "613862c".to_owned(),
+                since: "2026-10-05T12:00:00Z".to_owned(),
+            }),
+            ..module::Records::default()
+        };
+        let up = heard(Some(Ok(false)), Some(Ok(false)));
+        let brain = |b: Brain| Some(b);
+        let all = Brain {
+            running: true,
+            announced: true,
+            queued: true,
+            hold: Some(Hold::Battery),
+            failed: true,
+            worked: None,
+            next: 0,
+        };
+        assert_eq!(
+            status_of(brain(all).as_ref(), &staged, Some(&up)),
+            Status::Running
+        );
+        let counting = Brain {
+            running: false,
+            ..all
+        };
+        assert_eq!(
+            status_of(Some(&counting), &staged, Some(&up)),
+            Status::CountingDown
+        );
+        let queued = Brain {
+            announced: false,
+            ..counting
+        };
+        assert_eq!(
+            status_of(Some(&queued), &staged, Some(&up)),
+            Status::Queued(Some(Hold::Battery))
+        );
+        let failed = Brain {
+            queued: false,
+            ..queued
+        };
+        assert_eq!(
+            status_of(Some(&failed), &staged, Some(&up)),
+            Status::Restart { menu_only: false }
+        );
+        assert_eq!(status_of(Some(&failed), &held, Some(&up)), Status::Failed);
+        assert_eq!(status_of(None, &held, Some(&up)), Status::Held);
+        // GITHUB'S ANSWER.
+        assert_eq!(status_of(None, &records, None), Status::Unasked);
+        assert_eq!(
+            status_of(None, &records, Some(&Heads::Asking)),
+            Status::Checking
+        );
+        assert_eq!(status_of(None, &records, Some(&up)), Status::UpToDate);
+        for (heads, want) in [
+            (heard(Some(Ok(true)), Some(Ok(false))), Moved::Distro),
+            (heard(Some(Ok(false)), Some(Ok(true))), Moved::Nixpkgs),
+            (heard(Some(Ok(true)), Some(Ok(true))), Moved::Both),
+            (heard(None, Some(Ok(true))), Moved::Nixpkgs),
+            (
+                heard(Some(Err(Refusal::Offline)), Some(Ok(true))),
+                Moved::Nixpkgs,
+            ),
+        ] {
+            assert_eq!(
+                status_of(None, &records, Some(&heads)),
+                Status::Available(want)
+            );
+        }
+        for (heads, why) in [
+            (
+                heard(Some(Ok(false)), Some(Err(Refusal::Offline))),
+                Unchecked::Offline,
+            ),
+            (
+                heard(Some(Err(Refusal::RateLimited)), Some(Ok(false))),
+                Unchecked::RateLimited,
+            ),
+            (
+                heard(Some(Err(Refusal::ToolFailed)), None),
+                Unchecked::Other,
+            ),
+            (Heads::Came(Ok(Vec::new())), Unchecked::Nothing),
+            (
+                Heads::Came(Err(ronoctua_software::heads::Unread::NoLock)),
+                Unchecked::NoLock,
+            ),
+            (
+                Heads::Came(Err(ronoctua_software::heads::Unread::Unreadable)),
+                Unchecked::Unreadable,
+            ),
+        ] {
+            assert_eq!(
+                status_of(None, &records, Some(&heads)),
+                Status::Unchecked(why)
+            );
+        }
+        // NEVER GITHUB'S FAULT, and never "up to date", what nobody asked:
+        // a node of this machine's lock it does not read, and an input the
+        // update moves with no branch on GitHub — the installer's tree —,
+        // whatever the other input says.
+        let unlearnt = |distro: Unlearnt, nixpkgs: bool| {
+            let Heads::Came(Ok(mut all)) = heard(None, Some(Ok(nixpkgs))) else {
+                unreachable!("a test's heads came");
+            };
+            all.insert(
+                0,
+                ronoctua_software::heads::Heard {
+                    input: ronoctua_software::heads::Input::Distro,
+                    head: Err(distro),
+                },
+            );
+            Heads::Came(Ok(all))
+        };
+        assert_eq!(
+            status_of(None, &records, Some(&unlearnt(Unlearnt::Unasked, false))),
+            Status::Unchecked(Unchecked::Unasked(ronoctua_software::heads::Input::Distro)),
+            "an input nobody asked about let the other say up to date"
+        );
+        assert_eq!(
+            status_of(None, &records, Some(&unlearnt(Unlearnt::Lock, false))),
+            Status::Unchecked(Unchecked::Unreadable),
+            "this machine's lock was said to be GitHub's fault"
+        );
+        assert_eq!(
+            status_of(None, &records, Some(&unlearnt(Unlearnt::Unasked, true))),
+            Status::Available(Moved::Nixpkgs),
+            "a moved input is an update whatever the other is"
+        );
+        // EVERY SENTENCE IS THERE, in both languages, with its date.
+        let statuses = [
+            Status::Running,
+            Status::CountingDown,
+            Status::Queued(None),
+            Status::Restart { menu_only: false },
+            Status::Restart { menu_only: true },
+            Status::Failed,
+            Status::Held,
+            Status::Checking,
+            Status::Available(Moved::Both),
+            Status::UpToDate,
+            Status::Unchecked(Unchecked::RateLimited),
+            Status::Unchecked(Unchecked::Unasked(ronoctua_software::heads::Input::Distro)),
+            Status::Unchecked(Unchecked::Unasked(ronoctua_software::heads::Input::Nixpkgs)),
+            Status::Unasked,
+        ]
+        .into_iter()
+        .chain(
+            [
+                Hold::Ram,
+                Hold::Cpu,
+                Hold::Battery,
+                Hold::Busy,
+                Hold::Network,
+                Hold::Asleep,
+            ]
+            .map(|h| Status::Queued(Some(h))),
+        );
+        let zone = ronoctua_files::when::Zone::utc();
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            for status in statuses.clone() {
+                let said = status.sentence(Some(1_762_179_600), &zone, &t);
+                assert!(!said.contains('['), "{language}: {status:?}: {said}");
+                assert!(said.contains("2025"), "{language}: no date: {said}");
+            }
+        }
+        // A STOPPED RUN is the person's decision, not a failure — and what
+        // worked last is the newest that did.
+        let record = |kind, why: &str, ended| ronoctua_brain::RunRecord {
+            task: module::ID.to_owned(),
+            ended,
+            kind,
+            why: why.to_owned(),
+            ..ronoctua_brain::RunRecord::default()
+        };
+        let mut mind = a_mind_with(false, false, None, 0);
+        if let Some(task) = mind.task_mut(module::ID) {
+            use ronoctua_brain::task::OutcomeKind::{Done, Failed};
+            task.last = Some(record(Failed, ABORTED, 30));
+            task.history = vec![
+                record(Failed, ABORTED, 30),
+                record(Done, "", 20),
+                record(Failed, "", 10),
+            ];
+        }
+        let b = Brain::of(&mind);
+        assert!(!b.failed, "a stopped run read as a failure");
+        assert_eq!(b.worked, Some(20));
+        if let Some(task) = mind.task_mut(module::ID) {
+            task.history.remove(1);
+        }
+        assert!(Brain::of(&mind).failed);
+    }
+
+    /// FAILS IF: what GitHub said is not asked again once the machine's
+    /// lock moved under it — an update moved the branches' revisions —, is
+    /// asked again for nothing, or a view that never heard GitHub asks.
+    #[test]
+    fn a_moved_lock_makes_what_github_said_stale_once() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-update-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a room");
+        let lock = dir.join(ronoctua_software::heads::LOCK);
+        std::fs::write(&lock, b"{}").expect("a lock");
+        let mut v = a_view().with_heads(heard(Some(Ok(false)), Some(Ok(true))));
+        v.lock = Some((lock.clone(), modified(&lock)));
+        let _ = v.reread_if_moved();
+        assert!(!v.heads_are_stale(), "asked again with nothing moved");
+        v.lock = Some((lock.clone(), None));
+        let _ = v.reread_if_moved();
+        assert!(v.heads_are_stale(), "the lock moved and nothing is asked");
+        assert!(!v.heads_are_stale(), "asked again twice for one move");
+        // A MOVE WHILE GITHUB IS BEING ASKED: that question read the old
+        // lock, and is asked again.
+        let mut asking = a_view();
+        asking.heads_asked();
+        asking.lock = Some((lock.clone(), None));
+        let _ = asking.reread_if_moved();
+        assert!(asking.heads_are_stale(), "a move during a check was let be");
+        let mut never = a_view();
+        never.lock = Some((lock, None));
+        let _ = never.reread_if_moved();
+        assert!(!never.heads_are_stale(), "a view that never asked asks");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the head is not the status, a line of air, the actions —
+    /// each the short word its key teaches, a page's value beside it —, air
+    /// and the register, in both doors with the same targets; or the
+    /// focused line does not wear the cursor's colour.
+    #[test]
+    fn the_head_is_the_status_then_the_actions_in_both_doors() {
+        let t = texts();
+        let v = a_view()
+            .with_heads(heard(Some(Ok(false)), Some(Ok(true))))
+            .with_glance(Glance {
+                cache: ronoctua_cachix::settings::Named::Cache(
+                    ronoctua_person::options::BinaryCache {
+                        name: "someone".to_owned(),
+                        public_key: String::new(),
+                        visibility: ronoctua_person::options::Visibility::Private,
+                    },
+                ),
+                follow: crate::follow::Choice::Off,
+                parts: 2,
+            });
+        let head = v.top_lines(100, &t);
+        assert_eq!(head[0].target, Some(Target::Status));
+        assert_eq!(
+            head[0].text,
+            t.t(module::key::SYSTEM_UPDATE_STATUS_AVAILABLE_NIXPKGS)
+        );
+        assert_eq!(head[1].text, "", "no air under the status");
+        let actions: Vec<&TopLine> = head[2..6].iter().collect();
+        assert_eq!(
+            actions.iter().map(|l| l.target).collect::<Vec<_>>(),
+            [Action::Start, Action::Cache, Action::Follow, Action::Parts]
+                .map(|a| Some(Target::Action(a)))
+        );
+        for (line, action) in
+            actions
+                .iter()
+                .zip([Action::Start, Action::Cache, Action::Follow, Action::Parts])
+        {
+            assert_eq!(line.text, t.t(action.id()));
+        }
+        let beside = |l: &TopLine| l.beside.iter().map(|p| p.text.clone()).collect::<String>();
+        assert_eq!(beside(actions[0]), "", "update now has a value");
+        assert!(beside(actions[1]).contains("someone"), "{:?}", actions[1]);
+        assert_eq!(beside(actions[2]), t.t(key::DISTRO_FOLLOW_OFF));
+        assert!(beside(actions[3]).contains('2'), "{:?}", actions[3]);
+        assert_eq!(head[6].text, "", "no air under the actions");
+        assert_eq!(
+            actions[0].color,
+            crate::chrome::Kind::Setting.tones(true).0,
+            "the focus is not the cursor's colour"
+        );
+        assert_ne!(actions[1].color, actions[0].color);
+        // THE REGISTER SAYS WHAT THE FOCUSED ACTION DOES.
+        assert_eq!(
+            head[7].text,
+            crate::chrome::note_lines(&t.t(module::key::SYSTEM_UPDATE_START_DOES), 100)[0]
+        );
+        // THE FOOTER'S REGION: the same lines, the same targets.
+        let rows = v.region_rows(0, head.len(), 100, &t);
+        assert_eq!(
+            rows.iter().map(|r| r.target).collect::<Vec<_>>(),
+            v.top_lines(crate::chrome::extent(100).1, &t)
+                .iter()
+                .map(|l| l.target)
+                .collect::<Vec<_>>()
+        );
+        let words: String = rows
+            .iter()
+            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .collect();
+        for needle in [
+            t.t(module::key::SYSTEM_UPDATE_STATUS_AVAILABLE_NIXPKGS),
+            t.t(START),
+            t.t(key::DISTRO_FOLLOW_OFF),
+        ] {
+            assert!(words.contains(&needle), "`{needle}` is not in the region");
+        }
+        // AND THE REGION'S CURSOR IS THE FOCUS'S LINE.
+        assert_eq!(
+            rows[v.region_cursor(100, &t)].target,
+            Some(Target::Action(Action::Start))
+        );
+        // A COUNTDOWN offers its two answers, a run its stop; a queue its
+        // "update now", refusing.
+        let offered = |b: Brain| a_view().with_brain(b).actions();
+        assert_eq!(
+            offered(Brain {
+                announced: true,
+                ..Brain::default()
+            })[..2],
+            [Action::StartNow, Action::NotNow]
+        );
+        assert_eq!(
+            offered(Brain {
+                running: true,
+                ..Brain::default()
+            })[0],
+            Action::Stop
+        );
+        let mut queued = a_view().with_brain(Brain {
+            queued: true,
+            ..Brain::default()
+        });
+        assert_eq!(
+            queued.clicked(Target::Action(Action::Start)),
+            Errand::Moved,
+            "the first click on the queue's update now did more than select it"
+        );
+        let start = queued.top_lines(100, &t)[2].clone();
+        assert_eq!(start.target, Some(Target::Action(Action::Start)));
+        assert_eq!(
+            start.color,
+            crate::chrome::Kind::Disabled.tones(true).0,
+            "the queue's update now does not refuse"
+        );
+        assert!(
+            queued.register_lines(100, &t).join(" ").starts_with(
+                t.t(module::key::SYSTEM_UPDATE_START_QUEUED)
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+            ),
+            "the refusal does not say why"
+        );
+    }
+
+    /// FAILS IF: the window's name is drawn on the status line while the
+    /// header that says it is shown, is missing while the header is hidden,
+    /// is not at the right end in the quietest tone, or the status runs
+    /// under it.
+    #[test]
+    fn the_name_is_on_the_status_line_only_without_a_header() {
+        let (w, mut ui) = a_window();
+        let name = ui.texts.t(module::key::CMD_SYSTEM_UPDATE);
+        let shown = w.head(&ui);
+        assert!(
+            shown
+                .iter()
+                .all(|l| l.beside.iter().all(|p| p.text != name)),
+            "the name is drawn under a header that says it"
+        );
+        ui.hinted.hide_header(true);
+        let hidden = w.head(&ui);
+        let piece = hidden[0]
+            .beside
+            .iter()
+            .find(|p| p.text == name)
+            .expect("the name is not on the status line");
+        assert_eq!(piece.color, tokens::color::TEXT_DIM);
+        assert_eq!(
+            piece.at + layout::width(&piece.text) + EDGE_RIGHT,
+            ui.columns,
+            "the name is not at the right end"
+        );
+        for l in hidden.iter().filter(|l| l.target == Some(Target::Status)) {
+            assert!(
+                layout::width(&l.text) + COLUMN_GAP <= piece.at,
+                "the status runs under the name: {}",
+                l.text
+            );
+        }
+        assert_eq!(
+            hidden.iter().filter(|l| !l.beside.is_empty()).count(),
+            hidden
+                .iter()
+                .filter(|l| matches!(
+                    l.target,
+                    Some(Target::Action(
+                        Action::Cache | Action::Follow | Action::Parts
+                    ))
+                ))
+                .count()
+                + 1,
+            "the name is drawn on another line too"
+        );
+    }
+
+    /// FAILS IF: a scene cannot say what the brain is doing with the
+    /// update, or what GitHub said — or one that says a word it does not
+    /// have is drawn as if it said nothing.
+    #[test]
+    fn a_scene_says_the_brain_and_the_heads() {
+        let scene = |json: &str| -> UpdateWindow {
+            let file = std::env::temp_dir().join(format!(
+                "ronoctua-update-scene-{}-{}.json",
+                std::process::id(),
+                json.len()
+            ));
+            std::fs::write(&file, json).expect("a scene");
+            let asked =
+                camera::parse(&["--scene".to_owned(), file.display().to_string()]).expect("asked");
+            let w = camera::window_for_tests(&asked).expect("a window");
+            let _ = std::fs::remove_file(&file);
+            w
+        };
+        let w = scene(
+            r#"{"brain": {"announced": true, "queued": true, "last": {"kind": "done", "ended": 1762179600}}, "heads": {"nixpkgs": "moved", "ronoctua": "offline"}}"#,
+        );
+        assert_eq!(w.open.view.status(), Status::CountingDown);
+        assert_eq!(w.open.view.run(), Run::CountingDown);
+        let w = scene(r#"{"heads": {"nixpkgs": "same", "ronoctua": "same"}}"#);
+        assert_eq!(w.open.view.status(), Status::UpToDate);
+        let w = scene(r#"{"heads": "checking"}"#);
+        assert_eq!(w.open.view.status(), Status::Checking);
+        let w = scene(r#"{"heads": {"nixpkgs": "rate-limited"}}"#);
+        assert_eq!(
+            w.open.view.status(),
+            Status::Unchecked(Unchecked::RateLimited)
+        );
+        let w = scene(r#"{"heads": {"nixpkgs": "same", "ronoctua": "unasked"}}"#);
+        assert_eq!(
+            w.open.view.status(),
+            Status::Unchecked(Unchecked::Unasked(ronoctua_software::heads::Input::Distro))
+        );
+        let w = scene(r#"{"heads": {"nixpkgs": "lock"}}"#);
+        assert_eq!(
+            w.open.view.status(),
+            Status::Unchecked(Unchecked::Unreadable)
+        );
+        let w = scene(r#"{"brain": {"last": {"kind": "failed", "ended": 5}}}"#);
+        assert_eq!(w.open.view.status(), Status::Failed);
+        for wrong in [
+            r#"{"heads": {"nixpkgs": "sideways"}}"#,
+            r#"{"heads": {"elsewhere": "same"}}"#,
+            r#"{"heads": "maybe"}"#,
+            r#"{"brain": {"hold": "tired"}}"#,
+            r#"{"brain": {"runing": true}}"#,
+        ] {
+            let file = std::env::temp_dir().join(format!(
+                "ronoctua-update-scene-wrong-{}.json",
+                std::process::id()
+            ));
+            std::fs::write(&file, wrong).expect("a scene");
+            let asked =
+                camera::parse(&["--scene".to_owned(), file.display().to_string()]).expect("asked");
+            assert!(camera::window_for_tests(&asked).is_err(), "{wrong}");
+            let _ = std::fs::remove_file(&file);
+        }
     }
 }

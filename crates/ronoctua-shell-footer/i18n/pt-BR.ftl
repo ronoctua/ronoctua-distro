@@ -477,7 +477,7 @@ transfers-queued = na fila
 # onde cada uma tem cerca de uma dúzia de células e tudo o que vem depois de
 # uma frase longa cai fora da linha.
 cmd-brain-open = Brain
-cmd-brain-abort = Interromper
+cmd-brain-abort = Agora não, ou interromper
 cmd-brain-proceed = Começar já
 # A FAIXA SOB O MINIBUFFER — uma linha, e só enquanto uma contagem corre.
 #
@@ -490,8 +490,10 @@ cmd-brain-proceed = Começar já
 # tarefa acrescentada amanhã herda esta frase em vez de precisar de uma sua.
 brain-band-soon = { $task } — começa em { $seconds } s
 brain-band-abort = agora não
-brain-band-proceed = agora
+brain-band-proceed = começar já
 hint-brain-countdown = quanto falta para começar
+hint-brain-abort = adiar a tarefa para a próxima hora dela — a contagem acaba
+hint-brain-proceed = começar a tarefa agora, sem esperar a contagem
 hint-update-mark = clique para ver a atualização acontecer
 
 ## `theme-backdrop-near`, is offered only under a light theme.

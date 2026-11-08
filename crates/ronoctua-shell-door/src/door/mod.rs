@@ -1858,7 +1858,12 @@ pub trait Content: Sized + 'static {
     /// — `cmd-<id>` for a command of the registry, `about-<id>` for a key of a
     /// view (`chrome::hint_sentence`). The buffer host answers what its
     /// component declared, whose `cmd-<id>` is the short word on the line.
-    fn explains(&self, id: &'static str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    ///
+    /// AND THE SAME SENTENCE TRAVELS WITH THE SHORTCUT to the footer
+    /// (`ipc::keymap_line`), which says it under its line opened and beside
+    /// `LEADER Alt`'s list — so a window that says more of a key than its
+    /// registry label says it there too.
+    fn explains(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
         crate::chrome::hint_sentence(id, texts)
     }
 
@@ -2471,8 +2476,9 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
 /// line.
 #[derive(Default)]
 struct ShortcutSnapshot {
-    /// `<keys> <command>` per shortcut, newline-joined — the `keymap` verb's
-    /// answer, the shape the footer's `ipc::buffer_keymap` already reads.
+    /// One `ipc::keymap_line` per shortcut — its keys, its command, and the
+    /// window's words and sentence for it — newline-joined: the `keymap`
+    /// verb's answer, the shape the footer's `ipc::buffer_keymap` reads.
     answer: String,
     /// The ids declared, so `command <id>` runs ONLY one the window named: the
     /// socket sits in `XDG_RUNTIME_DIR`, reachable by anything this user runs
@@ -2895,10 +2901,11 @@ impl<C: Content> Door<C> {
             self.state_told = state;
         }
         // THE SHORTCUTS, published to this window's socket when the SET
-        // CHANGES — the current mode's keys (`Content::shortcuts`), so the
-        // footer's `LEADER Alt` region and its minibuffer line carry the
-        // window as it is now. Only for a window the base door serves; a
-        // buffer answers `keymap` from its own socket.
+        // CHANGES — the current mode's keys (`Content::shortcuts`), with the
+        // window's words and sentence for each — so the footer's `LEADER Alt`
+        // region and its minibuffer line carry the window as it is now. Only
+        // for a window the base door serves; a buffer answers `keymap` from
+        // its own socket.
         if let Some(shared) = &self.shortcuts_socket {
             let now = shortcuts_now(&self.content, &self.ui);
             if now != self.shortcuts_told {
@@ -2916,16 +2923,33 @@ impl<C: Content> Door<C> {
                         "a shortcut with no one key after LEADER Alt"
                     );
                 }
-                let answer = now
-                    .iter()
-                    .map(|b| format!("{} {}", b.keys, b.command))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if let Ok(mut g) = shared.lock() {
-                    g.answer = answer;
-                    g.known = now.iter().map(|b| b.command.clone()).collect();
+            }
+            // THE ANSWER IS WRITTEN WHEN IT CHANGES — the set, or only its
+            // words: a language turned keeps every key and says each one
+            // anew — and the footer is TOLD, so the window in front is never
+            // drawn from the set it had when the focus came to it: a page
+            // opened, a question that took every key, a countdown that
+            // teaches its answers. Quietly, as the state is: a report nobody
+            // asked for.
+            let answer = if now.is_empty() {
+                String::new()
+            } else {
+                let content = &self.content;
+                keymap_answer(&now, &content.hint(&self.ui), &self.ui.texts, |id| {
+                    content.explains(id, &self.ui.texts)
+                })
+            };
+            let told = shared.lock().is_ok_and(|mut g| {
+                if g.answer == answer {
+                    return false;
                 }
-                self.shortcuts_told = now;
+                g.answer = answer;
+                g.known = now.iter().map(|b| b.command.clone()).collect();
+                true
+            });
+            self.shortcuts_told = now;
+            if told {
+                Self::report_to_the_footer(crate::ipc::shortcuts_order(std::process::id()));
             }
         }
         let mut untaken = false;
@@ -3440,6 +3464,32 @@ impl<C: Content> Door<C> {
         let its = self.content.header_keys();
         self.ui.header_took(its, sym, down)
     }
+}
+
+/// The `keymap` answer for the shortcuts `now`: a line each
+/// (`ipc::keymap_line`), with the WORDS the window's hint says beside the key
+/// (`chrome::hint_words`) — else the id read as a text key, a window's short
+/// word — and the sentence the window says of it under the pointer
+/// (`explains`, [`Content::explains`]).
+fn keymap_answer(
+    now: &[ronoctua_protocol::Binding],
+    hint: &[crate::chrome::Piece],
+    texts: &ronoctua_i18n::Texts,
+    explains: impl Fn(&str) -> Option<String>,
+) -> String {
+    now.iter()
+        .map(|b| {
+            let words = crate::chrome::hint_words(hint, &b.command)
+                .or_else(|| texts.has(&b.command).then(|| texts.t(&b.command)));
+            crate::ipc::keymap_line(
+                &b.keys,
+                &b.command,
+                words.as_deref(),
+                explains(&b.command).as_deref(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The shortcuts a window publishes NOW ([`Content::shortcuts`]) — none while
@@ -4847,5 +4897,41 @@ mod tests {
             at((9.0, 9.0), PointerEventKind::Leave { serial: 2 }),
         ];
         assert_eq!(resting_at(Some((7.0, 8.0)), &went), None);
+    }
+}
+
+#[cfg(test)]
+mod keymap_answer_tests {
+    /// FAILS IF: a window's shortcut reaches the footer without the words its
+    /// header says beside the key, or without the sentence the window says of
+    /// it under the pointer — the footer would read them back from the id
+    /// and say something else than the window's header says — or a shortcut
+    /// the hint does not draw loses its short word.
+    #[test]
+    fn each_key_goes_with_the_windows_words_and_sentence() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let hint = crate::chrome::hint_of(&[("a", "brain-abort"), ("p", "brain-proceed")], &t);
+        let mut now = crate::chrome::bindings_of_hint(&hint, &[]);
+        // ONE THE HINT DOES NOT DRAW, as a terminal's group's are.
+        now.push(ronoctua_protocol::Binding {
+            keys: "x".to_owned(),
+            command: "brain-proceed".to_owned(),
+        });
+        let answer = super::keymap_answer(&now, &hint, &t, |id| {
+            (id == "brain-abort").then(|| "Puts it off.".to_owned())
+        });
+        let read: Vec<crate::ipc::Shortcut> = answer
+            .lines()
+            .filter_map(crate::ipc::shortcut_of_line)
+            .collect();
+        assert_eq!(read.len(), 3, "{answer}");
+        assert_eq!(read[0].keys, "a");
+        assert_eq!(read[0].command, "brain-abort");
+        assert_eq!(read[0].words, Some(t.t("brain-abort")));
+        assert_eq!(read[0].sentence.as_deref(), Some("Puts it off."));
+        assert_eq!(read[1].words, Some(t.t("brain-proceed")));
+        assert_eq!(read[1].sentence, None);
+        assert_eq!(read[2].words, Some(t.t("brain-proceed")), "no short word");
+        assert!(super::keymap_answer(&[], &hint, &t, |_| None).is_empty());
     }
 }

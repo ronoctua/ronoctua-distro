@@ -477,7 +477,7 @@ transfers-queued = in the queue
 # header's ladder, where each one has about a dozen cells and everything after
 # a long one falls off the end of the line.
 cmd-brain-open = Brain
-cmd-brain-abort = Stop it
+cmd-brain-abort = Not now, or stop it
 cmd-brain-proceed = Start now
 # THE BAND UNDER THE MINIBUFFER — one line, and only while a countdown runs.
 #
@@ -490,8 +490,10 @@ cmd-brain-proceed = Start now
 # tomorrow inherits this sentence instead of needing one of its own.
 brain-band-soon = { $task } — starts in { $seconds } s
 brain-band-abort = not now
-brain-band-proceed = now
+brain-band-proceed = start now
 hint-brain-countdown = how long is left before it starts
+hint-brain-abort = put the task off to its next moment — the countdown ends
+hint-brain-proceed = start the task now, without waiting for the countdown
 hint-update-mark = click to watch the update happen
 
 ## `theme-backdrop-near`, is offered only under a light theme.

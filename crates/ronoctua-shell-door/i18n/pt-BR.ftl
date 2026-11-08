@@ -74,10 +74,11 @@ brain-why-off = Desligada
 # para uma contagem — tirar da fila apenas a devolveria na batida seguinte, e a
 # pessoa responderia à mesma pergunta a cada meio minuto.
 echo-brain-postponed = Agora não — ela volta na próxima hora dela
+echo-brain-stopped = Interrompida — o que ela já fez continua feito
 echo-brain-proceeding = Começando agora
 echo-brain-idle = Não há nada para acontecer
-brain-abort = parar
-brain-proceed = começar agora
+brain-abort = agora não
+brain-proceed = começar já
 
 ## Energia — a bateria, o carregador, o perfil e o sono (LEADER s p)
 

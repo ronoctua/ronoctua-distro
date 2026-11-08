@@ -19,25 +19,25 @@ group-update = update
 ## How the boot trial stands (`machine-trial-<outcome>`).
 
 machine-trial-pending = The new system starts for the first time at the next restart. If it does not start, the machine comes back to the last good one by itself.
-machine-trial-good = The new system started well: it is the last good one now.
-machine-trial-failed = The new system did not start, or was rolled back: the machine is back on the last good one.
-machine-trial-boot-identical = The new system starts exactly like the last good one: no restart is needed to trust it.
+machine-trial-good = The new system started well, and it is now the last good one.
+machine-trial-failed = The new system did not start, or was undone, so the machine is back on the last good one.
+machine-trial-boot-identical = The new system starts exactly like the last good one, so there is no need to restart to trust it.
 
 ## Why the new system has no boot trial, until it has started once (`machine-no-trial-<why>`).
 
-machine-no-trial-no-efi-variables = This machine's boot variables cannot be written, so the new system has no way back but the boot menu.
-machine-no-trial-not-in-menu = The boot menu does not name the new system or the last good one in a way the trial can use, so the new system has no way back but the boot menu.
-machine-no-trial-no-last-good = No system is known to have started well on this machine yet, so the new system has no way back but the boot menu.
+machine-no-trial-no-efi-variables = This machine's boot settings cannot be written, so if the new system does not start, only the boot menu takes you back.
+machine-no-trial-not-in-menu = The boot menu does not list the new system and the last good one in a way the trial can use. If the new one does not start, only the boot menu takes you back.
+machine-no-trial-no-last-good = No system has started well on this machine yet, so if the new one does not start, only the boot menu takes you back.
 
 ## The machine's own gestures on the update's page: the system that did not start, tried again at the next update; the machine held on its distro revision, and let go. Each is asked on the page, the no first, then in the sudo bar.
 
 machine-try-again-row = Try it again at the next update.
-machine-try-again-asked = It is tried again at the next update, with its way back armed; { $keys } updates now.
-machine-try-again-question = Try the system that did not start again, at the next update? If it does not start this time either, the machine comes back to the last good one by itself.
+machine-try-again-asked = It will be tried again at the next update, with its way back ready. { $keys } updates now.
+machine-try-again-question = Try the system that did not start again at the next update? If it fails again, the machine goes back to the last good one by itself.
 machine-try-again-no = no, leave it
 machine-try-again-yes = yes, try it again
-machine-hold-row = Hold this machine on { $rev }: updates stop moving the distro and nixpkgs.
-machine-hold-question = Hold this machine on the distro revision it has? Updates stop moving the distro and nixpkgs until you let go.
+machine-hold-row = Hold this machine at { $rev }, so updates stop moving the distro and nixpkgs.
+machine-hold-question = Hold this machine at its current distro version? Updates stop moving the distro and nixpkgs until you let go.
 machine-hold-no = no, keep following the distro
 machine-hold-yes = yes, hold it
 machine-let-go-row = Let go: the next update moves the distro and nixpkgs again.
@@ -57,20 +57,20 @@ cmd-machine-let-go = Lets go of the machine's hold, so the next update moves the
 
 ## The person's brain modules that wait for an approval, on the update's records: a module whose NixOS half runs as root enters a build only at the hash an approval names. Each is asked on the page, the no first, then in the sudo bar.
 
-machine-approve-waiting = Your brain module { $id } waits for your approval: its NixOS half runs as root. The machine measured it as { $hash }.
+machine-approve-waiting = Your brain module { $id } is waiting for your approval, because part of it runs as root. The machine measured it as { $hash }.
 machine-approve-row = Approve { $id } as it is now.
-machine-approve-question = Approve { $id } at { $hash }? From the next update its NixOS half runs as root on this machine, until the module changes.
+machine-approve-question = Approve { $id } at { $hash }? From the next update, part of it runs as root on this machine until the module changes.
 machine-approve-no = no, leave it waiting
 machine-approve-yes = yes, approve it
-machine-approve-approved = { $id } is approved as it is now: it enters this machine with the next update.
-machine-approve-said-approved = { $id } is approved: it enters this machine with the next update.
-machine-approve-said-changed = { $id } changed since the machine measured it, so it was not approved: the next update measures it again.
+machine-approve-approved = { $id } is approved as it is now, and comes in with the next update.
+machine-approve-said-approved = { $id } is approved, and comes in with the next update.
+machine-approve-said-changed = { $id } changed since the machine measured it, so it was not approved. The next update measures it again.
 machine-approve-said-busy = Another change to this machine's data was running: ask again in a moment.
-machine-approve-said-gone = This machine holds no module { $id } any more: nothing was approved.
-machine-approve-said-unhashable = The machine could not measure { $id }: nothing was approved.
+machine-approve-said-gone = This machine no longer has the module { $id }, so nothing was approved.
+machine-approve-said-unhashable = The machine could not measure { $id }, so nothing was approved.
 machine-approve-said-unwritable = The machine could not record the approval of { $id }.
-machine-approve-said-unasked = The request to approve { $id } did not reach the machine whole: ask again.
-machine-approve-said-unstaged = The request to approve { $id } could not be written where the machine reads it.
+machine-approve-said-unasked = The request to approve { $id } arrived incomplete. Ask again.
+machine-approve-said-unstaged = The request to approve { $id } could not be passed to the machine.
 machine-approve-said-none = No brain module of yours waits for an approval.
 cmd-machine-approve-module = Approves a brain module of yours that waits, at the hash the machine measured — asked through sudo
 # THE PERSON'S BINARY CACHE — a page of the update's view (`c`, `LEADER s u c`),
@@ -111,6 +111,9 @@ binary-cache-token-kept = kept, encrypted with your belongings
 binary-cache-token-refused = not used
 binary-cache-copy-unreadable = cannot be read
 binary-cache-copy-newer = of a newer format
+binary-cache-glance-public = { $name }, public
+binary-cache-glance-private = { $name }, private
+binary-cache-does = Opens your binary cache: your own Cachix cache, which this machine downloads from and pushes to after each update.
 binary-cache-down = next row
 about-binary-cache-down = Puts the cursor on the next row of the binary cache's page.
 binary-cache-up = previous row
@@ -166,6 +169,7 @@ binary-cache-said-netrc-footer = Root's netrc is asked for in the sudo bar, abov
 # (`f`, `LEADER s u f`), in both doors: the person's option to let the routine
 # update move them past the versions the distro tested.
 distro-follow-open = follow releases
+distro-follow-does = Opens the distro's apps that follow their releases: whether each update moves them past the versions the distro tested.
 cmd-distro-follow-open = The distro's apps that follow their releases: whether each update moves them past the versions the distro tested
 distro-follow-heading = The distro's apps that follow their releases
 distro-follow-row-follow = follow their releases
@@ -219,6 +223,12 @@ about-distro-follow-enter = Turns following on or off, on its row.
 distro-follow-steps = the steps
 about-distro-follow-steps = Back to the update's steps.
 distro-parts-open = parts
+distro-parts-does = Opens the machine's parts: what arrives after the installation, and the other ways to bring in a download that keeps failing.
+distro-parts-glance = { $count ->
+        [0] none waiting
+        [one] one waiting
+       *[other] { $count } waiting
+    }
 cmd-distro-parts-open = The machine's parts: what arrives after the installation, each on its own, and the other ways to bring in a download that keeps failing
 cmd-distro-parts-hand-in = Hands in a file you downloaded elsewhere, for the part or the system under the cursor: it is taken only if it is that very download
 cmd-distro-parts-import = Brings in, from a stick, the downloads the parts and the system are missing

@@ -4180,11 +4180,12 @@ let
         sys.exit("ERROR: `brain::Hit` went away or changed shape")
     brain_hits = set(re.findall(r"^    ([A-Z]\w*)", brain_enum, re.M))
     # THE COUNTDOWN'S TWO, THE NOTICE'S THREE, AND `+N`: every one a command
-    # a key runs — the countdown's and the notice's inside the brain's buffer,
-    # `+N` at `LEADER b` — and what each runs is read off `brain_clicked`.
+    # of the registry — `LEADER :` reaches each by name, `+N` is `LEADER b` —
+    # named ONCE, by `Hit::command`, which the click runs and whose key the
+    # window in front may give.
     if brain_hits != {"Abort", "Proceed", "Act", "Dismiss", "Snooze", "More"}:
         gaps.append("the brain's line has targets " + repr(sorted(brain_hits)) + ", outside what was agreed")
-    brain_clicked = must(body_of(surface, "brain_clicked"), "`Footer::brain_clicked`")
+    brain_commands = must(body_of(brain, "command"), "`brain::Hit::command`")
     for hit, command in (
         ("Abort", "brain-abort"),
         ("Proceed", "brain-proceed"),
@@ -4193,58 +4194,101 @@ let
         ("Snooze", "brain-snooze"),
         ("More", "brain-open"),
     ):
-        if not re.search(r"Hit::" + hit + r'\s*=>\s*self\.run_command\("' + command + r'"\)', brain_clicked):
+        if not re.search(r"Self::" + hit + r'\s*=>\s*"' + command + r'"', brain_commands):
             gaps.append("the brain's `" + hit + "` does not run `" + command + "`")
+    brain_clicked = must(body_of(surface, "brain_clicked"), "`Footer::brain_clicked`")
+    if "self.run_command(hit.command())" not in brain_clicked:
+        gaps.append("a click on the brain's line runs something other than its control's command")
     #
-    # MEASURED AGAINST THE BRAIN'S BUFFER and no longer against the leader's
-    # table. `LEADER b a` and `LEADER b p` are gone: the owner asked for
-    # `LEADER b` to open the brain with nothing in between, and a sequence
-    # cannot be a command and the prefix of another — the keymap refuses that
-    # at build time. What the two answers do already lived inside the buffer,
-    # as `m a` and `m p`, and the band prints THOSE.
-    #
-    # So the promise is the same one, one door along: every control the band
-    # draws is answerable from the keyboard. The band also keeps its click,
-    # and both remain registry commands, so `LEADER :` reaches them by name.
+    # AND THE KEYBOARD'S WAY TO EACH IS A KEY THE BRAIN'S BUFFER BINDS to the
+    # control's command — a `("<keys>", "<command>")` pair of its keymap's
+    # table, whatever the keys —, which `LEADER Alt` reaches while it is in
+    # front. Read off the table itself: the command named anywhere else in
+    # the buffer (the arm that answers it) is no key.
     #
     # AND THE THIRD IS THE WATCH'S OFFER. A watch has no result but a
     # sentence, and a sentence that only appeared on a screen somebody has to
     # open would be a watch nobody hears — so the line carries the offer too,
     # with a button. It is ONE target and not one per notice: what it runs is
     # named by the notice itself, as a command id the registry resolves.
-    # The promise it is held to is the other two's exactly — the button is
-    # answerable from the keyboard, at `m n`.
     brain_buffer = read(root / "buffers" / "brain" / "src" / "lib.rs")
+    # PARSED: the table is `const KEYMAP: &[(&str, &str)] = &[ … ];`, and no
+    # pair in it holds a `]`.
+    brain_keymap = re.search(r"const KEYMAP\b[^=]*=\s*&\[(.*?)\];", brain_buffer, re.S)
+    if not brain_keymap:
+        sys.exit("ERROR: the brain buffer's `KEYMAP` table went away or changed shape")
+    floor(len(re.findall(r"\(\s*\"", brain_keymap.group(1))), 5, "pairs of the brain buffer's keymap")
     for command in (
-        '"brain-abort"',
-        '"brain-proceed"',
-        '"brain-act"',
-        '"brain-dismiss"',
-        '"brain-snooze"',
+        "brain-abort",
+        "brain-proceed",
+        "brain-act",
+        "brain-dismiss",
+        "brain-snooze",
     ):
-        if command not in brain_buffer:
-            gaps.append("the brain's line has no key in the brain's buffer for " + command)
-    # AND THE BAND PRINTS WHAT THE BUFFER ANSWERS TO. The two constants are
-    # the band's own, and they have to be the buffer's keys and not the
-    # leader's — a line that taught `SUPER b a` after that sequence went away
-    # would be teaching a key that does nothing.
-    leader_src = keymap
-    for const, wanted in (
-        ("BRAIN_ABORT_KEYS", "brain-abort"),
-        ("BRAIN_PROCEED_KEYS", "brain-proceed"),
-        ("BRAIN_NOTICE_KEYS", "brain-act"),
-        ("BRAIN_DISMISS_KEYS", "brain-dismiss"),
-        ("BRAIN_SNOOZE_KEYS", "brain-snooze"),
-    ):
-        said = re.search(r"pub const " + const + r': &str = "([^"]+)";', leader_src)
-        if not said:
-            gaps.append("`" + const + "` went away; the band draws its key from it")
-            continue
-        if ('("' + said.group(1) + '", "' + wanted + '")') not in brain_buffer:
+        if not re.search(r'\(\s*"[^"]+"\s*,\s*"' + command + r'"\s*\)', brain_keymap.group(1)):
+            gaps.append("the brain's buffer binds no key to " + command + " in its keymap: `LEADER Alt` cannot answer the line's control")
+    # AND THE LINE DRAWS A KEY ONLY FROM THE WINDOW IN FRONT. It drew the
+    # brain buffer's own `, a` over every window — a comma and a letter typed
+    # into any window but the brain's, which the owner read off the screen.
+    # What answers a control from the keyboard is `LEADER Alt` and the key
+    # the window in front gives the control's command, so that is the one
+    # source of a key on the line, and a control is drawn without one when
+    # the window gives none:
+    #
+    # - the line's words carry no key but the window's published shortcuts
+    #   (`Words::published`), which the footer hands it from what the window
+    #   in front publishes (`buffer_bindings`) — and which control's key the
+    #   pointer rests on, spelt there (`Words::spelt`);
+    # - the key is found there by the control's command (`key_of`);
+    # - every control is built from that answer, and may be built without
+    #   one (`control` takes an `Option`);
+    # - and no sequence is written into the line's code.
+    brain_words = must(scope(brain, r"pub struct Words\b"), "`brain::Words`")
+    fields = set(re.findall(r"^    pub (\w+):", brain_words, re.M))
+    if fields != {"texts", "zone", "published", "spelt"}:
+        gaps.append("the brain line's words carry " + repr(sorted(fields)) + ": a key from somewhere other than the window in front")
+    if not re.search(r"published:\s*&self\.buffer_bindings", surface):
+        gaps.append("the brain's line is not handed what the window in front publishes")
+    key_of = must(body_of(brain, "key_of"), "`brain::key_of`")
+    if ".published" not in key_of or "hit.command()" not in key_of:
+        gaps.append("the brain line's key is not looked up among the window's shortcuts by its command")
+    if not re.search(r"fn control\([^)]*key: Option<&str>", brain, re.S):
+        gaps.append("a control of the brain's line cannot be drawn without a key")
+    builders = "".join(
+        must(body_of(brain, name), "`brain::" + name + "`") for name in ("countdown_line", "notice_line")
+    )
+    # PARSED: each call of `control` by its parentheses (`shut_at`), split
+    # at the commas of its own depth; its key — the fourth — is the lookup
+    # itself, or the `key` the loop bound to it.
+    def arguments(text, opened):
+        inner, out, deep, start = shut_at(text, opened), [], 0, 0
+        for k, c in enumerate(inner):
+            if c in "([{":
+                deep += 1
+            elif c in ")]}":
+                deep -= 1
+            elif c == "," and deep == 0:
+                out.append(inner[start:k].strip())
+                start = k + 1
+        if inner[start:].strip():
+            out.append(inner[start:].strip())
+        return out
+    calls = [arguments(builders, m.end()) for m in re.finditer(r"\bcontrol\(", builders)]
+    floor(len(calls), 3, "controls built on the brain's line")
+    looked_up = re.compile(r"key_of\(words, Hit::\w+\)\.as_deref\(\)|key\.as_deref\(\)")
+    for args in calls:
+        if len(args) != 7 or not looked_up.fullmatch(args[3]):
             gaps.append(
-                "the band prints `" + said.group(1) + "` for " + wanted
-                + ", which is not what the brain's buffer binds"
+                "a control of the brain's line is built with the key `"
+                + (args[3] if len(args) > 3 else "?")
+                + "`, not one looked up in the window in front"
             )
+    if "let key = key_of(words, hit);" not in builders:
+        gaps.append("a notice's control is not given the key the window in front gives it")
+    # THE STRINGS ARE READ, and so `uncommented` and not `code_of`: a key
+    # written in is a string — `"[{keys}]"`, `", a"`.
+    if re.search(r'"\[|", [a-z]"', without_tests(brain)):
+        gaps.append("a key is written into the brain line's code instead of read from the window in front")
     # AND A CONTROL CANNOT BE BUILT WITHOUT SAYING WHAT IT DOES.
     #
     # This is structural rather than a count, and the first version of it was a
@@ -14542,6 +14586,14 @@ let
         ("files-column-modified", "files-detail-modified"),
         ("files-column-name", "files-detail-name"),
         ("files-column-size", "files-detail-size"),
+        # A STATE WORD, NOT A LABEL. The update's head draws each page's
+        # state beside the page's own name (`View::glance_of`) and the steps
+        # theirs beside each step's name: the same state of two different
+        # things, each read with the label in front of it — "off" said of
+        # the follow and of a step is two facts told apart by their rows.
+        ("binary-cache-copy-newer", "distro-follow-copy-newer"),
+        ("binary-cache-copy-unreadable", "distro-follow-copy-unreadable"),
+        ("distro-follow-off", "system-update-verdict-off"),
     }
 
     # THE VIEWS: one file each, and the keys are the ones IT names.
@@ -33270,8 +33322,8 @@ let
   # imported as, and so is a new caller of the TLS transports beneath it.
   #
   # And the pass itself: built in one place, over the person's own file — or
-  # over the one declared updater's own hosts, asked for from one function
-  # and asked as by the follow of the distro's AppImages alone. The
+  # over a declared updater's own hosts, asked for from one function and
+  # asked as by that updater's own module alone. The
   # helpers over a test's consent file (`pass_in` and its kin) are behind
   # `test-support`, which only a `[dev-dependencies]` table may turn on, and
   # no product calls them; `request_let` carries the caller's headers and
@@ -33504,16 +33556,26 @@ let
         if not item or 'feature = "test-support"' not in item.group(1):
             wrong.append(f"ronoctua-consent: `{name}` is not behind `test-support`")
 
-    # A DECLARED UPDATER'S PASS — the owner's exception (AGENTS.md): the
+    # A DECLARED UPDATER'S PASS — the owner's exceptions (AGENTS.md): the
     # machine keeping itself new asks no consent, so its pass is the
     # narrowest there is. The updaters and their hosts are a closed table in
     # the consent crate; the pass goes through the one `mint`, for the
     # updater's own hosts; ONE function of the workspace asks for it
-    # (`net::Asker::pass`), and only the follow of the distro's AppImages
-    # asks as an updater — the two hosts Nix already asks.
-    UPDATERS = {"DistroAppImages": ["api.github.com", "github.com"]}
+    # (`net::Asker::pass`), and each updater is asked as from one module of
+    # its own: the follow of the distro's AppImages (the two hosts Nix
+    # already asks), and the heads of the branches the machine's flake
+    # follows (2026-11-08, the API alone). The network itself (`net.rs`)
+    # carries whichever it is handed.
+    UPDATERS = {
+        "DistroAppImages": ["api.github.com", "github.com"],
+        "MachineBranches": ["api.github.com"],
+    }
     UPDATER_ASKS = {("ronoctua-software/src/net.rs", "pass")}
-    UPDATER_ASKERS = {"ronoctua-software/src/net.rs", "ronoctua-software/src/follow.rs"}
+    UPDATER_ASKERS = {
+        "ronoctua-software/src/net.rs": None,
+        "ronoctua-software/src/follow.rs": "DistroAppImages",
+        "ronoctua-software/src/heads.rs": "MachineBranches",
+    }
     # `attributed` keeps the strings: the hosts are the question.
     table = must(scope(attributed, r"pub enum Updater\b"), "consent: `enum Updater`")
     hosts_of = must(body_of(attributed, "hosts"), "consent: `Updater::hosts`")
@@ -33526,7 +33588,7 @@ let
         wrong.append("ronoctua-consent: `mint` lets an updater a host that is not one of its own")
     if "mint(Grant::Updater(" not in must(body_of(consent, "pass_for_updater"), "consent: `pass_for_updater`"):
         wrong.append("ronoctua-consent: `pass_for_updater` no longer goes through `mint`")
-    asks_found, askers_found = 0, 0
+    asks_found, askers_found = 0, {path: 0 for path in UPDATER_ASKERS}
     for f in sorted(crates.rglob("*.rs")):
         rel = f.relative_to(crates)
         if rel.parts[0] == "ronoctua-consent":
@@ -33539,17 +33601,27 @@ let
                 wrong.append(f"{rel} asks for a declared updater's pass in {site(code, at)} — only `net::Asker::pass` does")
         for m in re.finditer(r"\b(?:Asker::Updater|UpdaterNet)\s*\(", code):
             if str(rel) in UPDATER_ASKERS:
-                askers_found += 1
+                askers_found[str(rel)] += 1
             else:
-                wrong.append(f"{rel} asks as a declared updater in `{whose(code, m.start())}` — only the follow of the distro's AppImages does")
+                wrong.append(f"{rel} asks as a declared updater in `{whose(code, m.start())}` — only the follow of the distro's AppImages and the heads of the machine's branches do")
+        # AND AS ITS OWN UPDATER ONLY: a module that asks as one names that
+        # one and no other.
+        own = UPDATER_ASKERS.get(str(rel))
+        if own:
+            named = set(re.findall(r"\bUpdater::(\w+)", code))
+            if named != {own}:
+                wrong.append(f"{rel} names the updaters {sorted(named)}, not {own} alone — it asks as its own")
     floor(asks_found, 1, "asks for a declared updater's pass in `net::Asker::pass`")
-    floor(askers_found, 3, "places that ask as the declared updater (the follow, its network)")
+    # EVERY MODULE THE TABLE NAMES STILL ASKS: one renamed away would leave
+    # its place open to whatever takes the name.
+    for path, found in askers_found.items():
+        floor(found, 1, f"places in {path} that ask as a declared updater")
 
     for w in wrong:
         print(f"ERROR: {w}", file=sys.stderr)
     if wrong:
         raise SystemExit(1)
-    print(f"OK: {swept} sources, {older} older requests, and every new one carries a pass; one declared updater, asked from one place")
+    print(f"OK: {swept} sources, {older} older requests, and every new one carries a pass; {len(UPDATERS)} declared updaters, each asked as from its own module")
     END
   '';
 

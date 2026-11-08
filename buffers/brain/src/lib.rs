@@ -321,18 +321,20 @@ const TASK_TEACHES: &[Teach] = &[
 
 /// AND THE TWO THAT ANSWER A COUNTDOWN, taught only while one is running.
 ///
-/// They are the band's two buttons. The band draws these very notations, so a
-/// person reading the line under the minibuffer is told where the keyboard's
-/// answer is — which is inside this buffer, since `LEADER b` became the brain
-/// itself and a sequence cannot be a command and a prefix at once.
+/// They are the band's two buttons. With this buffer in front, `LEADER Alt`
+/// and their key answer the band, and the band draws that key beside each
+/// (`⌥a`, `⌥p`) — what it publishes is what the line under the minibuffer
+/// teaches, since `LEADER b` became the brain itself and a sequence cannot be
+/// a command and a prefix at once.
 const ANSWER_TEACHES: &[Teach] = &[(", p", "cmd-brain-proceed"), (", a", "cmd-brain-abort")];
 
 /// AND THE THREE A NOTICE ANSWERS TO, each taught only while the notice in
 /// front offers it: its first control, putting it away, putting it off.
 ///
-/// They are the strip's three buttons. The strip under the minibuffer draws
-/// these very notations, so a person reading it is told where the keyboard's
-/// answer is — here, in the brain's own buffer.
+/// They are the strip's three buttons. With this buffer in front, the strip
+/// under the minibuffer draws the key each is given after `LEADER Alt`, so a
+/// person reading it is told where the keyboard's answer is — here, in the
+/// brain's own buffer.
 const NOTICE_TEACHES: &[Teach] = &[
     (", n", "cmd-brain-act"),
     (", x", "cmd-brain-dismiss"),

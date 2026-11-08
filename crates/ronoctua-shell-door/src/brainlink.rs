@@ -220,7 +220,8 @@ pub fn put(
 
 /// The countdown's two answers — the band's buttons, `LEADER :`'s commands
 /// and the update's view in either door all come here: sends what answers
-/// it, and gives back the sentence to say.
+/// it, and gives back the sentence to say — what was done: started, put off
+/// to its next moment, or a running task stopped.
 ///
 /// # Why the refusal is spoken and not swallowed
 ///
@@ -235,11 +236,7 @@ pub fn answer(mind: Option<&Mind>, proceeding: bool) -> &'static str {
     match tell(&ask) {
         Ok(()) => {
             tracing::info!(?ask, "answer to the brain");
-            if proceeding {
-                crate::key::ECHO_BRAIN_PROCEEDING
-            } else {
-                crate::key::ECHO_BRAIN_POSTPONED
-            }
+            said_of(&ask)
         }
         // LOUD, and said on screen. A countdown that goes on running after
         // somebody pressed "not now" is the one failure here that must
@@ -248,6 +245,17 @@ pub fn answer(mind: Option<&Mind>, proceeding: bool) -> &'static str {
             tracing::error!(error = %e, ?ask, "the brain did not get the answer");
             crate::key::ECHO_BRAIN_UNREACHABLE
         }
+    }
+}
+
+/// The sentence for an answer the brain took ([`answer_of`]'s three): a
+/// running task stopped is never said as put off, which it is not.
+const fn said_of(ask: &ronoctua_brain::Ask) -> &'static str {
+    match ask {
+        ronoctua_brain::Ask::Abort { .. } => crate::key::ECHO_BRAIN_STOPPED,
+        ronoctua_brain::Ask::Postpone => crate::key::ECHO_BRAIN_POSTPONED,
+        // `Proceed`, the only other answer there is.
+        _ => crate::key::ECHO_BRAIN_PROCEEDING,
     }
 }
 
@@ -499,6 +507,21 @@ mod tests {
             ronoctua_brain::Ask::Abort {
                 task: "fixture".to_owned()
             }
+        );
+    }
+
+    /// FAILS IF: the answer that stopped a running task is said as the one
+    /// that put a countdown off — "not now, it comes back" over a run that
+    /// was stopped — or the other way round.
+    #[test]
+    fn a_stop_is_said_as_a_stop_and_a_postponement_as_one() {
+        let mut mind = Mind::default();
+        assert_eq!(said_of(&abort(&mind)), crate::key::ECHO_BRAIN_POSTPONED);
+        mind.running = "fixture".to_owned();
+        assert_eq!(said_of(&abort(&mind)), crate::key::ECHO_BRAIN_STOPPED);
+        assert_eq!(
+            said_of(&ronoctua_brain::Ask::Proceed),
+            crate::key::ECHO_BRAIN_PROCEEDING
         );
     }
 }

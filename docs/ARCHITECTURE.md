@@ -13048,8 +13048,8 @@ Fluent escolher o plural).
 
 - **A faixa sob o minibuffer** diz o aviso mais alto (`mind_wire::ranked`: alarme, perigo, alerta,
   informação; entre iguais, o mais novo) com os controles que ele oferece — a primeira ação do
-  módulo (`brain-act`, `, n`), dispensar (`brain-dismiss`, `, x`), adiar pelo primeiro adiamento
-  (`brain-snooze`, `, z`) — e `+N`, que abre a página. **Um alarme vence a contagem regressiva, e
+  módulo (`brain-act`), dispensar (`brain-dismiss`), adiar pelo primeiro adiamento
+  (`brain-snooze`) — e `+N`, que abre a página. **Um alarme vence a contagem regressiva, e
   com os dois a faixa cresce para uma segunda linha** (decisão do dono): nenhum empurra o outro
   para fora. Um controle que não cabe cede ao texto, nunca o contrário.
 - **As marcas da modeline** são segmentos `brain:<módulo>/<marca>`, só enquanto um módulo publica

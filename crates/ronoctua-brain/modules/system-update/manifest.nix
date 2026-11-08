@@ -159,7 +159,12 @@
     # machine's refusal in this module's sentences — the ones the brain's
     # record of a refused run says too.
     "crates/ronoctua-shell-update/src/machine_gesture.rs" = "*";
-    "tests/checks.nix" = [ "system-update" ];
+    "tests/checks.nix" = [
+      "system-update"
+      # `labels-of-a-view-are-distinct` lets the follow page's "off" and a
+      # step's "switched off" read alike: one state of two things.
+      "system-update-verdict-off"
+    ];
     # And the VM test that follows a distro AppImage's release end to end:
     # it runs the `person-pins` step with the arguments the table declares,
     # read from the folder's `steps.nix` (`distro-apps-follow-a-release-vm`).

@@ -210,10 +210,15 @@ fn every_window_shortcut_is_one_key() {
         &[OF_THE_WAY_BACK, &rows!(terminals::OF_THE_VIEW)],
         none,
     );
+    // THE UPDATE teaches one table a state of it — idle, queued, counting
+    // down, running —, and its pages theirs.
     window(
         "update",
         &[
             update_window::OF_THE_VIEW,
+            update_window::OF_THE_QUEUE,
+            update_window::OF_THE_COUNTDOWN,
+            update_window::OF_THE_RUN,
             update_window::OF_THE_PAGE,
             update_window::OF_THE_FOLLOW,
             update_window::OF_THE_PARTS,

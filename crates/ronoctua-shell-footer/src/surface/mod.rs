@@ -462,14 +462,18 @@ struct Footer {
     inputs: Vec<ronoctua_keymap::Entry>,
 
     // --- the focused buffer's own keymap (section 7.9) ---
-    /// What the focused buffer publishes: `(sequence, command id)`.
+    /// What the focused window publishes: each shortcut's sequence, its
+    /// command, and the window's own words and sentence for it
+    /// (`ipc::Shortcut`).
     ///
-    /// Read ONCE, when the leader opens, and not on every key: asking a second
-    /// process mid-sequence would put a socket round trip between a keystroke
-    /// and the screen. Empty when the focused window is not one of our buffers,
-    /// and THAT is what makes `SPC m` absent rather than empty — a submenu that
-    /// opens onto nothing is the same lie as a list with no way back.
-    buffer_bindings: Vec<(String, String)>,
+    /// Read when the focus moves, when the leader opens and when the window
+    /// in front says its set changed (`Order::Shortcuts`) — never on every
+    /// key: asking a second process mid-sequence would put a socket round
+    /// trip between a keystroke and the screen. Empty when the focused window
+    /// is not one of ours, and THAT is what makes `LEADER Alt` absent rather
+    /// than empty — a submenu that opens onto nothing is the same lie as a
+    /// list with no way back.
+    buffer_bindings: Vec<crate::ipc::Shortcut>,
     /// Whose. It is the pid `ronoctua_compositor::Window` already carries.
     buffer_pid: Option<u32>,
     /// The keys typed since `SPC m`, the `m` itself included.
@@ -552,6 +556,9 @@ struct Footer {
     /// What the brain line's control under the pointer says, for the message
     /// line.
     brain_hint: Option<String>,
+    /// The brain line's control whose KEY the pointer rests on, spelt out
+    /// there (`brain::Words::spelt`).
+    brain_spelt: Option<crate::brain::Hit>,
     /// THE ON-SCREEN KEYBOARD (`LEADER m k`), while it is out. `None` is put
     /// away, and then it costs nothing and takes no line. See `crate::osk`.
     osk: Option<crate::osk::Board>,
@@ -625,6 +632,19 @@ struct Footer {
     /// That is the same beat `hint_placed` already runs on, and for the same
     /// reason — what the pointer is told about has to be what was DRAWN.
     region_can_spare_a_row: std::cell::Cell<bool>,
+    /// THE ROW THE OPENED LINE KEEPS FOR THE EXPLANATION when no region
+    /// gives one — the line carrying the window's shortcuts at rest
+    /// (`minibuffer_rest_pieces`): kept from the frame the drawer opened over
+    /// them until it closes, so the sentence comes and goes with the pointer
+    /// inside a height that does not move ([`Footer::explain_rows`]). A row
+    /// added under the pointer would be the loop `fold::Fold::held` is about.
+    explain_kept: bool,
+    /// Whether the last frame drew the opened line over the window's
+    /// shortcuts with no region to give a row — what [`Footer::explain_kept`] is
+    /// settled from after the frame, the way `fold_wrapped` settles the
+    /// drawer: the height is asked before the frame, and what the line
+    /// carries is known inside it.
+    explain_offered: bool,
     /// The sentence explaining the shortcut under the pointer, while there is
     /// one.
     ///
@@ -657,15 +677,24 @@ struct Footer {
     /// line, or `None` when there is none.
     ///
     /// Remembered and not recomputed, for the reason `band_placed` is: what
-    /// the pointer clicks has to be what was DRAWN.
+    /// the pointer clicks has to be what was DRAWN. The CELL is kept whether
+    /// its glyph is drawn or not — what lights it under a hand that arrives
+    /// reads it —, and a press is taken only where the glyph was
+    /// (`fold_drawn`).
     fold_control: Option<u16>,
+    /// The same cell, only when its glyph was DRAWN in the last frame: the
+    /// one a press takes (a control is grabbed where it is drawn).
+    fold_drawn: Option<u16>,
     /// Where the SHORTCUTS glyph was drawn — the eye left of the chevron that
     /// hides or shows the relocated shortcuts (`adapt::Prefs::shortcuts`), as
     /// its cell and its line: beside the chevron on one line, under it when the
     /// minibuffer opened to two or more (the owner's ask). `None` when the "no
     /// header" mode is off and there is nothing to toggle. Remembered for the
-    /// reason `fold_control` is.
+    /// reason `fold_control` is, and like it kept whether the eye is drawn.
     shortcuts_control: Option<(u16, u16)>,
+    /// The same, only when the eye was DRAWN in the last frame: the one a
+    /// press takes.
+    shortcuts_drawn: Option<(u16, u16)>,
     /// Whether the pointer rests on that glyph, which lights.
     shortcuts_lit: bool,
     /// Where the PAGE COUNTER was drawn (`RCtrl ←→  2/3`), as its first cell
@@ -2903,6 +2932,7 @@ fn assemble(
         brain: None,
         brain_placed: None,
         brain_hint: None,
+        brain_spelt: None,
         osk: None,
         osk_keys: crate::virtual_keys::Keys::bind(globals, qh),
         gestures: None,
@@ -2918,6 +2948,8 @@ fn assemble(
         landings: 0,
         touch_here: PerSeat::default(),
         region_can_spare_a_row: std::cell::Cell::new(false),
+        explain_kept: false,
+        explain_offered: false,
         hint_placed: Vec::new(),
         hint_said: None,
         hint_lit: None,
@@ -2925,7 +2957,9 @@ fn assemble(
         fold_lit: false,
         fold: crate::fold::Fold::default(),
         fold_control: None,
+        fold_drawn: None,
         shortcuts_control: None,
+        shortcuts_drawn: None,
         shortcuts_lit: false,
         page_control: None,
         line_cluster: Vec::new(),
@@ -3987,6 +4021,15 @@ pub fn run(composition: &'static crate::Composition) -> Result<()> {
                             && state.windows.focused().and_then(|w| w.pid)
                                 == i32::try_from(pid).ok()
                         {
+                            state.draw_and_paint();
+                        }
+                    }
+                    // A WINDOW'S SHORTCUTS CHANGED: read again when it is the
+                    // one in front, and a frame only when what it publishes
+                    // did — the free line, `LEADER Alt`'s list and the
+                    // brain's band are drawn from it.
+                    Order::Shortcuts { pid } => {
+                        if state.shortcuts_heard(pid) {
                             state.draw_and_paint();
                         }
                     }
@@ -5427,14 +5470,15 @@ impl Footer {
         )
     }
 
-    /// A click on the brain's line: the two controls, and nothing else.
+    /// A click on the brain's line: its controls, and nothing else.
     ///
     /// # The mouse reaches nothing the keyboard does not
     ///
-    /// Each one IS a registered command — `brain-abort` and `brain-proceed` —
-    /// and the sequence that runs it is drawn on the line beside the label. The
-    /// click does not do a second thing: it runs the same command the key runs,
-    /// through the same door.
+    /// Each one IS a registered command ([`crate::brain::Hit::command`]) —
+    /// `LEADER :` runs it by name, and when the window in front gives it a key
+    /// after `LEADER Alt` the line draws that key beside the label. The click
+    /// does not do a second thing: it runs the same command, through the
+    /// same door.
     fn brain_clicked(&mut self, hit: crate::brain::Hit) {
         // A CONTROL IS PICKED BEFORE IT RUNS, by what it acts on — the strip
         // rose by itself (`brain::subject_of`). The `+N` has no subject: it
@@ -5446,18 +5490,10 @@ impl Footer {
             self.draw_and_paint();
             return;
         }
-        match hit {
-            crate::brain::Hit::Abort => self.run_command("brain-abort"),
-            crate::brain::Hit::Proceed => self.run_command("brain-proceed"),
-            // THE NOTICE'S THREE, each the command its key runs: a notice that
-            // does not offer one draws no button, so there is nothing here to
-            // click that it would refuse.
-            crate::brain::Hit::Act => self.run_command("brain-act"),
-            crate::brain::Hit::Dismiss => self.run_command("brain-dismiss"),
-            crate::brain::Hit::Snooze => self.run_command("brain-snooze"),
-            // AND `+N`: every notice, on the brain's page — `LEADER b`.
-            crate::brain::Hit::More => self.run_command("brain-open"),
-        }
+        // THE COUNTDOWN'S TWO, THE NOTICE'S THREE — a notice that does not
+        // offer one draws no button, so there is nothing here to click that
+        // it would refuse — AND `+N`: every notice, on the brain's page.
+        self.run_command(hit.command());
     }
 
     /// A click on a modeline segment does what its key does.
@@ -7610,9 +7646,13 @@ impl Footer {
                     // AND THE BRAIN'S LINE, the same way and on the same line:
                     // whatever explains itself does it on the message line and
                     // never in a tooltip (invariant 14).
-                    self.brain_hint = self
+                    // AND A CONTROL'S KEY UNDER IT IS SPELT OUT, as the free
+                    // line spells a window's shortcut.
+                    (self.brain_hint, self.brain_spelt) = self
                         .brain_at(e.position.0, e.position.1)
-                        .and_then(|p| p.explain.clone());
+                        .map_or((None, None), |p| {
+                            (p.explain.clone(), p.hit.filter(|_| p.key))
+                        });
                     // AND A HINT TOO LONG FOR THE LINE STAYS while the hand
                     // goes to the line to read the rest (`Footer::linger`).
                     self.linger();
@@ -7671,6 +7711,7 @@ impl Footer {
                         self.ask_paint();
                     }
                     self.brain_hint = None;
+                    self.brain_spelt = None;
                     // THE LINE GOES WITH THE POINTER, which is the whole of
                     // what it is: a pointer that leaves sends no motion on the
                     // way out, so without this the explanation of a key nobody
@@ -7843,8 +7884,9 @@ impl Footer {
                         continue;
                     }
                     // THE SHORTCUTS GLYPH, beside the chevron — a click hides or
-                    // shows the relocated shortcuts (`flip_the_shortcuts`).
-                    if self.shortcuts_control_at(e.position.0, e.position.1) {
+                    // shows the relocated shortcuts (`flip_the_shortcuts`) —
+                    // where it was drawn.
+                    if self.shortcuts_drawn_at(e.position.0, e.position.1) {
                         shortcuts_click = true;
                         continue;
                     }
@@ -7856,7 +7898,7 @@ impl Footer {
                         hint_act = Some(act);
                         continue;
                     }
-                    if self.fold_at(e.position.0, e.position.1) {
+                    if self.fold_drawn_at(e.position.0, e.position.1) {
                         fold_toggle = true;
                         continue;
                     }
@@ -7895,7 +7937,7 @@ impl Footer {
                     // the same reason as the two above: it is on a line that
                     // has no `ExpansionRow` behind it, and everything below
                     // here asks the row what it is.
-                    if self.fold_at(e.position.0, e.position.1) {
+                    if self.fold_drawn_at(e.position.0, e.position.1) {
                         fold_hit = true;
                         continue;
                     }
@@ -9687,9 +9729,11 @@ impl Footer {
     /// Takes an event from the bus and redraws if something changed.
     /// Asks the FOCUSED window's process what keys it answers to.
     ///
-    /// Called when the leader opens, and only then. The alternative — asking on
-    /// every key — would put a socket round trip between a keystroke and the
-    /// screen, and "which-key in one frame" is a measured target.
+    /// Called when the focus moves and when the leader opens — and the window
+    /// in front tells when its set changes in between
+    /// ([`Footer::shortcuts_heard`]). The alternative — asking on every key —
+    /// would put a socket round trip between a keystroke and the screen, and
+    /// "which-key in one frame" is a measured target.
     ///
     /// A window that is not one of our buffers answers nothing, and the empty
     /// list is what removes `SPC m` from the tree. That is deliberate: an entry
@@ -9714,7 +9758,11 @@ impl Footer {
             self.buffer_bindings = crate::adapt::Adapted::Kiosk(self.kiosk.adapter())
                 .local_bindings()
                 .iter()
-                .map(|(sequence, id, _)| (sequence.clone(), (*id).to_owned()))
+                .map(|(sequence, id, _)| crate::ipc::Shortcut {
+                    keys: sequence.clone(),
+                    command: (*id).to_owned(),
+                    ..crate::ipc::Shortcut::default()
+                })
                 .collect();
             self.local_runs_here = Some(w);
             return;
@@ -9752,6 +9800,55 @@ impl Footer {
                 self.state_menu = listed;
             }
         }
+    }
+
+    /// THE WINDOW `pid` SAYS ITS SHORTCUTS CHANGED (`Order::Shortcuts`): read
+    /// again, when it is the window in front ([`the_window_in_front`]), and
+    /// put where the old set was — the free line, the brain's band and, when
+    /// `LEADER Alt`'s list is open over it, the list, at the depth typed
+    /// (it closes when the window's keys there are gone, as any key that
+    /// leads nowhere does). Says whether anything changed.
+    ///
+    /// # Why the footer is told, and does not only ask on the focus
+    ///
+    /// Because the set changes WITHOUT the focus moving: a page of the window
+    /// opened, a question that takes every key, a countdown that teaches its
+    /// two answers. Read only when the focus came, the line went on teaching
+    /// the keys of the window as it was — and a click on one sent a command
+    /// the window no longer answered.
+    fn shortcuts_heard(&mut self, pid: u32) -> bool {
+        let focused = self.windows.focused().and_then(|w| w.pid);
+        if !the_window_in_front(focused, pid, self.local_runs_here.is_some()) {
+            return false;
+        }
+        let read = match crate::ipc::buffer_keymap(pid) {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read the window's shortcuts again");
+                return false;
+            }
+        };
+        if read == self.buffer_bindings {
+            return false;
+        }
+        tracing::debug!(
+            pid,
+            shortcuts = read.len(),
+            "the window in front changed its shortcuts"
+        );
+        if !read.is_empty() {
+            self.buffer_pid = Some(pid);
+        }
+        self.buffer_bindings = read;
+        // WHAT WAS SAID OF THE SHORTCUT UNDER A RESTING POINTER was said of
+        // the old set: the place may hold another key now, or none. Forgotten,
+        // as a notification placed over the line is, and asked again by the
+        // next motion against what is drawn.
+        self.forget_the_line_under_the_pointer();
+        if self.view() == ViewState::Leader && self.listing_the_window() {
+            self.show_the_buffer_level();
+        }
+        true
     }
 
     /// The which-key rows for the focused buffer's states.
@@ -9874,11 +9971,12 @@ impl Footer {
         // A COMPLETE SEQUENCE RUNS, in the buffer's own process. Listing without
         // running would teach keys that do nothing, which is worse than not
         // listing at all — it is the whole reason this went in with both halves.
-        let done = self.buffer_bindings.iter().find(|(sequence, _)| {
-            sequence.split_whitespace().collect::<Vec<_>>() == self.buffer_pending_refs()
-        });
-        if let Some((_, id)) = done {
-            let id = id.clone();
+        let done = self
+            .buffer_bindings
+            .iter()
+            .find(|b| b.keys.split_whitespace().collect::<Vec<_>>() == self.buffer_pending_refs());
+        if let Some(b) = done {
+            let id = b.command.clone();
             self.buffer_pending.clear();
             self.close_leader();
             self.run_window_command(&id);
@@ -9914,6 +10012,13 @@ impl Footer {
 
     fn buffer_pending_refs(&self) -> Vec<&str> {
         self.buffer_pending.iter().map(String::as_str).collect()
+    }
+
+    /// Whether the leader's list is the focused window's shortcuts — the
+    /// flat list `LEADER Alt` opens, or a buffer's `,` group at any depth —
+    /// and not the tree's.
+    const fn listing_the_window(&self) -> bool {
+        self.shortcuts_flat || !self.buffer_pending.is_empty()
     }
 
     /// Turns a killed cgroup into something a person can read.
@@ -10193,7 +10298,11 @@ impl Footer {
         // GROWS it, to the ceiling: a height that followed the line both ways
         // is a height the pointer moves, which is the loop `Fold::held` is
         // written about, and one that only grows cannot turn round.
-        if crate::fold::settle(&mut self.fold, self.fold_wrapped) {
+        // AND THE EXPLANATION'S ROW the drawer keeps, settled the same way
+        // and in the same round (`settle_the_explanation`).
+        let drawer = crate::fold::settle(&mut self.fold, self.fold_wrapped);
+        let explained = self.settle_the_explanation();
+        if drawer || explained {
             self.apply_geometry(self.interactivity());
             self.draw();
             self.paint();
@@ -11086,7 +11195,7 @@ impl Footer {
         else {
             return false;
         };
-        if let Some((_, command)) = self.buffer_bindings.get(at).cloned() {
+        if let Some(command) = self.buffer_bindings.get(at).map(|b| b.command.clone()) {
             self.run_window_command(&command);
         }
         true
@@ -11852,7 +11961,9 @@ impl Footer {
     /// drawer). A motion that comes later carries the surface's own
     /// coordinates, whole: it replaces this position, it never adds to it.
     fn pointer_follows_the_drawer(&mut self) {
-        let now = crate::fold::rows(self.fold);
+        // THE DRAWER AND THE ROW IT KEEPS for the explanation, which grows the
+        // footer the same way (`explain_kept_rows`).
+        let now = crate::fold::rows(self.fold) + self.explain_kept_rows();
         let was = std::mem::replace(&mut self.fold_rows_seen, now);
         if now == was {
             return;
@@ -12423,14 +12534,15 @@ impl Footer {
             );
         }
         let id = self.hint_under(x, y)?;
-        // A WINDOW'S SHORTCUT is explained by its command's sentence — the
-        // place it sits in is no name of ours to explain.
+        // A WINDOW'S SHORTCUT is explained by the sentence the WINDOW sent
+        // with it (`shortcut_sentence`) — the place it sits in is no name of
+        // ours to explain, and the window may say more of its key than the
+        // registry's label does.
         if let Some(at) = crate::leader::WINDOW_SHORTCUT_PLACES
             .iter()
             .position(|p| *p == id)
         {
-            let (_, command) = self.buffer_bindings.get(at)?;
-            return crate::chrome::hint_sentence(command, &self.texts);
+            return shortcut_sentence(self.buffer_bindings.get(at)?, &self.texts);
         }
         crate::chrome::hint_sentence(id, &self.texts)
     }
@@ -12823,27 +12935,6 @@ impl Footer {
     /// Which line of the surface that row is on, when it is up.
     fn above_line_at(&self) -> u16 {
         self.sudo_rows() + self.band_rows()
-    }
-
-    /// A sequence as the person would type it.
-    ///
-    /// # Why the leader is no longer in front of it
-    ///
-    /// Because these two are no longer leader sequences. They were `LEADER b a`
-    /// and `LEADER b p`, and the owner asked for `LEADER b` to open the brain
-    /// with nothing in between — which the keymap refuses to combine with a
-    /// sequence hanging off `b`. What they do already existed inside the
-    /// brain's own buffer, as `, a` and `, p`, and that is what this now
-    /// prints.
-    ///
-    /// The band keeps three ways to be answered, and none of them was lost:
-    /// the two buttons take a CLICK with no window open at all; the keyboard
-    /// answers from inside the brain, which `LEADER b` opens; and both remain
-    /// commands of the registry, so `LEADER :` reaches them by name from
-    /// anywhere. What changed is that the shortest keyboard path is now two
-    /// steps instead of one.
-    fn brain_keys(&self, sequence: &str) -> String {
-        sequence.to_owned()
     }
 
     /// What the brain has announced, when it has announced anything.
@@ -13869,7 +13960,55 @@ impl Footer {
     /// Which is also why a region of ONE row does not offer the line: taking
     /// its only row would leave the region empty and the height would have to
     /// grow after all.
+    ///
+    /// # AND WHERE NO REGION GIVES ONE, THE DRAWER KEEPS ONE
+    ///
+    /// The window's shortcuts at rest are on the line with nothing open under
+    /// it (`minibuffer_rest_pieces`), so there is no region to pay the row —
+    /// and the owner asked for the sentence on EVERY shortcut of the opened
+    /// line. So the drawer opened over them keeps a row for it from the frame
+    /// it opens until it closes ([`Footer::explain_kept`]), blank while the
+    /// pointer is on no key: the height moves when the line opens, never
+    /// under a hand resting on it.
     fn explain_rows(&self) -> u16 {
+        match self.explain_kept_rows() {
+            0 => self.explain_from_the_region(),
+            kept => kept,
+        }
+    }
+
+    /// The row the opened drawer KEEPS for the explanation, with no region to
+    /// give it ([`Footer::explain_kept`]) — one, or none. It adds to the
+    /// footer's height, where the region's row only moves inside it.
+    fn explain_kept_rows(&self) -> u16 {
+        u16::from(the_drawer_keeps_a_row(
+            self.fold.open,
+            self.explain_kept,
+            self.region_gives_a_row(),
+        ))
+    }
+
+    /// Whether the region under the line gives the explanation its row out
+    /// of its own — a region of two lines or more, as the last frame measured
+    /// it (`region_can_spare_a_row`, never measured here).
+    fn region_gives_a_row(&self) -> bool {
+        self.shape.region_shown && self.region_can_spare_a_row.get()
+    }
+
+    /// Settles [`Footer::explain_kept`] from the frame just drawn: kept from
+    /// the frame the opened line carried the window's shortcuts
+    /// ([`Footer::explain_offered`]) until the line closes — never given up
+    /// while it is open, for the reason `fold::settle` only grows a drawer.
+    /// Says whether it changed, which owes the compositor a new height.
+    fn settle_the_explanation(&mut self) -> bool {
+        let kept = kept_after_the_frame(self.fold.open, self.explain_kept, self.explain_offered);
+        std::mem::replace(&mut self.explain_kept, kept) != kept
+    }
+
+    /// The explanation's row when the REGION gives it — one, or none: see
+    /// [`Footer::explain_rows`]. What [`Footer::grid`] takes out of the
+    /// region, and nothing else is.
+    fn explain_from_the_region(&self) -> u16 {
         // AND ONLY WITH THE LINE OPEN, the owner's rule: the sentence belongs
         // to the opened line, where one goes to read the keys in full, and not
         // to every crossing of the hand over a folded one.
@@ -14174,7 +14313,7 @@ impl Footer {
         // anything from it.
         self.region_can_spare_a_row.set(g.lines >= 2);
         // THE EXPLANATION'S ROW COMES OUT OF THE REGION. See `explain_rows`.
-        g.lines = region_lines(g.lines, self.explain_rows());
+        g.lines = region_lines(g.lines, self.explain_from_the_region());
         g
     }
 
@@ -14670,9 +14809,19 @@ impl Footer {
 
     /// The region's rows while it shows the leader — its line of `Footer::expansion`.
     fn leader_expansion(&self) -> Vec<ExpansionRow> {
+        // THE WINDOW'S SHORTCUTS, when the list is theirs (`LEADER Alt`, or a
+        // buffer's `,`): each says what the free line says of it — the
+        // window's words, and its sentence under the pointer ([`window_row`]).
+        let window = self.listing_the_window();
         self.inputs
             .iter()
-            .map(|e| ExpansionRow {
+            .map(|e| {
+                let row = window
+                    .then(|| window_row(e, &self.buffer_bindings, &self.texts))
+                    .flatten();
+                (e, row)
+            })
+            .map(|(e, row)| ExpansionRow {
                 // A ROW WHOSE KEY IS ITS SYMBOL is drawn as a header draws that
                 // key — an arrow as its glyph (`chrome::key_text`); the tap
                 // rows' `ALT` and `CTRL` stand for a gesture and stay words.
@@ -14695,19 +14844,29 @@ impl Footer {
                 // in the translation: it used to live in there
                 // (`group-window = +window`) and that is why three of the
                 // six groups did not have it.
-                text: match &e.command {
-                    Some(id) => id.clone(),
-                    None => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
+                //
+                // BUT NOT A WINDOW'S SHORTCUT: the free line under the window
+                // says its WORDS beside the same key, and the two said two
+                // things for one shortcut — the owner's *"são diferentes"*.
+                // What is typed next is the key, which the row leads with.
+                text: match (&e.command, &row) {
+                    (Some(_), Some((words, _))) => words.clone(),
+                    (Some(id), None) => id.clone(),
+                    (None, _) => format!("{GROUP_MARK}{}", self.texts.t(&e.label)),
                 },
                 // THE SENTENCE, `cmd-` or `about-`: a window's command may have
                 // only the second (`chrome::hint_sentence`), and the label's
-                // `cmd-` alone showed it as `[cmd-files-preview]`.
-                description: Some(
-                    e.command
-                        .as_deref()
-                        .and_then(|id| crate::chrome::hint_sentence(id, &self.texts))
-                        .unwrap_or_else(|| self.texts.t(&e.label)),
-                ),
+                // `cmd-` alone showed it as `[cmd-files-preview]`. A window's
+                // shortcut, the one the window sent with it.
+                description: match row {
+                    Some((_, sentence)) => sentence,
+                    None => Some(
+                        e.command
+                            .as_deref()
+                            .and_then(|id| crate::chrome::hint_sentence(id, &self.texts))
+                            .unwrap_or_else(|| self.texts.t(&e.label)),
+                    ),
+                },
                 // THE TWO TAP ROWS run their gesture, not a key of the tree —
                 // the bars' cycle (`Click::Bars`) and the window's shortcuts
                 // (`Click::Shortcuts`); every other row presses its key.
@@ -14839,7 +14998,20 @@ impl Footer {
     /// the position out again — the same rule `band_placed` follows, and for
     /// the same reason: what the pointer hits has to be what the eye saw.
     fn fold_at(&self, x: f64, y: f64) -> bool {
-        let Some(at) = self.fold_control else {
+        self.fold_cell_at(self.fold_control, x, y)
+    }
+
+    /// Is a press on the chevron AS IT WAS DRAWN in the last frame? Its cell
+    /// is kept while no glyph is drawn there (`fold_at` lights it under a
+    /// hand that arrives), and a press there takes nothing: a control is
+    /// grabbed only where it is drawn.
+    fn fold_drawn_at(&self, x: f64, y: f64) -> bool {
+        self.fold_cell_at(self.fold_drawn, x, y)
+    }
+
+    /// Whether `(x, y)` is on the chevron's cell `at`, or the air beside it.
+    fn fold_cell_at(&self, at: Option<u16>, x: f64, y: f64) -> bool {
+        let Some(at) = at else {
             return false;
         };
         let Some(f) = self.metric() else {
@@ -14863,7 +15035,19 @@ impl Footer {
     /// beside it is part of the target, bounded so it does not reach the
     /// chevron two cells to its right.
     fn shortcuts_control_at(&self, x: f64, y: f64) -> bool {
-        let Some((at, line)) = self.shortcuts_control else {
+        self.eye_at(self.shortcuts_control, x, y)
+    }
+
+    /// Is a press on the eye AS IT WAS DRAWN in the last frame — the one a
+    /// press takes, as `fold_drawn_at` is the chevron's?
+    fn shortcuts_drawn_at(&self, x: f64, y: f64) -> bool {
+        self.eye_at(self.shortcuts_drawn, x, y)
+    }
+
+    /// Whether `(x, y)` is on the eye's cell and line `at`, or the air beside
+    /// it.
+    fn eye_at(&self, at: Option<(u16, u16)>, x: f64, y: f64) -> bool {
+        let Some((at, line)) = at else {
             return false;
         };
         let Some(f) = self.metric() else {
@@ -17227,11 +17411,11 @@ impl Footer {
                 &crate::brain::Words {
                     texts: &self.texts,
                     zone: &self.zone,
-                    abort_keys: &self.brain_keys(crate::leader::BRAIN_ABORT_KEYS),
-                    proceed_keys: &self.brain_keys(crate::leader::BRAIN_PROCEED_KEYS),
-                    act_keys: &self.brain_keys(crate::leader::BRAIN_NOTICE_KEYS),
-                    dismiss_keys: &self.brain_keys(crate::leader::BRAIN_DISMISS_KEYS),
-                    snooze_keys: &self.brain_keys(crate::leader::BRAIN_SNOOZE_KEYS),
+                    // A CONTROL'S KEY IS THE WINDOW IN FRONT'S, or none
+                    // (`brain::Words::published`) — repainted with every
+                    // frame the focus or the window's set brings.
+                    published: &self.buffer_bindings,
+                    spelt: self.brain_spelt,
                 },
             );
             // AND THE CONTROL A CLICK PICKED, while it still acts on what
@@ -17493,12 +17677,13 @@ impl Footer {
             let plain_room = columns
                 .saturating_sub(tokens::space::MODELINE_EDGELEFT)
                 .saturating_sub(taken);
-            // THE CONTROL IS THERE WHENEVER THE LINE CARRIES SOMETHING, the
-            // owner's rule: opening the line is also what shows the sentence
-            // about the key under the pointer (`explain_rows`), and a line that
-            // fits still has that to show. The minibuffer AT REST carries
-            // nothing, and there a control would open onto nothing — the
-            // owner's second word on it.
+            // THE CONTROL HAS ITS PLACE WHENEVER THE LINE CARRIES SOMETHING,
+            // the owner's rule: opening the line is also what shows the
+            // sentence about the key under the pointer (`explain_rows`), and a
+            // line that fits still has that to show. The minibuffer AT REST
+            // carries nothing, and there a control would open onto nothing —
+            // the owner's second word on it. Its GLYPH comes up only under the
+            // hand (`fold_glyph`), his third.
             let at_rest = echo.is_none()
                 && explanation.is_none()
                 && prompt_mx.is_none()
@@ -17519,7 +17704,29 @@ impl Footer {
             // only then — the way the file manager's own line-0 chevron does —
             // so a resting minibuffer is bare and the glyphs appear under the
             // hand. `on_minibuffer` is set on every move and cleared on leave.
-            let hover = self.shape.draws_minibuffer() && self.here.on_minibuffer;
+            // A FINGER ON THE LINE COUNTS too (`touch_here`, whichever of the
+            // two is swapped in while it is handled): its first tap brings
+            // the glyphs up, and a second tap on one is taken there.
+            let hover = self.shape.draws_minibuffer()
+                && (self.here.on_minibuffer || self.touch_here.on_minibuffer);
+            // THE LINE OPENED OVER SHORTCUTS — the window's at rest, or a
+            // view's hint — with no region under it to give the explanation a
+            // row: the drawer keeps one (`explain_kept`, settled after the
+            // frame). Asked of what the line CARRIES, and not of what it shows
+            // this instant: the hand on the chevron that opened it puts the
+            // chevron's own sentence there.
+            let the_windows = at_rest
+                && question.is_none()
+                && !mini_rest_pieces.is_empty()
+                && address.is_none()
+                && self.pointed.is_none();
+            let a_hint = echo.is_none()
+                && explanation.is_none()
+                && question.is_none()
+                && prompt_mx.is_none()
+                && held_pieces.is_some();
+            self.explain_offered =
+                held.open && (the_windows || a_hint) && !self.region_gives_a_row();
             // THE RIGHT END OF THE LINE, COUNTED FROM THE BORDER — the control,
             // and the page counter one cell of air to its left — so the air
             // after the control is the modeline's one cell at every width.
@@ -17647,13 +17854,16 @@ impl Footer {
                 v.fold_is_shown(opens);
                 v.fold_focused()
             });
+            // ITS CELL IS KEPT whenever it has a place, and the GLYPH is drawn
+            // only under the hand (or the keyboard on it) — the owner's rule,
+            // as the eye's beside it: the cell keeps the text from moving as
+            // the hand comes and goes, and a click is taken there only from a
+            // pointer on the line, which is the pointer that draws it
+            // (`fold_glyph`). `RCtrl ↑↓` open and walk it as before.
             self.fold_control = chevron_at;
-            if let Some(at) = self.fold_control {
-                let chevron = if held.open {
-                    tokens::icon::COLLAPSE
-                } else {
-                    tokens::icon::EXPAND
-                };
+            let chevron = fold_glyph(held.open, hover, lit);
+            self.fold_drawn = self.fold_control.filter(|_| chevron.is_some());
+            if let Some((at, chevron)) = self.fold_control.zip(chevron) {
                 spans.push(ronoctua_render::Span {
                     size: ronoctua_render::Size::OnTheCell(chrome_size_of(chevron)),
                     text: chevron.to_string(),
@@ -17705,7 +17915,8 @@ impl Footer {
                     (col, mini_line)
                 }
             });
-            if let Some((col, line)) = self.shortcuts_control.filter(|_| hover) {
+            self.shortcuts_drawn = self.shortcuts_control.filter(|_| hover);
+            if let Some((col, line)) = self.shortcuts_drawn {
                 let eye = if self.modeline.hide_shortcuts() {
                     tokens::icon::SHORTCUTS_HIDDEN
                 } else {
@@ -17817,6 +18028,7 @@ impl Footer {
             // and the owner read it off the screen as one more shortcut on the
             // row above rather than the answer to what he was pointing at.
             if self.explain_rows() > 0
+                && self.echo.is_none()
                 && let Some(said) = self.hint_said.as_ref()
             {
                 spans.push(ronoctua_render::Span {
@@ -21920,21 +22132,68 @@ enum Forward {
 
 /// Where `id` goes, run by name with nothing here answering it: the window in
 /// front (`window`, its process) when it publishes `id` among its shortcuts
-/// (`published`, its `(keys, command)` pairs). It names no feature: what a
-/// window publishes is the window's to say.
+/// (`published`). It names no feature: what a window publishes is the
+/// window's to say.
 fn forward_of(
-    published: &[(String, String)],
+    published: &[crate::ipc::Shortcut],
     window: Option<u32>,
     id: &str,
     registered: bool,
 ) -> Forward {
     match window {
-        Some(pid) if published.iter().any(|(_, command)| command == id) => {
-            Forward::ToTheWindow(pid)
-        }
+        Some(pid) if published.iter().any(|b| b.command == id) => Forward::ToTheWindow(pid),
         _ if registered => Forward::NotThisWindows,
         _ => Forward::Unknown,
     }
+}
+
+/// Whether the opened line keeps a row under it for the explanation: kept
+/// (`Footer::explain_kept`) while it is `open`, and only where no region
+/// gives the row out of its own (`region_gives`, [`Footer::explain_rows`]).
+const fn the_drawer_keeps_a_row(open: bool, kept: bool, region_gives: bool) -> bool {
+    open && kept && !region_gives
+}
+
+/// Whether the drawer keeps that row after a frame: from the first frame it
+/// was drawn open over the window's shortcuts (`offered`) until it closes —
+/// never given up while open, whatever the line says under the hand then.
+const fn kept_after_the_frame(open: bool, kept: bool, offered: bool) -> bool {
+    open && (kept || offered)
+}
+
+/// The minibuffer's chevron as it is DRAWN — only while the pointer is over
+/// the bar (`hover`) or the keyboard is on it (`focused`, the file manager's
+/// `Tab` ring), the owner's rule — the glyph saying what a click does: open
+/// the line, or close it. Its cell is kept whether it is drawn or not
+/// (`Footer::fold_control`), so the line does not move under the hand.
+fn fold_glyph(open: bool, hover: bool, focused: bool) -> Option<char> {
+    (hover || focused).then_some(if open {
+        tokens::icon::COLLAPSE
+    } else {
+        tokens::icon::EXPAND
+    })
+}
+
+/// Shortcuts a window publishes, from `(keys, command)` pairs and nothing
+/// else — what a test hands the footer's helpers.
+#[cfg(test)]
+fn shortcuts(pairs: &[(&str, &str)]) -> Vec<crate::ipc::Shortcut> {
+    pairs
+        .iter()
+        .map(|(keys, command)| crate::ipc::Shortcut {
+            keys: (*keys).to_owned(),
+            command: (*command).to_owned(),
+            ..crate::ipc::Shortcut::default()
+        })
+        .collect()
+}
+
+/// Whether a report that the shortcuts of process `reported` changed is about
+/// the window in front (`focused`, its process) — the one whose set the free
+/// line, `LEADER Alt` and the brain's band carry. A kiosk's group is this
+/// footer's own (`kiosk_view::local_bindings`), and no report changes it.
+fn the_window_in_front(focused: Option<i32>, reported: u32, kiosk: bool) -> bool {
+    !kiosk && focused.and_then(|p| u32::try_from(p).ok()) == Some(reported)
 }
 
 /// Whether `ESC` leaves the window's shortcuts here: at every depth of them —
@@ -21948,39 +22207,83 @@ fn esc_leaves(typed: &str, flat: bool, nothing_pending: bool) -> bool {
 /// Whether the focused window's shortcuts live under the local prefix — a
 /// buffer's `, x`. A lone `,` is one of a flat window's keys (the camera's
 /// settings), never the prefix.
-fn under_the_prefix(bindings: &[(String, String)]) -> bool {
+fn under_the_prefix(bindings: &[crate::ipc::Shortcut]) -> bool {
     bindings
         .iter()
-        .any(|(sequence, _)| ronoctua_protocol::local_key(sequence).is_some())
+        .any(|b| ronoctua_protocol::local_key(&b.keys).is_some())
 }
 
 /// The window's shortcuts on the free line, each by its PLACE
 /// (`leader::WINDOW_SHORTCUT_PLACES`): the `LEADER Alt` glyph and the one key —
 /// the glyph of the place under the pointer (`spelt`) spelt out — and the
-/// command's words ([`command_words`]).
+/// window's words for it ([`shortcut_words`]), the ones `LEADER Alt`'s list
+/// says beside the same key.
 fn window_shortcut_pieces(
-    bindings: &[(String, String)],
+    bindings: &[crate::ipc::Shortcut],
     texts: &ronoctua_i18n::Texts,
     spelt: Option<&str>,
 ) -> Vec<crate::chrome::Piece> {
     let mut out = Vec::with_capacity(bindings.len() * 3);
-    for ((keys, command), place) in bindings.iter().zip(crate::leader::WINDOW_SHORTCUT_PLACES) {
+    for (b, place) in bindings.iter().zip(crate::leader::WINDOW_SHORTCUT_PLACES) {
         if !out.is_empty() {
             out.push(crate::chrome::Piece::separator());
         }
-        let key = crate::chrome::leader_alt_text(&key_on_the_line(keys), spelt == Some(place));
+        let key = crate::chrome::leader_alt_text(&key_on_the_line(&b.keys), spelt == Some(place));
         out.push(
             crate::chrome::Piece::key_in(key, crate::chrome::Register::Key)
                 .about(place)
                 .running(place),
         );
         out.push(
-            crate::chrome::Piece::prose(format!(" {}", command_words(texts, command)))
+            crate::chrome::Piece::prose(format!(" {}", shortcut_words(b, texts)))
                 .about(place)
                 .running(place),
         );
     }
     out
+}
+
+/// The WORDS of a window's shortcut, wherever the footer says it — the free
+/// line and `LEADER Alt`'s list both, so the two never disagree: the words the
+/// window sent with it (`ipc::Shortcut::words`), what its header says beside
+/// the key; else its command's words read here ([`command_words`]), for a
+/// window that sends none (a kiosk's group is this footer's own).
+fn shortcut_words(shortcut: &crate::ipc::Shortcut, texts: &ronoctua_i18n::Texts) -> String {
+    shortcut
+        .words
+        .clone()
+        .unwrap_or_else(|| command_words(texts, &shortcut.command))
+}
+
+/// The SENTENCE about a window's shortcut — under the line opened, and beside
+/// `LEADER Alt`'s list: the one the window sent with it, what it says of the
+/// key under the pointer (`door::Content::explains`); else its command's
+/// (`chrome::hint_sentence`).
+fn shortcut_sentence(
+    shortcut: &crate::ipc::Shortcut,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<String> {
+    shortcut
+        .sentence
+        .clone()
+        .or_else(|| crate::chrome::hint_sentence(&shortcut.command, texts))
+}
+
+/// A row of the leader's list that is one of the window's shortcuts
+/// (`published`), as the free line says it: its words ([`shortcut_words`]) and
+/// its sentence ([`shortcut_sentence`]). `None` for a row that runs no
+/// command of the window — a group of a buffer's `,` keeps its name.
+fn window_row(
+    entry: &ronoctua_keymap::Entry,
+    published: &[crate::ipc::Shortcut],
+    texts: &ronoctua_i18n::Texts,
+) -> Option<(String, Option<String>)> {
+    let id = entry.command.as_deref()?;
+    let shortcut = published.iter().find(|b| b.command == id)?;
+    Some((
+        shortcut_words(shortcut, texts),
+        shortcut_sentence(shortcut, texts),
+    ))
 }
 
 /// The pending line while `LEADER Alt`'s list is open: the tap, and what was
@@ -22019,8 +22322,9 @@ fn command_words(texts: &ronoctua_i18n::Texts, id: &str) -> String {
 
 /// A shortcut as the minibuffer's line draws it: the key typed AFTER
 /// `LEADER Alt` — a buffer's `, x` is `x`, the `,` being typed for the
-/// person — drawn as a header draws it, an arrow as its glyph.
-fn key_on_the_line(sequence: &str) -> String {
+/// person — drawn as a header draws it, an arrow as its glyph. The brain's
+/// line draws a control's key the same way (`brain::key_of`).
+pub(crate) fn key_on_the_line(sequence: &str) -> String {
     let typed = ronoctua_protocol::local_key(sequence).unwrap_or(sequence);
     ronoctua_keymap::Key::parse(typed)
         .map_or_else(|_| typed.to_owned(), |k| crate::chrome::key_text(&k))
@@ -22037,12 +22341,17 @@ fn key_on_the_line(sequence: &str) -> String {
 /// A sequence that ENDS at this depth is a command; one that continues is a
 /// group, marked the same way the rest of the keymap marks its groups.
 fn narrow_buffer_keymap(
-    bindings: &[(String, String)],
+    bindings: &[crate::ipc::Shortcut],
     pending: &[&str],
 ) -> Vec<ronoctua_keymap::Entry> {
     let depth = pending.len();
     let mut out: Vec<ronoctua_keymap::Entry> = Vec::new();
-    for (sequence, id) in bindings {
+    for crate::ipc::Shortcut {
+        keys: sequence,
+        command: id,
+        ..
+    } in bindings
+    {
         let keys: Vec<&str> = sequence.split_whitespace().collect();
         if keys.len() <= depth || !keys.starts_with(pending) {
             continue;
@@ -23128,11 +23437,11 @@ mod tests {
     /// instead of opening an empty screen.
     #[test]
     fn the_buffer_keymap_narrows_by_prefix() {
-        let bindings = vec![
-            ("m f s".to_owned(), "memory-refresh".to_owned()),
-            ("m f r".to_owned(), "memory-scan".to_owned()),
-            ("m q".to_owned(), "memory-close".to_owned()),
-        ];
+        let bindings = super::shortcuts(&[
+            ("m f s", "memory-refresh"),
+            ("m f r", "memory-scan"),
+            ("m q", "memory-close"),
+        ]);
 
         let root = super::narrow_buffer_keymap(&bindings, &["m"]);
         assert_eq!(root.len(), 2, "two distinct keys after `m`: {root:?}");
@@ -23164,10 +23473,7 @@ mod tests {
     /// does not take the rest of the list with it.
     #[test]
     fn an_unspellable_key_does_not_lose_the_others() {
-        let bindings = vec![
-            ("m no-such-key".to_owned(), "x".to_owned()),
-            ("m s".to_owned(), "memory-refresh".to_owned()),
-        ];
+        let bindings = super::shortcuts(&[("m no-such-key", "x"), ("m s", "memory-refresh")]);
         let rows = super::narrow_buffer_keymap(&bindings, &["m"]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, "s");
@@ -24053,7 +24359,9 @@ mod tests {
 #[cfg(test)]
 mod leader_alt_tests {
     use super::{
-        command_words, esc_leaves, key_on_the_line, pending_after_the_tap, under_the_prefix,
+        command_words, esc_leaves, fold_glyph, kept_after_the_frame, key_on_the_line,
+        narrow_buffer_keymap, pending_after_the_tap, shortcut_sentence, shortcut_words, shortcuts,
+        the_drawer_keeps_a_row, the_window_in_front, under_the_prefix, window_row,
         window_shortcut_pieces,
     };
 
@@ -24077,10 +24385,7 @@ mod leader_alt_tests {
     #[test]
     fn each_window_shortcut_is_its_own_place_and_glyph() {
         let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
-        let bindings: Vec<(String, String)> = [(", r", "brain-run"), (", e", "brain-rehearse")]
-            .iter()
-            .map(|(k, c)| ((*k).to_owned(), (*c).to_owned()))
-            .collect();
+        let bindings = shortcuts(&[(", r", "brain-run"), (", e", "brain-rehearse")]);
         let first = crate::leader::WINDOW_SHORTCUT_PLACES[0];
         let second = crate::leader::WINDOW_SHORTCUT_PLACES[1];
         let keys = |spelt| -> Vec<(Option<&'static str>, String)> {
@@ -24137,10 +24442,8 @@ mod leader_alt_tests {
         );
     }
 
-    fn bound(keys: &[&str]) -> Vec<(String, String)> {
-        keys.iter()
-            .map(|k| ((*k).to_owned(), "a-command".to_owned()))
-            .collect()
+    fn bound(keys: &[&str]) -> Vec<crate::ipc::Shortcut> {
+        shortcuts(&keys.iter().map(|k| (*k, "a-command")).collect::<Vec<_>>())
     }
 
     /// FAILS IF: `ESC` in the flat list of `LEADER Alt` runs what a window
@@ -24170,6 +24473,182 @@ mod leader_alt_tests {
     /// FAILS IF: the minibuffer's line teaches a buffer's shortcut with the
     /// `,` that `LEADER Alt` types for the person, or an arrow by its
     /// notation where the header draws its glyph.
+    /// What the update window publishes on its steps, as its socket says
+    /// it: each key with the words its header says and its sentence — and
+    /// one shortcut that came with neither, as a kiosk's group's does.
+    fn the_updates() -> Vec<crate::ipc::Shortcut> {
+        let mut published = shortcuts(&[
+            ("j", "output-down"),
+            ("u", "update-now"),
+            ("a", "brain-abort"),
+            ("<end>", "output-end"),
+        ]);
+        let said = [
+            ("output down", "Moves the output a page towards its end."),
+            ("update now", "Starts a full update now."),
+            ("not now", "Puts off the update that is counting down."),
+        ];
+        for (s, (words, sentence)) in published.iter_mut().zip(said) {
+            s.words = Some(words.to_owned());
+            s.sentence = Some(sentence.to_owned());
+        }
+        published
+    }
+
+    /// FAILS IF: `LEADER Alt`'s list and the free minibuffer's line say two
+    /// different things for one shortcut of the window in front — the list
+    /// its command's id, the line its short word, which is what the owner
+    /// found (*"são diferentes"*) — or either stops saying the words the
+    /// window sent with the key, or the sentence it sent stops being what
+    /// is said of it under the pointer.
+    #[test]
+    fn the_list_and_the_line_say_the_same_words() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("the base language");
+        let published = the_updates();
+        let line: Vec<String> = window_shortcut_pieces(&published, &t, None)
+            .into_iter()
+            .filter(|p| !p.is_a_key() && p.id.is_some())
+            .map(|p| p.text.trim().to_owned())
+            .collect();
+        let list: Vec<(String, Option<String>)> = narrow_buffer_keymap(&published, &[])
+            .iter()
+            .map(|e| window_row(e, &published, &t).expect("a row of the window"))
+            .collect();
+        assert_eq!(line.len(), published.len());
+        assert_eq!(
+            list.iter()
+                .map(|(words, _)| words.clone())
+                .collect::<Vec<_>>(),
+            line,
+            "the list and the line say two things"
+        );
+        assert_eq!(line[0], "output down", "not the words the window sent");
+        assert_eq!(line[2], "not now");
+        assert_eq!(
+            list[2].1.as_deref(),
+            Some("Puts off the update that is counting down."),
+            "not the sentence the window sent"
+        );
+        // A SHORTCUT THAT CAME WITH NEITHER is said by its command, alike in
+        // the two — never as `[cmd-…]`.
+        assert_eq!(line[3], command_words(&t, "output-end"));
+        assert_eq!(list[3].0, line[3]);
+        assert_eq!(
+            shortcut_sentence(&published[3], &t),
+            crate::chrome::hint_sentence("output-end", &t)
+        );
+        assert_eq!(shortcut_words(&published[1], &t), "update now");
+        // AND A GROUP OF A BUFFER'S `,` keeps its name: it runs nothing.
+        let grouped = shortcuts(&[(", f s", "save"), (", f r", "reload")]);
+        let rows = narrow_buffer_keymap(&grouped, &[","]);
+        assert!(rows[0].is_group);
+        assert_eq!(window_row(&rows[0], &grouped, &t), None);
+    }
+
+    /// FAILS IF: a report that a window's shortcuts changed is read for a
+    /// window that is not the one in front, or not read for the one that
+    /// is — the line would go on teaching the keys the window had when the
+    /// focus came to it — or a kiosk's group, which is this footer's own,
+    /// is read from a socket.
+    #[test]
+    fn a_report_is_read_for_the_window_in_front_only() {
+        assert!(the_window_in_front(Some(4242), 4242, false));
+        assert!(!the_window_in_front(Some(4242), 4243, false));
+        assert!(!the_window_in_front(None, 4242, false));
+        assert!(!the_window_in_front(Some(-1), 4242, false));
+        assert!(!the_window_in_front(Some(4242), 4242, true));
+    }
+
+    /// FAILS IF: the set a window publishes, changed while it stays in
+    /// front, is not what the footer reads after the window reports it —
+    /// the report names the window, and the set is read from its socket,
+    /// words and sentence with it.
+    #[test]
+    fn the_set_read_after_a_report_is_the_new_one() {
+        use std::io::{BufRead as _, Write as _};
+        let path = std::env::temp_dir().join(format!(
+            "ronoctua-footer-reread-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        // THE WINDOW: its steps' keys, then a page opened — one key, and its
+        // words the page's.
+        let answers = [
+            "u update-now\tupdate now\tStarts a full update now.\nc binary-cache-open\tbinary cache"
+                .to_owned(),
+            crate::ipc::keymap_line("c", "binary-cache-steps", Some("the steps"), None),
+        ];
+        let served = std::thread::spawn(move || {
+            for answer in answers {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut line = String::new();
+                std::io::BufReader::new(stream.try_clone().expect("clone"))
+                    .read_line(&mut line)
+                    .expect("read");
+                assert_eq!(line.trim(), "keymap");
+                writeln!(stream, "{answer}").expect("reply");
+            }
+        });
+        let before = crate::ipc::buffer_keymap_at(&path).expect("read");
+        let after = crate::ipc::buffer_keymap_at(&path).expect("read again");
+        served.join().expect("the window's thread");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].words.as_deref(), Some("update now"));
+        assert_ne!(before, after, "the report read the old set");
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].command, "binary-cache-steps");
+        assert_eq!(after[0].words.as_deref(), Some("the steps"));
+    }
+
+    /// FAILS IF: the row the opened line keeps for the sentence about the
+    /// shortcut under the pointer comes and goes with the pointer — the
+    /// footer would grow and shrink under the hand, the loop
+    /// `fold::Fold::held` is about — or is kept with the line shut, or kept
+    /// where a region gives the row out of its own.
+    #[test]
+    fn the_open_line_keeps_a_row_for_the_explanation() {
+        // OPENED OVER THE WINDOW'S SHORTCUTS: kept from that frame.
+        let kept = kept_after_the_frame(true, false, true);
+        assert!(kept);
+        assert!(the_drawer_keeps_a_row(true, kept, false));
+        // THE HAND ON THE CHEVRON — the line says the chevron's sentence —
+        // or on a key, or on nothing: still kept, the height does not move.
+        let still = kept_after_the_frame(true, kept, false);
+        assert!(still && the_drawer_keeps_a_row(true, still, false));
+        // SHUT, it goes.
+        assert!(!kept_after_the_frame(false, kept, true));
+        assert!(!the_drawer_keeps_a_row(false, kept, false));
+        // A REGION SHOWN gives the row out of its own, and the drawer keeps
+        // none.
+        assert!(!the_drawer_keeps_a_row(true, kept, true));
+        // A line opened over anything else keeps none.
+        assert!(!kept_after_the_frame(true, false, false));
+    }
+
+    /// FAILS IF: the minibuffer's chevron is drawn with no pointer over the
+    /// bar and no keyboard on it — the owner's rule — or is not drawn under
+    /// the pointer, or says open where the line is open.
+    #[test]
+    fn the_chevron_comes_up_under_the_hand() {
+        assert_eq!(fold_glyph(false, false, false), None);
+        assert_eq!(fold_glyph(true, false, false), None);
+        assert_eq!(
+            fold_glyph(false, true, false),
+            Some(ronoctua_tokens::icon::EXPAND)
+        );
+        assert_eq!(
+            fold_glyph(true, true, false),
+            Some(ronoctua_tokens::icon::COLLAPSE)
+        );
+        assert_eq!(
+            fold_glyph(false, false, true),
+            Some(ronoctua_tokens::icon::EXPAND),
+            "the keyboard on it"
+        );
+    }
+
     #[test]
     fn the_line_says_the_key_typed_after_leader_alt() {
         assert_eq!(key_on_the_line(", r"), "r");
@@ -24191,10 +24670,7 @@ mod forward_tests {
     /// unknown id stops being "does nothing yet".
     #[test]
     fn a_command_the_window_publishes_is_handed_to_it() {
-        let published = [
-            ("C-T".to_owned(), "terminal-new".to_owned()),
-            ("C-TAB".to_owned(), "terminal-next".to_owned()),
-        ];
+        let published = super::shortcuts(&[("C-T", "terminal-new"), ("C-TAB", "terminal-next")]);
         assert_eq!(
             forward_of(&published, Some(4242), "terminal-new", true),
             Forward::ToTheWindow(4242)

@@ -295,10 +295,14 @@ fn keep(cache_dir: &Path, owner_repo: &str, kept: &Kept) {
     }
 }
 
-/// Until when GitHub said to stop asking, remembered across processes.
-const LIMIT_FILE: &str = "rate-limit";
+/// Until when GitHub said to stop asking, remembered across processes —
+/// and across questions: the heads of the machine's branches
+/// (`crate::heads`) spend the same allowance, from the same folder.
+pub(crate) const LIMIT_FILE: &str = "rate-limit";
 
-fn limited_until(cache_dir: &Path) -> u64 {
+/// The moment [`LIMIT_FILE`] says GitHub may be asked again; 0 when it says
+/// nothing.
+pub(crate) fn limited_until(cache_dir: &Path) -> u64 {
     std::fs::read_to_string(cache_dir.join(LIMIT_FILE))
         .ok()
         .and_then(|t| t.trim().parse().ok())

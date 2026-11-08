@@ -140,7 +140,8 @@ pub struct Net;
 
 /// The network a declared system updater asks ([`Asker::Updater`]): the
 /// same requests as [`Net`], each on the updater's pass for its first host
-/// and never on the person's consent. Only [`crate::follow`] builds one.
+/// and never on the person's consent. Only [`crate::follow`] and
+/// [`crate::heads`] build one, each for its own updater.
 #[derive(Debug, Clone, Copy)]
 pub struct UpdaterNet(pub ronoctua_consent::Updater);
 
@@ -170,7 +171,7 @@ impl Fetch for UpdaterNet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Asker {
     /// The person's, in their `consent.json`: every request of this crate
-    /// but the declared updater's.
+    /// but the declared updaters'.
     Person,
     /// A system updater the distro declares (`ronoctua_consent::Updater`):
     /// the machine keeping itself at the newest version, which asks only its

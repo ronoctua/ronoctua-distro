@@ -90,6 +90,15 @@ pub enum Order {
         /// The sentence, or nothing.
         text: String,
     },
+    /// THE SHORTCUTS A WINDOW PUBLISHES CHANGED (`ipc::shortcuts_order`) — a
+    /// page opened, a question took every key, a state teaches others. Like
+    /// [`Order::State`], a REPORT nobody asks for, by the window's PID; the
+    /// set itself is read from the window's socket, and only when it is the
+    /// window in front.
+    Shortcuts {
+        /// The window's process.
+        pid: u32,
+    },
     /// The clipboard's window wants the history, now and after every change:
     /// the connection it came on stays open, and the footer writes the whole
     /// history down it (`crate::clipboard_wire`).
@@ -372,6 +381,20 @@ pub fn listen_on(path: &std::path::Path, channel: Sender<Order>) -> bool {
                                 tracing::warn!(
                                     order = line.trim(),
                                     "a pointed report with no pid or no seq"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    // `shortcuts <pid>`: a window's set changed. A pid that
+                    // does not parse names nobody, and is dropped.
+                    (Some(verb), Some(pid)) if verb == crate::ipc::SHORTCUTS_CHANGED => {
+                        match pid.parse() {
+                            Ok(pid) => Order::Shortcuts { pid },
+                            Err(_) => {
+                                tracing::warn!(
+                                    order = line.trim(),
+                                    "a shortcuts report with no pid"
                                 );
                                 continue;
                             }
@@ -926,36 +949,6 @@ impl Leader {
     }
 }
 
-/// How `brain-abort` is typed — inside the brain's buffer.
-///
-/// A constant and not a literal in two places: the BAND DRAWS IT, because a
-/// control whose key is only in the manual is a control nobody presses — and a
-/// sequence that lived in the table and again in the drawing would be two
-/// answers to "which key stops it", with the wrong one on screen.
-///
-/// # Why it is no longer a leader sequence
-///
-/// It was `LEADER b a`, beside `LEADER b b` for the screen itself. The owner
-/// asked for `LEADER b` to open the brain with nothing in between, and the
-/// keymap refuses — at BUILD time — a sequence that is both a command and the
-/// prefix of another. So `b a` and `b p` had to go, and what they did already
-/// existed inside the buffer under its own leader: `, a` and `, p`.
-///
-/// This is what the band prints, so the line that appears without anybody
-/// asking still says where the keyboard's answer is. The mouse keeps both
-/// buttons on the band itself; the keyboard opens the brain first.
-pub const BRAIN_ABORT_KEYS: &str = ", a";
-
-/// The same, for `brain-proceed`.
-pub const BRAIN_PROCEED_KEYS: &str = ", p";
-
-/// And for the button a standing notice offers.
-///
-/// `, n`, inside the brain, for the same reason the two above are `, a` and
-/// `, p`: the band's controls are answered from the brain's own buffer, and
-/// the band prints what that buffer binds.
-pub const BRAIN_NOTICE_KEYS: &str = ", n";
-
 /// The prefix the buffer's STATE chooser hangs off — `w`, the window's letter,
 /// where the buffer commands live — and the key under it.
 ///
@@ -1172,9 +1165,11 @@ pub const BASE: Contribution = Contribution {
         // They are registered HERE, and not only in the buffer, because the
         // line they belong to is the FOOTER'S: it appears with no window open
         // and it is clickable, and the mouse may not reach a door the keyboard
-        // does not. The buffer has its own `, a` and `, p` for the same two
-        // verbs — same letters, its own prefix — and the two never meet: a
-        // buffer's sequence is resolved by the buffer's process.
+        // does not. A window may publish the same two among its shortcuts —
+        // the brain's buffer at `, a` and `, p`, the update's window at `a`
+        // and `p` while its run counts down — and then `LEADER Alt` and that
+        // key run them in the window, and the band draws the key
+        // (`brain::Words::published`).
         Command {
             id: "brain-abort",
             label: key::CMD_BRAIN_ABORT,
@@ -1823,10 +1818,11 @@ pub const BASE: Contribution = Contribution {
         // So the two that used to sit beside it — `b a` and `b p`, the band's
         // answers — are gone from here. They live in the buffer's own keymap
         // as `, a` and `, p`, which is where everything else this screen does
-        // already lived, and the band now draws THOSE notations. The cost,
-        // said plainly: somebody at the keyboard answers a countdown with
-        // `LEADER b` and then `, a`, where it used to be `LEADER b a`. The
-        // band keeps both buttons for the mouse.
+        // already lived, and `LEADER Alt` reaches them while the brain is in
+        // front — the band then draws `⌥a` and `⌥p`. The cost, said plainly:
+        // somebody at the keyboard answers a countdown with `LEADER b` and
+        // then `LEADER Alt a`, where it used to be `LEADER b a`. The band
+        // keeps both buttons for the mouse.
         (BRAIN_KEYS, "brain-open", None),
         // `t` for theme, under `s` because a theme is the SYSTEM's skin and not
         // any one buffer's: the same drawer as memory, format and the brain.
@@ -1925,9 +1921,10 @@ pub const BASE: Contribution = Contribution {
         "footer-hide-push",
         "footer-hide-cover",
         // THE STRIP'S THREE ABOUT A NOTICE. The strip CLICKS them and `LEADER :`
-        // reaches them by name; their keys are the brain's own `, n`, `, x` and
-        // `, z`, for the reason `brain-abort` and `brain-proceed` are `, a` and
-        // `, p` — a sequence under `LEADER b` cannot be a command and a prefix.
+        // reaches them by name; a window in front that publishes them — the
+        // brain's buffer, at `, n`, `, x` and `, z` — gives them a key after
+        // `LEADER Alt`, which the strip draws. A sequence under `LEADER b`
+        // cannot be one: it would be a command and a prefix at once.
         "brain-dismiss",
         "brain-snooze",
         "brain-act",
@@ -2098,16 +2095,6 @@ pub const EVERY_WORKSPACE_KEYS: &str = "0";
 /// The key that zooms the workspace in front out and back, likewise.
 pub const OVERVIEW_KEYS: &str = "TAB TAB";
 
-/// How `brain-dismiss` and `brain-snooze` are typed — inside the brain's
-/// buffer, beside `, n` for the notice's first control and for the reason the
-/// countdown's two are `, a` and `, p`: the strip PRINTS these, and a key
-/// written in the table and again in the drawing would be two answers to
-/// "which key puts it away".
-pub const BRAIN_DISMISS_KEYS: &str = ", x";
-
-/// See [`BRAIN_DISMISS_KEYS`].
-pub const BRAIN_SNOOZE_KEYS: &str = ", z";
-
 /// Whether a command is a brain module's action (`<module>-<action>`, from
 /// the brain's catalogue, `ronoctua_brain::catalogue`).
 ///
@@ -2276,6 +2263,44 @@ mod tests {
             }
         }
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FAILS IF: a window's report that its shortcuts changed
+    /// (`ipc::shortcuts_order`) does not reach the footer as the order that
+    /// reads them again, for that window — the line would go on teaching the
+    /// keys the window had when the focus came to it.
+    #[test]
+    fn a_window_says_its_shortcuts_changed() {
+        use smithay_client_toolkit::reexports::calloop::channel;
+        use std::io::Write as _;
+
+        let dir = std::env::temp_dir().join(format!("ronoctua-shortcuts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("control.sock");
+        let (sender, receiver) = channel::channel::<Order>();
+        assert!(listen_on(&path, sender), "the footer opens its socket");
+        for order in ["shortcuts nobody", &crate::ipc::shortcuts_order(4242)] {
+            let mut s = UnixStream::connect(&path).expect("the footer listens");
+            writeln!(s, "{order}").expect("write the report");
+        }
+        // AS SOON AS THE THREAD READS IT, which is not "already": a short
+        // wait with an early exit measures the mechanism, not the machine.
+        let up_to = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let heard = loop {
+            match receiver.try_recv() {
+                Ok(order) => break order,
+                Err(_) if std::time::Instant::now() < up_to => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => panic!("the report never reached the footer"),
+            }
+        };
+        assert_eq!(
+            heard,
+            Order::Shortcuts { pid: 4242 },
+            "a report naming nobody was taken"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

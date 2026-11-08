@@ -80,11 +80,16 @@ pub fn unaimed(flake: &str, release: &str) -> Option<String> {
 /// Pure.
 #[must_use]
 pub fn follows_a_checkout(lock: &[u8]) -> bool {
-    disk::input_node(lock, DISTRO_INPUT).is_some_and(|node| {
-        ["original", "locked"]
-            .iter()
-            .any(|field| node.get(field).is_some_and(is_local))
-    })
+    disk::input_node(lock, DISTRO_INPUT).is_some_and(|node| is_a_checkout(&node))
+}
+
+/// Whether one node of a lock is a LOCAL checkout: its `original` or its
+/// `locked` on this machine's disk, outside the store ([`follows_a_checkout`]
+/// asks it of the distro input's). Pure.
+pub(crate) fn is_a_checkout(node: &serde_json::Value) -> bool {
+    ["original", "locked"]
+        .iter()
+        .any(|field| node.get(field).is_some_and(is_local))
 }
 
 /// Whether one source of a lock's node is on this machine's disk, outside

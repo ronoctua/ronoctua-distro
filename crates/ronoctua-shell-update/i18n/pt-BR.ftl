@@ -19,25 +19,25 @@ group-update = atualização
 ## How the boot trial stands (`machine-trial-<outcome>`).
 
 machine-trial-pending = O sistema novo sobe pela primeira vez no próximo reinício. Se ele não subir, a máquina volta sozinha ao último sistema bom.
-machine-trial-good = O sistema novo subiu bem: agora ele é o último bom.
-machine-trial-failed = O sistema novo não subiu, ou foi desfeito: a máquina está de volta no último sistema bom.
-machine-trial-boot-identical = O sistema novo sobe exatamente como o último bom: não precisa de reinício para merecer confiança.
+machine-trial-good = O sistema novo subiu bem, e agora é o último bom.
+machine-trial-failed = O sistema novo não subiu, ou foi desfeito, então a máquina voltou ao último sistema bom.
+machine-trial-boot-identical = O sistema novo sobe exatamente como o último bom, então não é preciso reiniciar para confiar nele.
 
 ## Why the new system has no boot trial, until it has started once (`machine-no-trial-<why>`).
 
-machine-no-trial-no-efi-variables = As variáveis de boot desta máquina não podem ser escritas: o sistema novo não tem volta além do menu de boot.
-machine-no-trial-not-in-menu = O menu de boot não nomeia o sistema novo ou o último bom de um jeito que o teste possa usar: o sistema novo não tem volta além do menu de boot.
-machine-no-trial-no-last-good = Ainda não se sabe de nenhum sistema que tenha subido bem nesta máquina: o sistema novo não tem volta além do menu de boot.
+machine-no-trial-no-efi-variables = As configurações de boot desta máquina não podem ser escritas, então, se o sistema novo não subir, só o menu de boot leva você de volta.
+machine-no-trial-not-in-menu = O menu de boot não lista o sistema novo e o último bom de um jeito que o teste possa usar. Se o novo não subir, só o menu de boot leva você de volta.
+machine-no-trial-no-last-good = Nenhum sistema subiu bem nesta máquina até agora, então, se o novo não subir, só o menu de boot leva você de volta.
 
 ## The machine's own gestures on the update's page: the system that did not start, tried again at the next update; the machine held on its distro revision, and let go. Each is asked on the page, the no first, then in the sudo bar.
 
 machine-try-again-row = Tentar de novo na próxima atualização.
-machine-try-again-asked = Ele é tentado de novo na próxima atualização, com a volta armada; { $keys } atualiza agora.
-machine-try-again-question = Tentar de novo, na próxima atualização, o sistema que não subiu? Se ele não subir desta vez também, a máquina volta sozinha ao último sistema bom.
+machine-try-again-asked = Ele será testado de novo na próxima atualização, com a volta preparada. { $keys } atualiza agora.
+machine-try-again-question = Testar de novo, na próxima atualização, o sistema que não subiu? Se falhar outra vez, a máquina volta sozinha ao último sistema bom.
 machine-try-again-no = não, deixar assim
 machine-try-again-yes = sim, tentar de novo
-machine-hold-row = Reter esta máquina em { $rev }: as atualizações param de mover a distro e o nixpkgs.
-machine-hold-question = Reter esta máquina na revisão da distro que ela tem? As atualizações param de mover a distro e o nixpkgs até você soltar.
+machine-hold-row = Reter esta máquina em { $rev }, para as atualizações pararem de mover a distro e o nixpkgs.
+machine-hold-question = Reter esta máquina na versão atual da distro? As atualizações param de mover a distro e o nixpkgs até você soltar.
 machine-hold-no = não, continuar seguindo a distro
 machine-hold-yes = sim, reter
 machine-let-go-row = Soltar: a próxima atualização volta a mover a distro e o nixpkgs.
@@ -57,20 +57,20 @@ cmd-machine-let-go = Solta a retenção da máquina, e a próxima atualização 
 
 ## The person's brain modules that wait for an approval, on the update's records: a module whose NixOS half runs as root enters a build only at the hash an approval names. Each is asked on the page, the no first, then in the sudo bar.
 
-machine-approve-waiting = Seu módulo do brain { $id } espera a sua aprovação: a metade NixOS dele roda como root. A máquina o mediu como { $hash }.
+machine-approve-waiting = Seu módulo do brain { $id } espera a sua aprovação, porque uma parte dele roda como root. A máquina o mediu como { $hash }.
 machine-approve-row = Aprovar { $id } como ele está agora.
-machine-approve-question = Aprovar { $id } em { $hash }? A partir da próxima atualização a metade NixOS dele roda como root nesta máquina, até o módulo mudar.
+machine-approve-question = Aprovar { $id } em { $hash }? A partir da próxima atualização, uma parte dele roda como root nesta máquina, até o módulo mudar.
 machine-approve-no = não, deixar esperando
 machine-approve-yes = sim, aprovar
-machine-approve-approved = { $id } está aprovado como está agora: ele entra nesta máquina na próxima atualização.
-machine-approve-said-approved = { $id } foi aprovado: ele entra nesta máquina na próxima atualização.
-machine-approve-said-changed = { $id } mudou desde que a máquina o mediu, e não foi aprovado: a próxima atualização o mede de novo.
+machine-approve-approved = { $id } está aprovado como está agora, e entra na próxima atualização.
+machine-approve-said-approved = { $id } foi aprovado, e entra na próxima atualização.
+machine-approve-said-changed = { $id } mudou desde que a máquina o mediu, então não foi aprovado. A próxima atualização o mede de novo.
 machine-approve-said-busy = Outra mudança nos dados desta máquina estava em curso: peça de novo daqui a pouco.
-machine-approve-said-gone = Esta máquina não tem mais o módulo { $id }: nada foi aprovado.
-machine-approve-said-unhashable = A máquina não conseguiu medir { $id }: nada foi aprovado.
+machine-approve-said-gone = Esta máquina não tem mais o módulo { $id }, então nada foi aprovado.
+machine-approve-said-unhashable = A máquina não conseguiu medir { $id }, então nada foi aprovado.
 machine-approve-said-unwritable = A máquina não conseguiu registrar a aprovação de { $id }.
-machine-approve-said-unasked = O pedido para aprovar { $id } não chegou inteiro à máquina: peça de novo.
-machine-approve-said-unstaged = O pedido para aprovar { $id } não pôde ser escrito onde a máquina o lê.
+machine-approve-said-unasked = O pedido para aprovar { $id } chegou incompleto. Peça de novo.
+machine-approve-said-unstaged = O pedido para aprovar { $id } não pôde ser passado à máquina.
 machine-approve-said-none = Nenhum módulo do brain seu espera aprovação.
 cmd-machine-approve-module = Aprova um módulo do brain seu que espera, no hash que a máquina mediu — pedido pelo sudo
 # O CACHE BINÁRIO DA PESSOA — uma página da vista da atualização (`c`, `LEADER s u c`),
@@ -111,6 +111,9 @@ binary-cache-token-kept = guardado, cifrado com os seus pertences
 binary-cache-token-refused = não usado
 binary-cache-copy-unreadable = não lê
 binary-cache-copy-newer = de um formato mais novo
+binary-cache-glance-public = { $name }, público
+binary-cache-glance-private = { $name }, privado
+binary-cache-does = Abre o seu cache binário: o seu próprio cache no Cachix, de onde esta máquina baixa e para onde envia depois de cada atualização.
 binary-cache-down = próxima linha
 about-binary-cache-down = Põe o cursor na próxima linha da página do cache binário.
 binary-cache-up = linha anterior
@@ -166,6 +169,7 @@ binary-cache-said-netrc-footer = O netrc do root é pedido na barra do sudo, aci
 # atualização (`f`, `LEADER s u f`), nas duas portas: a opção da pessoa de
 # deixar a atualização de rotina levá-los além das versões que a distro testou.
 distro-follow-open = seguir versões
+distro-follow-does = Abre os apps da distro que seguem as próprias versões: se cada atualização os leva além das versões que a distro testou.
 cmd-distro-follow-open = Os apps da distro que seguem as próprias versões: se cada atualização os leva além das versões que a distro testou
 distro-follow-heading = Os apps da distro que seguem as próprias versões
 distro-follow-row-follow = seguir as versões
@@ -219,6 +223,12 @@ about-distro-follow-enter = Liga ou desliga o seguir, na linha dele.
 distro-follow-steps = os passos
 about-distro-follow-steps = De volta aos passos da atualização.
 distro-parts-open = partes
+distro-parts-does = Abre as partes da máquina: o que chega depois da instalação, e os outros jeitos de trazer um download que continua falhando.
+distro-parts-glance = { $count ->
+        [0] nenhuma esperando
+        [one] uma esperando
+       *[other] { $count } esperando
+    }
 cmd-distro-parts-open = As partes da máquina: o que chega depois da instalação, cada uma por conta própria, e os outros jeitos de trazer um download que continua falhando
 cmd-distro-parts-hand-in = Entrega um arquivo que você baixou em outro lugar, para a parte ou o sistema sob o cursor: ele só é aceito se for exatamente aquele download
 cmd-distro-parts-import = Traz de um pendrive os downloads que faltam às partes e ao sistema

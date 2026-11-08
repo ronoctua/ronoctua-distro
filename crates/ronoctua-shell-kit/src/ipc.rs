@@ -55,16 +55,109 @@ pub fn buffer_socket_path(pid: u32) -> Result<PathBuf> {
     Ok(PathBuf::from(dir).join(format!("ronoctua-buffer-{pid}.sock")))
 }
 
-/// Asks a buffer for its bindings: `(sequence, command id)` per entry.
+/// One shortcut a window publishes on its per-PID socket — a line of the
+/// `keymap` answer — with what the WINDOW calls it.
 ///
-/// Empty when there is no buffer listening on that PID, and that is a normal
-/// answer rather than an error: most focused windows are not our buffers, and
-/// `SPC m` has to be ABSENT for those instead of showing a failure.
+/// # Why the words and the sentence travel with the keys
+///
+/// Because the footer draws them twice — the free minibuffer's line and the
+/// `LEADER Alt` list — and the window is the one that knows them: a native
+/// window's short word is its hint's (`texts.t(id)`), a buffer's is what its
+/// component declared, and a sentence a window overrides
+/// (`door::Content::explains`) is nowhere the footer could look it up. Read
+/// back from the command id, the two places said two different things — the
+/// line the short word, the list the id — which is what the owner found.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Shortcut {
+    /// The sequence: a native window's one key after `LEADER Alt` (`j`), a
+    /// buffer's local sequence (`, a`).
+    pub keys: String,
+    /// The command it runs, in the window's process.
+    pub command: String,
+    /// The window's own short words for it — what its header says beside
+    /// the key. `None` from a window that sends none.
+    pub words: Option<String>,
+    /// What it does, in a sentence — what the window says of it under the
+    /// pointer. `None` likewise.
+    pub sentence: Option<String>,
+}
+
+/// The verb of the report a window sends the footer when the shortcuts it
+/// publishes CHANGED — a page opened, a question took every key, a state
+/// teaches others ([`shortcuts_order`]). The footer reads the window's
+/// `keymap` again when it is the one in front.
+pub const SHORTCUTS_CHANGED: &str = "shortcuts";
+
+/// The report itself: `shortcuts <pid>`. It names the window and nothing
+/// else — the set is on the window's socket, where the footer reads it, so
+/// the report can never carry a set of its own that disagrees with it.
+#[must_use]
+pub fn shortcuts_order(pid: u32) -> String {
+    format!("{SHORTCUTS_CHANGED} {pid}")
+}
+
+/// One line of the `keymap` answer: `<keys> <command>`, then — after a TAB
+/// each — the words and the sentence, when the window has them.
+///
+/// A TAB, and not a space: the sequence carries spaces (`, a`) and the words
+/// do too, and a tab is what neither ever holds. Each is put on ONE line, its
+/// whitespace collapsed — a sentence a module wrote may carry a line break,
+/// and the answer is a line per shortcut. A line with neither is the old
+/// one, so a reader of the old shape reads it still.
+#[must_use]
+pub fn keymap_line(
+    keys: &str,
+    command: &str,
+    words: Option<&str>,
+    sentence: Option<&str>,
+) -> String {
+    let one = |t: Option<&str>| {
+        t.map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
+    };
+    let (words, sentence) = (one(words), one(sentence));
+    match (words.is_empty(), sentence.is_empty()) {
+        (true, true) => format!("{keys} {command}"),
+        (_, true) => format!("{keys} {command}\t{words}"),
+        _ => format!("{keys} {command}\t{words}\t{sentence}"),
+    }
+}
+
+/// A line of the `keymap` answer read back ([`keymap_line`]). `None` for a
+/// line with no command.
+///
+/// `rsplit_once` on the head, and the test is what said so: the SEQUENCE
+/// carries spaces (`m f s`) and the id does not, so what separates them is the
+/// LAST space. Splitting on the first gave `("m", "f s save-file")` — a
+/// plausible pair that would have listed one key and run nothing.
+#[must_use]
+pub fn shortcut_of_line(line: &str) -> Option<Shortcut> {
+    let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
+    let (keys, command) = fields.next()?.trim().rsplit_once(' ')?;
+    let said = |f: Option<&str>| {
+        f.map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_owned)
+    };
+    Some(Shortcut {
+        keys: keys.to_owned(),
+        command: command.to_owned(),
+        words: said(fields.next()),
+        sentence: said(fields.next()),
+    })
+}
+
+/// Asks a window for its shortcuts — a buffer, or any window the base door
+/// serves: one [`Shortcut`] per entry.
+///
+/// Empty when there is no window listening on that PID, and that is a normal
+/// answer rather than an error: most focused windows are not ours, and
+/// `LEADER Alt` has to be ABSENT for those instead of showing a failure.
 ///
 /// # Errors
 ///
 /// `XDG_RUNTIME_DIR` absent.
-pub fn buffer_keymap(pid: u32) -> Result<Vec<(String, String)>> {
+pub fn buffer_keymap(pid: u32) -> Result<Vec<Shortcut>> {
     buffer_keymap_at(&buffer_socket_path(pid)?)
 }
 
@@ -73,7 +166,7 @@ pub fn buffer_keymap(pid: u32) -> Result<Vec<(String, String)>> {
 /// Split off for the same reason as [`listen_on`]: `XDG_RUNTIME_DIR` is
 /// process-global, and a test that changes it races every other test in the
 /// binary.
-pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>> {
+pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<Shortcut>> {
     let Ok(mut stream) = UnixStream::connect(path) else {
         return Ok(Vec::new());
     };
@@ -87,15 +180,7 @@ pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<(String, String)>>
     if std::io::Read::read_to_string(&mut stream, &mut answer).is_err() {
         return Ok(Vec::new());
     }
-    // `rsplit_once`, and the test is what said so: the SEQUENCE carries spaces
-    // (`m f s`) and the id does not, so what separates them is the LAST space.
-    // Splitting on the first gave `("m", "f s save-file")` — a plausible
-    // pair that would have listed one key and run nothing.
-    Ok(answer
-        .lines()
-        .filter_map(|l| l.trim().rsplit_once(' '))
-        .map(|(keys, command)| (keys.to_owned(), command.to_owned()))
-        .collect())
+    Ok(answer.lines().filter_map(shortcut_of_line).collect())
 }
 
 /// What a buffer answers about its states: which one is in effect, and the list
@@ -370,7 +455,13 @@ mod tests {
                     .read_line(&mut line)
                     .expect("read");
                 let reply = match line.trim() {
-                    "keymap" => "m f s save-file\nm f r reload-file".to_owned(),
+                    // THE OLD SHAPE AND THE NEW, side by side: a line with
+                    // the words and the sentence after tabs, and one with
+                    // neither, which a window that has none still sends.
+                    "keymap" => format!(
+                        "{}\nm f r reload-file",
+                        super::keymap_line("m f s", "save-file", Some("save"), Some("Saves it."))
+                    ),
                     order => {
                         seen.lock().expect("lock").push(order.to_owned());
                         "ok".to_owned()
@@ -381,13 +472,20 @@ mod tests {
         });
 
         let keymap = super::buffer_keymap_at(&path).expect("read the keymap");
+        let pairs: Vec<(&str, &str)> = keymap
+            .iter()
+            .map(|s| (s.keys.as_str(), s.command.as_str()))
+            .collect();
         assert_eq!(
-            keymap,
-            vec![
-                ("m f s".to_owned(), "save-file".to_owned()),
-                ("m f r".to_owned(), "reload-file".to_owned()),
-            ],
-            "the sequence carries spaces, so only the FIRST one separates the id from it"
+            pairs,
+            vec![("m f s", "save-file"), ("m f r", "reload-file")],
+            "the sequence carries spaces, so only the LAST one separates the id from it"
+        );
+        assert_eq!(keymap[0].words.as_deref(), Some("save"));
+        assert_eq!(keymap[0].sentence.as_deref(), Some("Saves it."));
+        assert_eq!(
+            (keymap[1].words.as_ref(), keymap[1].sentence.as_ref()),
+            (None, None)
         );
 
         super::buffer_command_at(&path, "save-file").expect("run the command");
@@ -398,6 +496,51 @@ mod tests {
             "the command has to arrive on the buffer's side, not just be sent"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// FAILS IF: a shortcut's words or sentence do not come back as the
+    /// window wrote them — a space in them taken for the seam between the
+    /// keys and the command, a sentence of two lines breaking the answer in
+    /// two, the words lost when there is no sentence — or a line of the old
+    /// shape stops being read.
+    #[test]
+    fn words_and_sentence_travel_with_the_keys() {
+        let line = super::keymap_line(
+            ", a",
+            "brain-abort",
+            Some("not now"),
+            Some("Puts it off\nto its next moment."),
+        );
+        assert_eq!(line.lines().count(), 1, "one line per shortcut: {line:?}");
+        assert_eq!(
+            super::shortcut_of_line(&line),
+            Some(super::Shortcut {
+                keys: ", a".to_owned(),
+                command: "brain-abort".to_owned(),
+                words: Some("not now".to_owned()),
+                sentence: Some("Puts it off to its next moment.".to_owned()),
+            })
+        );
+        let words_only = super::keymap_line("u", "update-now", Some("update now"), None);
+        let read = super::shortcut_of_line(&words_only).expect("a shortcut");
+        assert_eq!(read.words.as_deref(), Some("update now"));
+        assert_eq!(read.sentence, None);
+        let sentence_only = super::keymap_line("u", "update-now", None, Some("Updates."));
+        let read = super::shortcut_of_line(&sentence_only).expect("a shortcut");
+        assert_eq!(
+            (read.words, read.sentence.as_deref()),
+            (None, Some("Updates."))
+        );
+        // THE OLD SHAPE, which is also what a window with neither sends.
+        assert_eq!(super::keymap_line("j", "down", None, None), "j down");
+        let old = super::shortcut_of_line("m f s save-file").expect("a shortcut");
+        assert_eq!(
+            (old.keys.as_str(), old.command.as_str()),
+            ("m f s", "save-file")
+        );
+        assert_eq!(super::shortcut_of_line("nothing"), None);
+        // AND THE REPORT names the window and nothing else.
+        assert_eq!(super::shortcuts_order(4242), "shortcuts 4242");
     }
 
     /// No buffer listening is a NORMAL answer, and not an error: most focused
