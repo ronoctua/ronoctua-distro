@@ -508,6 +508,13 @@ pub fn host_it(unit: &str) -> Result<()> {
         .run(None, &mut state, |e| {
             // THE ONE PLACE THAT KNOWS THE BATCH IS OVER.
             e.settle();
+            // A CONNECTION THE COMPOSITOR CLOSED ON A PROTOCOL ERROR draws
+            // nothing again, and a loop that went on would wake for the same
+            // error as fast as it could, writing it to the journal each time.
+            if let Some(error) = e.conn.protocol_error() {
+                tracing::error!(%error, "the compositor closed the connection; the line ends");
+                e.quit = true;
+            }
             if e.quit {
                 signal.stop();
             }
@@ -1138,7 +1145,15 @@ impl LayerShellHandler for Lifeline {
         self.width = self.asked.0;
         self.height = self.asked.1;
         self.recount();
-        self.assemble_gpu();
+        // ONCE PER SURFACE, as `paint` asks: a layer surface is configured
+        // again on every resize, and a second context on the same
+        // `wl_surface` asks the compositor for a second explicit-sync object,
+        // which `wp_linux_drm_syncobj_manager_v1` refuses as a protocol
+        // error — the connection dies with it, and so does the line. A new
+        // size is the context's to follow (`hidpi::resized`, below).
+        if self.gpu.is_none() {
+            self.assemble_gpu();
+        }
         if let Some(g) = self.gpu.as_mut() {
             let (shown_w, shown_h) = crate::hidpi::resized(g, self.asked, self.scale);
             self.width = shown_w;
