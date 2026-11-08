@@ -4369,6 +4369,14 @@ name = "ronoctua-options"
 version = "0.1.0"
 
 [[package]]
+name = "ronoctua-packets"
+version = "0.1.0"
+dependencies = [
+ "resvg",
+ "ronoctua-i18n",
+]
+
+[[package]]
 name = "ronoctua-pam"
 version = "0.1.0"
 dependencies = [
@@ -5447,10 +5455,13 @@ dependencies = [
  "ronoctua-i18n",
  "ronoctua-keymap",
  "ronoctua-notify",
+ "ronoctua-packets",
  "ronoctua-render",
  "ronoctua-shell-door",
  "ronoctua-shell-kit",
  "ronoctua-tokens",
+ "serde",
+ "serde_json",
  "smithay-client-toolkit",
 ]
 

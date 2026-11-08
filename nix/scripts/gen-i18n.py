@@ -24,9 +24,15 @@ that at runtime. Here we only need the SET of keys, which in Fluent are
 the column-0 lines with `=`. Continuations (indented lines), comments and
 blank lines are ignored.
 
+A BOOK (`--book <name>=<book>`) is a crate's fragment kept out of the merged
+file: checked the same way — its parity, its arguments, its keys owned once
+among every fragment's — and written to `<out-dir>/books/<book>/<lang>.ftl`,
+for the one program that opens it (`ronoctua_i18n::Book`).
+
 Usage:
     gen-i18n.py <out-dir> <language>... [--fragment <name>=<dir> ...]
                 [--module <id>=<dir> ...] [--prefixes <id>=<prefix>,<prefix> ...]
+                [--book <name>=<book> ...]
 
 # The brain's modules (brain.md §3)
 
@@ -162,6 +168,9 @@ def main() -> int:
     ap.add_argument(
         "--prefixes", action="append", default=[], help="<id>=<p>,<p>: a module's key prefixes (default: its id)"
     )
+    ap.add_argument(
+        "--book", action="append", default=[], help="<name>=<book>: a fragment that is a book, written apart"
+    )
     args = ap.parse_args()
     out_dir = args.out
     # MANDATORY languages, and they come from `assets/i18n/languages.nix`
@@ -171,6 +180,15 @@ def main() -> int:
     languages = tuple(args.languages)
     crates = pairs(args.fragment, "--fragment")
     modules = pairs(args.module, "--module")
+    # A BOOK is a fragment checked like every other and written APART, into
+    # `<out-dir>/books/<book>/<language>.ftl`: sentences only the program that
+    # opens the book reads (`ronoctua_i18n::Book`), kept out of the file every
+    # program parses at its start.
+    books = pairs(args.book, "--book")
+    for name in books:
+        if name not in crates:
+            print(f"ERROR: --book names `{name}`, which no --fragment hands in", file=sys.stderr)
+            return 2
     if not crates:
         print("ERROR: no --fragment: there would be no texts", file=sys.stderr)
         return 2
@@ -344,18 +362,29 @@ def main() -> int:
     def messages_of(text: str) -> str:
         return "".join(line for line in text.splitlines(keepends=True) if not line.startswith("#"))
 
-    for language in languages:
+    def merged_of(parts) -> str:
         merged = ""
-        for title, texts in [
-            *((f"{name}", crate_texts[name][language]) for name in sorted(crate_texts)),
-            *((f"brain module: {ident}", fragment_texts[ident][language]) for ident in sorted(fragment_texts)),
-        ]:
+        for title, texts in parts:
             if merged:
                 merged += "\n"
             merged += f"# ── {title} ──\n" + messages_of(texts)
             if not merged.endswith("\n"):
                 merged += "\n"
+        return merged
+
+    for language in languages:
+        merged = merged_of(
+            [
+                *((f"{name}", crate_texts[name][language]) for name in sorted(crate_texts) if name not in books),
+                *((f"brain module: {ident}", fragment_texts[ident][language]) for ident in sorted(fragment_texts)),
+            ]
+        )
         (out_dir / f"{language}.ftl").write_text(merged, encoding="utf-8")
+        for book in sorted(set(books.values())):
+            shelf = out_dir / "books" / book
+            shelf.mkdir(parents=True, exist_ok=True)
+            pages = [(f"{name}", crate_texts[name][language]) for name in sorted(books) if books[name] == book]
+            (shelf / f"{language}.ftl").write_text(merged_of(pages), encoding="utf-8")
 
     moved = sum(len(f[base]) for f in fragments.values())
     beside = f" ({moved} of them from the brain's modules: {', '.join(sorted(fragments))})" if fragments else ""

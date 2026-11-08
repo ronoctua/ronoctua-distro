@@ -123,8 +123,8 @@
   wordsData,
   # The three icon tables in one directory (`nix/iconset.nix`), read at RUN time.
   iconset,
-  # GNU's Emacs reference card, a page to a column (`nix/emacs-refcard.nix`),
-  # read at RUN time.
+  # GNU's Emacs reference card, as data (`nix/emacs-refcard.nix`), read at
+  # RUN time.
   emacsRefcard,
   # The calculator's unit table (`nix/unitsgen.nix`), compiled in.
   unitsRs,

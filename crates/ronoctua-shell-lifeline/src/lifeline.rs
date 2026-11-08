@@ -1561,6 +1561,7 @@ impl crate::photo::scenes::Scene for Camera {
             }],
             split: 1,
             pictures: Vec::new(),
+            sprites: Vec::new(),
         };
         let mut gpu = ronoctua_render::offscreen::Offscreen::new(1, 1)?;
         let mut images =

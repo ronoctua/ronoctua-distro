@@ -281,7 +281,12 @@ in
           name: c:
           textKeys.render {
             inherit name;
-            inherit (c) dir names uses;
+            inherit (c)
+              dir
+              names
+              uses
+              book
+              ;
           }
         ) textKeys.crates;
         compiledReads =
@@ -580,6 +585,18 @@ in
       KEY = re.compile(r"^([a-z][a-z0-9-]*)\s*=", re.M)
       for language in facts["languages"]:
           text = hashless(open(os.path.join(facts["merged"], language + ".ftl"), encoding="utf-8").read())
+          # AND THE BOOKS, beside the texts (`books/<book>/<language>.ftl`):
+          # their keys are names like any other, and never in the file every
+          # program parses at its start — that is what a book is for.
+          shelf = os.path.join(facts["merged"], "books")
+          common = set(KEY.findall(text))
+          for book in sorted(os.listdir(shelf)) if os.path.isdir(shelf) else []:
+              pages = hashless(open(os.path.join(shelf, book, language + ".ftl"), encoding="utf-8").read())
+              shelved = set(KEY.findall(pages))
+              if shelved & common:
+                  wrong.append(f"the book {book} has keys in the merged {language}.ftl too, "
+                               f"e.g. {sorted(shelved & common)[:3]}")
+              text += "\n" + pages
           ids = sorted(set(KEY.findall(text)))
           if ids != names:
               extra = sorted(set(ids) - set(names))[:3]

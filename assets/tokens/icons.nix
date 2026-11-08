@@ -1109,4 +1109,19 @@
   incus-container = "md-cube_outline";
   incus-vm = "md-monitor";
 
+  # ===================================================================
+  # THE NETWORK PROTOCOLS' MANUAL (`LEADER h`, then the protocols): the
+  # manual's own mark, its transport — the step before and after, back to
+  # the start, the speed; `play` and `pause` are the system's — its three
+  # views, and the dot a packet's class is told by in the legend.
+  # ===================================================================
+  protocols = "md-lan";
+  protocols-previous = "md-skip_previous";
+  protocols-next = "md-skip_next";
+  protocols-restart = "md-restart";
+  protocols-speed = "md-speedometer";
+  protocols-network = "md-transit_connection_variant";
+  protocols-sequence = "md-timeline_text_outline";
+  protocols-anatomy = "md-table_large";
+  protocols-class = "md-circle_medium";
 }

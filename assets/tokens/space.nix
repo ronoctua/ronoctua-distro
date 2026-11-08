@@ -1192,6 +1192,41 @@
     pictureCells = 16;
   };
 
+  # THE EMACS CARD (`LEADER e`, and its row of `LEADER h`): the width of one
+  # of its columns, in cells — the card's longest row and its key side by
+  # side, as the paper card's column holds them — and the air between two.
+  emacsCard = {
+    columnCells = 50;
+    gapCells = 4;
+  };
+
+  # THE NETWORK PROTOCOLS' MANUAL (`LEADER h`, then the protocols): its
+  # panel beside the stage and the narrowest stage that keeps it there (a
+  # narrower window puts the panel under the stage), the lines of the
+  # packets' table, the camera's widest and closest views in tenths of the
+  # drawings' own size, the dots of the floor and of a link (in tenths of a
+  # pixel, the globe's unit) and the air between two dots of a link, how high
+  # above the floor a packet flies (in the drawings' units), and how long
+  # each thing takes, in milliseconds of the animation at its own speed: a
+  # camera move, a packet across one link, a character typed, a light, and
+  # the rest at the end of a step — long enough to read what the step said.
+  packets = {
+    panelCells = 50;
+    stageLeastCells = 60;
+    tableLines = 9;
+    zoomLeastTenths = 5;
+    zoomMostTenths = 30;
+    floorDotTenths = 16;
+    linkDotTenths = 26;
+    linkGapPx = 8;
+    lift = 16;
+    cameraMs = 900;
+    hopMs = 750;
+    keyMs = 55;
+    lightMs = 550;
+    restMs = 1400;
+  };
+
   osk = {
     lowQuarters = 4;
     mediumQuarters = 8;

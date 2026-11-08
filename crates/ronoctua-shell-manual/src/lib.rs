@@ -25,6 +25,12 @@ pub mod key;
 pub mod manual;
 pub mod manual_region;
 pub mod manual_window;
+pub mod packets_anatomy;
+pub mod packets_panel;
+pub mod packets_sequence;
+pub mod packets_stage;
+pub mod packets_table;
+pub mod packets_window;
 pub mod refcard;
 pub mod refcard_window;
 
@@ -37,11 +43,18 @@ pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[ronoctua_shell_kit::door
 }];
 
 /// THE EMACS CARD'S CAMERA (`photograph --door emacs-card --scene <folder>`),
-/// over a card as `nix/emacs-refcard.nix` builds it.
-pub const CAMERAS: &[ronoctua_shell_door::photo::Camera] = &[ronoctua_shell_door::photo::Camera {
-    door: "emacs-card",
-    take: refcard_window::camera,
-}];
+/// over a card as `nix/emacs-refcard.nix` reads it, and THE PROTOCOLS'
+/// (`photograph --door protocols --scene <protocol>`), at any moment of one.
+pub const CAMERAS: &[ronoctua_shell_door::photo::Camera] = &[
+    ronoctua_shell_door::photo::Camera {
+        door: "emacs-card",
+        take: refcard_window::camera,
+    },
+    ronoctua_shell_door::photo::Camera {
+        door: "protocols",
+        take: packets_window::camera,
+    },
+];
 
 /// `ronoctua-shell manual [<word>]` — a word that names no manual is
 /// refused, never taken for the shortcuts'.
@@ -61,6 +74,10 @@ fn manuals_door(words: &ronoctua_shell_kit::doors::Words) -> anyhow::Result<()> 
     // screen (`refcard_window`).
     if which == Some(manual::Which::Emacs) {
         return refcard_window::host_it().context("host the Emacs reference card");
+    }
+    // AND THE PROTOCOLS ARE A NETWORK, animated: a window of their own.
+    if which == Some(manual::Which::Protocols) {
+        return packets_window::host_it().context("host the network protocols");
     }
     manual_window::host_it(which).context("host the manuals")
 }

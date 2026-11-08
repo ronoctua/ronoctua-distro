@@ -132,6 +132,10 @@ let
     ) fileEdits
   );
   folderOf = name: if fileEdits ? ${name} then "edited-${name}" else "${copied.${name}}";
+  # THE BOOKS, written apart (`gen-i18n.py --book`).
+  bookArgs = lib.concatStringsSep " " (
+    lib.mapAttrsToList (name: book: "--book ${lib.escapeShellArg "${name}=${book}"}") textKeys.books
+  );
 in
 assert
   unknownEdits == [ ]
@@ -155,7 +159,7 @@ stdenvNoCC.mkDerivation {
         f:
         "--module ${lib.escapeShellArg "${f.id}=${f.dir}"} --prefixes ${lib.escapeShellArg "${f.id}=${lib.concatStringsSep "," f.prefixes}"}"
       ) brainFragments
-    }
+    } ${bookArgs}
     runHook postBuild
   '';
 
@@ -177,6 +181,8 @@ stdenvNoCC.mkDerivation {
     inherit names;
     # The fragments' folders as the derivation reads them, by name.
     fragments = copied;
+    # And the `--book` arguments that keep the books apart.
+    inherit bookArgs;
     # THE BASE'S NAMES alone, and EVERY NAME THE TEXTS HOLD (`names`) — the
     # base's and every module's, a person's included: what the brain's
     # catalogue may ask of the texts (`nix/brain-catalogue.nix`) and what a

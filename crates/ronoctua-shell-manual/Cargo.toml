@@ -1,6 +1,6 @@
 [package]
 name = "ronoctua-shell-manual"
-description = "The manuals (LEADER h): their list, the shortcuts' and the gestures', in the footer's region and in a window."
+description = "The manuals (LEADER h): their list, the shortcuts' and the gestures', in the footer's region and in a window; the Emacs card and the network protocols, in windows of their own."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,9 +25,15 @@ ronoctua-gestures = { path = "../ronoctua-gestures" }
 ronoctua-notify = { path = "../ronoctua-notify" }
 # The bar under the Emacs card's columns (`Scroll`, the one bar arithmetic).
 ronoctua-design = { path = "../ronoctua-design" }
+# The network protocols' manual as data: its scenes, steps, packets,
+# drawings and book (`packets_window`).
+ronoctua-packets = { path = "../ronoctua-packets" }
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true
+# The Emacs card, as `nix/emacs-refcard.nix` reads it (`refcard::card`).
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 # The door's and the kit's guards hold in these tests too (`test-support`).
@@ -41,7 +47,7 @@ workspace = true
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
 env = ["RONOCTUA_KEYS_DIR"]
-# The Emacs reference card, built from the installed Emacs's own source
+# The Emacs reference card, read from the installed Emacs's own source
 # (`nix/emacs-refcard.nix`): read when the card is opened. Its tests name the
-# folder they plant (`refcard::pages_in`), so they run without it.
+# folder they plant (`refcard::card_in`), so they run without it.
 run-env-absent = ["RONOCTUA_EMACS_REFCARD"]

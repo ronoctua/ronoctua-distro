@@ -19452,6 +19452,7 @@ impl Footer {
                     quads,
                     split,
                     pictures: pixmaps.clone(),
+                    sprites: Vec::new(),
                 });
                 continue;
             }

@@ -101,13 +101,29 @@ writeShellApplication {
         "--module ${lib.escapeShellArg m.id}=\"$tree/crates/ronoctua-brain/modules/\"${lib.escapeShellArg m.id}/i18n --prefixes ${lib.escapeShellArg "${m.id}=${lib.concatStringsSep "," m.prefixes}"}"
       ) textModules
     })
+    # THE BOOKS, as each crate's manifest names them (`nix/text-keys.nix`).
+    mapfile -t books < <(python3 -I - "$tree" <<'BOOKS'
+    import pathlib, sys, tomllib
+    tree = pathlib.Path(sys.argv[1])
+    for d in tomllib.loads((tree / "Cargo.toml").read_text())["workspace"]["members"]:
+        m = tomllib.loads((tree / d / "Cargo.toml").read_text())
+        book = m["package"].get("metadata", {}).get("ronoctua", {}).get("book")
+        if book:
+            print("--book")
+            print(f"{m['package']['name']}={book}")
+    BOOKS
+    )
     rm -rf "$texts.new"
     python3 ${./scripts/gen-i18n.py} "$texts.new" ${lib.escapeShellArgs languages} \
-      "''${fragments[@]}" "''${modules[@]}" > /dev/null
+      "''${fragments[@]}" "''${modules[@]}" "''${books[@]}" > /dev/null
     mkdir -p "$texts"
     for language in ${lib.escapeShellArgs languages}; do
       mv -f "$texts.new/$language.ftl" "$texts/$language.ftl"
     done
+    rm -rf "$texts/books"
+    if [ -d "$texts.new/books" ]; then
+      mv "$texts.new/books" "$texts/books"
+    fi
     rm -rf "$texts.new"
 
     # THEN THE KEYS.

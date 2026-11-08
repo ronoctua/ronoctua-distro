@@ -74,6 +74,7 @@ members = [
   "crates/ronoctua-effects",
   "crates/ronoctua-segment",
   "crates/ronoctua-gestures",
+  "crates/ronoctua-packets",
   "crates/ronoctua-studio",
   "crates/ronoctua-frames",
   "crates/ronoctua-player",

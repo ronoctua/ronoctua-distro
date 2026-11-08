@@ -56,7 +56,7 @@ fn every_window_shortcut_is_one_key() {
     use ronoctua_shell_icons::icons;
     use ronoctua_shell_incus::incus;
     use ronoctua_shell_locale::{geo, locale};
-    use ronoctua_shell_manual::manual;
+    use ronoctua_shell_manual::{manual, packets_window, refcard_window};
     use ronoctua_shell_network::network;
     use ronoctua_shell_notifications::notifications;
     use ronoctua_shell_player::{player, text_area};
@@ -151,6 +151,20 @@ fn every_window_shortcut_is_one_key() {
     window("geo", &[geo::OF_THE_VIEW], none);
     window("locale", &[locale::OF_THE_VIEW], none);
     window("manual", &[manual::OF_THE_LIST, manual::OF_A_MANUAL], none);
+    window(
+        "protocols",
+        &[
+            OF_THE_WAY_BACK,
+            packets_window::OF_THE_LIST,
+            packets_window::OF_A_PROTOCOL,
+        ],
+        none,
+    );
+    window(
+        "emacs-card",
+        &[OF_THE_WAY_BACK, refcard_window::OF_THE_VIEW],
+        none,
+    );
     window("network", &[&rows!(network::OF_THE_VIEW)], none);
     window(
         "notifications",

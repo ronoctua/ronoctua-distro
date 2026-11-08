@@ -381,10 +381,17 @@ mod tests {
         let mut w = way(&t);
         let mut m = open("help", None, &mut w);
         let _ = m.command("help", None, &mut w);
-        // TO THE SHORTCUTS, the longest of the manuals read here: the list is
-        // alphabetical, and the Emacs card first opens its own window.
-        let _ = m.key(key("<down>"), &mut w);
-        let _ = m.key(key("<down>"), &mut w);
+        // TO THE SHORTCUTS, the longest of the manuals read here — found by
+        // NAME: the list is alphabetical in the language read, and the Emacs
+        // card and the protocols first open windows of their own.
+        let at = View::fresh()
+            .found(&t)
+            .iter()
+            .position(|which| *which == Which::Shortcuts)
+            .expect("the shortcuts are listed");
+        for _ in 0..at {
+            let _ = m.key(key("<down>"), &mut w);
+        }
         let _ = m.key(key("RET"), &mut w);
         w.owed.clear();
         for (notation, page) in [
@@ -402,7 +409,7 @@ mod tests {
         }
         w.owed.clear();
         let _ = m.key(key("C-w"), &mut w);
-        let opened = View::fresh().found(&t)[2];
+        let opened = Which::Shortcuts;
         assert_eq!(
             w.owed,
             vec![

@@ -103,12 +103,43 @@ impl Area {
     }
 }
 
-/// An instance as the GPU sees it: two `vec2`s.
+/// An instance as the GPU sees it: where, how big, what it may cover and how
+/// opaque.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
     pos: [f32; 2],
     sz: [f32; 2],
+    /// What of the screen it may cover, in NDC: left, bottom, right, top —
+    /// the whole screen for a picture, its stage for a sprite.
+    clip: [f32; 4],
+    /// How opaque it is drawn: 1 for a picture.
+    alpha: f32,
+}
+
+/// A picture that MOVES: one over its area like any other, and also cut to
+/// a box of the screen and drawn at an opacity.
+///
+/// # Why it exists
+///
+/// A picture covers its whole area and nothing downstream cuts it, so a
+/// drawing that slides half out of the panel it belongs to is drawn over its
+/// neighbour (the globe's note). An animated illustration — the protocols'
+/// manual, its devices zoomed by a camera and its packets flying — needs a
+/// drawing to be CUT where its stage ends and to come and go GRADUALLY: the
+/// stage is its `clip`, and `alpha` fades it. The fragment outside the clip is
+/// discarded; nothing else changes, and a picture is a sprite with the whole
+/// screen for a clip and full opacity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sprite {
+    /// The texture's key, as uploaded.
+    pub key: String,
+    /// Where it goes, in logical pixels.
+    pub area: Area,
+    /// What of the screen it may cover, in logical pixels.
+    pub clip: Area,
+    /// Its opacity, 0 to 1.
+    pub alpha: f32,
 }
 
 /// How many images fit in a frame.
@@ -324,7 +355,12 @@ impl Images {
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Instance>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2,
+                        1 => Float32x2,
+                        2 => Float32x4,
+                        3 => Float32,
+                    ],
                 })],
             },
             fragment: Some(wgpu::FragmentState {
@@ -514,22 +550,59 @@ impl Images {
         height: u32,
         items: &[(String, Area)],
     ) {
+        self.prepare_with(queue, width, height, items, &[]);
+    }
+
+    /// [`Images::prepare`], and the frame's [`Sprite`]s after its pictures —
+    /// each cut to its clip and drawn at its opacity, in the order given.
+    pub fn prepare_with(
+        &mut self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        items: &[(String, Area)],
+        sprites: &[Sprite],
+    ) {
         self.batch.clear();
         if width == 0 || height == 0 {
             return;
         }
         let (w, h) = (width as f32, height as f32);
-        let mut instances: Vec<Instance> = Vec::with_capacity(items.len().min(CEILING));
-        for (key, area) in items {
+        let ndc = |a: &Area| {
+            [
+                a.x / w * 2.0 - 1.0,
+                1.0 - (a.y + a.height) / h * 2.0,
+                (a.x + a.width) / w * 2.0 - 1.0,
+                1.0 - a.y / h * 2.0,
+            ]
+        };
+        let whole = [-1.0, -1.0, 1.0, 1.0];
+        let mut instances: Vec<Instance> =
+            Vec::with_capacity((items.len() + sprites.len()).min(CEILING));
+        let shown = items
+            .iter()
+            .map(|(key, area)| (key, area, whole, 1.0))
+            .chain(
+                sprites
+                    .iter()
+                    .map(|s| (&s.key, &s.area, ndc(&s.clip), s.alpha)),
+            );
+        for (key, area, clip, alpha) in shown {
             if instances.len() >= CEILING {
                 break;
             }
-            if area.width <= 0.0 || area.height <= 0.0 || !self.uploads.contains_key(key) {
+            if area.width <= 0.0
+                || area.height <= 0.0
+                || alpha <= 0.0
+                || !self.uploads.contains_key(key)
+            {
                 continue;
             }
             instances.push(Instance {
                 pos: [area.x / w * 2.0 - 1.0, 1.0 - area.y / h * 2.0],
                 sz: [area.width / w * 2.0, -(area.height / h * 2.0)],
+                clip,
+                alpha: alpha.min(1.0),
             });
             self.batch.push(key.clone());
         }

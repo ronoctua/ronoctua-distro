@@ -34,8 +34,9 @@ usage: ronoctua-shell photograph [options] [steps]
                         stick, software, incus, agents, fast-access,
                         network, bluetooth, audio, locale,
                         camera-settings, display, clipboard, curtain,
-                        lifeline, lock, emacs-card, terminal, terminals,
-                        terminal-settings or footer (default: window);
+                        lifeline, lock, emacs-card, protocols, terminal,
+                        terminals, terminal-settings or footer (default:
+                        window);
                         terminal is the terminal's window over a recorded
                         stream (`--corpus <file.vt>`); terminals the ones no
                         window shows over a planted census (`--terminals
@@ -69,7 +70,7 @@ usage: ronoctua-shell photograph [options] [steps]
 ";
 
 /// Every door's word, as a door that is none of them is refused with.
-const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, audio, locale, camera-settings, display, clipboard, curtain, lifeline, lock, emacs-card, terminal, terminals, terminal-settings and footer";
+const NAMED: &str = "window, column, footer-settings, update, update-scene, files, git, icons, calc, video-metrics, security, containers, belongings, stick, software, incus, agents, fast-access, network, bluetooth, audio, locale, camera-settings, display, clipboard, curtain, lifeline, lock, emacs-card, protocols, terminal, terminals, terminal-settings and footer";
 
 /// THE DOORS THAT ARE NOT THE PLAYER'S, as the player's camera reads them.
 const OTHER_DOORS: OtherDoors = OtherDoors {

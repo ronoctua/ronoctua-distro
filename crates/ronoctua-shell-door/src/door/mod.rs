@@ -1213,7 +1213,8 @@ type Lit = (Vec<(tokens::Color, Option<usize>)>, Vec<Option<f32>>);
 /// One frame, as a window describes it.
 ///
 /// The ORDER of drawing is the canvas's and not the window's: rectangles,
-/// then pictures, then the rectangles that go OVER pictures, then the text.
+/// then pictures and the sprites after them, then the rectangles that go OVER
+/// pictures, then the text.
 /// There is no depth test, and whoever draws later is on top — so the order is
 /// a decision, and it is made once here.
 pub struct Canvas<'a> {
@@ -1226,6 +1227,10 @@ pub struct Canvas<'a> {
     pub over: Vec<ronoctua_render::quad::Quad>,
     /// The pictures, by key, in pixels of the window.
     pub pictures: Vec<(String, ronoctua_render::image::Area)>,
+    /// The pictures that MOVE, drawn after the others — each cut to its clip
+    /// and at its opacity (`ronoctua_render::image::Sprite`): an animated
+    /// drawing's pieces, cut where its stage ends.
+    pub sprites: Vec<ronoctua_render::image::Sprite>,
     /// Every pointer's row, in its cursor's colour — for the hover bands.
     pub lit: &'a [(tokens::Color, Option<usize>)],
     /// Where across the surface each of [`Canvas::lit`]'s pointers is, in the
@@ -1305,6 +1310,8 @@ pub struct Composed {
     pub split: u32,
     /// The pictures, by key, in pixels of the window.
     pub pictures: Vec<(String, ronoctua_render::image::Area)>,
+    /// The pictures that move, after the others ([`Canvas::sprites`]).
+    pub sprites: Vec<ronoctua_render::image::Sprite>,
 }
 
 impl Composed {
@@ -1379,6 +1386,7 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         under: Vec::new(),
         over: Vec::new(),
         pictures: Vec::new(),
+        sprites: Vec::new(),
         lit,
         lit_x,
         device,
@@ -1392,6 +1400,7 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         mut under,
         mut over,
         pictures,
+        sprites,
         ..
     } = canvas;
     // WHAT THE WINDOW SAYS OR ASKS, at its foot, over nothing the window drew:
@@ -1419,6 +1428,7 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         quads: under,
         split,
         pictures,
+        sprites,
     }
 }
 
@@ -3085,7 +3095,13 @@ impl<C: Content> Door<C> {
         // NDC by dividing — so a logical rectangle over a logical viewport lands
         // exactly where a physical one over a physical viewport would.
         quads.prepare(&gpu.device, &gpu.queue, width, height, &composed.quads);
-        images.prepare(&gpu.queue, width, height, &composed.pictures);
+        images.prepare_with(
+            &gpu.queue,
+            width,
+            height,
+            &composed.pictures,
+            &composed.sprites,
+        );
         // THE GRID OF CELLS, when the window draws one: over the PHYSICAL
         // surface like the text, shaped through the text's own faces so its
         // fallback is the interface's, and only the rows the sheet says were

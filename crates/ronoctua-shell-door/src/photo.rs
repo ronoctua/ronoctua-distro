@@ -261,6 +261,13 @@ pub fn draw_with(
                 a.x, a.y, a.width, a.height
             );
         }
+        for sp in &composed.sprites {
+            let (a, c) = (sp.area, sp.clip);
+            println!(
+                "sprite {} {:.1},{:.1} {:.1}x{:.1} clip {:.1},{:.1} {:.1}x{:.1} alpha {:.2}",
+                sp.key, a.x, a.y, a.width, a.height, c.x, c.y, c.width, c.height, sp.alpha
+            );
+        }
         if let Some(sheet) = grid.sheet {
             print_sheet(sheet);
         }
@@ -301,7 +308,13 @@ pub fn draw_with(
         logical.1,
         &composed.quads,
     );
-    images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
+    images.prepare_with(
+        &gpu.queue,
+        logical.0,
+        logical.1,
+        &composed.pictures,
+        &composed.sprites,
+    );
     let cells = grid.prepared(gpu, format, &mut text)?;
     let (drawn, rects, pictures) = (&text, &quads, &*images);
     gpu.frame(grid.clear, |pass| {
@@ -1173,7 +1186,13 @@ keeps no file of its own refuses it."
             logical.1,
             &composed.quads,
         );
-        images.prepare(&gpu.queue, logical.0, logical.1, &composed.pictures);
+        images.prepare_with(
+            &gpu.queue,
+            logical.0,
+            logical.1,
+            &composed.pictures,
+            &composed.sprites,
+        );
         // THE WINDOW'S GROUND AND ITS GRID, as `super::draw_with` draws them.
         let grid = super::Grid::of(&d.content);
         let cells = grid.prepared(&gpu, format, &mut text)?;

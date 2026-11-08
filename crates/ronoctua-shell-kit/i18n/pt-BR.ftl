@@ -326,6 +326,7 @@ mode-software = programas
 mode-camera-settings = ajustes da câmera
 mode-manual = manual
 mode-emacs-card = cartão do emacs
+mode-protocols = protocolos de rede
 
 ## O caminho de volta, primeiro na linha de toda vista: Esc, e um clique nele
 

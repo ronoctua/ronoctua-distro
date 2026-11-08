@@ -227,6 +227,9 @@ let
             "beside"
             "data"
             "bins"
+            # Its keys are a book, read by the program that opens it
+            # (`nix/text-keys.nix`): the texts' business, not the build's.
+            "book"
           ] (lib.attrNames meta);
           # A role is one of four, and names one of the crate's programs.
           roles = [

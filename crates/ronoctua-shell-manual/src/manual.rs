@@ -48,11 +48,19 @@ pub enum Which {
     /// GNU's Emacs reference card (`crate::refcard`), on the whole screen in
     /// columns: its row opens its window, from either door.
     Emacs,
+    /// The network protocols, animated (`crate::packets_window`): a window of
+    /// its own, which its row opens from either door.
+    Protocols,
 }
 
 impl Which {
     /// Every manual, in the list's order.
-    pub const ALL: [Self; 3] = [Self::Shortcuts, Self::Gestures, Self::Emacs];
+    pub const ALL: [Self; 4] = [
+        Self::Shortcuts,
+        Self::Gestures,
+        Self::Emacs,
+        Self::Protocols,
+    ];
 
     /// Its name in the list.
     #[must_use]
@@ -61,6 +69,7 @@ impl Which {
             Self::Shortcuts => key::MANUAL_SHORTCUTS,
             Self::Gestures => key::MANUAL_GESTURES,
             Self::Emacs => key::MANUAL_EMACS,
+            Self::Protocols => key::MANUAL_PROTOCOLS,
         }
     }
 
@@ -71,6 +80,7 @@ impl Which {
             Self::Shortcuts => key::ABOUT_MANUAL_SHORTCUTS,
             Self::Gestures => key::ABOUT_MANUAL_GESTURES,
             Self::Emacs => key::ABOUT_MANUAL_EMACS,
+            Self::Protocols => key::ABOUT_MANUAL_PROTOCOLS,
         }
     }
 
@@ -81,6 +91,7 @@ impl Which {
             Self::Shortcuts => "shortcuts",
             Self::Gestures => "gestures",
             Self::Emacs => "emacs",
+            Self::Protocols => "protocols",
         }
     }
 
@@ -96,8 +107,9 @@ impl Which {
         match self {
             Self::Shortcuts => aired(assemble(texts, chord)),
             Self::Gestures => aired(gestures(texts)),
-            // PAGES, drawn by its own window (`crate::refcard_window`).
-            Self::Emacs => Vec::new(),
+            // DRAWN BY THEIR OWN WINDOWS (`crate::refcard_window`,
+            // `crate::packets_window`).
+            Self::Emacs | Self::Protocols => Vec::new(),
         }
     }
 }
@@ -390,9 +402,10 @@ impl View {
     /// Opens the manual under the list's cursor, here.
     fn open_here(&mut self, texts: &Texts) -> Errand {
         match self.found(texts).get(self.cursor).copied() {
-            // THE CARD OPENS IN ITS WINDOW from either door: a page of it does
-            // not fit a region, and the window is the whole screen.
-            Some(Which::Emacs) => Errand::Window(Which::Emacs),
+            // THE CARD AND THE PROTOCOLS OPEN IN THEIR WINDOWS from either
+            // door: a page of the card does not fit a region, nor does a
+            // network flying its packets.
+            Some(which @ (Which::Emacs | Which::Protocols)) => Errand::Window(which),
             Some(which) => {
                 self.which = Some(which);
                 Errand::Level

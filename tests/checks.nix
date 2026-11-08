@@ -169,9 +169,11 @@ let
   fragmentDirs = pkgs.writeText "text-fragments.json" (
     builtins.toJSON (lib.mapAttrs (_: dir: "${dir}") texts.fragments)
   );
-  fragmentTextArgs = lib.concatStringsSep " " (
-    lib.mapAttrsToList (name: dir: "--fragment ${lib.escapeShellArg "${name}=${dir}"}") texts.fragments
-  );
+  fragmentTextArgs =
+    lib.concatStringsSep " " (
+      lib.mapAttrsToList (name: dir: "--fragment ${lib.escapeShellArg "${name}=${dir}"}") texts.fragments
+    )
+    + " ${texts.bookArgs}";
   brainTextArgs = lib.concatMapStringsSep " " (
     f:
     "--module ${lib.escapeShellArg "${f.id}=${f.dir}"} --prefixes ${lib.escapeShellArg "${f.id}=${lib.concatStringsSep "," f.prefixes}"}"
@@ -18312,6 +18314,10 @@ let
     # `ronoctua-http` frames HTTP; inside it, that is the whole job.
     framer = crates / "ronoctua-http"
     heart = framer / "src" / "lib.rs"
+    # THE PROTOCOLS' MANUAL SHOWS HTTP, and sends none: its tables hold what
+    # travels on the wire as data to draw (`ronoctua-packets`, invariant 8's
+    # exception of 2026-11-08), and the crate opens no connection at all.
+    shown = crates / "ronoctua-packets" / "src" / "catalogue"
     wrong = []
 
     # WHAT ONLY A FRAMER WRITES. Not "HTTP" — a comment says that, and so does
@@ -18320,7 +18326,7 @@ let
              "Connection: close")
 
     for f in sorted(crates.rglob("*.rs")):
-        if framer in f.parents:
+        if framer in f.parents or shown in f.parents:
             continue
         # A CRATE'S `tests/` IS TEST CODE, as `mod tests` is below: the local
         # server a test answers a request with (`ronoctua-git`'s 401 for the
@@ -23849,7 +23855,17 @@ let
       # reason: the icon on its page is the SUBJECT, drawn at the size the
       # person chose on the page and grown from its centre
       # (`the-icon-grows-from-its-centre`) — not a glyph of the chrome.
-      EXCEPT = {("fields.rs", "run_size"), ("icons_page.rs", "centred_run")}
+      #
+      # AND THE PROTOCOLS' STAGE (`packets_window::placed`): the network's
+      # WORDS — a device's name, a packet's tag, what is typed in a bubble —
+      # written at any pixel of the stage, at the text's own size
+      # (`text::size`): running text where the camera put it, not a glyph of
+      # the chrome.
+      EXCEPT = {
+          ("fields.rs", "run_size"),
+          ("icons_page.rs", "centred_run"),
+          ("packets_window.rs", "placed"),
+      }
 
       exec(open("${pyPrelude}").read())
       exec(open("${shellPrelude}").read())

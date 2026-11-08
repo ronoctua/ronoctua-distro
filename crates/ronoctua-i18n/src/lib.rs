@@ -757,6 +757,151 @@ impl Marked {
     }
 }
 
+/// A key of a BOOK: a sentence only the program that opens the book reads.
+///
+/// # Why a book
+///
+/// Every program parses the whole of [`ENV`]'s file at its start, and a
+/// manual's pages — paragraphs by the hundred, said by one window — would be
+/// parsed by the footer, every window and every command that never shows
+/// them. So a crate may declare its keys a book (`[package.metadata.ronoctua]
+/// book`): its fragment is checked like every other (`gen-i18n.py`) and
+/// written apart, `books/<name>/<language>.ftl` beside the texts, and read
+/// when a program opens it ([`Book::open`]).
+///
+/// A distinct type and not a `&str`, so that [`Texts::t`] cannot be handed
+/// one: a book's key asked of the texts would be a `[key]` on screen, and here
+/// it is a program that does not compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BookKey(pub &'static str);
+
+impl BookKey {
+    /// Its name, as the book's file writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.0
+    }
+}
+
+/// A book and every key in it, as its crate's generated `key::BOOK` hands
+/// them in: what [`Book::open`] checks the book's file against.
+#[derive(Debug, Clone, Copy)]
+pub struct Shelf {
+    /// The book's name: its folder, `books/<name>/`, beside the texts.
+    pub name: &'static str,
+    /// Every key it holds.
+    pub keys: &'static [BookKey],
+}
+
+/// One language's book — [`Texts`] over the book's own file.
+#[derive(Debug)]
+pub struct Book {
+    texts: Texts,
+}
+
+/// Each book's file, parsed once per language and per process, as the texts
+/// are ([`PARSED`]): a book opened again — the window's language changed and
+/// changed back — builds a bundle over what was read.
+static SHELVES: OnceLock<std::sync::Mutex<Vec<Shelved>>> = OnceLock::new();
+
+/// A book's file as it was read: the book and the language, and the file
+/// parsed or why it could not be.
+type Shelved = ((&'static str, String), Result<Parsed, Missing>);
+
+impl Book {
+    /// The book `shelf` names, in `language` — the default language when that
+    /// one is not declared — from the texts' directory ([`ENV`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Missing`]: the variable is unset, the book's file cannot be read or
+    /// parsed, or it lacks a key of `shelf` (another build's).
+    pub fn open(shelf: &Shelf, language: &str) -> Result<Self, Missing> {
+        let language = if LANGUAGES.contains(&language) {
+            language
+        } else {
+            DEFAULT
+        };
+        let mut shelves = SHELVES
+            .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let parsed = match shelves
+            .iter()
+            .find(|((name, l), _)| *name == shelf.name && l == language)
+        {
+            Some((_, parsed)) => parsed.clone(),
+            None => {
+                let dir = std::env::var_os(ENV).filter(|d| !d.is_empty()).map(|d| {
+                    PathBuf::from(d)
+                        .join("books")
+                        .join(shelf.name)
+                        .into_os_string()
+                });
+                let parsed = read(dir, language);
+                shelves.push(((shelf.name, language.to_owned()), parsed.clone()));
+                parsed
+            }
+        };
+        drop(shelves);
+        Self::over(shelf, language, parsed?)
+    }
+
+    /// The book `shelf` names, in `language`, from the folder `dir` — the
+    /// book's own, holding `<language>.ftl`. Pure in what it is handed: the
+    /// tests and a photograph point it at a folder they planted.
+    ///
+    /// # Errors
+    ///
+    /// As [`Book::open`].
+    pub fn open_in(shelf: &Shelf, dir: &Path, language: &str) -> Result<Self, Missing> {
+        let parsed = read(Some(dir.as_os_str().to_owned()), language)?;
+        Self::over(shelf, language, parsed)
+    }
+
+    /// A book over a parsed file, every key of `shelf` in it.
+    fn over(shelf: &Shelf, language: &str, parsed: Parsed) -> Result<Self, Missing> {
+        let Some(texts) = Texts::over(language, parsed)? else {
+            return Err(Missing::Unparsable {
+                file: PathBuf::from(language),
+                why: format!("`{language}` is not a language this program speaks"),
+            });
+        };
+        let lacking: Vec<&'static str> = shelf
+            .keys
+            .iter()
+            .map(|k| k.0)
+            .filter(|k| !texts.has(k))
+            .collect();
+        if !lacking.is_empty() {
+            return Err(Missing::Keys {
+                file: texts.file,
+                keys: lacking,
+                of: shelf.keys.len(),
+            });
+        }
+        Ok(Self { texts })
+    }
+
+    /// The book's language.
+    #[must_use]
+    pub fn language(&self) -> &str {
+        self.texts.language()
+    }
+
+    /// A key's sentence ([`Texts::t`]).
+    #[must_use]
+    pub fn t(&self, key: BookKey) -> String {
+        self.texts.t(key.0)
+    }
+
+    /// A key's sentence, with arguments that may be numbers ([`Texts::t_args`]).
+    #[must_use]
+    pub fn t_args(&self, key: BookKey, args: &[(&str, Arg<'_>)]) -> String {
+        self.texts.t_args(key.0, args)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,5 +1270,45 @@ mod tests {
             Texts::checked("xx-XX", &Keys::of(key::sets)),
             Ok(None)
         ));
+    }
+
+    /// FAILS IF: a book is not read from its own file, a key of its shelf
+    /// missing from that file is let through, or a book's keys reach the
+    /// texts every program reads.
+    #[test]
+    fn a_book_is_read_from_its_own_file_and_checked_against_its_shelf() {
+        let dir = std::env::temp_dir().join(format!("ronoctua-book-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("en-GB.ftl"),
+            "book-hello = Hello { $who }\nbook-plain = Plain\n",
+        )
+        .unwrap();
+        static KEYS: [BookKey; 2] = [BookKey("book-hello"), BookKey("book-plain")];
+        let shelf = Shelf {
+            name: "test",
+            keys: &KEYS,
+        };
+        let book = Book::open_in(&shelf, &dir, "en-GB").expect("the book");
+        assert_eq!(book.t(BookKey("book-plain")), "Plain");
+        assert_eq!(
+            book.t_args(BookKey("book-hello"), &[("who", Arg::Text("you"))]),
+            "Hello you"
+        );
+        static MORE: [BookKey; 3] = [
+            BookKey("book-hello"),
+            BookKey("book-plain"),
+            BookKey("book-gone"),
+        ];
+        let wider = Shelf {
+            name: "test",
+            keys: &MORE,
+        };
+        assert!(
+            matches!(Book::open_in(&wider, &dir, "en-GB"), Err(Missing::Keys { keys, .. }) if keys == vec!["book-gone"]),
+            "a key the file lacks was let through"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

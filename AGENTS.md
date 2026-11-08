@@ -123,9 +123,12 @@ como exceção implícita. Os números são citados no código (`inv. 3`), entã
    declarados. Exceções aprovadas: a linha do log do brain (2026-09-25), o texto que a pessoa digita
    num lembrete e a amostra de código que um buffer mostra (o `example`, 2026-10-04), a linha do
    journal, o trecho de um filtro dela (o que a pessoa digita e o de fábrica) e o porquê que a pessoa
-   escreve para um filtro (2026-11-07) são dado, como o conteúdo de um arquivo, e também o nome
-   próprio de um programa — o `name` do registro e o `Name=` de um `.desktop`, igual em todo idioma
-   (2026-10-20, aprovado no plano da leva); a moldura em volta deles continua em chaves.
+   escreve para um filtro (2026-11-07), o texto do fio do manual dos protocolos — linhas de
+   protocolo, flags, endereços, portas e domínios de exemplo, nas tabelas do `ronoctua-packets` — e
+   as palavras do cartão do Emacs, lidas do fonte do Emacs instalado (2026-11-08) são dado, como o
+   conteúdo de um arquivo, e também o nome próprio de um programa — o `name` do registro e o
+   `Name=` de um `.desktop`, igual em todo idioma (2026-10-20, aprovado no plano da leva); a
+   moldura em volta deles continua em chaves.
 9. **Zero valor visual escrito à mão** — cor, fonte, tamanho, espaçamento, codepoint: tudo por
    token. (A cor de um efeito de câmera é aritmética sobre a imagem, não interface.) Exceção do
    dono (2026-11-02): a cor que um programa pede a um terminal — SGR de 256 cores e de 24 bits, e
@@ -373,6 +376,10 @@ no PATH, o KVM e o `nix-direnv`.
 - **Uma frase pertence ao crate que a diz** (o `i18n/<idioma>.ftl` dele; dita por vários, ao crate
   mais próximo sobre o qual todos ficam, nunca ao `ronoctua-i18n`), e num checkout o `ronoctua-keys`
   escreve as chaves e os textos fora da árvore como a avaliação (cobra `keys-agree`).
+- **Um livro** (`[package.metadata.ronoctua] book`) é o fragmento de um crate que só um programa lê
+  (as páginas de um manual): validado como os outros, gravado à parte (`books/<livro>/<idioma>.ftl`
+  ao lado dos textos) e aberto por `ronoctua_i18n::Book`; suas chaves são `BookKey`, que `Texts::t`
+  não aceita, e ficam fora da guarda de partida de todo programa.
 - `Color` é um papel (`u16`), resolvido na paleta carregada (`ronoctua_tokens::palettes`,
   `[tema][página][papel]`) na hora de desenhar; `==` compara papéis.
 - **As faixas seguem o fundo.** Todo tema é resolvido em quatro páginas — o chrome e as mesas
