@@ -4,7 +4,7 @@
 # the questions and refusals of the lines typed there. The accounts' VIEW
 # speaks in its own words (`agents-…`).
 brain-task-agent-accounts = LLM accounts
-brain-task-agent-accounts-does = Shows each of your LLM accounts on the modeline, even at rest: the account's glyph, whose colour says how much of its limits is used (for an API key, whether its credits ran out), and one glyph for each agent working in it. Usage is checked again only after the account is used, never on a timer, and asking Anthropic needs your permission.
+brain-task-agent-accounts-does = Shows each of your LLM accounts on the modeline, even at rest: the account's glyph, whose colour says how much of its limits is used (for an API key, whether its credits ran out) and, at rest, whether it is logged in, and one glyph for each agent working in it. Usage is checked again only after the account is used, never on a timer, and asking Anthropic needs your permission.
 brain-task-agent-accounts-brief = Shows each LLM account's usage, and the agents working in it, on the modeline.
 agent-accounts-mark-claude = Claude Code account “{ $label }” — a click opens it; a right click opens a new agent in it
 agent-accounts-mark-codex = Codex account “{ $label }” — a click opens it; a right click opens a new agent in it

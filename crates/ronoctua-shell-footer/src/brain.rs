@@ -2123,6 +2123,10 @@ mod tests {
             tone_colour(Tone::Working),
             tokens::color::MODELINE_FOLLOWING
         );
+        // AND AN ACCOUNT LOGGED IN, AT REST, its own faded colour — never the
+        // quiet grey one logged out keeps (owner, 2026-11-09).
+        assert_eq!(tone_colour(Tone::Ready), tokens::color::MODELINE_READY);
+        assert_ne!(tone_colour(Tone::Ready), tone_colour(Tone::Quiet));
         assert!(hint_in(&drawn[0], &words()).is_some_and(|h| !h.is_empty()));
         assert_eq!(
             click_of(&drawn[0], false),

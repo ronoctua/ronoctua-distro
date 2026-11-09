@@ -903,6 +903,74 @@ fn launch_from(
     launch_with(account, &program, env, home)
 }
 
+/// Claude Code's login, in the account's folder (`credentials::CLAUDE_FILE`).
+pub(crate) const CLAUDE_LOGIN_FILE: &str = ".credentials.json";
+
+/// Codex's login, in the account's folder (`credentials::CODEX_FILE`).
+pub(crate) const CODEX_LOGIN_FILE: &str = "auth.json";
+
+/// WHETHER AN ACCOUNT IS LOGGED IN, as far as its folder says without a word
+/// of the login read: the file Claude Code (`.credentials.json`) or Codex
+/// (`auth.json`) keeps it in, there or not — what the brain's marks may ask,
+/// which never carry a token reader. `None` for an API key's account: its
+/// key lies inside Claude Code's global configuration, and only reading it
+/// tells (`credentials::facts_of`, the view's).
+#[must_use]
+pub fn logged_in(account: &Account) -> Option<bool> {
+    let file = match account.kind {
+        Kind::Claude => CLAUDE_LOGIN_FILE,
+        Kind::Codex => CODEX_LOGIN_FILE,
+        Kind::ClaudeApi => return None,
+    };
+    Some(account.dir.join(file).is_file())
+}
+
+/// The arguments that log `account` OUT: the agent's own — Claude Code's
+/// `auth logout`, Codex's `logout` — in the account's folder, as a session
+/// is opened there ([`launch_arguments`]). The agent forgets its login; the
+/// folder, its sessions and its settings stay.
+///
+/// # Errors
+///
+/// As [`launch_arguments`].
+pub fn logout_arguments(account: &Account) -> Result<Vec<String>, Refusal> {
+    let mut argv = launch_arguments(account)?;
+    argv.extend(logout_words(account.kind).iter().map(|w| (*w).to_owned()));
+    Ok(argv)
+}
+
+/// What follows the agent's program to log it out.
+const fn logout_words(kind: Kind) -> &'static [&'static str] {
+    match kind {
+        Kind::Claude | Kind::ClaudeApi => &["auth", "logout"],
+        Kind::Codex => &["logout"],
+    }
+}
+
+/// Logs `account` out ([`logout_arguments`]) and waits for the agent to have
+/// done it. BLOCKS on the agent's program: a door calls it on a thread.
+///
+/// # Errors
+///
+/// As [`launch_arguments`]; [`Why::Failed`] when the program could not run
+/// or said it failed.
+pub fn logout(account: &Account) -> Result<(), Refusal> {
+    let argv = logout_arguments(account)?;
+    let (program, args) = argv.split_first().ok_or(Refusal::of(Why::Failed))?;
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|_| Refusal::of(Why::Failed))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Refusal::of(Why::Failed))
+    }
+}
+
 /// The arguments that log `account` in: Codex's `login`; Claude Code asks
 /// for a login itself when it starts in a folder that has none — and offers
 /// the Console's there, which is how an API key's account gets its key.
@@ -1536,6 +1604,69 @@ mod tests {
                 .default_env(Path::new("/home/p"))
                 .contains(r"export CLAUDE_CONFIG_DIR='/home/p/it'\''s'"),
             "a quote cannot end the value"
+        );
+    }
+
+    /// FAILS IF: an account is said logged in without its agent's login
+    /// file, or out with it — or an API key's is said either, which only
+    /// reading its key could tell.
+    #[test]
+    fn logged_in_is_the_login_files_being_there() {
+        let dir = scratch("logged-in");
+        let mut account = Account {
+            id: "claude-1".to_owned(),
+            kind: Kind::Claude,
+            name: "Work".to_owned(),
+            dir: dir.clone(),
+            default: true,
+        };
+        assert_eq!(logged_in(&account), Some(false));
+        std::fs::write(dir.join(CLAUDE_LOGIN_FILE), "{}").unwrap();
+        assert_eq!(logged_in(&account), Some(true));
+        account.kind = Kind::Codex;
+        assert_eq!(
+            logged_in(&account),
+            Some(false),
+            "Claude Code's file is not Codex's"
+        );
+        std::fs::write(dir.join(CODEX_LOGIN_FILE), "{}").unwrap();
+        assert_eq!(logged_in(&account), Some(true));
+        account.kind = Kind::ClaudeApi;
+        assert_eq!(logged_in(&account), None);
+    }
+
+    /// FAILS IF: logging out is anything but the agent's own word for it,
+    /// in the account's folder, after its program.
+    #[test]
+    fn logging_out_is_the_agents_own_logout_in_its_folder() {
+        let home = Path::new("/home/p");
+        let mut account = Account {
+            id: "claude-2".to_owned(),
+            kind: Kind::Claude,
+            name: "Home".to_owned(),
+            dir: home.join(".claude-2"),
+            default: false,
+        };
+        let out = |a: &Account| {
+            let mut argv = launch_with(a, "/c", "/e", Some(home)).unwrap();
+            argv.extend(logout_words(a.kind).iter().map(|w| (*w).to_owned()));
+            argv
+        };
+        assert_eq!(
+            out(&account),
+            [
+                "/e",
+                "CLAUDE_CONFIG_DIR=/home/p/.claude-2",
+                "/c",
+                "auth",
+                "logout"
+            ]
+        );
+        account.kind = Kind::Codex;
+        account.dir = home.join("work-codex");
+        assert_eq!(
+            out(&account),
+            ["/e", "CODEX_HOME=/home/p/work-codex", "/c", "logout"]
         );
     }
 

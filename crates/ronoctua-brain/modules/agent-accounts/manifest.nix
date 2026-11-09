@@ -91,7 +91,8 @@
 
   # ONE SET PER ACCOUNT, at rest too — the owner's exception
   # (`assets/brain-resting-marks.nix`, AGENTS.md): the account is there while
-  # it is quiet, and its colour says when it is not. The set is the
+  # it is quiet, and its colour says when it is not — and, at rest, whether
+  # it is logged in (`Tone::Ready`, a faded teal; owner, 2026-11-09). The set is the
   # account's place in the person's list, the same in the accounts' view, so
   # nine accounts at most have one; its lead draws no digit, a click on it
   # opens the accounts' view on that account (`agents-open <n>`), and a right

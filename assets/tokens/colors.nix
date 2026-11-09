@@ -1575,6 +1575,19 @@
     # drawer's, the device blue and the one-shot task's `text.once` by the
     # gates.
     following = "follow.text";
+    # AN LLM ACCOUNT THAT IS LOGGED IN, at rest (`Tone::Ready`; owner,
+    # 2026-11-09): "a green leaning to teal, well faded", where one logged out
+    # keeps the marks' grey (`text.secondary`) and one at its lines takes the
+    # warning or the danger. The grey's own rung turned a little over half of
+    # the way to the teal of what the brain follows: the same lightness as the
+    # grey beside it, so it reads as a KIND and not a louder mark, and its
+    # colour faint enough not to be taken for an agent at work in the same
+    # set — told from both, and from the drawer's green, by the gates.
+    ready = {
+      of = "neutral.text";
+      toward = "follow.text";
+      mix = 0.55;
+    };
     # THE SELECTION — windows marked to be acted on together. The green of
     # their outline (`border.selected`), at the rung every other mark reads
     # at: the mark and the windows it counts are told apart by nothing else.

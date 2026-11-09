@@ -714,6 +714,10 @@ pub(crate) const fn tone_of(t: Tone) -> ronoctua_protocol::BrainTone {
         Tone::Working => ronoctua_protocol::BrainTone::Working,
         Tone::Critical => ronoctua_protocol::BrainTone::Critical,
         Tone::Minor => ronoctua_protocol::BrainTone::Minor,
+        // THE BRAIN'S PAGE DRAWS A READY MARK AS A QUIET ONE: the faded
+        // colour is the modeline's (`brainlink::tone_colour`), and the WIT
+        // keeps its tones — a new one would rebuild every buffer.
+        Tone::Ready => ronoctua_protocol::BrainTone::Quiet,
     }
 }
 

@@ -615,9 +615,10 @@ OSC 7501, que o guardião lê.
 <!-- anchor: L11 -->
 - Exceção: as contas LLM ficam na modeline em repouso, um conjunto por conta (`sets = N`,
   `leads`): o glifo da conta (`brain:agent-accounts/claude`, `brain:agent-accounts/claude-api`,
-  `brain:agent-accounts/codex`), o tom dizendo o uso (numa chave de API, se os créditos acabaram),
-  e depois os agentes dela; o agente pronto (`brain:agent-accounts/agent-done.<n>`) e a contagem
-  dos que passam do nono lugar (`brain:agent-accounts/agent-more`) também repousam (2026-11-02). A
+  `brain:agent-accounts/codex`), o tom dizendo o uso (numa chave de API, se os créditos acabaram)
+  e, em repouso, se ela está logada (`Tone::Ready`, `modeline.ready`), e depois os agentes dela; o
+  agente pronto (`brain:agent-accounts/agent-done.<n>`) e a contagem dos que passam do nono lugar
+  (`brain:agent-accounts/agent-more`) também repousam (2026-11-02). A
   semana usada vai ao lado do glifo da conta a partir da linha de aviso (o líder conta em por cento),
   e sob o ponteiro a marca diz, antes da dica, frases do módulo (`Mark::told`: a semana e quando
   recomeça, a tarefa do agente) (2026-11-09).

@@ -55,10 +55,10 @@ use zeroize::Zeroizing;
 use super::{Account, Kind, Refusal, Why};
 
 /// Claude Code's credentials file, in the account's folder.
-pub const CLAUDE_FILE: &str = ".credentials.json";
+pub const CLAUDE_FILE: &str = crate::CLAUDE_LOGIN_FILE;
 
 /// Codex's credentials file, in the account's folder.
-pub const CODEX_FILE: &str = "auth.json";
+pub const CODEX_FILE: &str = crate::CODEX_LOGIN_FILE;
 
 /// The most a credentials file may weigh: a few tokens and their dates.
 pub(crate) const MOST_BYTES: u64 = 64 * 1024;

@@ -1566,6 +1566,9 @@ CONTRAST_GATES = (
     ("text.secondary", MARK_SET_GROUNDS, 43, 45),
     ("modeline.watching", MARK_SET_GROUNDS, 40, 45),
     ("modeline.following", MARK_SET_GROUNDS, 40, 45),
+    # AN ACCOUNT LOGGED IN, at rest — on the sets' grounds, where it is only
+    # ever drawn. Measured 2026-11-09: 47 at the lowest.
+    ("modeline.ready", MARK_SET_GROUNDS, 40, 45),
     ("state.caution", MARK_SET_GROUNDS, 45, 50),
     ("state.error", MARK_SET_GROUNDS, 45, 50),
     ("state.accent", MARK_SET_GROUNDS, 45, 50),
@@ -1905,6 +1908,20 @@ DISTANCE_GATES = (
     # (measured 0.035 at the lowest, flashbang's desk): a warn there, a fail
     # under 0.03.
     ("modeline.following", "text.secondary", 0.04, 0.05),
+    # AN ACCOUNT LOGGED IN, "well faded" at the owner's word, and still told
+    # from one logged out (the grey it was turned from), from an agent at work
+    # beside it in the set (the teal it was turned toward), from the other
+    # quiet greens and blue of the line, and from the warning and the danger
+    # it gives way to. Measured 2026-11-09: 0.026 from the grey and 0.023
+    # from the teal at the lowest (flashbang's backdrop).
+    ("modeline.ready", "text.secondary", 0.02, 0.025),
+    ("modeline.ready", "modeline.following", 0.02, 0.022),
+    ("modeline.ready", "modeline.drawer", 0.02, 0.025),
+    ("modeline.ready", "modeline.device", 0.02, 0.025),
+    ("modeline.ready", "modeline.tunnel", 0.02, 0.025),
+    ("modeline.ready", "state.caution", 0.06, 0.08),
+    ("modeline.ready", "state.error", 0.06, 0.08),
+    ("modeline.ready", "state.accent", 0.04, 0.05),
     ("modeline.following", "state.accent", 0.04, 0.05),
     ("modeline.following", "modeline.watching", 0.06, 0.08),
     ("modeline.following", "modeline.tunnel", 0.03, 0.05),

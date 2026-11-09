@@ -138,6 +138,11 @@ trait Probe: Send + Sync {
     fn week(&self, _account: &Account) -> Vec<Window> {
         Vec::new()
     }
+    /// Whether it is logged in (`ronoctua_llm::logged_in`): not told by
+    /// default — a probe that plants accounts plants no login unless it says.
+    fn logged_in(&self, _account: &Account) -> Option<bool> {
+        None
+    }
     /// What to watch for it.
     fn watched(&self, account: &Account) -> Watched;
     /// The agents at work in these accounts now — the one seam their
@@ -182,6 +187,12 @@ impl Probe for Machine {
 
     fn week(&self, account: &Account) -> Vec<Window> {
         week_now(account)
+    }
+
+    // ITS LOGIN FILE, there or not — in the account's folder, which the
+    // watches already cover (`targets`), so a login and a logout are heard.
+    fn logged_in(&self, account: &Account) -> Option<bool> {
+        ronoctua_llm::logged_in(account)
     }
 
     fn watched(&self, account: &Account) -> Watched {
@@ -385,6 +396,7 @@ impl Inner {
                 .map(|a| {
                     Seen::of(a, self.probe.windows(a), self.probe.out_of_credits(a))
                         .with_week(self.probe.week(a))
+                        .logged_in(self.probe.logged_in(a))
                 })
                 .collect::<Vec<_>>();
             (seen, self.probe.agents(&accounts))

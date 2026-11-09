@@ -161,13 +161,20 @@ pub const fn credits_tone(out_since: Option<Moment>) -> Tone {
 }
 
 /// The colour an account's mark wears at `now`: an API key's by its credits
-/// (it has no window), every other by its windows.
+/// (it has no window), every other by its windows — and, with nothing to
+/// warn of, READY while it is logged in (owner, 2026-11-09: one logged out
+/// keeps the quiet grey).
 #[must_use]
 pub fn account_tone(seen: &Seen, lines: Lines, now: Moment) -> Tone {
-    if seen.agent.has_windows() {
+    let tone = if seen.agent.has_windows() {
         mark_tone(&seen.windows, lines, now)
     } else {
         credits_tone(seen.out_of_credits_since)
+    };
+    if tone == Tone::Quiet && seen.logged_in == Some(true) {
+        Tone::Ready
+    } else {
+        tone
     }
 }
 
@@ -280,7 +287,11 @@ fn marks_with_agents(accounts: &[Account], agents: &[AgentSeen], now: Moment) ->
     // module's own rule (`Kept::unreadable`): the caller hands none.
     let seen: Vec<Seen> = accounts
         .iter()
-        .map(|a| Seen::of(a, windows_now(a), credits_now(a)).with_week(week_now(a)))
+        .map(|a| {
+            Seen::of(a, windows_now(a), credits_now(a))
+                .with_week(week_now(a))
+                .logged_in(ronoctua_llm::logged_in(a))
+        })
         .collect();
     let mut places = Places::default();
     places.settle(agents);
@@ -355,6 +366,9 @@ pub struct Seen {
     /// The readings of its week ([`week_said`]); none for an account that
     /// has no week, or before anything said it.
     pub week: Vec<Window>,
+    /// Whether it is logged in, as its folder says (`ronoctua_llm::logged_in`);
+    /// `None` where that is not told — an API key's.
+    pub logged_in: Option<bool>,
 }
 
 impl Seen {
@@ -372,7 +386,15 @@ impl Seen {
             windows,
             out_of_credits_since,
             week: Vec::new(),
+            logged_in: None,
         }
+    }
+
+    /// The same, logged in or not ([`Seen::logged_in`]).
+    #[must_use]
+    pub const fn logged_in(mut self, logged_in: Option<bool>) -> Self {
+        self.logged_in = logged_in;
+        self
     }
 
     /// The same, with the readings of its week.
@@ -863,7 +885,7 @@ impl Places {
 /// loudest of theirs, so one waiting for the person is still seen.
 const fn loudness(tone: Tone) -> u8 {
     match tone {
-        Tone::Quiet | Tone::Minor => 0,
+        Tone::Quiet | Tone::Minor | Tone::Ready => 0,
         Tone::Working => 1,
         Tone::Watching => 2,
         Tone::Accent => 3,
@@ -1014,6 +1036,7 @@ mod tests {
             windows,
             out_of_credits_since: None,
             week: Vec::new(),
+            logged_in: None,
         }
     }
 
@@ -1055,6 +1078,35 @@ mod tests {
                 "{mark:?}"
             );
         }
+    }
+
+    /// FAILS IF: an account logged in, with nothing to warn of, does not
+    /// wear the ready tone — or one logged out, or one whose login is not
+    /// told, does; or the ready tone covers a warning or a danger (owner,
+    /// 2026-11-09).
+    #[test]
+    fn a_logged_in_account_at_rest_is_ready_and_its_lines_still_win() {
+        let tone_of = |windows: Vec<Window>, logged_in: Option<bool>| {
+            let list = [seen("claude-1", Agent::Claude, "Work", windows).logged_in(logged_in)];
+            with(&list, &[])[0].tone
+        };
+        let calm = || vec![window(10.0, NOON + 3600)];
+        assert_eq!(tone_of(calm(), Some(true)), Tone::Ready);
+        assert_eq!(tone_of(calm(), Some(false)), Tone::Quiet);
+        assert_eq!(tone_of(calm(), None), Tone::Quiet);
+        assert_eq!(
+            tone_of(Vec::new(), Some(true)),
+            Tone::Ready,
+            "nothing said yet"
+        );
+        assert_eq!(
+            tone_of(vec![window(85.0, NOON + 3600)], Some(true)),
+            Tone::Warning
+        );
+        assert_eq!(
+            tone_of(vec![window(99.0, NOON + 3600)], Some(true)),
+            Tone::Danger
+        );
     }
 
     /// FAILS IF: an account's week is not said under the pointer — how much

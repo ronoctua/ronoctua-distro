@@ -80,12 +80,14 @@ pub fn interned(id: &str) -> Option<&'static str> {
 /// something is wrong, the journal's errors among them. A warning is the
 /// marks' own ORANGE (`state.caution`, owner 2026-11-02), not the band's
 /// amber: beside the dev build's amber and the answer's gold, the amber read
-/// as one more gold mark. PAST DANGER is the theme's alarm red, and a MINOR
-/// mark is the quiet any row wears.
+/// as one more gold mark. PAST DANGER is the theme's alarm red, a MINOR
+/// mark is the quiet any row wears, and a READY one — an LLM account logged
+/// in, at rest — the quiet grey turned toward the teal (`modeline.ready`).
 #[must_use]
 pub const fn tone_colour(tone: Tone) -> tokens::Color {
     match tone {
         Tone::Quiet | Tone::Minor => tokens::color::TEXT_SECONDARY,
+        Tone::Ready => tokens::color::MODELINE_READY,
         Tone::Watching => tokens::color::MODELINE_WATCHING,
         Tone::Working => tokens::color::MODELINE_FOLLOWING,
         Tone::Warning => tokens::color::STATE_CAUTION,

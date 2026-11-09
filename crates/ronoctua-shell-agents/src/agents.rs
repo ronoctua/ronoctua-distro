@@ -110,7 +110,10 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<right>", "agents-next-account", Where::Tabs),
     // ON AN ACCOUNT: single keys, the distro-wide standard for a list view.
     ("n", SESSION_COMMAND, Where::OnAnAccount),
-    ("l", LOGIN_COMMAND, Where::OnAnAccount),
+    // A LOGIN ONLY WHILE THERE IS NONE, a logout only while there is one
+    // (owner, 2026-11-09).
+    ("l", LOGIN_COMMAND, Where::LoggedOut),
+    ("o", LOGOUT_COMMAND, Where::LoggedIn),
     ("e", "agents-rename", Where::OnAnAccount),
     ("f", "agents-default", Where::OnAnAccount),
     ("d", "agents-remove", Where::OnAnAccount),
@@ -139,8 +142,10 @@ pub const OPEN_COMMAND: &str = "agents-open";
 /// person chooses first; what the OTHER button on an account's mark runs
 /// (the brain module's `STARTS`, one spelling: a test holds the two).
 pub const SESSION_COMMAND: &str = "agents-session";
-/// A login of an account (`LEADER / a l`, `l` on one).
+/// A login of an account (`LEADER / a l`, `l` on one) — one not logged in.
 pub const LOGIN_COMMAND: &str = "agents-login";
+/// A logout of an account (`o` on one logged in) — after a question.
+pub const LOGOUT_COMMAND: &str = "agents-logout";
 /// An agent, by its session: the window it works in brought forward, or
 /// its terminal opened in one — what a click on its glyph on the modeline
 /// runs (the brain module's `SHOWS`, one spelling), and its row's `RET`.
@@ -181,6 +186,10 @@ pub enum Where {
     OnAnAccount,
     /// While there are two accounts or more: a tab to go to.
     Tabs,
+    /// While the account shown is logged in ([`logged_in`]).
+    LoggedIn,
+    /// While it is not — or that is not told.
+    LoggedOut,
 }
 
 /// A key, once the door has read it.
@@ -196,6 +205,8 @@ pub enum Press {
     Session,
     /// A login of it.
     Login,
+    /// Its logout, after a question.
+    Logout,
     /// Its name.
     Rename,
     /// Make it the default of its agent.
@@ -225,6 +236,7 @@ pub fn press_of(id: &str) -> Option<Press> {
         "agents-enter" => Press::Enter,
         SESSION_COMMAND => Press::Session,
         LOGIN_COMMAND => Press::Login,
+        LOGOUT_COMMAND => Press::Logout,
         "agents-rename" => Press::Rename,
         "agents-default" => Press::Default,
         "agents-remove" => Press::Remove,
@@ -337,6 +349,23 @@ impl Readings {
         self.accounts
             .iter()
             .any(|s| s.account.kind == Agent::Claude)
+    }
+}
+
+/// WHETHER AN ACCOUNT IS LOGGED IN, as its facts say: `Some(true)` with a
+/// login of its own — a token, or a key the Console login kept — `Some(false)`
+/// never logged in, and `None` where that is not told: facts that do not
+/// read, or a key the account's settings give (no login to log out of).
+#[must_use]
+pub fn logged_in(s: &Seen) -> Option<bool> {
+    match &s.facts {
+        Ok(Facts {
+            api_key: Some(ApiKey::Helper | ApiKey::Settings),
+            ..
+        }) => None,
+        Ok(_) => Some(true),
+        Err(Why::NoCredentials) => Some(false),
+        Err(_) => None,
     }
 }
 
@@ -630,6 +659,11 @@ impl Open {
                     way.say(said, Echo::Normal);
                     self.read_again();
                 }
+                Heard::LoggedOut(name, done) => {
+                    let said = logged_out_said(&name, done, way.texts());
+                    way.say(said, Echo::Long);
+                    self.read_again();
+                }
             }
         }
     }
@@ -777,6 +811,13 @@ fn leave(inbox: &Arc<Mutex<Vec<Heard>>>, wake: &Wake, heard: Heard) {
 fn choose(open: &mut Open, account: &Account, login: bool, way: &mut dyn Doorway) {
     let start = match &open.reach {
         Reach::Machine => {
+            // A LOGIN OF AN ACCOUNT LOGGED IN makes no sense (owner,
+            // 2026-11-09): said, and nothing opened — `/ a l` from anywhere.
+            if login && ronoctua_llm::logged_in(account) == Some(true) {
+                let said = way.texts().t(key::AGENTS_ALREADY_LOGGED_IN);
+                way.say(said, Echo::Long);
+                return;
+            }
             if let Err(r) = terminal_of(account, login, None) {
                 let said = words::refused(r.why, way.texts());
                 way.say(said, Echo::Long);
@@ -792,6 +833,48 @@ fn choose(open: &mut Open, account: &Account, login: bool, way: &mut dyn Doorway
     let wake = open.wake();
     open.view.choose(account, login, start, wake.as_ref());
     open.settle(way.columns(), way.texts());
+}
+
+/// LOGS AN ACCOUNT OUT, by its agent's own logout, off the loop (the
+/// agent's program runs and is waited for): what came of it is said, and
+/// the view reads again — the watches hear the login file go too. A
+/// photograph's writes down what would have happened.
+fn log_out(open: &mut Open, id: &str, way: &mut dyn Doorway) {
+    let Some(account) = open.account(id) else {
+        let said = way.texts().t(key::AGENTS_NONE);
+        way.say(said, Echo::Normal);
+        return;
+    };
+    match (&mut open.reach, &open.reader) {
+        (Reach::Nowhere(done), _) => done.push(format!("{LOGOUT_COMMAND} {id}")),
+        (Reach::Machine, Reader::Thread(wake)) => {
+            let (inbox, wake) = (Arc::clone(&open.inbox), wake.clone());
+            let spawned = std::thread::Builder::new()
+                .name("agents-logout".to_owned())
+                .spawn(move || {
+                    let done = ronoctua_llm::logout(&account).map_err(|r| r.why);
+                    leave(&inbox, &wake, Heard::LoggedOut(account.name, done));
+                });
+            if let Err(e) = spawned {
+                tracing::warn!(error = %e, "the account could not be logged out");
+                let said = words::refused(Why::Failed, way.texts());
+                way.say(said, Echo::Long);
+            }
+        }
+        (Reach::Machine, Reader::Here(_)) => {
+            let done = ronoctua_llm::logout(&account).map_err(|r| r.why);
+            let said = logged_out_said(&account.name, done, way.texts());
+            way.say(said, Echo::Long);
+        }
+    }
+}
+
+/// What a logout came to, as the door's line says it.
+fn logged_out_said(name: &str, done: Result<(), Why>, texts: &ronoctua_i18n::Texts) -> String {
+    match done {
+        Ok(()) => texts.t_with(key::AGENTS_LOGGED_OUT, &[("name", name)]),
+        Err(why) => words::refused(why, texts),
+    }
 }
 
 /// THE FOLDER CHOSEN: remembered for the account — its next agent is
@@ -889,6 +972,7 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
             way.say(said, Echo::Normal);
             open.refresh();
         }
+        Errand::Logout(id) => log_out(open, &id, way),
         Errand::Show(session) => match &mut open.reach {
             Reach::Machine => show_agent(&session, way),
             Reach::Nowhere(done) => done.push(format!("{SHOW_COMMAND} {session}")),
@@ -1152,6 +1236,8 @@ pub enum Heard {
     Read(Box<Readings>),
     /// A refresh, done.
     Refreshed(Result<Vec<ronoctua_llm::refresh::Refreshed>, Refusal>),
+    /// A logout, done — the account's name, and how it went.
+    LoggedOut(String, Result<(), Why>),
 }
 
 /// Reads on a thread, and sends the reading.
@@ -1279,8 +1365,11 @@ pub enum Target {
     StatusLine(String),
     /// A session of it, in the terminal.
     Session(String),
-    /// Its login, in the terminal.
+    /// Its login, in the terminal — drawn only while it has none.
     Login(String),
+    /// Its logout: `RET` asks first, "no" drawn first — drawn only while it
+    /// has a login.
+    Logout(String),
     /// Its name: `RET` asks it.
     Rename(String),
     /// The default of its agent: `RET` makes it so.
@@ -1319,6 +1408,7 @@ impl Target {
             | Self::StatusLine(id)
             | Self::Session(id)
             | Self::Login(id)
+            | Self::Logout(id)
             | Self::Rename(id)
             | Self::Default(id)
             | Self::Remove(id)
@@ -1335,6 +1425,7 @@ impl Target {
             Self::StatusLine(_) => "agents-status-line",
             Self::Session(_) => SESSION_COMMAND,
             Self::Login(_) => LOGIN_COMMAND,
+            Self::Logout(_) => LOGOUT_COMMAND,
             Self::Rename(_) => "agents-rename",
             Self::Default(_) => "agents-default",
             Self::Remove(_) => "agents-remove",
@@ -1951,6 +2042,8 @@ fn counted(n: u64, most: u64, texts: &ronoctua_i18n::Texts) -> String {
 pub enum Question {
     /// Remove this account — its id, its name and its agent.
     Remove(String, String, Agent),
+    /// Log this account out — its id and its name.
+    Logout(String, String),
 }
 
 // ---------------------------------------------------------------------------
@@ -2055,6 +2148,8 @@ pub enum Errand {
     Refresh,
     /// Go to the agent of this session ([`show_agent`]).
     Show(String),
+    /// Log this account out, off the loop ([`ronoctua_llm::logout`]).
+    Logout(String),
 }
 
 impl Errand {
@@ -2304,6 +2399,7 @@ pub fn question_text(q: &Question, texts: &ronoctua_i18n::Texts) -> String {
         Question::Remove(_, name, Agent::ClaudeApi | Agent::Codex) => {
             texts.t_with(key::AGENTS_ASK_REMOVE, &[("name", name)])
         }
+        Question::Logout(_, name) => texts.t_with(key::AGENTS_ASK_LOGOUT, &[("name", name)]),
     }
 }
 
@@ -2426,7 +2522,9 @@ impl View {
         if let Some(h) = &self.picking {
             return h.picker.hint(texts);
         }
-        let on_one = self.account_here(r).is_some();
+        let here = self.account_here(r);
+        let on_one = here.is_some();
+        let logged = here.and_then(logged_in);
         let tabs = r.accounts.len() > 1;
         let mut here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
@@ -2439,6 +2537,8 @@ impl View {
                     Where::Anywhere => true,
                     Where::OnAnAccount => on_one,
                     Where::Tabs => tabs,
+                    Where::LoggedIn => logged == Some(true),
+                    Where::LoggedOut => on_one && logged != Some(true),
                 }
             })
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
@@ -2544,7 +2644,7 @@ impl View {
             return;
         }
         // A QUESTION ABOUT AN ACCOUNT THAT IS GONE goes with it.
-        if let Some(Question::Remove(id, ..)) = &self.question
+        if let Some(Question::Remove(id, ..) | Question::Logout(id, _)) = &self.question
             && r.seen(id).is_none()
         {
             self.question = None;
@@ -2646,10 +2746,11 @@ impl View {
             &t.t(key::AGENTS_HEADING),
             vec![Entry::Note(question_text(q, t))],
         );
-        for (yes, k) in [
-            (false, key::AGENTS_ANSWER_NO),
-            (true, key::AGENTS_ANSWER_YES),
-        ] {
+        let yes_word = match q {
+            Question::Remove(..) => key::AGENTS_ANSWER_YES,
+            Question::Logout(..) => key::AGENTS_ANSWER_LOGOUT,
+        };
+        for (yes, k) in [(false, key::AGENTS_ANSWER_NO), (true, yes_word)] {
             let on = b.cursor == b.out.len();
             // THE CURSOR IS A COLOUR; "yes" is in the colour of danger.
             let color = if on {
@@ -2721,8 +2822,15 @@ impl View {
                 }
             }
             Press::Refresh => Errand::Refresh,
-            Press::Session | Press::Login => match here {
-                Some(id) => Errand::Choose(id, p == Press::Login),
+            Press::Session | Press::Login | Press::Logout => match here {
+                Some(id) => {
+                    let target = match p {
+                        Press::Session => Target::Session(id),
+                        Press::Login => Target::Login(id),
+                        _ => Target::Logout(id),
+                    };
+                    self.enter(target, r, zone, columns, texts)
+                }
                 None => Errand::Say(texts.t(key::AGENTS_NONE)),
             },
             Press::Rename | Press::Default | Press::Remove => {
@@ -2811,7 +2919,23 @@ impl View {
                 None => Errand::Say(words::refused(Why::Invalid, texts)),
             },
             Target::Session(id) => Errand::Choose(id, false),
-            Target::Login(id) => Errand::Choose(id, true),
+            // A LOGIN ONLY WHILE THERE IS NONE, a logout only while there is
+            // one — said, by a key or a name, where the row is not drawn.
+            Target::Login(id) => match r.seen(&id).and_then(logged_in) {
+                Some(true) => Errand::Say(texts.t(key::AGENTS_ALREADY_LOGGED_IN)),
+                _ => Errand::Choose(id, true),
+            },
+            Target::Logout(id) => match r.seen(&id) {
+                Some(s) if logged_in(s) == Some(true) => {
+                    self.question = Some(Question::Logout(id, s.account.name.clone()));
+                    // "NO" FIRST, and the cursor is born on it.
+                    self.yes = false;
+                    self.aim = Some(Target::Answer(false));
+                    self.settle_in(r, zone, columns, texts);
+                    Errand::Nothing
+                }
+                _ => Errand::Say(texts.t(key::AGENTS_NOTHING_TO_LOG_OUT)),
+            },
             Target::Rename(id) => self.ask(Ask::Name(id), r),
             Target::Default(id) => {
                 if r.seen(&id).is_some_and(|s| s.account.default) {
@@ -2868,6 +2992,7 @@ impl View {
                 self.aim = None;
                 match (q, yes) {
                     (Some(Question::Remove(id, ..)), true) => Errand::Edit(Edit::Remove(id)),
+                    (Some(Question::Logout(id, _)), true) => Errand::Logout(id),
                     _ => Errand::Nothing,
                 }
             }
@@ -3410,12 +3535,24 @@ fn account_entries(b: &mut Builder<'_>, r: &Readings, s: &Seen, zone: &ronoctua_
         Target::Session(id()),
         true,
     ));
-    e.push(pair(
-        t.t(key::AGENTS_ROW_LOGIN),
-        String::new(),
-        Target::Login(id()),
-        true,
-    ));
+    // A LOGIN WHILE THERE IS NONE, A LOGOUT WHILE THERE IS ONE (owner,
+    // 2026-11-09): the agent renews its own token, so a login over a login
+    // would only open a session.
+    if logged_in(s) == Some(true) {
+        e.push(pair(
+            t.t(key::AGENTS_ROW_LOGOUT),
+            String::new(),
+            Target::Logout(id()),
+            true,
+        ));
+    } else {
+        e.push(pair(
+            t.t(key::AGENTS_ROW_LOGIN),
+            String::new(),
+            Target::Login(id()),
+            true,
+        ));
+    }
     e.push(pair(
         t.t(key::AGENTS_ROW_NAME),
         a.name.clone(),
@@ -3606,6 +3743,10 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         ronoctua_cmd::Command {
             id: "agents-login",
             label: crate::key::CMD_AGENTS_LOGIN,
+        },
+        ronoctua_cmd::Command {
+            id: "agents-logout",
+            label: crate::key::CMD_AGENTS_LOGOUT,
         },
         // THE VIEW'S KEYS AND ROWS (`agents::OF_THE_VIEW`, `OF_THE_ROWS`).
         ronoctua_cmd::Command {
@@ -3964,8 +4105,10 @@ pub(crate) mod tests {
             v.press(Press::Session, &r, &zone(), 100, &t),
             Errand::Choose("codex-1".to_owned(), false)
         );
+        let mut out = r.clone();
+        out.accounts[1].facts = Err(Why::NoCredentials);
         assert_eq!(
-            v.press(Press::Login, &r, &zone(), 100, &t),
+            v.press(Press::Login, &out, &zone(), 100, &t),
             Errand::Choose("codex-1".to_owned(), true)
         );
         stand_on(&mut v, &r, &Target::Refresh, &t);
@@ -4140,6 +4283,87 @@ pub(crate) mod tests {
             !rows.get(second + 1).is_some_and(|row| row.continues),
             "an agent that named nothing drew a task"
         );
+    }
+
+    /// FAILS IF: an account logged in draws a login row, or one logged out
+    /// draws a logout row (or not its login); logging out goes through
+    /// without a question, the question does not draw "no" first, or "yes"
+    /// does not log THAT account out — and a login by key on an account
+    /// logged in, or a logout on one logged out, does anything but say so
+    /// (owner, 2026-11-09).
+    #[test]
+    fn a_login_while_there_is_none_and_a_logout_while_there_is_one() {
+        let t = texts("en-GB");
+        let mut r = readings();
+        r.accounts[1].facts = Err(Why::NoCredentials);
+        let rows_of = |v: &mut View, id: &str| {
+            v.show(id);
+            v.rows(&r, &zone(), 100, &t)
+        };
+        let has = |rows: &[Row], target: &Target| {
+            rows.iter().any(|row| row.target.as_ref() == Some(target))
+        };
+        let mut v = View::default();
+        let rows = rows_of(&mut v, "claude-1");
+        assert!(has(&rows, &Target::Logout("claude-1".to_owned())));
+        assert!(
+            !has(&rows, &Target::Login("claude-1".to_owned())),
+            "a login over a login"
+        );
+        let rows = rows_of(&mut v, "codex-1");
+        assert!(has(&rows, &Target::Login("codex-1".to_owned())));
+        assert!(
+            !has(&rows, &Target::Logout("codex-1".to_owned())),
+            "a logout of nothing"
+        );
+        // BY KEY, where the row is not drawn: said.
+        v.show("claude-1");
+        assert_eq!(
+            v.press(Press::Login, &r, &zone(), 100, &t),
+            Errand::Say(t.t(key::AGENTS_ALREADY_LOGGED_IN))
+        );
+        v.show("codex-1");
+        assert_eq!(
+            v.press(Press::Logout, &r, &zone(), 100, &t),
+            Errand::Say(t.t(key::AGENTS_NOTHING_TO_LOG_OUT))
+        );
+        // THE LOGOUT: asked, "no" first, and "yes" is THAT account's.
+        v.show("claude-1");
+        assert_eq!(
+            v.press(Press::Logout, &r, &zone(), 100, &t),
+            Errand::Nothing
+        );
+        assert!(matches!(v.question(), Some(Question::Logout(id, _)) if id == "claude-1"));
+        let rows = v.rows(&r, &zone(), 100, &t);
+        assert_eq!(rows[v.cursor()].target, Some(Target::Answer(false)));
+        assert!(drawn(&rows).contains(&t.t(key::AGENTS_ANSWER_LOGOUT)));
+        let _ = v.press(Press::Down, &r, &zone(), 100, &t);
+        assert_eq!(
+            v.press(Press::Enter, &r, &zone(), 100, &t),
+            Errand::Logout("claude-1".to_owned())
+        );
+        assert!(v.question().is_none());
+    }
+
+    /// FAILS IF: a logout the view asked for is carried anywhere but to its
+    /// account — a photograph's writes it down, and opens nothing.
+    #[test]
+    fn a_logout_is_carried_out_for_its_account() {
+        fn planted(_: &ronoctua_files::when::Zone) -> Readings {
+            readings()
+        }
+        let t = texts("en-GB");
+        let mut open = Open::new(
+            zone(),
+            Reader::Here(planted),
+            Reach::Nowhere(Vec::new()),
+            None,
+            100,
+            &t,
+        );
+        let mut way = recorder("en-GB");
+        carry_out(Errand::Logout("codex-1".to_owned()), &mut open, &mut way);
+        assert_eq!(open.done(), [format!("{LOGOUT_COMMAND} codex-1")]);
     }
 
     /// FAILS IF: removing an account goes through without a question, the

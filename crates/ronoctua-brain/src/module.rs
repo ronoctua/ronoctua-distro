@@ -362,8 +362,9 @@ impl Manifest {
         }
         // THE MODELINE AT REST IS SILENT: a quiet mark says only that all is
         // well, and only a mark declared `resting` may say that. A minor one
-        // wears the same colour there, so it says the same.
-        if matches!(mark.tone, Tone::Quiet | Tone::Minor) && !declared.resting {
+        // wears the same colour there, so it says the same; and a ready one
+        // says all is well too, in its own faded colour.
+        if matches!(mark.tone, Tone::Quiet | Tone::Minor | Tone::Ready) && !declared.resting {
             return Some("a mark at rest its manifest does not declare `resting`");
         }
         // WHICH MARK IT IS: its name, its set and its instance — the lead of
@@ -974,6 +975,11 @@ pub enum Tone {
     /// WORTH KEEPING AND NOT WORTH A LOOK: the quiet end of a list that sorts
     /// by gravity, where [`Tone::Quiet`] would say nothing is the matter.
     Minor,
+    /// ALL IS WELL, AND IT IS READY — an LLM account logged in, at rest
+    /// (owner, 2026-11-09): quiet as [`Tone::Quiet`], in a faded colour of its
+    /// own (`modeline.ready`) where one logged out keeps the quiet grey. A
+    /// mark at rest all the same: only one declared `resting` may wear it.
+    Ready,
 }
 
 /// How loud a notice is. The ORDER is the strip's precedence, quietest first:

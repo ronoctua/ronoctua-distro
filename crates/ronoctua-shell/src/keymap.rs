@@ -1544,6 +1544,7 @@ mod tests {
             "agents-window",
             "agents-session",
             "agents-login",
+            "agents-logout",
             "agents-up",
             "agents-down",
             "agents-enter",
