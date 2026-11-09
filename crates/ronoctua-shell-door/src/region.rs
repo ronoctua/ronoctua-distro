@@ -881,6 +881,13 @@ pub trait Region {
     fn command(&mut self, id: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Taken;
     /// Row `row` was clicked.
     fn clicked(&mut self, row: usize, way: &mut dyn Doorway);
+    /// WHETHER `TAB` WALKS ITS ROWS' SECTIONS — `Shift+TAB` back — as the
+    /// footer does for every region whose rows have two titles or more
+    /// (`section_ring`, owner 2026-11-09), the window's door's twin. `true`,
+    /// the default: a region where `TAB` means something else says `false`.
+    fn walks_sections(&self) -> bool {
+        true
+    }
     /// Row `row` was clicked at cell `cell` of the line, counted from the
     /// region's left margin as the row's fields are — for a row whose halves
     /// sit side by side (a device's page of the radio), or a row of several

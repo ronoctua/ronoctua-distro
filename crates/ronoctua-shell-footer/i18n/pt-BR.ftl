@@ -984,6 +984,7 @@ echo-brain-no-notice = O cérebro não tem nada a dizer agora
 cmd-leader-set-default = As teclas como são, cada uma abrindo o seu app no rodapé
 cmd-footer-bars-cycle = O próximo dos três modos das barras: à mostra, escondidas empurrando as janelas, escondidas por cima delas
 cmd-leader-close = Fechar a lista da leader, como o Esc dela faz
+cmd-minibuffer-close = Fechar o que está aberto no minibuffer, tudo
 echo-bars-shown = Modeline e minibuffer à mostra
 echo-bars-push = Modeline e minibuffer escondidos; o que abre empurra as janelas
 echo-bars-cover = Modeline e minibuffer escondidos; o que abre fica por cima das janelas

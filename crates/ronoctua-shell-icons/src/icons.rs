@@ -1580,6 +1580,24 @@ impl View {
         s.top = g.wheeled(s.top, by, s.hits.len());
     }
 
+    /// THE THREE SETS AS THE WINDOW'S TABS (`door::Content::tabs`), named
+    /// as [`View::tab_pieces`] names them: the modeline draws them while the
+    /// window is in focus (owner, 2026-11-09), a click running the tab's own
+    /// shortcut. None on a page, whose keys are the page's.
+    #[must_use]
+    pub fn window_tabs(&self, texts: &ronoctua_i18n::Texts) -> Vec<crate::ipc::WindowTab> {
+        if self.in_page() {
+            return Vec::new();
+        }
+        TABS.iter()
+            .map(|(_, c, id)| crate::ipc::WindowTab {
+                command: (*id).to_owned(),
+                name: texts.t(&format!("icons-screen-{}", c.id())),
+                current: *c == self.screen,
+            })
+            .collect()
+    }
+
     /// The pieces of the footer's tab line: the three tabs, each its key and
     /// its name — the one showing in the title's ink. In a window they lead
     /// the header's line.
@@ -2036,6 +2054,36 @@ mod tests {
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the English words")
+    }
+
+    /// FAILS IF: the window's tabs for the modeline (owner, 2026-11-09) are
+    /// not the three sets, named as its tabs name them, the one shown
+    /// marked — or a tab is no shortcut the window publishes, which the door
+    /// would leave out (`door::Content::tabs`), or a page keeps them.
+    #[test]
+    fn the_three_sets_are_the_windows_tabs_and_each_is_a_shortcut() {
+        let t = texts();
+        let v = View::new(Collection::Lucide, &t);
+        let tabs = v.window_tabs(&t);
+        assert_eq!(
+            tabs.iter()
+                .map(|tab| tab.command.as_str())
+                .collect::<Vec<_>>(),
+            TABS.iter().map(|(_, _, id)| *id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            tabs.iter().map(|tab| tab.current).collect::<Vec<_>>(),
+            [false, true, false]
+        );
+        assert_eq!(tabs[0].name, t.t("icons-screen-nerd-fonts"));
+        let published = crate::chrome::bindings_of_hint(&v.tab_pieces(&t), &[]);
+        for tab in &tabs {
+            assert!(
+                published.iter().any(|b| b.command == tab.command),
+                "the tab `{}` is no shortcut the window publishes",
+                tab.command
+            );
+        }
     }
 
     fn a_set() -> Arc<Set> {

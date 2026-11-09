@@ -13,7 +13,7 @@
 // THE KIT AND THE DOOR, by the names the modules already use.
 use ronoctua_shell_door::{door, region};
 use ronoctua_shell_kit::{
-    bars, bindings, chrome, fields, glyph, line, minibuffer, text_select, wheel,
+    bars, bindings, chrome, fields, glyph, ipc, line, minibuffer, text_select, wheel,
 };
 
 pub mod icons;

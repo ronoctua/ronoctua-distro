@@ -242,6 +242,12 @@ impl Region for Syncthing {
         ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// the file picker's `TAB` walks its filters.
+    fn walks_sections(&self) -> bool {
+        !self.view.picking()
+    }
+
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         self.view
             .rows(self.snapshot.as_deref(), seen.columns, seen.texts)

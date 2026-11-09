@@ -212,6 +212,11 @@
   # a line, and the owner's rule reserves them for that.
   shortcuts-shown = "md-eye_outline";
   shortcuts-hidden = "md-eye_off";
+  # WHAT IS OPEN ON THE MINIBUFFER, CLOSED — the first thing on its line
+  # whenever something is open there, a click on it closing all of it (the
+  # owner, 2026-11-09): an arrow pointing down, where the footer goes back to.
+  # Not the `expand` chevron, which opens a line.
+  minibuffer-close = "cod-arrow_down";
   # `LEADER Alt`, IN ONE CELL — in front of every window shortcut's key, on the
   # minibuffer, a window's header and a buffer's own line (the owner's rule,
   # 2026-11-04: a window shortcut is `LEADER Alt` and one key, and nothing
@@ -1043,9 +1048,10 @@
   # THE CENTRE'S OWN THREE: the shield beside "nothing is off" and the
   # firewall on, the shield struck through beside the firewall off, and the
   # fingerprint beside each finger enrolled. Material, and the same shield the
-  # brain's mark is on the modeline, so the two read as one set.
-  security-shield = "md-shield";
-  security-shield-off = "md-shield_off";
+  # brain's mark is on the modeline, so the two read as one set — the
+  # outline, as the mark became (owner, 2026-11-09).
+  security-shield = "md-shield_outline";
+  security-shield-off = "md-shield_off_outline";
   security-fingerprint = "md-fingerprint";
   # A SECURITY KEY, beside each key that answers the administrator in the
   # centre's keys section — the key itself, not a lock.

@@ -21,9 +21,10 @@
   schedule = null;
 
   # THE SHIELD ALONE (owner, 2026-11-02): what is off is said by its COLOUR
-  # — warning or danger — and its sentence, not by a sign inside it.
+  # — warning or danger — and its sentence, not by a sign inside it. Its
+  # OUTLINE (owner, 2026-11-09): nothing filled and nothing in its middle.
   glyphs = {
-    shield = "md-shield";
+    shield = "md-shield_outline";
   };
 
   # ONE GLYPH, SEVEN MEANINGS: the module draws only the loudest of what is

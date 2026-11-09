@@ -50,7 +50,7 @@ use ronoctua_shell_door::{
 use ronoctua_shell_kit::{
     actions, aim, band, bars, bindings, chrome, clipboard_copy, daemon, desk, echo, fields, fold,
     foreign, glyph, hidpi, ipc, keyboard, language, line, mind_wire, minibuffer, seats,
-    security_words, sizes, text_select, theme, toolkits, wake, watchdog, wheel, when,
+    section_ring, security_words, sizes, text_select, theme, toolkits, wake, watchdog, wheel, when,
 };
 use ronoctua_shell_report::report;
 use ronoctua_shell_work::{jobs, programs_words};
@@ -110,6 +110,7 @@ mod trails;
 mod virtual_keys;
 mod virtual_pointer;
 mod window_menu;
+mod window_tabs;
 mod workspaces;
 mod world;
 

@@ -54,6 +54,11 @@ pub struct Program {
     pub app: String,
     /// Its state, as it said it (`state=`).
     pub state: String,
+    /// Its short label for people (`title=`), plain; empty when it gave none.
+    pub title: String,
+    /// Its line for people (`msg=`) — what it is doing this moment; empty
+    /// when it said nothing.
+    pub msg: String,
 }
 
 /// What the reader asks of the machine.
@@ -101,6 +106,18 @@ pub struct Agent {
     /// among its account's agents.
     #[serde(default)]
     pub started_at_ns: u64,
+    /// Its transcript, as Claude Code named it to the hook — where the title
+    /// Claude Code gives the session is read ([`crate::transcripts::title`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<PathBuf>,
+    /// The label its own OSC 7501 record gives it, inside our terminals;
+    /// `None` when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// What its own OSC 7501 record says it is doing this moment, inside
+    /// our terminals; `None` when it said nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doing_now: Option<String>,
 }
 
 /// A program's state, as a session's status — `None` for a state this does
@@ -138,7 +155,9 @@ pub fn merged(
         }) else {
             continue;
         };
-        let told = said_of(s, programs).and_then(|p| status_of_program(&p.state));
+        let own = said_of(s, programs);
+        let told = own.and_then(|p| status_of_program(&p.state));
+        let said = |text: &str| Some(text.trim().to_owned()).filter(|t| !t.is_empty());
         out.push((
             place,
             Agent {
@@ -149,6 +168,9 @@ pub fn merged(
                 terminal: s.terminal.clone(),
                 pid: s.pid,
                 started_at_ns: s.started_at_ns,
+                transcript: s.transcript.clone(),
+                label: own.and_then(|p| said(&p.title)),
+                doing_now: own.and_then(|p| said(&p.msg)),
             },
         ));
     }
@@ -239,6 +261,8 @@ mod tests {
             id: id.map(str::to_owned),
             app: CLAUDE_CODE.to_owned(),
             state: state.to_owned(),
+            title: String::new(),
+            msg: String::new(),
         }
     }
 
@@ -282,6 +306,38 @@ mod tests {
             ]
         );
         assert!(agents.iter().all(|a| a.account == "claude-1"));
+    }
+
+    /// FAILS IF: what the session's own record says it is doing, and its
+    /// label, do not reach its agent — or another program's, or a task's,
+    /// are taken for its own.
+    #[test]
+    fn the_sessions_own_record_says_what_it_is_doing() {
+        let sessions = [session("aa", Status::Working, Some(T1))];
+        let programs = [
+            Program {
+                msg: "a task's line".to_owned(),
+                ..program(T1, Some("task-1"), "working")
+            },
+            Program {
+                app: "another".to_owned(),
+                msg: "another's line".to_owned(),
+                ..program(T1, None, "working")
+            },
+            Program {
+                title: "  Fixing the footer ".to_owned(),
+                msg: "Running cargo test".to_owned(),
+                ..program(T1, None, "working")
+            },
+        ];
+        let agents = merged(&accounts(), &sessions, &programs, &ALL_ALIVE);
+        assert_eq!(agents[0].label.as_deref(), Some("Fixing the footer"));
+        assert_eq!(agents[0].doing_now.as_deref(), Some("Running cargo test"));
+        let quiet = merged(&accounts(), &sessions, &programs[..2], &ALL_ALIVE);
+        assert_eq!(
+            (quiet[0].label.as_deref(), quiet[0].doing_now.as_deref()),
+            (None, None)
+        );
     }
 
     /// FAILS IF: every state OSC 7501 says is not the status it means, or

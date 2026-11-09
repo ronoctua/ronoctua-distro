@@ -474,6 +474,13 @@ struct Footer {
     /// than empty — a submenu that opens onto nothing is the same lie as a
     /// list with no way back.
     buffer_bindings: Vec<crate::ipc::Shortcut>,
+    /// THE TABS THE FOCUSED WINDOW PUBLISHED (`ipc::buffer_tabs`), read with
+    /// its shortcuts and again when it says they changed — what
+    /// `crate::window_tabs` draws on the modeline.
+    window_tabs: Vec<crate::ipc::WindowTab>,
+    /// THE MINIBUFFER IS TO CLOSE when a footer with no loop next turns — a
+    /// photograph's (`Footer::close_the_minibuffer`).
+    closing_owed: bool,
     /// Whose. It is the pid `ronoctua_compositor::Window` already carries.
     buffer_pid: Option<u32>,
     /// The keys typed since `SPC m`, the `m` itself included.
@@ -2914,6 +2921,8 @@ fn assemble(
         tap: crate::leader::Tap::default(),
         inputs: Vec::new(),
         buffer_bindings: Vec::new(),
+        window_tabs: Vec::new(),
+        closing_owed: false,
         buffer_pid: None,
         buffer_pending: Vec::new(),
         local_runs_here: None,
@@ -3387,6 +3396,12 @@ pub(crate) fn photographed(
                 state.sudo_bar.light(Some(control));
                 state.draw_and_paint();
             }
+        }
+        // WHAT THE LOOP'S NEXT TURN WOULD DO: the minibuffer closed by its
+        // arrow (`Footer::close_the_minibuffer`).
+        if std::mem::take(&mut state.closing_owed) {
+            state.close_what_is_open();
+            state.draw_and_paint();
         }
         // WHAT THE STEP ASKED OF THE COMPOSITOR is answered before the next:
         // a height comes back as a `configure`, which paints.
@@ -4944,7 +4959,7 @@ impl Footer {
             .unwrap_or_default();
         // THE BRAIN'S MARKS, remembered for the colour, the hint and the
         // click — each asked later by the segment's id alone.
-        let brain_marks = crate::brain::marks(self.brain.as_ref(), &self.texts);
+        let brain_marks = crate::brain::marks(self.brain.as_ref(), &self.zone, &self.texts);
         crate::brain::remember(&brain_marks);
         let mut out = crate::modeline::segments(
             &crate::daemon::buffer_name(&self.windows, &self.texts),
@@ -5370,6 +5385,43 @@ impl Footer {
     /// the key does in the view that is open, and a COMMAND runs by its id.
     /// The modifiers of the real keyboard are put back afterwards: a click
     /// must not leave a Ctrl held that no hand is holding.
+    /// WHATEVER IS OPEN ON THE MINIBUFFER, CLOSED — `minibuffer-close`, the
+    /// down arrow at the left end of its line (the owner, 2026-11-09).
+    ///
+    /// ON THE LOOP'S NEXT TURN: the click that asks it came down the key path
+    /// (a press, `hint_clicked`, `run_with`), and pressing `Esc` from inside
+    /// it would be that path again before it returned — the footer asking
+    /// itself (`the-footer-does-not-ask-itself`).
+    fn close_the_minibuffer(&mut self) {
+        match self.repeat.clone() {
+            Some(handle) => {
+                handle.insert_idle(|state: &mut Self| state.close_what_is_open());
+            }
+            // NO LOOP — a photograph's footer: owed, and closed by the walk
+            // after the step, where the loop's turn would come.
+            None => self.closing_owed = true,
+        }
+    }
+
+    /// The `Esc` of what is open, pressed until nothing is: each view goes
+    /// back through its own `Esc` — a theme being tried is put back, a
+    /// question is let go, a page closes before its view — and the drawer
+    /// shuts first, as `Esc` shuts it. Pressed, not torn down, because what
+    /// an `Esc` undoes is each view's to know. Bounded: a view that kept its
+    /// `Esc` every time is left open rather than pressed for ever.
+    fn close_what_is_open(&mut self) {
+        const PRESSES: usize = 16;
+        let Ok(esc) = ronoctua_keymap::Key::parse("ESC") else {
+            return;
+        };
+        for _ in 0..PRESSES {
+            if self.view() == ViewState::NoneOf && !self.fold.open {
+                break;
+            }
+            self.hint_clicked(crate::chrome::Act::Key(esc));
+        }
+    }
+
     fn hint_clicked(&mut self, act: crate::chrome::Act) {
         match act {
             crate::chrome::Act::Key(key) => {
@@ -9131,6 +9183,7 @@ impl Footer {
                     self.draw_and_paint();
                 }
             }
+            "minibuffer-close" => self.close_the_minibuffer(),
             "minibuffer-fold-open" => self.fold_by_name(ronoctua_keymap::Sym::Down),
             "minibuffer-fold-close" => self.fold_by_name(ronoctua_keymap::Sym::Up),
             "alert-dismiss" => self.dismiss_the_alert(),
@@ -9749,6 +9802,7 @@ impl Footer {
     fn refresh_buffer_keymap(&mut self) {
         self.buffer_pending.clear();
         self.buffer_bindings.clear();
+        self.window_tabs.clear();
         self.buffer_pid = None;
         self.state_pending = false;
         self.state_menu.clear();
@@ -9793,6 +9847,8 @@ impl Footer {
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "could not read the buffer's keymap"),
         }
+        // AND ITS TABS, from the same socket (`crate::window_tabs`).
+        self.window_tabs = crate::ipc::buffer_tabs(pid).unwrap_or_default();
 
         // THE STATES, from the same socket and in the same breath.
         //
@@ -9836,8 +9892,13 @@ impl Footer {
                 return false;
             }
         };
+        // ITS TABS, told by the same report: the one shown moves without a
+        // key of the set changing, and the modeline draws it.
+        let tabs = crate::ipc::buffer_tabs(pid).unwrap_or_default();
+        let tabs_moved = tabs != self.window_tabs;
+        self.window_tabs = tabs;
         if read == self.buffer_bindings {
-            return false;
+            return tabs_moved;
         }
         tracing::debug!(
             pid,
@@ -16494,12 +16555,15 @@ impl Footer {
         // It was one run of prose, cut at its end: the last letters typed
         // went out of sight, and the question could be answered and let go
         // from the keyboard alone, while the window's same line took a click.
+        // AND SHORT OF THE ARROW THAT CLOSES IT, which a question always has in
+        // front (`closing_arrow`): the keys it puts at the right edge stay there.
         let question = self.mx.line().filter(|_| self.apps.is_none()).map(|l| {
             crate::door::list::question_pieces(
                 l,
                 &self.texts,
                 self.screen_columns()
-                    .saturating_sub(tokens::space::MODELINE_EDGELEFT),
+                    .saturating_sub(tokens::space::MODELINE_EDGELEFT)
+                    .saturating_sub(CLOSING_ARROW_CELLS),
             )
         });
 
@@ -17684,6 +17748,16 @@ impl Footer {
             } else {
                 vec![crate::chrome::Piece::said(mini_at_rest.clone())]
             };
+            // THE ARROW THAT CLOSES IT, first, whenever something is open on
+            // the minibuffer — a view, the leader, a question — whatever the
+            // line says then (the owner, 2026-11-09).
+            let line_pieces = if self.shape.draws_minibuffer() && self.view() != ViewState::NoneOf {
+                let mut out = closing_arrow().to_vec();
+                out.extend(line_pieces);
+                out
+            } else {
+                line_pieces
+            };
             // THE SHORTCUT UNDER THE POINTER, LIT — see `chrome::lit`.
             let line_pieces = crate::chrome::lit(&line_pieces, self.hint_lit);
             let plain_room = columns
@@ -18097,15 +18171,22 @@ impl Footer {
             // border like the counter, in its quiet tone: it is there to be
             // found. The minute's timer is armed only while this draws it
             // (`Footer::keep_the_clock`).
+            //
+            // LEFT OF THE HAND'S CONTROLS, always: the chevron and the eye come
+            // up in the last cells when the pointer reaches the line, and the
+            // hours used to be drawn in those same cells, under them (the
+            // owner, 2026-11-09). Kept clear whether or not the hand is there,
+            // so nothing moves under it (`kept_for_the_hand`).
+            let kept = kept_for_the_hand(glyph_beside);
             if at_rest && !held.open && indicator.is_none() && self.hours_wanted() {
                 let text = self.hours_now();
                 let w = layout::width(&text);
-                if w < columns {
+                if w + kept < columns {
                     self.clock_drawn = true;
                     spans.push(ronoctua_render::Span {
                         size: ronoctua_render::Size::Grid,
                         text,
-                        column: crate::chrome::from_the_edge(columns, w),
+                        column: crate::chrome::from_the_edge(columns, w + kept),
                         line: mini_line,
                         color: tokens::color::TEXT_SUBTLE_DEFAULT,
                         edge: true,
@@ -18134,8 +18215,8 @@ impl Footer {
                 } else {
                     0
                 };
-                if clock + wide < columns {
-                    let at = crate::chrome::from_the_edge(columns, clock + wide);
+                if clock + wide + kept < columns {
+                    let at = crate::chrome::from_the_edge(columns, clock + wide + kept);
                     spans.extend(glyph_and_text(
                         &tokens::icon::CPU.to_string(),
                         at,
@@ -20005,6 +20086,32 @@ fn minibuffer_room(columns: u16, indicator_cells: Option<u16>, chevron: bool, gl
     }
 }
 
+/// The cells the closing arrow takes at the left end of the minibuffer: its
+/// glyph and a cell of air ([`closing_arrow`]).
+const CLOSING_ARROW_CELLS: u16 = 2;
+
+/// THE ARROW THAT CLOSES WHAT IS OPEN ON THE MINIBUFFER, as the line's first
+/// pieces: a click runs `minibuffer-close`, the pointer on it lights it and
+/// says what it does, like every shortcut of the line — it IS one, by id.
+fn closing_arrow() -> [crate::chrome::Piece; 2] {
+    [
+        crate::chrome::Piece::key(tokens::icon::MINIBUFFER_CLOSE.to_string(), false)
+            .about("minibuffer-close")
+            .running("minibuffer-close"),
+        crate::chrome::Piece::prose(" "),
+    ]
+}
+
+/// THE CELLS THE HAND'S CONTROLS KEEP at the right end of the minibuffer —
+/// the chevron, and the eye a cell of air to its left in the "no header" mode
+/// (`glyph`) — with the cell of air before them: what the hours and the
+/// processors stand left of, so the glyphs that come up under the pointer
+/// never land on them. The same boundary [`minibuffer_room`] gives the text
+/// with the chevron in its place.
+const fn kept_for_the_hand(glyph: bool) -> u16 {
+    if glyph { 4 } else { 2 }
+}
+
 /// The room an event's actions are placed in (`chrome::room_for_actions`) on
 /// a screen `own_columns` wide, when the narrowest screen is
 /// `narrowest_columns`: THAT screen's room, on every screen.
@@ -20834,6 +20941,11 @@ impl Footer {
             crate::adapt::Adapted::Terminals(crate::terminal_tabs::Adapter::new(
                 &self.terminals.census.terminals,
             )),
+            crate::adapt::Adapted::Tabs(crate::window_tabs::Adapter::new(
+                &self.window_tabs,
+                &self.buffer_bindings,
+                self.buffer_pid,
+            )),
         ]
         .into_iter()
         .find(|a| self.modeline.adapts(a.id()) && a.claims(w))
@@ -20972,6 +21084,7 @@ impl Footer {
         match act {
             crate::adapt::Act::Run(id) => self.run_with(id, None),
             crate::adapt::Act::RunWith(id, arg) => self.run_with(id, Some(&arg)),
+            crate::adapt::Act::Window(command) => self.run_window_command(&command),
         }
         self.draw_and_paint();
     }
@@ -22872,6 +22985,35 @@ mod tests {
         assert_eq!(paint("terminals-away", false), color::TEXT_SECONDARY);
         assert_eq!(paint("terminals-away", true), color::STATE_CAUTION);
         assert_eq!(paint("drawer", true), color::MODELINE_DRAWER);
+    }
+
+    /// FAILS IF: the hours or the processors stand in a cell the chevron or
+    /// the eye comes up in under the hand — the owner's clock, drawn under
+    /// both glyphs whenever the pointer reached the minibuffer.
+    #[test]
+    fn the_hours_stand_left_of_the_hands_controls() {
+        for columns in [40, 120, 300] {
+            for glyph in [false, true] {
+                let chevron = crate::chrome::from_the_edge(columns, 1);
+                let leftmost = if glyph { chevron - 2 } else { chevron };
+                for w in [5, 9] {
+                    let at =
+                        crate::chrome::from_the_edge(columns, w + super::kept_for_the_hand(glyph));
+                    let last = at + w - 1;
+                    assert!(
+                        last + 1 < leftmost,
+                        "{w} cells at {at} touch the control at {leftmost}"
+                    );
+                    // AND WHERE THE TEXT OF THE LINE STOPS: one boundary.
+                    assert_eq!(
+                        last + 1,
+                        ronoctua_tokens::space::MODELINE_EDGELEFT
+                            + super::minibuffer_room(columns, None, true, glyph),
+                        "{columns} columns, eye {glyph}"
+                    );
+                }
+            }
+        }
     }
 
     /// FAILS IF: a mark drawn from the border is hit by the column from the

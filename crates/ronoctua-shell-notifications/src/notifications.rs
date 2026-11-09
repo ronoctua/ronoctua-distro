@@ -1062,6 +1062,13 @@ pub fn split_at(columns: u16) -> u16 {
 }
 
 impl View {
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        !matches!(self.level, Level::List)
+    }
+
     /// A fresh manager, on the first pane.
     #[must_use]
     pub fn fresh() -> Self {

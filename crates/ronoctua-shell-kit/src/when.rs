@@ -52,6 +52,14 @@ impl Clock {
 /// `files-when` is `{ $y }-{ $m }-{ $d }` in `en-GB.ftl` and in `pt-BR.ftl`.
 /// A Brazilian reading `2026-09-08` is reading an ISO date, not a Portuguese
 /// one, and the key had no way of saying which was meant.
+///
+/// # Why the separator and the month's name are orders too
+///
+/// Because what the person picks is how a date LOOKS, and `08-09-2026`,
+/// `08.09.2026` and `08-set-2026` are three looks of one order (the owner,
+/// 2026-11-09). One ring with a sample on it is what the row already is; a
+/// second ring for the separator would offer `2026.09.08`, which nobody
+/// writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Order {
     /// `2026-09-08`. Sorts as text, which is why it is the default.
@@ -59,6 +67,13 @@ pub enum Order {
     BigEndian,
     /// `08/09/2026`.
     DayFirst,
+    /// `08-09-2026`.
+    DayFirstDashes,
+    /// `08.09.2026`.
+    DayFirstDots,
+    /// `08-set-2026`: the month as the language abbreviates it
+    /// (`locale-month-short`).
+    DayFirstMonthName,
     /// `09/08/2026`.
     MonthFirst,
 }
@@ -70,13 +85,24 @@ impl Order {
         match self {
             Self::BigEndian => "ymd",
             Self::DayFirst => "dmy",
+            Self::DayFirstDashes => "dmy-dashes",
+            Self::DayFirstDots => "dmy-dots",
+            Self::DayFirstMonthName => "dmy-month",
             Self::MonthFirst => "mdy",
         }
     }
 
-    /// The three, in the order they are offered.
+    /// The six, in the order they are offered.
     pub fn all() -> impl Iterator<Item = Self> {
-        [Self::BigEndian, Self::DayFirst, Self::MonthFirst].into_iter()
+        [
+            Self::BigEndian,
+            Self::DayFirst,
+            Self::DayFirstDashes,
+            Self::DayFirstDots,
+            Self::DayFirstMonthName,
+            Self::MonthFirst,
+        ]
+        .into_iter()
     }
 
     /// The one this id names, if any.

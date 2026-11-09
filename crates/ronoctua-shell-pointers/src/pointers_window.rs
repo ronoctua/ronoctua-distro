@@ -164,6 +164,15 @@ impl Content for PointersWindow {
         format!("*{}*", texts.t(crate::key::POINTERS_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::POINTERS_TITLE,
+        ))
+    }
+
     /// A key, read by its whole notation through the reader the footer
     /// calls too (`pointers::press_of_key`): a letter held with `Ctrl` or `Alt`
     /// is not the letter, in either door.

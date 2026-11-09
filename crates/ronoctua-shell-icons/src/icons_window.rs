@@ -213,8 +213,23 @@ impl Content for IconsWindow {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` opens the filters.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::ICONS_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::ICONS_TITLE,
+            self.view.in_page(),
+        ))
     }
 
     /// A key, read by its whole notation through the reader the footer calls
@@ -254,6 +269,11 @@ impl Content for IconsWindow {
         out.push(crate::chrome::Piece::separator());
         out.extend(self.view.hint(&ui.texts));
         out
+    }
+
+    /// The three sets, for the modeline's tabs.
+    fn tabs(&self, ui: &Ui) -> Vec<crate::ipc::WindowTab> {
+        self.view.window_tabs(&ui.texts)
     }
 
     /// No rows: the grid and the page are drawn by the view.

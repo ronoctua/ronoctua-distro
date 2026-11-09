@@ -446,6 +446,11 @@ impl Region for GitRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks its columns.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// Its columns laid onto the region's lines, each line every column's
     /// fields at the region's cells (`git_browser::Drawn`) — one click per
     /// line, and the view says which column and row the pointer's cell is.

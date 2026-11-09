@@ -123,6 +123,11 @@ impl Region for IconsRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` opens the filters.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// No rows: blank lines, the app draws its tabs, grid and page over them.
     fn rows(&self, _: &Seen<'_>) -> Vec<Row> {
         Vec::new()

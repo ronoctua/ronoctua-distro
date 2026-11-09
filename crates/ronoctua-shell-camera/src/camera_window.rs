@@ -865,6 +865,11 @@ impl Content for CameraWindow {
         camera::APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): it draws no list.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         texts.t(crate::key::CAMERA_TITLE)
     }

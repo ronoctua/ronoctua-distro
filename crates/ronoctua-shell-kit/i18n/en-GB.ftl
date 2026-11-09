@@ -245,6 +245,9 @@ locale-clock-pm = pm
 locale-date-ymd = { $y }-{ $m }-{ $d }
 locale-date-dmy = { $d }/{ $m }/{ $y }
 locale-date-mdy = { $m }/{ $d }/{ $y }
+locale-date-dmy-dashes = { $d }-{ $m }-{ $y }
+locale-date-dmy-dots = { $d }.{ $m }.{ $y }
+locale-date-dmy-month = { $d }-{ $month }-{ $y }
 # THE TWELVE MONTHS, AS ONE KEY. A Fluent selector, because which numbers get a
 # word of their own is the LANGUAGE's business — the same argument the channel
 # counts already make. The month arrives as a NUMBER: `"01"` does not match `[1]`.
@@ -262,6 +265,23 @@ locale-month =
         [10] October
         [11] November
        *[12] December
+    }
+# THE TWELVE MONTHS ABBREVIATED, for the date `10-oct-2026`: lower case, as
+# the owner wrote it, and the month arrives as a NUMBER, like `locale-month`.
+locale-month-short =
+    { $m ->
+        [1] jan
+        [2] feb
+        [3] mar
+        [4] apr
+        [5] may
+        [6] jun
+        [7] jul
+        [8] aug
+        [9] sep
+        [10] oct
+        [11] nov
+       *[12] dec
     }
 # A DATE WRITTEN OUT, one key per order.
 #

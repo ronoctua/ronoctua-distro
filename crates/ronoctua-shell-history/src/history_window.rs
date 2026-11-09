@@ -179,6 +179,15 @@ impl Content for HistoryWindow {
         format!("*{}*", texts.t(crate::key::ATUIN_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::ATUIN_TITLE,
+        ))
+    }
+
     /// A key, read by its whole notation through the one reader the footer
     /// calls too (`history::press_of_key`) — which is what makes `S-<right>`
     /// and `S-<left>` reach the view, from the keyboard and from the hint.

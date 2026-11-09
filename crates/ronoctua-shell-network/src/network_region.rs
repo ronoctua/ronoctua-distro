@@ -1258,6 +1258,11 @@ impl crate::region::Region for NetworkRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): it walks its sections itself, its title to the top.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// THE VIEW'S ROWS, as `fields` — two columns of its own. The question
     /// "keep it?" is among them, at the top, drawn by the view for both
     /// doors — and a click on its answers is the first-selects, second-acts

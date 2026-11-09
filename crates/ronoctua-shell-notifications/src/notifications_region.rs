@@ -338,6 +338,11 @@ impl Region for Manager {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks its panes.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// Its own `fields` and not the key/text pair: it lays out two columns of
     /// its own — the file manager's listing's shape. A drawn row takes a
     /// click where the view says one does along it (`View::takes`, the

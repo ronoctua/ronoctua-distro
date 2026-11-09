@@ -1089,6 +1089,11 @@ impl Content for FastAccess {
         }
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` shows the detail.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         texts.t(crate::key::FAST_ACCESS_TITLE)
     }

@@ -511,6 +511,12 @@ impl Region for SecurityRegion {
         ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// the file picker's `TAB` walks its filters.
+    fn walks_sections(&self) -> bool {
+        !self.open.view.picking()
+    }
+
     /// Each row a click that selects and a second that acts — a heading
     /// none.
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {

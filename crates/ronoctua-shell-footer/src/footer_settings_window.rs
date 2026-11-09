@@ -194,6 +194,15 @@ impl Content for FooterSettingsWindow {
         format!("*{}*", texts.t(crate::key::FOOTER_SETTINGS_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::FOOTER_SETTINGS_TITLE,
+        ))
+    }
+
     /// A key, read by its whole notation through the reader the footer calls
     /// too (`footer_settings::press_of_key`).
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {

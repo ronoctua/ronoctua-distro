@@ -183,6 +183,81 @@ pub fn buffer_keymap_at(path: &std::path::Path) -> Result<Vec<Shortcut>> {
     Ok(answer.lines().filter_map(shortcut_of_line).collect())
 }
 
+/// ONE OF A WINDOW'S TABS — the screens it shows one at a time (the icons'
+/// three sets) — as the window publishes them for the modeline to draw while
+/// it is in focus (`crate::door::Content::tabs`; the footer's
+/// `window_tabs`, owner 2026-11-09).
+///
+/// A tab is one of the window's own SHORTCUTS, by its command: a click on it
+/// runs that command in the window, by the one door `LEADER Alt` runs it
+/// through — the mouse reaches nothing the keyboard does not.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowTab {
+    /// The window's command that shows it.
+    pub command: String,
+    /// Its name, in the window's language.
+    pub name: String,
+    /// Whether it is the one shown.
+    pub current: bool,
+}
+
+/// The verb a window's socket answers its tabs on.
+pub const TABS_VERB: &str = "tabs";
+
+/// One line of the `tabs` answer: `<command>`, `1` for the tab shown or `0`,
+/// and the name, a TAB between each — the name carries spaces, a tab never.
+#[must_use]
+pub fn tab_line(tab: &WindowTab) -> String {
+    let name = tab.name.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{}\t{}\t{name}", tab.command, u8::from(tab.current))
+}
+
+/// A line of the `tabs` answer read back ([`tab_line`]); `None` for one that
+/// is not a tab — a socket that does not know the verb answers `?`.
+#[must_use]
+pub fn tab_of_line(line: &str) -> Option<WindowTab> {
+    let mut fields = line.trim_end_matches(['\r', '\n']).splitn(3, '\t');
+    let command = fields.next()?.trim();
+    let current = match fields.next()?.trim() {
+        "1" => true,
+        "0" => false,
+        _ => return None,
+    };
+    let name = fields.next()?.trim();
+    (!command.is_empty() && !command.contains(' ') && !name.is_empty()).then(|| WindowTab {
+        command: command.to_owned(),
+        name: name.to_owned(),
+        current,
+    })
+}
+
+/// Asks a window for its tabs — none from a window that has none, or that
+/// does not answer.
+///
+/// # Errors
+///
+/// `XDG_RUNTIME_DIR` absent.
+pub fn buffer_tabs(pid: u32) -> Result<Vec<WindowTab>> {
+    Ok(buffer_tabs_at(&buffer_socket_path(pid)?))
+}
+
+/// The same, at a given path. See [`buffer_keymap_at`].
+#[must_use]
+pub fn buffer_tabs_at(path: &std::path::Path) -> Vec<WindowTab> {
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return Vec::new();
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+    if writeln!(stream, "{TABS_VERB}").is_err() {
+        return Vec::new();
+    }
+    let mut answer = String::new();
+    if std::io::Read::read_to_string(&mut stream, &mut answer).is_err() {
+        return Vec::new();
+    }
+    answer.lines().filter_map(tab_of_line).collect()
+}
+
 /// What a buffer answers about its states: which one is in effect, and the list
 /// of `(id, letter)` it declared.
 pub type States = (String, ronoctua_protocol::Tone, Vec<(String, char)>);
@@ -351,6 +426,23 @@ pub fn send_it(order: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// A window's tabs cross the socket as they were: the one shown, the
+    /// names with their spaces — and an answer that is no tab is none.
+    #[test]
+    fn a_tab_reads_back_as_it_was_written() {
+        let tab = super::WindowTab {
+            command: "icons-tab-nerd-fonts".to_owned(),
+            name: "Nerd\nFonts".to_owned(),
+            current: true,
+        };
+        let back = super::tab_of_line(&super::tab_line(&tab)).expect("a tab");
+        assert_eq!(back.command, tab.command);
+        assert_eq!(back.name, "Nerd Fonts");
+        assert!(back.current);
+        assert_eq!(super::tab_of_line("?"), None);
+        assert_eq!(super::tab_of_line("x\t2\tName"), None);
+    }
+
     /// THE STATE PROTOCOL, both ways, against a socket that answers like a buffer.
     ///
     /// Two hand-rolled parsers face each other here — the buffer writes the

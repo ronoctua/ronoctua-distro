@@ -21,7 +21,7 @@ use ronoctua_terminals::registry::Registry;
 use ronoctua_terminals::state::ProgramState;
 use serde::{Deserialize, Serialize};
 
-use crate::module::{Birth, Mark, MarkId, Tone, key_is_well_formed};
+use crate::module::{Arg, Birth, Mark, MarkId, Told, Tone, key_is_well_formed};
 use crate::moment::Moment;
 
 /// The shell's command a click on an account's lead runs: the accounts'
@@ -117,6 +117,22 @@ pub fn windows_said(limits: Option<Limits>, usage: Option<&usage::Kept>) -> Vec<
             .into_iter()
             .flatten(),
         );
+    }
+    out
+}
+
+/// An account's WEEK as its numbers say it: the status line's (or the logs')
+/// seven days and the endpoint's — the two readings of one window, which
+/// [`Seen::week_at`] makes one. Not the weeks of one model: those are the
+/// endpoint's alone, and the week a plan runs out of is the whole one.
+#[must_use]
+pub fn week_said(limits: Option<Limits>, usage: Option<&usage::Kept>) -> Vec<Window> {
+    let mut out = Vec::new();
+    if let Some(w) = limits.and_then(|l| l.seven_day) {
+        out.push(w);
+    }
+    if let Some(w) = usage.and_then(|k| k.usage).and_then(|u| u.seven_day) {
+        out.push(w);
     }
     out
 }
@@ -258,7 +274,7 @@ fn marks_with_agents(accounts: &[Account], agents: &[AgentSeen], now: Moment) ->
     // module's own rule (`Kept::unreadable`): the caller hands none.
     let seen: Vec<Seen> = accounts
         .iter()
-        .map(|a| Seen::of(a, windows_now(a), credits_now(a)))
+        .map(|a| Seen::of(a, windows_now(a), credits_now(a)).with_week(week_now(a)))
         .collect();
     let mut places = Places::default();
     places.settle(agents);
@@ -330,6 +346,9 @@ pub struct Seen {
     /// Since when Claude Code says an API key's credits ran out
     /// ([`credits_now`]); `None` for every other account.
     pub out_of_credits_since: Option<Moment>,
+    /// The readings of its week ([`week_said`]); none for an account that
+    /// has no week, or before anything said it.
+    pub week: Vec<Window>,
 }
 
 impl Seen {
@@ -346,7 +365,32 @@ impl Seen {
             name: account.name.clone(),
             windows,
             out_of_credits_since,
+            week: Vec::new(),
         }
+    }
+
+    /// The same, with the readings of its week.
+    #[must_use]
+    pub fn with_week(mut self, week: Vec<Window>) -> Self {
+        self.week = week;
+        self
+    }
+
+    /// Its week at `now`: the fuller of its readings that has not reset —
+    /// a window only fills until it resets — or `None`.
+    #[must_use]
+    pub fn week_at(&self, now: Moment) -> Option<Window> {
+        self.week
+            .iter()
+            .filter(|w| w.resets_at_s > now && w.used_percent.is_finite())
+            .copied()
+            .reduce(|a, b| {
+                if b.used_percent > a.used_percent {
+                    b
+                } else {
+                    a
+                }
+            })
     }
 }
 
@@ -365,6 +409,16 @@ pub fn accounts_now() -> Option<Vec<Account>> {
 #[must_use]
 pub fn windows_now(account: &Account) -> Vec<Window> {
     windows_said(
+        ronoctua_llm::statusline::limits(account).ok(),
+        ronoctua_llm::usage::kept(account).as_ref(),
+    )
+}
+
+/// The readings of an account's week now ([`week_said`]), from the same
+/// files [`windows_now`] reads.
+#[must_use]
+pub fn week_now(account: &Account) -> Vec<Window> {
+    week_said(
         ronoctua_llm::statusline::limits(account).ok(),
         ronoctua_llm::usage::kept(account).as_ref(),
     )
@@ -493,6 +547,15 @@ pub struct AgentSeen {
     /// photograph's, which has none.
     #[serde(default)]
     pub pid: u32,
+    /// What Claude Code calls the work — the title it gives the session
+    /// (its transcript's, else its terminal's) — data, said under the
+    /// pointer; `None` while it named nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// What it is doing this moment, in its own line (OSC 7501's `msg`,
+    /// inside our terminals) — data, said under the pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doing_now: Option<String>,
 }
 
 /// Where a click on an agent takes the person.
@@ -582,6 +645,8 @@ pub fn agents_in(
                     id: (!r.id.is_empty()).then(|| r.id.clone()),
                     app: r.app.clone(),
                     state: program_state(r.state).to_owned(),
+                    title: r.title.clone(),
+                    msg: r.msg.clone(),
                 })
         })
         .collect();
@@ -591,14 +656,33 @@ pub fn agents_in(
     };
     ronoctua_llm::agents::merged(accounts, &records, &programs, &machine)
         .into_iter()
-        .map(|a| AgentSeen {
-            account: a.account,
-            session: a.session,
-            folder: shown_folder(&a.folder, home),
-            doing: Doing::of(a.status),
-            since: i64::try_from(a.started_at_ns / 1_000_000_000).unwrap_or(i64::MAX),
-            terminal: a.terminal,
-            pid: a.pid,
+        .map(|a| {
+            // WHAT CLAUDE CODE CALLS THE WORK: the title it keeps in the
+            // session's transcript, else the label of its own record in our
+            // terminal, else that terminal's title (OSC 0/2).
+            let held = a
+                .terminal
+                .as_deref()
+                .and_then(|t| states.iter().find(|s| s.id.to_string() == t))
+                .map(|s| s.title.trim().to_owned())
+                .filter(|t| !t.is_empty());
+            let title = a
+                .transcript
+                .as_deref()
+                .and_then(ronoctua_llm::transcripts::title)
+                .or(a.label)
+                .or(held);
+            AgentSeen {
+                account: a.account,
+                session: a.session,
+                folder: shown_folder(&a.folder, home),
+                doing: Doing::of(a.status),
+                since: i64::try_from(a.started_at_ns / 1_000_000_000).unwrap_or(i64::MAX),
+                terminal: a.terminal,
+                pid: a.pid,
+                title,
+                doing_now: a.doing_now,
+            }
         })
         .collect()
 }
@@ -807,11 +891,28 @@ pub fn marks_for(
         let (Some(lead), Ok(set)) = (mark_of(seen.agent), u8::try_from(n + 1)) else {
             continue;
         };
+        // ITS WEEK, under the pointer always, and beside the glyph from the
+        // person's warning line on (owner, 2026-11-09): the week is the
+        // window a plan runs out of, and the five hours come back by
+        // themselves.
+        let week = seen.week_at(now);
+        let used = week.map(|w| whole_percent(w.used_percent));
         out.push(Mark {
             id: lead.in_set(set, Some(seen.name.clone())).opening(OPENS),
             tone: account_tone(seen, lines, now),
-            count: 0,
+            count: used
+                .filter(|p| *p >= u32::from(lines.warn_percent))
+                .unwrap_or(0),
             act: None,
+            told: week
+                .zip(used)
+                .map(|(w, p)| {
+                    Told::of(super::key::AGENT_ACCOUNTS_TOLD_WEEK)
+                        .with("percent", Arg::Number(i64::from(p)))
+                        .with("when", Arg::Moment(w.resets_at_s))
+                })
+                .into_iter()
+                .collect(),
         });
         let mut mine: Vec<(Option<u8>, &AgentSeen)> = agents
             .iter()
@@ -836,6 +937,7 @@ pub fn marks_for(
                 tone: a.doing.tone(),
                 count: 0,
                 act: None,
+                told: agent_told(a),
             });
         }
         if let Some(loudest) = hidden
@@ -848,8 +950,34 @@ pub fn marks_for(
                 tone: loudest,
                 count: u32::try_from(hidden.len()).unwrap_or(u32::MAX),
                 act: None,
+                told: Vec::new(),
             });
         }
+    }
+    out
+}
+
+/// A share as the modeline writes it: a whole per cent, from 0 to 100.
+fn whole_percent(used: f32) -> u32 {
+    // `as` AFTER THE CLAMP AND THE ROUND: a whole number from 0 to 100.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let whole = used.clamp(0.0, 100.0).round() as u32;
+    whole
+}
+
+/// What an agent tells the pointer besides its hint: the title Claude Code
+/// gave the work, and what it is doing this moment — each when it is known.
+fn agent_told(a: &AgentSeen) -> Vec<Told> {
+    let mut out = Vec::new();
+    if let Some(title) = &a.title {
+        out.push(
+            Told::of(super::key::AGENT_ACCOUNTS_TOLD_TITLE).with("title", Arg::Text(title.clone())),
+        );
+    }
+    if let Some(doing) = &a.doing_now {
+        out.push(
+            Told::of(super::key::AGENT_ACCOUNTS_TOLD_DOING).with("doing", Arg::Text(doing.clone())),
+        );
     }
     out
 }
@@ -875,6 +1003,7 @@ mod tests {
             name: name.to_owned(),
             windows,
             out_of_credits_since: None,
+            week: Vec::new(),
         }
     }
 
@@ -888,6 +1017,8 @@ mod tests {
             since: NOON + i64::from(n),
             terminal: None,
             pid: 4000 + n,
+            title: None,
+            doing_now: None,
         }
     }
 
@@ -914,6 +1045,93 @@ mod tests {
                 "{mark:?}"
             );
         }
+    }
+
+    /// FAILS IF: an account's week is not said under the pointer — how much
+    /// of it is used and when it starts over — or is drawn beside the glyph
+    /// below the person's warning line, or is not from it on; or a week that
+    /// already started over is said at all (owner, 2026-11-09).
+    #[test]
+    fn the_week_is_told_and_drawn_beside_the_lead_from_the_warning_line() {
+        let lead = |week: Vec<Window>| {
+            let list = [seen("claude-1", Agent::Claude, "Work", Vec::new()).with_week(week)];
+            with(&list, &[]).remove(0)
+        };
+        // THE FULLER OF THE TWO READINGS that has not reset: 84.6 % rounds to
+        // 85, from the warning line (80) on.
+        let full = lead(vec![window(50.0, NOON + 60), window(84.6, NOON + 3600)]);
+        assert!(full.id.percent, "the lead does not count in per cent");
+        assert_eq!(full.count, 85);
+        assert_eq!(full.told.len(), 1);
+        assert_eq!(
+            full.told[0].says,
+            super::super::key::AGENT_ACCOUNTS_TOLD_WEEK
+        );
+        assert_eq!(
+            full.told[0].args,
+            vec![
+                ("percent".into(), Arg::Number(85)),
+                ("when".into(), Arg::Moment(NOON + 3600)),
+            ]
+        );
+        // BELOW THE LINE: said under the pointer, not drawn beside.
+        let half = lead(vec![window(50.0, NOON + 60)]);
+        assert_eq!((half.count, half.told.len()), (0, 1));
+        // STARTED OVER, or never said: nothing.
+        for gone in [vec![window(99.0, NOON - 60)], Vec::new()] {
+            let quiet = lead(gone);
+            assert_eq!((quiet.count, quiet.told.len()), (0, 0));
+        }
+    }
+
+    /// FAILS IF: an agent does not tell the pointer what Claude Code calls its
+    /// work and what it is doing, when they are known — or tells an empty one.
+    #[test]
+    fn an_agent_tells_its_task_and_what_it_is_doing() {
+        let list = [seen("claude-1", Agent::Claude, "Work", Vec::new())];
+        let named = AgentSeen {
+            title: Some("Minibuffer e modeline".to_owned()),
+            doing_now: Some("Running cargo test".to_owned()),
+            ..agent("claude-1", 1, Doing::Working)
+        };
+        let marks = with(&list, &[named, agent("claude-1", 2, Doing::Done)]);
+        let told = |m: &Mark| -> Vec<(String, Vec<(String, Arg)>)> {
+            m.told
+                .iter()
+                .map(|t| {
+                    (
+                        t.says.to_string(),
+                        t.args
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.clone()))
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            told(&marks[1]),
+            vec![
+                (
+                    super::super::key::AGENT_ACCOUNTS_TOLD_TITLE.to_owned(),
+                    vec![(
+                        "title".to_owned(),
+                        Arg::Text("Minibuffer e modeline".to_owned())
+                    )]
+                ),
+                (
+                    super::super::key::AGENT_ACCOUNTS_TOLD_DOING.to_owned(),
+                    vec![(
+                        "doing".to_owned(),
+                        Arg::Text("Running cargo test".to_owned())
+                    )]
+                ),
+            ]
+        );
+        assert!(
+            marks[2].told.is_empty(),
+            "an agent that named nothing told something"
+        );
     }
 
     /// FAILS IF: an account does not lead a set of its own — its set the
@@ -1185,6 +1403,8 @@ mod tests {
                 since: 0,
                 terminal: None,
                 pid: 0,
+                title: None,
+                doing_now: None,
             }]
         );
         // A PLANTED AGENT HAS NO PROCESS: a click on it finds nowhere to go.
@@ -1251,7 +1471,7 @@ mod tests {
             viewer: None,
             front: false,
             seen: false,
-            title: String::new(),
+            title: "Terminal title".to_owned(),
             program: "zsh".to_owned(),
             cwd: None,
             started_s: 5,
@@ -1270,7 +1490,7 @@ mod tests {
                         state: *state,
                         kind: None,
                         title: String::new(),
-                        msg: String::new(),
+                        msg: format!("{app} at {record}"),
                         percent: None,
                         at_ms: 1,
                     },
@@ -1346,6 +1566,15 @@ mod tests {
         );
         assert_eq!(read[1].whereabouts(), Some(Whereabouts::Process(102)));
         assert!(!first.outside() && read[1].outside());
+        // WHAT IT IS DOING, from its own record (Claude Code's, with no id)
+        // and never another program's; and with no transcript, its
+        // terminal's title — the one outside our terminals has neither.
+        assert_eq!(first.doing_now.as_deref(), Some("claude-code at"));
+        assert_eq!(first.title.as_deref(), Some("Terminal title"));
+        assert_eq!(
+            (read[1].title.as_deref(), read[1].doing_now.as_deref()),
+            (None, None)
+        );
         // WITH NO HOME TO SHORTEN BY, the folder as it is.
         let bare = agents_in(&accounts, &sessions, Some(&terms), None, &|_, _| true);
         assert!(bare.iter().any(|a| a.folder == "/home/p/src/p1"));

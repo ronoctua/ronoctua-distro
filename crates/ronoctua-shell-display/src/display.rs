@@ -881,6 +881,13 @@ impl Builder<'_> {
 }
 
 impl View {
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        !matches!(self.level, Level::List)
+    }
+
     /// A view on the list.
     #[must_use]
     pub fn fresh() -> Self {

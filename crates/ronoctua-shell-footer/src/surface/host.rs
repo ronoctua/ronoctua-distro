@@ -623,6 +623,35 @@ impl Footer {
 
     /// A key of the shown region (`Footer::view_took_the_key`).
     pub(super) fn hosted_key(&mut self, id: &'static str, key: ronoctua_keymap::Key) {
+        // `TAB` FROM SECTION TO SECTION — `Shift+TAB` back — the footer's,
+        // for every region with sections that does not keep the key
+        // (`section_ring`), as the window's door does it: the first click on
+        // the next section's first row, which only moves the cursor there.
+        let shift = ronoctua_keymap::Mods {
+            shift: true,
+            ..ronoctua_keymap::Mods::default()
+        };
+        if key.sym == ronoctua_keymap::Sym::Tab
+            && (key.mods == ronoctua_keymap::Mods::default() || key.mods == shift)
+            && let Some((row, there)) = self.regions.get(id).and_then(|r| {
+                if !r.walks_sections() {
+                    return None;
+                }
+                let rows = r.rows(&self.region_seen());
+                let fields: Vec<Vec<crate::fields::Field>> =
+                    rows.iter().map(|row| row.fields.clone()).collect();
+                let takes: Vec<bool> = rows.iter().map(|row| row.takes).collect();
+                crate::section_ring::landing(&fields, &takes, r.cursor(), key.mods == shift)
+                    .map(|row| (row, r.cursor() == Some(row)))
+            })
+        {
+            if !there {
+                let _ = self.with_region(id, |r, w| r.clicked(row, w));
+            }
+            self.apply_geometry(self.interactivity());
+            self.ask_paint();
+            return;
+        }
         // A KEY IT DOES NOT TAKE IS SWALLOWED all the same, as every modal
         // view swallows the keyboard it holds: a wrong key loses nothing.
         let _ = self.with_region(id, |r, w| r.key(key, w));

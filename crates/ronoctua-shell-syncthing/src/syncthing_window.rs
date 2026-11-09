@@ -168,8 +168,24 @@ impl Content for SyncthingWindow {
         APP_ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// the file picker's `TAB` walks its filters.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        !self.view.picking()
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::SYNCTHING_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::SYNCTHING_TITLE,
+            self.view.below_the_first(),
+        ))
     }
 
     /// The key read whole — the door's one reader, then the view's

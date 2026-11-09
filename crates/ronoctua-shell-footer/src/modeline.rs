@@ -981,6 +981,7 @@ mod tests {
                 set: 0,
                 leads: false,
                 key: None,
+                told: Vec::new(),
             })
             .collect();
         for columns in [20_u16, 40, 80, 200] {
@@ -1190,6 +1191,7 @@ mod tests {
                 tone: Tone::Warning,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             },
         };
         let mut marks = vec![posted(MarkId::of(
@@ -1206,6 +1208,7 @@ mod tests {
                 marks,
                 ..ronoctua_brain::Mind::default()
             }),
+            &ronoctua_files::when::Zone::utc(),
             &ronoctua_i18n::Texts::fresh("en-GB").unwrap(),
         )
     }

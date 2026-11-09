@@ -13,6 +13,9 @@ agent-accounts-mark-agent-working = An agent is working in “{ $label }” — 
 agent-accounts-mark-agent-waiting = An agent in “{ $label }” is waiting for you — a click takes you to it
 agent-accounts-mark-agent-done = An agent in “{ $label }” is done — a click takes you to it
 agent-accounts-mark-agent-failed = An agent in “{ $label }” stopped on an error — a click takes you to it
+agent-accounts-told-week = The week: { $percent }% used, starts over { $when }
+agent-accounts-told-title = Task: { $title }
+agent-accounts-told-doing = Now: { $doing }
 agent-accounts-mark-agent-more = { $count ->
         [one] One more agent of this account, in the loudest of their colours
        *[other] { $count } more agents of this account, in the loudest of their colours

@@ -3966,6 +3966,8 @@ mod tests {
             since: NOW,
             terminal: terminal.map(str::to_owned),
             pid: 4000 + n,
+            title: None,
+            doing_now: None,
         }
     }
 

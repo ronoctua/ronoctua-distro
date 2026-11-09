@@ -105,6 +105,12 @@
   # — so one waiting for you is still seen. A done agent and the count rest
   # (approved, 2026-11-02): an agent that finished is still there to go back
   # to. A click on an agent goes to it (`agents-show <session>`).
+  #
+  # THE WEEK BESIDE THE LEAD (owner, 2026-11-09): an account with a week —
+  # Claude Code's, Codex's — draws how much of it is used beside its glyph
+  # from the person's warning line on, so the lead counts in per cent; under
+  # the pointer it always says the week and when it starts over, and an agent
+  # says what it is working on when Claude Code named it.
   marks = {
     claude = {
       glyph = "claude";
@@ -112,6 +118,7 @@
       sets = 9;
       leads = true;
       resting = true;
+      percent = true;
     };
     claude-api = {
       glyph = "claude-api";
@@ -126,6 +133,7 @@
       sets = 9;
       leads = true;
       resting = true;
+      percent = true;
     };
     agent-working = {
       glyph = "agent";

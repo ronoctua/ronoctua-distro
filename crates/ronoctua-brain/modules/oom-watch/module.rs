@@ -320,6 +320,7 @@ impl Module for OomWatch {
                 tone: ram_tone(used),
                 count: u32::from(used),
                 act: None,
+                told: Vec::new(),
             }],
             _ => Vec::new(),
         };

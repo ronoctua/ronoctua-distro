@@ -737,6 +737,16 @@ impl Content for Protocols {
         texts.t(crate::key::MANUAL_PROTOCOLS)
     }
 
+    /// Its name at the right end of the first line, with no header — or, with
+    /// a protocol open, the way back to the list (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::MANUAL_PROTOCOLS,
+            self.open.is_some(),
+        ))
+    }
+
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         let Some(key) = crate::door::keys::key_of(event, mods) else {
             return;

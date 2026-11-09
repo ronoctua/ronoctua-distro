@@ -225,6 +225,12 @@ impl Region for Settings {
         ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// the file picker's `TAB` walks its filters.
+    fn walks_sections(&self) -> bool {
+        !self.view.picking()
+    }
+
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         self.view
             .rows(&self.snap, seen.columns, seen.texts)

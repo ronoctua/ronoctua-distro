@@ -1875,6 +1875,20 @@ pub struct View {
 }
 
 impl View {
+    /// Whether the file picker is up — whose `TAB` walks its filters, and
+    /// not the sections under it (`section_ring`).
+    #[must_use]
+    pub const fn picking(&self) -> bool {
+        self.picking.is_some()
+    }
+
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        self.seal_mode.is_some()
+    }
+
     /// Opens it on the first row that acts.
     #[must_use]
     pub fn fresh() -> Self {

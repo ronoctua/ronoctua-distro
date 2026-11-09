@@ -228,6 +228,7 @@ impl Module for PartsWatch {
                 tone: Tone::Warning,
                 count: needs,
                 act: None,
+                told: Vec::new(),
             });
         } else if arriving > 0 {
             face.marks.push(Mark {
@@ -235,6 +236,7 @@ impl Module for PartsWatch {
                 tone: Tone::Watching,
                 count: arriving,
                 act: None,
+                told: Vec::new(),
             });
         }
         face

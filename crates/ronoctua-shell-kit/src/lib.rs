@@ -73,6 +73,8 @@ pub mod paint;
 pub mod partly_read;
 pub mod seats;
 pub mod security_words;
+// `TAB` from a list's section to the next, the door's and the footer's.
+pub mod section_ring;
 // A size as a person reads it — one arithmetic for the footer and for the
 // photograph of the brain's page.
 pub mod sizes;

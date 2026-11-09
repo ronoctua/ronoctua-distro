@@ -36,12 +36,14 @@ impl Module for Sample {
                     tone: Tone::Watching,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
                 Mark {
                     id: super::mark::SEAT.numbered(3, Some(shared::DESK.to_owned())),
                     tone: Tone::Warning,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
             ],
             ..Face::default()

@@ -381,6 +381,11 @@ impl Region for VideoMetrics {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its question's `TAB` picks the answer.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// The region's rows — its fields, and whether each takes a click
     /// ([`VideoMetrics::told_whole`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {

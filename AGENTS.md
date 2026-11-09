@@ -281,7 +281,11 @@ no PATH, o KVM e o `nix-direnv`.
 - **Dois modos ocultos** (`hidden.rs`): um `Ctrl` na raiz da leader gira normal → empurra → cobre
   (`hidden::next_mode`, `footer-bars-cycle`); nos dois o rodapé fica na camada `overlay`.
 - **A modeline se adapta a um programa** (`adapt.rs`): o que desenha responde ao ponteiro, e todo
-  segmento roda um comando do registro (cobra `footer-mouse-reaches-nothing-new`).
+  segmento roda um comando do registro (cobra `footer-mouse-reaches-nothing-new`). Uma janela que
+  mostra uma tela por vez publica abas (`Content::tabs`, um atalho dela cada uma), que a modeline
+  desenha enquanto ela tem o foco (`window_tabs.rs`, 2026-11-09).
+- Enquanto algo está aberto no minibuffer, a primeira coisa da linha é a seta que fecha tudo
+  (`minibuffer-close`, 2026-11-09); a hora e o CPU ficam à esquerda das células do chevron e do olho.
 - Se o rodapé morre, o `OnFailure=` levanta a linha de vida (`ronoctua-shell lifeline <unidade>`);
   `Ctrl+Alt+Del` é o resgate.
 - **Uma vista que segue um daemon lê ao vivo, não do cache.** Quando o rodapé vigia um daemon por
@@ -314,6 +318,12 @@ no PATH, o KVM e o `nix-direnv`.
   `every-door-hears-every-keyboard`), segue a escala da tela (`hidpi.rs`; cobra
   `every-window-knows-its-scale`) e repete teclas (cobra `every-window-repeats` — o rodapé é a
   exceção).
+- Sem cabeçalho, o fim da primeira linha diz o nome da janela em `text.dim`, ou `Voltar` numa página
+  abaixo da primeira, um clique que é o `Esc` dela (`Content::corner`, 2026-11-09); a porta só o
+  desenha onde o quadro deixou espaço (`door::corner`).
+- **`TAB` anda pelas seções** de toda lista com dois títulos ou mais, `Shift+TAB` de volta, nas duas
+  portas (`section_ring`, 2026-11-09); quem usa `TAB` para outra coisa responde `false` em
+  `Content::walks_sections`/`Region::walks_sections`.
 - As colunas à direita têm uma base só, `column::Column<T>`; o inquilino (`column::Tenant`) desenha
   na `column::Area` que recebe, um slot por espaço (`right_column.rs`), estacionada fora da tela
   (`Shell::Parked`).
@@ -607,7 +617,10 @@ OSC 7501, que o guardião lê.
   `leads`): o glifo da conta (`brain:agent-accounts/claude`, `brain:agent-accounts/claude-api`,
   `brain:agent-accounts/codex`), o tom dizendo o uso (numa chave de API, se os créditos acabaram),
   e depois os agentes dela; o agente pronto (`brain:agent-accounts/agent-done.<n>`) e a contagem
-  dos que passam do nono lugar (`brain:agent-accounts/agent-more`) também repousam (2026-11-02).
+  dos que passam do nono lugar (`brain:agent-accounts/agent-more`) também repousam (2026-11-02). A
+  semana usada vai ao lado do glifo da conta a partir da linha de aviso (o líder conta em por cento),
+  e sob o ponteiro a marca diz, antes da dica, frases do módulo (`Mark::told`: a semana e quando
+  recomeça, a tarefa do agente) (2026-11-09).
   Declaram `resting = true`, e só as de `assets/brain-resting-marks.nix` podem (cobra
   `resting-marks-are-the-approved-ones`); o núcleo descarta uma `Tone::Quiet` sem `resting`. Uma
   marca tem até 9 instâncias e um módulo até 9 conjuntos (cobra `mark-instances-are-bounded`); a

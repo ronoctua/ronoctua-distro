@@ -92,6 +92,12 @@ impl Drawn {
         }
     }
 
+    /// The tracks drawn this frame.
+    #[must_use]
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+
     /// Whether a point is on any bar the last frame drew.
     #[must_use]
     pub fn on(&self, x: f64, y: f64) -> bool {

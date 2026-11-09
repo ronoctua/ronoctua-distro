@@ -51,6 +51,10 @@ pub enum Act {
     Run(&'static str),
     /// Run this command with this argument.
     RunWith(&'static str, String),
+    /// Run this command of the WINDOW in focus, in its own process — one of
+    /// the shortcuts it published, by the door `LEADER Alt` runs them through
+    /// (`crate::window_tabs`).
+    Window(String),
 }
 
 /// Which button a press came from.
@@ -122,6 +126,8 @@ pub enum Adapted<'a> {
     Kiosk(crate::kiosk::Adapter<'a>),
     /// A group of terminals, its tabs (`crate::terminal_tabs`).
     Terminals(crate::terminal_tabs::Adapter<'a>),
+    /// A window's own tabs, as it published them (`crate::window_tabs`).
+    Tabs(crate::window_tabs::Adapter<'a>),
 }
 
 /// What a segment of any adapter is about.
@@ -131,6 +137,8 @@ pub enum Target {
     Kiosk(crate::kiosk::Target),
     /// A group of terminals'.
     Terminals(crate::terminal_tabs::Target),
+    /// A window's own tabs'.
+    Tabs(crate::window_tabs::Target),
 }
 
 impl Adapted<'_> {
@@ -140,6 +148,7 @@ impl Adapted<'_> {
         match self {
             Self::Kiosk(a) => a.id(),
             Self::Terminals(a) => a.id(),
+            Self::Tabs(a) => a.id(),
         }
     }
 
@@ -149,6 +158,7 @@ impl Adapted<'_> {
         match self {
             Self::Kiosk(a) => a.claims(w),
             Self::Terminals(a) => a.claims(w),
+            Self::Tabs(a) => a.claims(w),
         }
     }
 
@@ -166,6 +176,11 @@ impl Adapted<'_> {
                 .into_iter()
                 .map(|(s, t)| (s, Target::Terminals(t)))
                 .collect(),
+            Self::Tabs(a) => a
+                .segments(w, texts)
+                .into_iter()
+                .map(|(s, t)| (s, Target::Tabs(t)))
+                .collect(),
         }
     }
 
@@ -175,6 +190,7 @@ impl Adapted<'_> {
         match self {
             Self::Kiosk(a) => a.strip(w),
             Self::Terminals(a) => a.strip(w),
+            Self::Tabs(a) => a.strip(w),
         }
     }
 
@@ -188,6 +204,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.colour(t),
             (Self::Terminals(a), Target::Terminals(t)) => a.colour(t),
+            (Self::Tabs(a), Target::Tabs(t)) => a.colour(t),
             _ => None,
         }
     }
@@ -198,6 +215,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.clicked(t, b),
             (Self::Terminals(a), Target::Terminals(t)) => a.clicked(t, b),
+            (Self::Tabs(a), Target::Tabs(t)) => a.clicked(t, b),
             _ => None,
         }
     }
@@ -208,6 +226,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.wheeled(t, lines),
             (Self::Terminals(a), Target::Terminals(t)) => a.wheeled(t, lines),
+            (Self::Tabs(a), Target::Tabs(t)) => a.wheeled(t, lines),
             _ => None,
         }
     }
@@ -218,6 +237,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.draggable(t),
             (Self::Terminals(a), Target::Terminals(t)) => a.draggable(t),
+            (Self::Tabs(a), Target::Tabs(t)) => a.draggable(t),
             _ => false,
         }
     }
@@ -230,6 +250,7 @@ impl Adapted<'_> {
             (Self::Terminals(a), Target::Terminals(from), Target::Terminals(onto)) => {
                 a.dropped(from, onto)
             }
+            (Self::Tabs(a), Target::Tabs(from), Target::Tabs(onto)) => a.dropped(from, onto),
             _ => None,
         }
     }
@@ -240,6 +261,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.hint(t, texts),
             (Self::Terminals(a), Target::Terminals(t)) => a.hint(t, texts),
+            (Self::Tabs(a), Target::Tabs(t)) => a.hint(t, texts),
             _ => None,
         }
     }
@@ -250,6 +272,7 @@ impl Adapted<'_> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => Target::Kiosk(a.counted(t, n)),
             (Self::Terminals(a), Target::Terminals(t)) => Target::Terminals(a.counted(t, n)),
+            (Self::Tabs(a), Target::Tabs(t)) => Target::Tabs(a.counted(t, n)),
             (_, other) => other.clone(),
         }
     }
@@ -260,6 +283,7 @@ impl Adapted<'_> {
         match self {
             Self::Kiosk(a) => a.local_bindings(),
             Self::Terminals(a) => a.local_bindings(),
+            Self::Tabs(a) => a.local_bindings(),
         }
     }
 

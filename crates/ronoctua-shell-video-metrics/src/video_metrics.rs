@@ -1204,6 +1204,13 @@ pub struct View {
 const DESCRIPTION: &str = "video-metrics-second-description";
 
 impl View {
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        !self.trail.is_empty()
+    }
+
     /// Opens it on `page` — the whole trail back to the home page, so `Esc`
     /// walks back the way a person would have come — and asks for what the
     /// page draws.

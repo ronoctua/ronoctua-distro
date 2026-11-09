@@ -258,6 +258,16 @@ impl Content for Manual {
         format!("*{}*", texts.t(name))
     }
 
+    /// The manuals' name at the right end of the first line, with no header —
+    /// or, with one open, the way back to their list (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::CMD_HELP,
+            self.view.which().is_some(),
+        ))
+    }
+
     /// A key, read by the view the footer reads its keys with.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         let Some(key) = crate::door::keys::key_of(event, mods) else {

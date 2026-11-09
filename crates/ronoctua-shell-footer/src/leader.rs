@@ -1605,6 +1605,10 @@ pub const BASE: Contribution = Contribution {
             label: key::CMD_LEADER_CLOSE,
         },
         Command {
+            id: "minibuffer-close",
+            label: key::CMD_MINIBUFFER_CLOSE,
+        },
+        Command {
             id: "minibuffer-fold-open",
             label: key::CMD_MINIBUFFER_FOLD_OPEN,
         },
@@ -1944,6 +1948,11 @@ pub const BASE: Contribution = Contribution {
         // over the socket again and again, and each opening has to be one
         // (`nix/bench-frames.nix`). The leader pressed again walks the sets now.
         "leader-close",
+        // WHATEVER IS OPEN ON THE MINIBUFFER, CLOSED — the down arrow at the
+        // left end of its line (`Footer::close_the_minibuffer`): a click, and
+        // `LEADER :` for the keyboard. No sequence: the leader it would be
+        // typed in is one of the things it closes.
+        "minibuffer-close",
         // THE MINIBUFFER'S DRAWER, opened or walked down and walked up or shut —
         // the right `Ctrl` with an arrow while the footer has the keyboard
         // (`Footer::fold_key`), and the compositor's transient bind while a hint

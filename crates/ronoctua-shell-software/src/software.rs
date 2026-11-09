@@ -1431,6 +1431,13 @@ pub struct View {
 }
 
 impl View {
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        !self.back.is_empty()
+    }
+
     /// A view opened at `opening`, and the first thing the door has to do for
     /// it — besides reading the machine (`Want::Reread`), which every opening
     /// needs and the door asks for itself.

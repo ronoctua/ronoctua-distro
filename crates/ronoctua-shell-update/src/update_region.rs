@@ -1149,6 +1149,11 @@ impl Region for UpdateRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): it walks its sections itself.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
         let len = self.row_count(seen);
         self.rows_from(seen, 0, len)

@@ -647,8 +647,23 @@ impl Content for Network {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): it walks its sections itself, its title to the top.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::NETWORK_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::NETWORK_TITLE,
+            self.view.below_the_first(),
+        ))
     }
 
     /// A key, read against the view's table by its whole notation — the one

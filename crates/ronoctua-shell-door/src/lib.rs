@@ -30,8 +30,8 @@
 // THE KIT, by the names these modules already use (`crate::chrome::…`).
 use ronoctua_shell_kit::{
     band, bars, bindings, chrome, daemon, desk, echo, fields, fold, foreign, glyph, header, hidpi,
-    ipc, language, line, mind_wire, seats, security_words, sizes, text_select, theme, toolkits,
-    wake, watchdog, wheel, when,
+    ipc, language, line, mind_wire, seats, section_ring, security_words, sizes, text_select, theme,
+    toolkits, wake, watchdog, wheel, when,
 };
 // The list's tests drive the minibuffer's own completion.
 #[cfg(test)]

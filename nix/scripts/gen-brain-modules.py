@@ -247,8 +247,8 @@ def manifest_rs(m: dict, names: list[str], language: str, tables: list[str]) -> 
             fail(ident, f"the mark `{k}` declares {sets!r} sets; a mark stands in from 1 to 9")
         if leads and (not sets or instances):
             fail(ident, f"the mark `{k}` leads a set: it stands in sets and has no instances")
-        if percent and (sets or instances):
-            fail(ident, f"the mark `{k}` counts in per cent: it is one mark, with no instances and no sets")
+        if percent and (instances or (sets and not leads)):
+            fail(ident, f"the mark `{k}` counts in per cent: it is one mark or a set's lead, with no instances")
         if sets and leads:
             doc = f"`brain:{ident}/<1..={sets}>`'s lead, drawn first in its set with the glyph token `{token}`"
         elif sets and instances:

@@ -598,10 +598,25 @@ impl Content for Notifications {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks its panes.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     /// `*name*` is Emacs's convention for a buffer that is not a file, the
     /// same one the modeline already uses for `*scratch*`.
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::NOTIF_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::NOTIF_TITLE,
+            self.view.below_the_first(),
+        ))
     }
 
     /// THE KEYS THIS WINDOW TEACHES, the same set its header draws (`paint`,

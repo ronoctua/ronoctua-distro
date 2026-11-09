@@ -1718,6 +1718,11 @@ impl Region for Player {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` folds a group.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// The region's rows — its fields, and whether each takes a click
     /// ([`Player::told_whole`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {

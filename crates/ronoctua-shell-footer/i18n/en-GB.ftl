@@ -984,6 +984,7 @@ echo-brain-no-notice = The brain has nothing to say right now
 cmd-leader-set-default = The keys as they are, each opening its app in the footer
 cmd-footer-bars-cycle = The next of the bars' three modes: shown, hidden and pushing the windows, hidden and over them
 cmd-leader-close = Close the leader's list, as its Esc does
+cmd-minibuffer-close = Close what is open on the minibuffer, all of it
 echo-bars-shown = Modeline and minibuffer shown
 echo-bars-push = Modeline and minibuffer hidden; what opens pushes the windows away
 echo-bars-cover = Modeline and minibuffer hidden; what opens lies over the windows

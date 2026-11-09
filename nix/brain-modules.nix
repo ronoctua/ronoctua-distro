@@ -66,8 +66,9 @@
 #
 # AND MARKS IN PER CENT (2026-11-06): `percent = true` for a mark whose count
 # is a share — the RAM in use, the disk filled — which the footer writes with
-# the language's per cent sign. It is one mark: no instances (their digit
-# would stand where the share is) and no sets.
+# the language's per cent sign. It is one mark or a set's lead (an account's
+# week, 2026-11-09): no instances (their digit would stand where the share
+# is), and no other member of a set.
 #
 # ACTIONS (2026-11-07). `row` and `asks` as ever, and three more: `opens` for
 # an action that is only the way to something the footer opens, at either door
@@ -516,8 +517,8 @@ let
                 ) "marks.${k}.leads: a lead has no instances (one per set)"
                 ++ lib.optional (!(isBool percent)) "marks.${k}.percent is a boolean"
                 ++ lib.optional (
-                  percent == true && (instances != null || sets != null)
-                ) "marks.${k}.percent: a mark in per cent is one mark (no instances and no sets)"
+                  percent == true && (instances != null || (sets != null && leads != true))
+                ) "marks.${k}.percent: a mark in per cent is one mark or a set's lead (no instances)"
                 # THE MODELINE AT REST IS SILENT, but for the marks the owner
                 # approved one by one — and never a person's.
                 ++ lib.optional (

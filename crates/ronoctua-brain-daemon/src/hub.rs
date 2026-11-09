@@ -1315,6 +1315,7 @@ mod tests {
                 tone: Tone::Warning,
                 count: 2,
                 act: None,
+                told: Vec::new(),
             }],
             notices: vec![
                 Notice::of(
@@ -1755,30 +1756,35 @@ mod tests {
                     tone: Tone::Quiet,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
                 Mark {
                     id: SEAT.numbered(10, None),
                     tone: Tone::Danger,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
                 Mark {
                     id: SEAT.numbered(1, None),
                     tone: Tone::Warning,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
                 Mark {
                     id: FULL.clone(),
                     tone: Tone::Warning,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
                 Mark {
                     id: SEAT.numbered(9, Some("work".to_owned())),
                     tone: Tone::Danger,
                     count: 0,
                     act: None,
+                    told: Vec::new(),
                 },
             ],
             ..Face::default()
@@ -1804,6 +1810,7 @@ mod tests {
                 tone: Tone::Quiet,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             }],
             ..Face::default()
         });
@@ -1828,6 +1835,7 @@ mod tests {
                 tone: Tone::Warning,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             }
         }
         let fake = Fake::new(Manifest {

@@ -2129,11 +2129,25 @@ pub fn date_text(
 ) -> String {
     let c = ronoctua_files::when::civil(secs, zone);
     let args = c.args();
-    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let mut args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    // THE MONTH'S SHORT NAME, for the one shape that writes it — asked as a
+    // NUMBER for the reason `date_long` gives.
+    let month = matches!(order, crate::when::Order::DayFirstMonthName).then(|| {
+        texts.t_args(
+            crate::key::LOCALE_MONTH_SHORT,
+            &[("m", ronoctua_i18n::Arg::Number(i64::from(c.month)))],
+        )
+    });
+    if let Some(month) = &month {
+        args.push(("month", month));
+    }
     texts.t_with(
         match order {
             crate::when::Order::BigEndian => crate::key::LOCALE_DATE_YMD,
             crate::when::Order::DayFirst => crate::key::LOCALE_DATE_DMY,
+            crate::when::Order::DayFirstDashes => crate::key::LOCALE_DATE_DMY_DASHES,
+            crate::when::Order::DayFirstDots => crate::key::LOCALE_DATE_DMY_DOTS,
+            crate::when::Order::DayFirstMonthName => crate::key::LOCALE_DATE_DMY_MONTH,
             crate::when::Order::MonthFirst => crate::key::LOCALE_DATE_MDY,
         },
         &args,
@@ -2250,7 +2264,13 @@ pub fn date_long(
     texts.t_with(
         match order {
             crate::when::Order::BigEndian => crate::key::LOCALE_DATE_LONG_YMD,
-            crate::when::Order::DayFirst => crate::key::LOCALE_DATE_LONG_DMY,
+            // THE FOUR DAY-FIRST SHAPES ARE ONE ORDER written out: what tells
+            // them apart is a separator or an abbreviation, and a date in
+            // words has neither.
+            crate::when::Order::DayFirst
+            | crate::when::Order::DayFirstDashes
+            | crate::when::Order::DayFirstDots
+            | crate::when::Order::DayFirstMonthName => crate::key::LOCALE_DATE_LONG_DMY,
             crate::when::Order::MonthFirst => crate::key::LOCALE_DATE_LONG_MDY,
         },
         &[
@@ -6433,6 +6453,64 @@ mod tests {
     /// setembro de 2026 às 12:45:20"* — where the line used to say `and 20
     /// seconds`, which is the seconds-of-the-minute the column has no room
     /// for, pinned to a cell the sentence never names.
+    /// The owner's three shapes (2026-11-09), written as he wrote them —
+    /// `10-out-2026` and `10-oct-2026` — and every shape, on the 24-hour
+    /// clock, inside the file manager's date column in both languages.
+    #[test]
+    fn the_day_first_shapes_are_written_as_asked() {
+        let en = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let pt = ronoctua_i18n::Texts::fresh("pt-BR").unwrap();
+        let utc = ronoctua_files::when::Zone::utc();
+        // 2026-10-10 14:32 UTC.
+        let secs = 1_791_642_720;
+        let c = ronoctua_files::when::civil(secs, &utc);
+        assert_eq!((c.year, c.month, c.day, c.hour), (2026, 10, 10, 14));
+        let shape = |o, t| super::date_text(secs, &utc, o, t);
+        assert_eq!(shape(crate::when::Order::DayFirstDashes, &pt), "10-10-2026");
+        assert_eq!(shape(crate::when::Order::DayFirstDots, &pt), "10.10.2026");
+        assert_eq!(
+            shape(crate::when::Order::DayFirstMonthName, &pt),
+            "10-out-2026"
+        );
+        assert_eq!(
+            shape(crate::when::Order::DayFirstMonthName, &en),
+            "10-oct-2026"
+        );
+        // EVERY MONTH HAS ITS OWN SHORT NAME: a selector that fell through
+        // to its default would write `dez` for eleven of them.
+        for t in [&en, &pt] {
+            let names: std::collections::BTreeSet<String> = (1..=12)
+                .map(|m| {
+                    t.t_args(
+                        crate::key::LOCALE_MONTH_SHORT,
+                        &[("m", ronoctua_i18n::Arg::Number(m))],
+                    )
+                })
+                .collect();
+            assert_eq!(names.len(), 12, "{:?}", names);
+        }
+        // AND A COLUMN THAT ELIDES A DATE LIES ABOUT ITS YEAR: the widest
+        // shape still fits `fields::Column::Modified`.
+        let room = crate::fields::Column::Modified.width();
+        for t in [&en, &pt] {
+            for order in crate::when::Order::all() {
+                for month in 1..=12 {
+                    let at = 1_767_225_600 + (month - 1) * 31 * 86_400 + 23 * 3600;
+                    let date = super::date_text(at, &utc, order, t);
+                    let time = clock_text(at, &utc, crate::when::Clock::TwentyFour, t);
+                    let cell = t.t_with(
+                        crate::key::FILES_WHEN,
+                        &[("date", date.as_str()), ("time", time.as_str())],
+                    );
+                    assert!(
+                        ronoctua_render::layout::width(&cell) <= room,
+                        "{cell} does not fit {room} cells"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_long_date_names_its_month_and_its_second() {
         let en = ronoctua_i18n::Texts::fresh("en-GB").unwrap();

@@ -529,6 +529,16 @@ impl Content for Display {
         format!("*{}*", texts.t(crate::key::DISPLAY_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::DISPLAY_TITLE,
+            self.view.below_the_first(),
+        ))
+    }
+
     /// A key, through the reader the footer calls too
     /// (`display_words::press_of_key`).
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {

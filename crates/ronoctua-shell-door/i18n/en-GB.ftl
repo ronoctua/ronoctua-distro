@@ -88,6 +88,10 @@ brain-proceed = start now
 # What the doors say when a daemon refused, and what the window cannot do.
 door-no-footer = The footer could not be reached to run this
 door-esc-again = { $keys } again closes this window
+# THE WAY BACK at the right end of a window's first line, with no header
+# (`door::corner`), and what the minibuffer says of it under the pointer.
+door-corner-back = Back
+door-corner-back-does = Goes back a page, as this window’s { $keys } does.
 door-message-dismiss = take the message off
 # What a click or a key does to the thing a window's own foot explains,
 # with what it will do (`door::foot::gesture`): the key is the code's.

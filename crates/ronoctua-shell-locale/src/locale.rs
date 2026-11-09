@@ -2761,17 +2761,23 @@ mod tests {
         );
     }
 
-    /// The three orders write three different dates, each with its named part
-    /// in front.
+    /// Every shape writes a different date, each with its named part in
+    /// front — so turning the ring always changes the sample on it.
     #[test]
-    fn the_three_orders_write_three_different_dates() {
+    fn every_order_writes_a_different_date() {
         let (t, z) = (texts(), utc());
         let secs = 1_788_000_000;
         let ymd = crate::chrome::date_text(secs, &z, Order::BigEndian, &t);
         let dmy = crate::chrome::date_text(secs, &z, Order::DayFirst, &t);
         let mdy = crate::chrome::date_text(secs, &z, Order::MonthFirst, &t);
-        assert_ne!(ymd, dmy);
-        assert_ne!(dmy, mdy);
+        let all: std::collections::BTreeSet<String> = Order::all()
+            .map(|o| crate::chrome::date_text(secs, &z, o, &t))
+            .collect();
+        assert_eq!(
+            all.len(),
+            Order::all().count(),
+            "two shapes read alike: {all:?}"
+        );
         let c = ronoctua_files::when::civil(secs, &z);
         assert!(ymd.starts_with(&format!("{:04}", c.year)));
         assert!(dmy.starts_with(&format!("{:02}", c.day)));

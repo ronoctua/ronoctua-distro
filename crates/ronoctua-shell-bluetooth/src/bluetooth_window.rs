@@ -373,8 +373,24 @@ impl Content for BluetoothWindow {
         APP_ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// on a device's page its `TAB` walks the two panes.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        !matches!(self.view.level(), crate::bluetooth::Level::Device(_))
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::BLUETOOTH_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::BLUETOOTH_TITLE,
+            !matches!(self.view.level(), crate::bluetooth::Level::List),
+        ))
     }
 
     /// THE KEY IS READ WHOLE — the door's one reader (`keys::key_of`), and

@@ -212,6 +212,7 @@ impl Module for DiskSpace {
                 tone: Tone::Warning,
                 count: rules::used_percent(&fullest),
                 act: None,
+                told: Vec::new(),
             });
         }
         face

@@ -339,6 +339,11 @@ impl Region for CalcRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks the modes.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// The view's lines, each a click on what it holds — a key, a mode, an
     /// answer kept, a unit — found by the cell under the pointer
     /// (`calc::Line::target_at`), the ruler the lit field uses.

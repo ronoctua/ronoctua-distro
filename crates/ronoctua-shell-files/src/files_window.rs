@@ -1859,6 +1859,11 @@ impl Content for Files {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks its panes.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     /// `*name*` is Emacs's convention for a buffer that is not a file, the same
     /// one the modeline already uses for `*scratch*`.
     fn title(&self, _: &ronoctua_i18n::Texts) -> String {
@@ -2479,6 +2484,10 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     } else {
         s.geo.metric.first + u16::try_from(s.geo.room()).unwrap_or(0)
     };
+    // WHETHER THE FOOT LINE SAYS ANYTHING — and while it does it wears the
+    // ground every window's foot wears (`door::foot`), over the panels'
+    // rules, which run to the window's edge underneath it.
+    let foot_speaks = !opens && (second.is_some() || s.question.is_some());
     s.hinted.open_elsewhere(opens && s.fold.open);
     let room = plain_room.saturating_sub(crate::fold::WIDTH);
     // HOW TALL THE LINE WOULD BE, written down for the geometry — see
@@ -2987,10 +2996,19 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
         // WHERE THEY START AND WHERE THEY STOP, and the stop is the
         // SURFACE'S — never a count of lines times a fractional line
         // height, which is what left every one of them short of the edge.
+        //
+        // AND WITH THE PANELS AT THE RIGHT THERE IS NO STRIP UNDER THEM: the
+        // line the "no header" mode keeps off the bottom is the foot's, and a
+        // rule that stopped over it ended a line short of the window's edge
+        // (the owner, 2026-11-09) while the preview beside it ran to the end.
         let (rule_from, rule_to) = if panes.right > 0 {
             (
                 s.geo.metric.y_of(s.geo.metric.first),
-                s.geo.list_bottom(line_px),
+                if panes.strip == 0 {
+                    s.geo.metric.bottom()
+                } else {
+                    s.geo.list_bottom(line_px)
+                },
             )
         } else {
             (s.geo.metric.y_of(strip_top), s.geo.metric.bottom())
@@ -3024,6 +3042,23 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
                 rule_to,
             ));
         }
+    }
+    // THE FOOT'S GROUND, while it says something: one line, or to the
+    // window's edge when it is the last thing drawn.
+    if foot_speaks {
+        let top = s.geo.metric.y_of(base);
+        let bottom = if panes.strip == 0 {
+            s.geo.metric.bottom()
+        } else {
+            top + line_px
+        };
+        quads.push(ronoctua_render::quad::Quad {
+            x: 0.0,
+            y: top,
+            width: s.geo.metric.width,
+            height: (bottom - top).max(0.0),
+            color: tokens::color::SURFACE_HEADER,
+        });
     }
     // EVERY SECTION'S BAR, from the section itself.
     //

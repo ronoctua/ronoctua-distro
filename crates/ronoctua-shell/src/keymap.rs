@@ -1328,6 +1328,7 @@ mod tests {
             "leader-set-default",
             "footer-bars-cycle",
             "leader-close",
+            "minibuffer-close",
             "minibuffer-fold-open",
             "minibuffer-fold-close",
             "alert-dismiss",

@@ -451,8 +451,22 @@ impl Content for IncusWindow {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks the kinds.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::INCUS_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::INCUS_TITLE,
+        ))
     }
 
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {

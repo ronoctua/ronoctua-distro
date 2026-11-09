@@ -355,6 +355,7 @@ impl Module for SecurityWatch {
                     tone: tone_of(*first),
                     count: count_of(*first),
                     act: None,
+                    told: Vec::new(),
                 });
             }
             // THE NOTICE, until a person puts it away: a newer refusal than

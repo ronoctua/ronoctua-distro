@@ -241,6 +241,15 @@ impl Content for ClipboardWindow {
         format!("*{}*", texts.t(crate::key::CLIPBOARD_HISTORY))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::CLIPBOARD_HISTORY,
+        ))
+    }
+
     /// A key, read by its whole notation in the view's own table — the
     /// footer's reader, and `Esc` through the view so a code on screen is
     /// put away before the window closes.

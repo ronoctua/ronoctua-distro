@@ -105,6 +105,15 @@ impl Content for SettingsWindow {
         format!("*{}*", texts.t(crate::key::TERMINAL_SETTINGS_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::TERMINAL_SETTINGS_TITLE,
+        ))
+    }
+
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         if let Some(press) =
             crate::door::keys::key_of(event, mods).and_then(crate::terminal_settings::press_of_key)

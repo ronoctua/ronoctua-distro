@@ -376,6 +376,7 @@ impl Module for SearchIndex {
                 tone: Tone::Watching,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             });
         }
         face

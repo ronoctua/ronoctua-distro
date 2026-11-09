@@ -426,6 +426,11 @@ impl Region for FilesRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks its panes.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// No rows of its own: a region in sections is laid onto the lines by the
     /// footer's sectioned arithmetic ([`Region::sections`]).
     fn rows(&self, _: &Seen<'_>) -> Vec<crate::region::Row> {

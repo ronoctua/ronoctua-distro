@@ -58,6 +58,7 @@ pub mod sessions;
 pub mod statusline;
 mod time;
 pub mod tokens;
+pub mod transcripts;
 pub mod usage;
 
 /// Why something was not read or done, as a closed set (`agents-refused-<id>`).

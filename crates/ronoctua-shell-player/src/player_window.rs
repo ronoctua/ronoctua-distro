@@ -3223,6 +3223,11 @@ impl Content for Player {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` folds a group.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         texts.t(crate::key::PLAYER_TITLE)
     }

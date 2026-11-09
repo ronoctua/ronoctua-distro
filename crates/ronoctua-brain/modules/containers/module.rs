@@ -193,6 +193,7 @@ impl Module for Containers {
                 tone: Tone::Watching,
                 count: count_of(&kept),
                 act: None,
+                told: Vec::new(),
             });
         }
         face

@@ -400,6 +400,7 @@ mod tests {
                     tone: Tone::Danger,
                     count: 2,
                     act: Some("forget".into()),
+                    told: Vec::new(),
                 },
             }],
             events: vec![Said {

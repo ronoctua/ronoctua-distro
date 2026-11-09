@@ -35161,7 +35161,13 @@ let
         here = pathlib.Path(sys.argv[1])
         RUN = re.compile(r'^run line (\d+) column \d+ \S+ color\.[\w.]+ "(.*)"$', re.M)
         def line_of(name, n):
-            return "".join(t for k, t in RUN.findall((here / f"{name}.txt").read_text()) if int(k) == n)
+            runs = [t for k, t in RUN.findall((here / f"{name}.txt").read_text()) if int(k) == n]
+            # THE ARROW THAT CLOSES what is open on the minibuffer, and its
+            # air, lead the line while the question is up (`closing_arrow`,
+            # 2026-11-09): they are not the question's words.
+            if len(runs) >= 2 and re.fullmatch(r"\\u\{[0-9a-f]+\}", runs[0]) and runs[1] == " ":
+                runs = runs[2:]
+            return "".join(runs)
         def keys_of(language):
             text = pathlib.Path("${../crates/ronoctua-shell-git/i18n}", f"{language}.ftl").read_text()
             keys = dict(re.findall(r"^([a-z0-9-]+) = (.+)$", text, re.M))

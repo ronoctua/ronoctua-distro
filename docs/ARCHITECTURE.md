@@ -20457,7 +20457,7 @@ do `~/.ssh` e as chaves do GnuPG e olha o que guarda o segredo: o identificador 
 `.tpm` não contam, e PEM, `openssh-key-v1` comum ou PuTTY contam, com ou sem senha. O tipo sai da
 parte pública do `openssh-key-v1`, que nunca é cifrada.
 
-**O escudo da modeline é um escudo só (`md-shield`), e a cor diz quanto.** O que a pessoa escolheu
+**O escudo da modeline é um escudo só (o contorno, `md-shield_outline`, desde 2026-11-09), e a cor diz quanto.** O que a pessoa escolheu
 com a senha (a janela, o TPM, o firewall desligado, os escudos) e o firewall recusando conexões saem
 em laranja (`state.caution`, a família `caution` de cada semente). O que ninguém escolheu (o
 firewall que falhou, uma chave em arquivo) sai na cor de perigo (`state.error`, um vermelho puxado

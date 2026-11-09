@@ -5835,6 +5835,11 @@ impl Content for UpdateWindow {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): it walks its sections itself.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     /// `*name*` is Emacs's convention for a buffer that is not a file, and the
     /// name is the command's own label — one sentence, two doors.
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {

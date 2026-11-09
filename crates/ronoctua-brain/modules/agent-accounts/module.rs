@@ -87,7 +87,7 @@ use ronoctua_llm::{Account, Kind as Agent, Watched, Window};
 use super::{
     AgentSeen, Lines, Places, Seen, Which, accounts_now, agents_now, credits_now, credits_tone,
     lines_store, make_agents_folders, marked_most, marks_for, most_used, outside_is_drawn,
-    read_lines, sessions_folder, terminals_folder, tone_of, windows_now, write_line,
+    read_lines, sessions_folder, terminals_folder, tone_of, week_now, windows_now, write_line,
 };
 use crate::module::{
     Act, Acted, Birth, Cell, Ctx, Face, Heard, Look, Manifest, Mark, Module, Row, Run, Scheduled,
@@ -132,6 +132,12 @@ trait Probe: Send + Sync {
     /// Since when an API key's credits ran out, as Claude Code last said;
     /// `None` for every other account.
     fn out_of_credits(&self, account: &Account) -> Option<Moment>;
+
+    /// The readings of an account's week ([`super::week_said`]): none by default —
+    /// a probe that plants windows plants no week unless it says so.
+    fn week(&self, _account: &Account) -> Vec<Window> {
+        Vec::new()
+    }
     /// What to watch for it.
     fn watched(&self, account: &Account) -> Watched;
     /// The agents at work in these accounts now — the one seam their
@@ -172,6 +178,10 @@ impl Probe for Machine {
 
     fn out_of_credits(&self, account: &Account) -> Option<Moment> {
         credits_now(account)
+    }
+
+    fn week(&self, account: &Account) -> Vec<Window> {
+        week_now(account)
     }
 
     fn watched(&self, account: &Account) -> Watched {
@@ -372,7 +382,10 @@ impl Inner {
         let read = self.probe.accounts().map(|accounts| {
             let seen = accounts
                 .iter()
-                .map(|a| Seen::of(a, self.probe.windows(a), self.probe.out_of_credits(a)))
+                .map(|a| {
+                    Seen::of(a, self.probe.windows(a), self.probe.out_of_credits(a))
+                        .with_week(self.probe.week(a))
+                })
                 .collect::<Vec<_>>();
             (seen, self.probe.agents(&accounts))
         });
@@ -1239,6 +1252,8 @@ mod tests {
             since: NOON + i64::from(n),
             terminal: None,
             pid: 0,
+            title: None,
+            doing_now: None,
         };
         let (a, b, c) = (
             agent("claude-api-1", 1, Doing::Working),
@@ -1870,6 +1885,8 @@ mod tests {
             since: NOON,
             terminal: terminal.map(str::to_owned),
             pid: 4242,
+            title: None,
+            doing_now: None,
         };
         let m = module(&set, None);
         let (ctx, _) = Ctx::kept("agent-accounts", NOON);
@@ -1928,6 +1945,8 @@ mod tests {
             since: NOON,
             terminal: None,
             pid: 4242,
+            title: None,
+            doing_now: None,
         }];
         // A WINDOW resetting long after the rings below.
         *set.windows.lock().unwrap() = vec![(

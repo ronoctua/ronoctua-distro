@@ -29,6 +29,7 @@
 //! about touch still answers a finger.
 
 pub mod compose;
+pub mod corner;
 pub mod foot;
 pub mod handlers;
 pub mod keys;
@@ -135,6 +136,9 @@ pub struct Ui {
     /// WHAT THE WINDOW SAYS AND ASKS AT ITS FOOT, with no header — and what
     /// it explains there, in a foot it keeps ([`foot`]).
     pub foot: foot::Foot,
+    /// WHERE THE RIGHT END OF THE FIRST LINE SAID THE WINDOW'S NAME, or its
+    /// way back, with no header ([`corner`]).
+    pub corner: corner::Placed,
     /// Where the list's BAR was drawn on the last frame, if one was.
     ///
     /// The pointer asks this and nothing else about whether it is on the bar,
@@ -730,6 +734,7 @@ impl Ui {
             hinted: crate::chrome::Hinted::default(),
             room: crate::chrome::Room::default(),
             foot: foot::Foot::default(),
+            corner: corner::Placed::default(),
             conn,
             surface,
             pointer_seat: 0,
@@ -1408,6 +1413,9 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         sprites,
         ..
     } = canvas;
+    // THE NAME OR THE WAY BACK at the right end of the first line, with no
+    // header — where the window's own frame left the room ([`corner`]).
+    corner::paint(&*content, ui, &mut spans, &mut under, &pictures, bars);
     // WHAT THE WINDOW SAYS OR ASKS, at its foot, over nothing the window drew:
     // its rows were taken from the window's before it painted ([`foot`]) —
     // or, in a foot the window keeps, what it explains there.
@@ -2048,6 +2056,34 @@ pub trait Content: Sized + 'static {
         None
     }
 
+    /// WHETHER `TAB` WALKS ITS LIST'S SECTIONS — `Shift+TAB` back — as the
+    /// door does for every window whose rows have two titles or more
+    /// (`section_ring`, owner 2026-11-09). `true`, the default: a window
+    /// where `TAB` means something else says `false` (a ring of panes, the
+    /// file picker's filters), and keeps its own.
+    fn walks_sections(&self, ui: &Ui) -> bool {
+        let _ = ui;
+        true
+    }
+
+    /// WHAT THE RIGHT END OF ITS FIRST LINE SAYS while it wears no header
+    /// ([`corner`], owner 2026-11-09): its name, quiet, or on a page below
+    /// its first the way back, a click that is its `Esc`. The door draws it
+    /// only where the window's frame left room. `None`, the default: nothing.
+    fn corner(&self, ui: &Ui) -> Option<corner::Corner> {
+        let _ = ui;
+        None
+    }
+
+    /// THE SCREENS THIS WINDOW SHOWS ONE AT A TIME, as tabs the modeline
+    /// draws while it is in focus (owner, 2026-11-09: the icons' three sets):
+    /// each one of its shortcuts by command, its name and whether it is the
+    /// one shown. None by default — and fewer than two draw none.
+    fn tabs(&self, ui: &Ui) -> Vec<crate::ipc::WindowTab> {
+        let _ = ui;
+        Vec::new()
+    }
+
     /// Draws one frame. The default is the standard window: the header, the
     /// list under it, the hover of every cursor, and the list's bar.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
@@ -2433,6 +2469,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             hinted: fresh_hinted(&content),
             room: crate::chrome::Room::default(),
             foot: foot::Foot::default(),
+            corner: corner::Placed::default(),
             conn: conn.clone(),
             surface: shell.wl_surface().clone(),
             pointer_seat: 0,
@@ -2541,6 +2578,9 @@ struct ShortcutSnapshot {
     /// socket sits in `XDG_RUNTIME_DIR`, reachable by anything this user runs
     /// (the rule a buffer states for its own socket).
     known: std::collections::HashSet<String>,
+    /// One `ipc::tab_line` per tab ([`Content::tabs`]), newline-joined: the
+    /// `tabs` verb's answer.
+    tabs: String,
 }
 
 /// Serves this window's shortcuts on its per-PID socket, for a window the base
@@ -2586,6 +2626,9 @@ fn serve_shortcuts(
                     // `buffer_states` reads `None` rather than a state called
                     // `?` on the modeline.
                     None if line.trim() == "states" => String::new(),
+                    None if line.trim() == crate::ipc::TABS_VERB => {
+                        shared.lock().map(|s| s.tabs.clone()).unwrap_or_default()
+                    }
                     // ONLY A COMMAND THIS WINDOW DECLARED (`known`), as a
                     // buffer's socket does — the footer only ever sends back
                     // what it was just told.
@@ -2996,11 +3039,25 @@ impl<C: Content> Door<C> {
                     content.explains(id, &self.ui.texts)
                 })
             };
+            // AND ITS TABS, told the same way: the modeline draws them, and
+            // the one shown moves without a key of the set changing.
+            let tabs = if now.is_empty() {
+                String::new()
+            } else {
+                self.content
+                    .tabs(&self.ui)
+                    .iter()
+                    .filter(|t| now.iter().any(|b| b.command == t.command))
+                    .map(crate::ipc::tab_line)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
             let told = shared.lock().is_ok_and(|mut g| {
-                if g.answer == answer {
+                if g.answer == answer && g.tabs == tabs {
                     return false;
                 }
                 g.answer = answer;
+                g.tabs = tabs;
                 g.known = now.iter().map(|b| b.command.clone()).collect();
                 true
             });
@@ -3061,6 +3118,7 @@ impl<C: Content> Door<C> {
                 .ui
                 .foot
                 .pointed()
+                .or_else(|| self.ui.corner.pointed())
                 .or_else(|| self.ui.hinted.pointed())
                 .map(str::to_owned);
             if pointed != self.pointed_told.0 {
@@ -3631,6 +3689,29 @@ fn typed_into<C: Content>(
         }
         return;
     }
+    // `TAB` FROM SECTION TO SECTION — the door's, for every list with
+    // sections whose window does not keep the key (`section_ring`): the
+    // first click on the next section's first row, which only moves the
+    // cursor there.
+    if matches!(event.keysym, Keysym::Tab | Keysym::ISO_Left_Tab)
+        && !mods.ctrl
+        && !mods.alt
+        && !mods.logo
+        && content.walks_sections(ui)
+        && let Some(row) = crate::section_ring::landing(
+            &content.rows(ui),
+            &content.takes(ui),
+            content.cursor(),
+            mods.shift || event.keysym == Keysym::ISO_Left_Tab,
+        )
+    {
+        if content.cursor() != Some(row) {
+            content.clicked(ui, row);
+        }
+        ui.ask_paint();
+        follow_into(content, ui);
+        return;
+    }
     ui.esc_in_hand = EscInHand::of(
         is_esc(&event, mods),
         ui.repeating,
@@ -3807,6 +3888,16 @@ fn pointer_into<C: Content>(
                 e.kind,
                 PointerEventKind::Motion { .. } | PointerEventKind::Release { .. }
             );
+        // THE WAY BACK at the right end of the first line ([`corner`]): a
+        // press on it is the Back button's, the window's `Esc`.
+        match corner::pointer(ui, e) {
+            corner::Took::Passed => {}
+            corner::Took::Kept => continue,
+            corner::Took::Pressed => {
+                acts.push(None);
+                continue;
+            }
+        }
         if !the_windows_press {
             match foot::pointer(ui, e) {
                 foot::Took::Passed => {}

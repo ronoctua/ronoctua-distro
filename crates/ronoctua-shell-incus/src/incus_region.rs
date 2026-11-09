@@ -170,6 +170,11 @@ impl Region for IncusRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks the kinds.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// The stacked layout's lines, each clickable where it has something to
     /// take — which stretch, the click's cell says ([`Region::clicked_at`]).
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {

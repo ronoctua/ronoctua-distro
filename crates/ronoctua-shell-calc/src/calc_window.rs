@@ -729,6 +729,11 @@ impl Content for CalcWindow {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks the modes.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         texts.t(crate::key::CALC_TITLE)
     }

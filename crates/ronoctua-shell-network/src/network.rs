@@ -1528,6 +1528,13 @@ pub fn has_radio(net: &Snapshot) -> bool {
 }
 
 impl View {
+    /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
+    /// line says its way back, with no header (`door::corner`).
+    #[must_use]
+    pub fn below_the_first(&self) -> bool {
+        !matches!(self.level, Level::List)
+    }
+
     /// A fresh view, on the first row that is not a heading.
     #[must_use]
     pub fn fresh() -> Self {

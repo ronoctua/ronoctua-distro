@@ -527,6 +527,7 @@ impl Module for Reminders {
                 // glyph says nothing the glyph does not.
                 count: if count > 1 { count } else { 0 },
                 act: None,
+                told: Vec::new(),
             });
         }
         if let Some(last) = st.book.missed.last() {

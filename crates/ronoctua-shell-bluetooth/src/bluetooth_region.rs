@@ -248,6 +248,12 @@ impl crate::region::Region for BluetoothRegion {
         ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// on a device's page its `TAB` walks the two panes.
+    fn walks_sections(&self) -> bool {
+        !matches!(self.view.level(), crate::bluetooth::Level::Device(_))
+    }
+
     /// THE BLUETOOTH VIEW'S ROWS, as `fields`: two columns of its own. A
     /// row takes a click where one of its halves does (`View::takes`, the
     /// window's answer too), and the band then lights that half alone

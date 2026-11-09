@@ -369,6 +369,11 @@ impl Region for FastAccessRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` shows the detail.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// THE SEARCH: blank rows, as many as the region may hold — the view
     /// draws what is typed, its results and its detail over them itself
     /// ([`Region::paint`]), with the layout its pointer reads.

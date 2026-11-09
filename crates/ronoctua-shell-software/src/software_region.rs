@@ -402,6 +402,11 @@ impl Region for SoftwareRegion {
         ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` walks the sources.
+    fn walks_sections(&self) -> bool {
+        false
+    }
+
     /// The rows as drawn ([`SoftwareRegion::told_rows`]), without their
     /// pictures.
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {

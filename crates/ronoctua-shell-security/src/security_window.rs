@@ -275,8 +275,24 @@ impl Content for SecurityWindow {
         APP_ID
     }
 
+    /// `TAB` FROM SECTION TO SECTION (`section_ring`) — but where
+    /// the file picker's `TAB` walks its filters.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        !self.open.view.picking()
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::SECURITY_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::SECURITY_TITLE,
+            self.open.view.below_the_first(),
+        ))
     }
 
     /// A key, read by its whole notation through the reader the footer calls

@@ -371,8 +371,23 @@ impl Content for VideoMetricsWindow {
         APP_ID
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its question's `TAB` picks the answer.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
         format!("*{}*", texts.t(crate::key::VIDEO_METRICS_TITLE))
+    }
+
+    /// Its name at the right end of the first line, with no header — or, on
+    /// a page below the first, the way back (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named_or_back(
+            &ui.texts,
+            crate::key::VIDEO_METRICS_TITLE,
+            self.view.below_the_first(),
+        ))
     }
 
     /// A key, read by its whole notation through the reader the footer calls

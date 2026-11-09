@@ -96,6 +96,15 @@ impl Content for StickWindow {
         format!("*{}*", texts.t(crate::key::STICK_TITLE))
     }
 
+    /// Its name at the right end of the first line, with no header
+    /// (`door::corner`).
+    fn corner(&self, ui: &Ui) -> Option<crate::door::corner::Corner> {
+        Some(crate::door::corner::Corner::named(
+            &ui.texts,
+            crate::key::STICK_TITLE,
+        ))
+    }
+
     /// A key, by its whole notation, through the reader the footer calls too.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         if let Some(press) =

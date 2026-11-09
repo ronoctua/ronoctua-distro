@@ -573,9 +573,10 @@ pub struct MarkId {
     #[serde(default, skip_serializing_if = "is_false")]
     pub leads: bool,
     /// DECLARED: its count is a share IN PER CENT (`percent = true` in the
-    /// manifest) — the RAM in use, the disk filled — which the footer draws
-    /// with the language's per cent sign. A mark in per cent is one mark: no
-    /// instance (its digit would stand where the share is) and no set.
+    /// manifest) — the RAM in use, the disk filled, an account's week — which
+    /// the footer draws with the language's per cent sign. A mark in per cent
+    /// is one mark or a set's LEAD: no instance (its digit would stand where
+    /// the share is), and no other member of a set.
     #[serde(default, skip_serializing_if = "is_false")]
     pub percent: bool,
     /// Which set it stands in, from 1; `0` for a mark in none. The set is
@@ -871,12 +872,48 @@ pub struct Mark {
     /// its id instead ([`MarkId::opens`]): ONE way for a mark to open a
     /// command, and it is typed, not a prefix on a string.
     pub act: Option<Word>,
+    /// WHAT THE POINTER IS TOLD BESIDES THE HINT: sentences of the module's
+    /// own keys with their values, said after the hint while the pointer
+    /// rests on the mark — an account's week and when it starts over, what an
+    /// agent is working on (owner, 2026-11-09). The shell formats the values
+    /// (a moment in the person's date and zone); empty for most marks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub told: Vec<Told>,
     // THE 2026-10-05 WAVE: a mark's instance and its label, after its anchor.
     // ── anchor: L11 ──
     // (They live on the id — `MarkId::instance` and `MarkId::label`, set with
     // `MarkId::numbered` — beside everything else the segment is made of; see
     // `MarkId`. A mark with an instance names no `act`: the core refuses it,
     // since a module action would not know which instance was clicked.)
+}
+
+/// A sentence a mark tells the pointer besides its hint ([`Mark::told`]):
+/// a key of the module's own, and its values.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct Told {
+    /// What it says, as a text key.
+    pub says: Word,
+    /// The sentence's values.
+    pub args: Args,
+}
+
+impl Told {
+    /// A sentence that says this.
+    #[must_use]
+    pub fn of(says: &'static str) -> Self {
+        Self {
+            says: Cow::Borrowed(says),
+            args: Vec::new(),
+        }
+    }
+
+    /// The same, with one more value for the sentence.
+    #[must_use]
+    pub fn with(mut self, name: &'static str, arg: Arg) -> Self {
+        self.args.push((Cow::Borrowed(name), arg));
+        self
+    }
 }
 
 /// The colour a mark or a row is drawn in — a MEANING, one token each in the
@@ -1323,6 +1360,7 @@ mod tests {
                 tone: Tone::Watching,
                 count: 3,
                 act: None,
+                told: Vec::new(),
             }],
             notices: vec![notice],
             items: vec![Item {
@@ -1440,6 +1478,7 @@ mod tests {
             tone,
             count: 0,
             act: None,
+            told: Vec::new(),
         };
         let full = MARKS[0].clone();
         let seat = MARKS[1].clone();
@@ -1588,6 +1627,7 @@ mod tests {
             tone: Tone::Warning,
             count: 0,
             act: None,
+            told: Vec::new(),
         }
     }
 

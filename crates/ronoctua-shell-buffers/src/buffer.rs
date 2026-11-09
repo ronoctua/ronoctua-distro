@@ -4252,9 +4252,24 @@ impl Content for Host {
         self.app_id
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` is the component's.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     // THE TITLE AND THE `app_id` COME FROM THE DESCRIPTOR — see `host_it`.
     fn title(&self, _: &ronoctua_i18n::Texts) -> String {
         self.title.clone()
+    }
+
+    /// THE TITLE THE COMPONENT DECLARES (`Screen::heading`), at the right end
+    /// of the first line with no header (`door::corner`) — where the
+    /// component's own frame left the room.
+    fn corner(&self, _: &Ui) -> Option<crate::door::corner::Corner> {
+        self.declared
+            .title
+            .clone()
+            .map(crate::door::corner::Corner::Name)
     }
 
     /// No margin of the door's: a buffer counts from its own inset

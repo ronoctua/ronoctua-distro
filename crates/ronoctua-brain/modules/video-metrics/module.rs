@@ -294,6 +294,7 @@ impl Module for VideoMetrics {
                 tone: Tone::Watching,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             });
         } else if k.last.is_some_and(|l| l.failed_everywhere()) {
             face.marks.push(Mark {
@@ -301,6 +302,7 @@ impl Module for VideoMetrics {
                 tone: Tone::Danger,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             });
         }
         face

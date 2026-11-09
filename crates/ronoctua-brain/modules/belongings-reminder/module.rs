@@ -210,6 +210,7 @@ impl Seen {
             tone,
             count,
             act: None,
+            told: Vec::new(),
         })
     }
 

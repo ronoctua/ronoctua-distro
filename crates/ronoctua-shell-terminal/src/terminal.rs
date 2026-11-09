@@ -2439,6 +2439,11 @@ impl Content for TerminalWindow {
         self.identity.app_id()
     }
 
+    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` is the program's.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
+    }
+
     /// What the program in front called the window — or the one whose strip
     /// line the pointer rests on — or the identity's own name.
     fn title(&self, texts: &ronoctua_i18n::Texts) -> String {

@@ -918,6 +918,7 @@ impl Module for JournalErrors {
                 },
                 count: u32::try_from(unseen).unwrap_or(u32::MAX),
                 act: None,
+                told: Vec::new(),
             });
         }
         face

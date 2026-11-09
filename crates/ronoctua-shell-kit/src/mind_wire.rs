@@ -736,7 +736,10 @@ pub fn arg_text(
         Arg::Number(n) => n.to_string(),
         Arg::Bytes(b) => crate::sizes::readable_bytes(*b, texts.decimal_mark()),
         Arg::PerMille(p) => format!("{}{}{}", p / 10, texts.decimal_mark(), p % 10),
-        Arg::Moment(at) => iso(*at, zone),
+        // A MOMENT IN THE PERSON'S SHAPE (`when::prefs`), as every date this
+        // interface writes: an account's week starting over read `2026-11-10
+        // 14:00` beside a clock and a file manager that wrote `10-nov-2026`.
+        Arg::Moment(at) => crate::chrome::when_text(*at, zone, false, texts),
     }
 }
 

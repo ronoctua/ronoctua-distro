@@ -109,8 +109,9 @@ impl Column {
     /// How many cells this column wants.
     ///
     /// Fixed for everything but the name, which takes what is left. `Modified`
-    /// is sixteen because that is `2026-08-20 14:32` exactly, and a date column
-    /// that elides is a date column that lies about the year.
+    /// is seventeen because that is `20-ago-2026 14:32` exactly, the widest of
+    /// the date's shapes (`when::Order`), and a date column that elides is a
+    /// date column that lies about the year.
     pub const fn width(self) -> u16 {
         match self {
             // THE GLYPH, AND NOTHING ELSE. The air is the columns' own `gap`,
@@ -133,7 +134,7 @@ impl Column {
             Self::Owner | Self::Group => 8,
             // `1023,9 KiB` is the longest a size gets.
             Self::Size => 10,
-            Self::Modified => 16,
+            Self::Modified => 17,
         }
     }
 }

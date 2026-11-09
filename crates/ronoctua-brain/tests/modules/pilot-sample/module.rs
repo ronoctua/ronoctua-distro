@@ -55,6 +55,7 @@ impl Module for PilotSample {
                 tone: Tone::Warning,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             });
         }
         face

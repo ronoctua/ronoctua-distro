@@ -806,13 +806,26 @@ pub struct Drawn {
     /// (`MarkId::key`): the module's word for the one thing it stands for.
     /// Never interned: there are as many as there are agents.
     pub key: Option<String>,
+    /// What the pointer is told besides the hint (`Mark::told`), each
+    /// sentence made in the person's language, date and zone.
+    pub told: Vec<String>,
 }
 
-/// The marks one mind publishes, in the order the modules published them.
+/// The marks one mind publishes, in the order the modules published them —
+/// what they tell the pointer made in `zone`.
 #[must_use]
-pub fn marks(mind: Option<&Mind>, texts: &ronoctua_i18n::Texts) -> Vec<Drawn> {
-    mind.map(|m| m.marks.iter().filter_map(|p| drawn_of(p, texts)).collect())
-        .unwrap_or_default()
+pub fn marks(
+    mind: Option<&Mind>,
+    zone: &ronoctua_files::when::Zone,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<Drawn> {
+    mind.map(|m| {
+        m.marks
+            .iter()
+            .filter_map(|p| drawn_of(p, zone, texts))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Remembers the marks about to be drawn, for [`colour_of`], [`drawn_mark`]
@@ -826,7 +839,11 @@ pub fn remember(drawn: &[Drawn]) {
 }
 
 /// One published mark, drawn — or none, past [`NAMES_KEPT`].
-fn drawn_of(posted: &Posted<Mark>, texts: &ronoctua_i18n::Texts) -> Option<Drawn> {
+fn drawn_of(
+    posted: &Posted<Mark>,
+    zone: &ronoctua_files::when::Zone,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Drawn> {
     let mark = &posted.what;
     // `brain:<module>/<mark>`, and `brain:<module>/<mark>.<n>` for one of its
     // instances — each its own segment, hint and click. A MARK OF A SET is
@@ -869,6 +886,11 @@ fn drawn_of(posted: &Posted<Mark>, texts: &ronoctua_i18n::Texts) -> Option<Drawn
         set: mark.id.set,
         leads: mark.id.leads,
         key: mark.id.key.as_deref().map(ToOwned::to_owned),
+        told: mark
+            .told
+            .iter()
+            .map(|t| crate::mind_wire::sentence(&t.says, &t.args, zone, texts))
+            .collect(),
     })
 }
 
@@ -1080,6 +1102,19 @@ pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
     (!d.hint.is_empty()).then(|| {
         let number = number_of(d).to_string();
         let own = texts.t_args(&d.hint, &hint_args(d, &number));
+        // AND WHAT IT TELLS BESIDES, FIRST (owner, 2026-11-09): an account's
+        // week and when it starts over, what an agent is working on — what
+        // the hand came for, and the hint after it is the part a short line
+        // cuts.
+        let own = d.told.iter().rev().fold(own, |said, told| {
+            texts.t_args(
+                crate::key::BRAIN_MARK_ALSO,
+                &[
+                    ("first", ronoctua_i18n::Arg::Text(told)),
+                    ("then", ronoctua_i18n::Arg::Text(&said)),
+                ],
+            )
+        });
         // EVERY OTHER CASE, after the mark's own (owner, 2026-11-02): the
         // shield of two things that are off said one of them, and the other
         // went unread. A case is never an instance (the core refuses one),
@@ -1974,6 +2009,7 @@ mod tests {
                         tone: Tone::Danger,
                         count: 3,
                         act: None,
+                        told: Vec::new(),
                     },
                 },
                 Posted {
@@ -1983,12 +2019,13 @@ mod tests {
                         tone: Tone::Watching,
                         count: 0,
                         act: Some("seen".into()),
+                        told: Vec::new(),
                     },
                 },
             ],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m), &words());
+        let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         assert_eq!(drawn.len(), 2);
         assert_eq!(drawn[0].id, "brain:fixture/full");
         assert!(is_mark(drawn[0].id));
@@ -2028,11 +2065,18 @@ mod tests {
             ("brain-act", "fixture-watch command:fixture-open".to_owned())
         );
         // THE SAME ID IS THE SAME STATIC, however often it is asked for.
-        let again = marks(Some(&m), &words());
+        let again = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         assert!(std::ptr::eq(again[0].id, drawn[0].id));
         // AND AT REST, NOTHING — the modeline says nothing it does not mean.
-        assert!(marks(Some(&Mind::default()), &words()).is_empty());
-        assert!(marks(None, &words()).is_empty());
+        assert!(
+            marks(
+                Some(&Mind::default()),
+                &ronoctua_files::when::Zone::utc(),
+                &words()
+            )
+            .is_empty()
+        );
+        assert!(marks(None, &ronoctua_files::when::Zone::utc(), &words()).is_empty());
     }
 
     /// FAILS IF: a mark that stands for several cases says only its own
@@ -2050,6 +2094,7 @@ mod tests {
                 tone: Tone::Danger,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             },
         };
         // THE HINT: the mark's own, then each other case's with its count —
@@ -2060,7 +2105,7 @@ mod tests {
             marks: vec![posted("fixture", own.besides(&counting, 4))],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m), &words());
+        let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         let texts = words();
         let alone = Drawn {
             also: Vec::new(),
@@ -2092,6 +2137,7 @@ mod tests {
                     marks: vec![posted(watch, id)],
                     ..Mind::default()
                 }),
+                &ZONE,
                 &words(),
             );
             let (command, argument) = click_of(&drawn[0]);
@@ -2133,11 +2179,12 @@ mod tests {
                     tone: Tone::Watching,
                     count: 2,
                     act: None,
+                    told: Vec::new(),
                 },
             }],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m), &words());
+        let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         assert_eq!(click_of(&drawn[0]), ("fixture-open", String::new()));
     }
 
@@ -2157,13 +2204,14 @@ mod tests {
                 tone: Tone::Quiet,
                 count,
                 act: None,
+                told: Vec::new(),
             },
         };
         let m = Mind {
             marks: vec![posted(1, Some("home"), 0), posted(3, None, 0)],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m), &words());
+        let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         assert_eq!(
             drawn.iter().map(|d| d.id).collect::<Vec<_>>(),
             ["brain:fixture/seat.1", "brain:fixture/seat.3"]
@@ -2228,6 +2276,7 @@ mod tests {
                 tone: Tone::Warning,
                 count,
                 act: None,
+                told: Vec::new(),
             },
         };
         let share = MarkId::of("ram", "fixture-ram", "fixture-mark-ram").in_per_cent();
@@ -2237,12 +2286,59 @@ mod tests {
                 marks: vec![posted(share, 91), posted(things, 3)],
                 ..Mind::default()
             }),
+            &ZONE,
             &words(),
         );
         assert!(drawn[0].text.ends_with(" 91%"), "{:?}", drawn[0].text);
         assert!(drawn[1].text.ends_with(" 3"), "{:?}", drawn[1].text);
         // THE HINT SAYS THE SAME NUMBER, as its `$count`.
         assert_eq!(drawn[0].count, 91);
+    }
+
+    /// FAILS IF: what a mark tells besides its hint is not said before it, in
+    /// the person's words — an account's week and when it starts over, with
+    /// the share beside a lead that counts in per cent (owner, 2026-11-09).
+    #[test]
+    fn a_mark_tells_what_it_was_given_before_its_hint() {
+        use ronoctua_brain::module::{Arg, Told};
+        let lead = MarkId::declared_in_sets(
+            "lead",
+            "fixture-lead",
+            "cmd-minibuffer-close",
+            0,
+            true,
+            9,
+            true,
+        )
+        .in_per_cent()
+        .in_set(1, Some("Work".to_owned()));
+        let m = Mind {
+            marks: vec![Posted {
+                module: "fixture".to_owned(),
+                what: Mark {
+                    id: lead,
+                    tone: Tone::Warning,
+                    count: 85,
+                    act: None,
+                    // 2026-10-10 14:32 UTC — a moment, made by the shell.
+                    told: vec![
+                        Told::of("locale-source-answered")
+                            .with("when", Arg::Moment(1_791_642_720))
+                            .with("host", Arg::Text("example.org".to_owned())),
+                    ],
+                },
+            }],
+            ..Mind::default()
+        };
+        let drawn = marks(Some(&m), &ZONE, &words());
+        assert!(drawn[0].text.ends_with(" 85%"), "{:?}", drawn[0].text);
+        let said = hint_in(&drawn[0], &words()).expect("a hint");
+        let (told, own) = said.split_once(" · ").expect("told before the hint");
+        assert!(
+            told.contains("example.org") && told.contains("14:32"),
+            "{told}"
+        );
+        assert_eq!(own, words().t("cmd-minibuffer-close"));
     }
 
     /// FAILS IF: a mark's instances read on the modeline in any order but
@@ -2258,6 +2354,7 @@ mod tests {
                 tone: Tone::Warning,
                 count: 0,
                 act: None,
+                told: Vec::new(),
             },
         };
         let m = Mind {
@@ -2276,7 +2373,7 @@ mod tests {
             ],
             ..Mind::default()
         };
-        let drawn = marks(Some(&m), &words());
+        let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
         let pushed: Vec<&str> = from_the_edge(&drawn).iter().map(|d| d.id).collect();
         assert_eq!(
             pushed,
@@ -2351,6 +2448,7 @@ mod tests {
                 tone,
                 count,
                 act: None,
+                told: Vec::new(),
             },
         };
         vec![
@@ -2384,6 +2482,7 @@ mod tests {
                 marks: a_set(2),
                 ..Mind::default()
             }),
+            &ZONE,
             &words(),
         );
         assert!(drawn.iter().all(|d| d.id == "brain:fixture/2"), "{drawn:?}");
@@ -2459,6 +2558,7 @@ mod tests {
                 marks: a_set(1),
                 ..Mind::default()
             }),
+            &ZONE,
             &words(),
         );
         let all = sets(&drawn);

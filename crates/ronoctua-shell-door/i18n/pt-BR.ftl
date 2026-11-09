@@ -86,6 +86,10 @@ brain-proceed = começar já
 # O que as portas dizem quando um daemon recusou, e o que a janela não faz.
 door-no-footer = Não foi possível chegar ao rodapé para rodar isto
 door-esc-again = { $keys } de novo fecha esta janela
+# THE WAY BACK at the right end of a window's first line, with no header
+# (`door::corner`), and what the minibuffer says of it under the pointer.
+door-corner-back = Voltar
+door-corner-back-does = Volta uma página, como o { $keys } desta janela.
 door-message-dismiss = tirar a mensagem
 # O que um clique ou uma tecla faz com o que o pé próprio de uma janela
 # explica, com o que vai acontecer (`door::foot::gesture`): a tecla é do código.
