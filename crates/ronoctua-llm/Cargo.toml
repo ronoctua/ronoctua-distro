@@ -60,6 +60,11 @@ ronoctua-xdg = { path = "../ronoctua-xdg" }
 ronoctua-memory = { path = "../ronoctua-memory" }
 # Codex's compressed logs.
 ruzstd.workspace = true
+# WHAT OUR STATUS LINE SAYS when it has no line of the person's to chain
+# (`statusline::said`): its sentences are this crate's (`i18n/`), read from
+# the texts the CLI's wrapper hands it (`RONOCTUA_TEXTS`, `painters` in
+# `nix/rust.nix`).
+ronoctua-i18n = { path = "../ronoctua-i18n" }
 
 [dev-dependencies]
 # A test mints its passes from a consent file of its own; the helpers that
@@ -71,4 +76,4 @@ workspace = true
 
 [package.metadata.ronoctua]
 # What this crate reads and what its programs are: `nix/rust/units.nix`.
-env = ["RONOCTUA_CACHE_RS", "RONOCTUA_LLM_ENV", "RONOCTUA_LLM_SH"]
+env = ["RONOCTUA_CACHE_RS", "RONOCTUA_KEYS_DIR", "RONOCTUA_LLM_ENV", "RONOCTUA_LLM_SH"]

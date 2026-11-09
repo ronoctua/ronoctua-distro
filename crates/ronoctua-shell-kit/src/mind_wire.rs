@@ -736,6 +736,10 @@ pub fn arg_text(
         Arg::Number(n) => n.to_string(),
         Arg::Bytes(b) => crate::sizes::readable_bytes(*b, texts.decimal_mark()),
         Arg::PerMille(p) => format!("{}{}{}", p / 10, texts.decimal_mark(), p % 10),
+        Arg::Percent(p) => texts.t_args(
+            crate::key::MIND_PERCENT,
+            &[("percent", ronoctua_i18n::Arg::Number(i64::from(*p)))],
+        ),
         // A MOMENT IN THE PERSON'S SHAPE (`when::prefs`), as every date this
         // interface writes: an account's week starting over read `2026-11-10
         // 14:00` beside a clock and a file manager that wrote `10-nov-2026`.
@@ -777,6 +781,51 @@ pub fn sentence(
         })
         .collect();
     texts.t_args(key, &fluent)
+}
+
+/// What a mark tells the pointer ([`ronoctua_brain::module::Told`]), made as
+/// the minibuffer draws it: the sentence in what the line says, and each
+/// value the module stresses in an ink of its own
+/// ([`crate::chrome::Register::Figure`]; owner, 2026-11-09).
+#[must_use]
+pub fn told_runs(
+    told: &ronoctua_brain::module::Told,
+    zone: &ronoctua_files::when::Zone,
+    texts: &ronoctua_i18n::Texts,
+) -> Vec<crate::chrome::Piece> {
+    let texts_of: Vec<Option<String>> = told
+        .args
+        .iter()
+        .map(|(_, a)| match a {
+            Arg::Number(_) => None,
+            other => Some(arg_text(other, zone, texts)),
+        })
+        .collect();
+    let fluent: Vec<(&str, ronoctua_i18n::Arg<'_>)> = told
+        .args
+        .iter()
+        .zip(&texts_of)
+        .map(|((name, a), text)| {
+            let value = match (a, text) {
+                (Arg::Number(n), _) => ronoctua_i18n::Arg::Number(*n),
+                (_, Some(t)) => ronoctua_i18n::Arg::Text(t.as_str()),
+                (_, None) => ronoctua_i18n::Arg::Text(""),
+            };
+            (name.as_ref(), value)
+        })
+        .collect();
+    crate::chrome::marked_sentence(
+        texts,
+        &told.says,
+        &fluent,
+        |name| {
+            told.stressed
+                .iter()
+                .any(|s| s == name)
+                .then_some(crate::chrome::Register::Figure)
+        },
+        crate::chrome::Register::Said,
+    )
 }
 
 /// What is in the way, as the WIT names it.

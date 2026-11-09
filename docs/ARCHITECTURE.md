@@ -18975,9 +18975,10 @@ módulo do brain e a vista (L24) perguntam ao crate; o shell só lê o arquivo q
   à geração, e um caminho do store apontaria para um programa que a próxima coleta apaga — por isso
   o CLI está no PATH dos dois perfis (`nix/modules/llm.nix`). Ele guarda os limites e ENCADEIA:
   roda a linha da pessoa com o mesmo stdin, num shell (o Claude Code também roda num shell), e o
-  stdout e o código de saída dela são os nossos; sem nada para encadear, não imprime nada (cobra
-  `statusline-chains`). Uma linha que a pessoa pôs depois do embrulho é dela: o `wrapped` diz
-  `Replaced`, a vista oferece embrulhar de novo, e o `unwrap` a deixa em paz. A linha guardada é
+  stdout e o código de saída dela são os nossos; sem nada para encadear, diz as janelas da resposta,
+  usadas e quanto falta para recomeçar (`statusline::said`; cobra `statusline-chains`). Uma linha
+  que a pessoa pôs depois do embrulho é dela: o `wrapped` diz `Replaced`, a vista oferece embrulhar
+  de novo, e o `unwrap` a deixa em paz. A linha guardada é
   achada pela conta na lista e, quando a lista não a tem mais (editada à mão, ou ilegível), na pasta
   em que o Claude Code nos roda (`CLAUDE_CONFIG_DIR`, ou `~/.claude` sem ela), conferindo que foi
   guardada para aquela conta: a linha da pessoa nunca fica em branco, calada, atrás de um nome que
@@ -20817,8 +20818,9 @@ de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
   existe, vigia a pasta existente mais próxima até ela nascer (`Watching::ancestors`).
 - **O conjunto é o lugar na lista.** O conjunto de uma conta é o lugar dela na lista inteira (não
   dentro do tipo), e o clique no glifo da conta entrega esse número ao `agents-open`, que abre a
-  vista com o cursor naquela conta (`View::aim_at_place`); o de um agente entrega a sessão ao
-  `agents-show`, que vai à janela dele. Nove contas no máximo.
+  vista na aba daquela conta (`View::aim_at_place`), e o clique direito ao `agents-session`, que
+  abre um agente novo dela (`MarkId::aside`); o de um agente entrega a sessão ao `agents-show`, que
+  vai à janela dele. Nove contas no máximo.
 - **Ler é numa thread.** Uma leitura abre credenciais, os números guardados, a contagem e o fim dos
   logs mais novos de uma conta do Codex; as duas portas a pedem a uma thread (`read_off_the_loop`),
   uma de cada vez, e a resposta chega pelo laço. Um `refresh` (contar e perguntar ao endpoint, com o
@@ -20839,10 +20841,12 @@ de uso — mora no `why.md` dele; aqui fica o que as duas metades combinam.
   módulo a ouvem desde o início); a lista é editada sobre o que o arquivo diz agora
   (`Accounts::keep`); numa conta do Claude Code a nossa statusline vai na frente da da pessoa, porque
   os limites vêm dela; e o login abre no nosso terminal. Sessão e login são a linha de comando do
-  crate (`launch_arguments`, `login_arguments`) dentro de `ronoctua-shell terminal`, com a vista
-  fechada antes (a regra do lançador). O programa do agente chega ao rodapé pelo ambiente
-  (`nix/modules/agents.nix`, `RONOCTUA_CLAUDE`/`RONOCTUA_CODEX`, cada um seguindo o seu programa no
-  registro), nunca compilado: o Claude Code é unfree.
+  crate (`launch_arguments`, `login_arguments`) dentro de `ronoctua-shell terminal --cwd`, numa
+  pasta que a pessoa escolhe antes no seletor de arquivos (modo pasta), aberto onde o último agente
+  da conta abriu (`ronoctua_llm::workspaces`), com a vista fechada antes (a regra do lançador). O
+  programa do agente chega ao rodapé pelo ambiente (`nix/modules/agents.nix`,
+  `RONOCTUA_CLAUDE`/`RONOCTUA_CODEX`, cada um seguindo o seu programa no registro), nunca compilado:
+  o Claude Code é unfree.
 - **Remover pergunta antes, "não" primeiro.** A pasta fica (com as sessões e o login), mas uma conta
   acrescentada de novo ganha outra pasta, então a pergunta aparece na vista com o cursor no "não" e
   o "sim" na cor de perigo. Numa conta do Claude Code a frase diz que a statusline dela volta.

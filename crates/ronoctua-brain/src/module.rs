@@ -525,6 +525,12 @@ pub struct MarkId {
     /// else its set's — nothing for a mark that is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opens: Option<Word>,
+    /// THE COMMAND THE OTHER BUTTON RUNS, when the mark means a second thing
+    /// from it (owner, 2026-11-09: a right click on an account opens a new
+    /// agent of it, where the left opens the account) — handed the same
+    /// argument as [`MarkId::opens`]. `None`: either button runs the one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aside: Option<Word>,
     /// DECLARED: how many of it a module may show at once (`instances = N`
     /// in the manifest, from 1 to 9 — `nix/brain-modules.nix` refuses any
     /// other); `0` is a mark that is one. The core reads it from the
@@ -672,6 +678,7 @@ impl MarkId {
             glyph: Cow::Borrowed(glyph),
             hint: Cow::Borrowed(hint),
             opens: None,
+            aside: None,
             instances,
             resting,
             instance: 0,
@@ -714,6 +721,16 @@ impl MarkId {
     pub fn opening(&self, command: &'static str) -> Self {
         Self {
             opens: Some(Cow::Borrowed(command)),
+            ..self.clone()
+        }
+    }
+
+    /// The same mark, its OTHER button running the shell's command `command`
+    /// — see [`MarkId::aside`].
+    #[must_use]
+    pub fn opening_aside(&self, command: &'static str) -> Self {
+        Self {
+            aside: Some(Cow::Borrowed(command)),
             ..self.clone()
         }
     }
@@ -896,6 +913,12 @@ pub struct Told {
     pub says: Word,
     /// The sentence's values.
     pub args: Args,
+    /// THE VALUES IT STRESSES, by name — what the hand came for (an
+    /// account's week used, an agent's task), which the shell draws in a
+    /// colour of their own (owner, 2026-11-09). Every other value reads as
+    /// the sentence around it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stressed: Vec<Word>,
 }
 
 impl Told {
@@ -905,6 +928,7 @@ impl Told {
         Self {
             says: Cow::Borrowed(says),
             args: Vec::new(),
+            stressed: Vec::new(),
         }
     }
 
@@ -913,6 +937,13 @@ impl Told {
     pub fn with(mut self, name: &'static str, arg: Arg) -> Self {
         self.args.push((Cow::Borrowed(name), arg));
         self
+    }
+
+    /// The same, with one more value — STRESSED ([`Told::stressed`]).
+    #[must_use]
+    pub fn stressing(mut self, name: &'static str, arg: Arg) -> Self {
+        self.stressed.push(Cow::Borrowed(name));
+        self.with(name, arg)
     }
 }
 
@@ -1029,6 +1060,9 @@ pub enum Arg {
     Bytes(u64),
     /// A proportion, in per mille.
     PerMille(u16),
+    /// A share in per cent, whole — drawn with the language's per cent sign,
+    /// the sign part of the value (an account's week used, stressed whole).
+    Percent(u32),
     /// An instant, in the person's zone.
     Moment(Moment),
 }

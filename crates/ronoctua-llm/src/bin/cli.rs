@@ -3,8 +3,9 @@
 //! - `statusline --profile <id>`: what Claude Code runs as the account's
 //!   status line (ours, wrapped in front of the person's). Keeps the limits
 //!   its stdin says, then chains the person's own line with the same stdin,
-//!   passing its stdout and exit code through; prints nothing when there is
-//!   nothing to chain. It never fails the person's line for a reason of ours.
+//!   passing its stdout and exit code through; with nothing to chain, says
+//!   the account's windows itself. It never fails the person's line for a
+//!   reason of ours.
 //! - `refresh [--profile <id>]`: what the usage unit runs. Counts each
 //!   account's transcripts (from where the last count stopped) and, for a
 //!   Claude account, asks the usage endpoint when the person let its host —
@@ -108,12 +109,26 @@ fn run_statusline(id: &str) -> i32 {
     {
         eprintln!("ronoctua-llm: the status line's input did not read: {e}");
     }
-    statusline::run(
-        id,
-        &input,
-        &statusline::Chain::of_env(),
-        std::process::Stdio::inherit(),
-    )
+    let chain = statusline::Chain::of_env();
+    let code = statusline::run(id, &input, &chain, std::process::Stdio::inherit());
+    // NOBODY'S LINE TO CHAIN: ours says the windows (`statusline::said`) —
+    // in the person's language, or nothing when the texts cannot be had:
+    // the line is never failed for a reason of ours.
+    if !chain.chained && !statusline::chains(&chain, id) {
+        let keys = ronoctua_i18n::Keys::of(ronoctua_llm::key::sets);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let language = statusline::language(chain.roots.config.as_deref());
+        if let Some(line) = ronoctua_i18n::Texts::checked(&language, &keys)
+            .ok()
+            .flatten()
+            .and_then(|texts| statusline::said(&input, now, &texts))
+        {
+            println!("{line}");
+        }
+    }
+    code
 }
 
 /// The usage unit's run: every account (or one), counted and asked — the

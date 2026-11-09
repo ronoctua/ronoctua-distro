@@ -18,6 +18,14 @@
 //! terminal from here, and what came of a gesture is said on this window's
 //! line.
 //!
+//! # Two columns, the footer's page
+//!
+//! The rows are the view's, laid side by side through the same
+//! [`crate::agents::Page`] the footer's region draws by; the pointer lights
+//! the half of a line, or the tab, a click there takes — the cell of a press
+//! is caught where the pointer is read ([`Content::pointer`]), since a click
+//! is handed only its row.
+//!
 //! # What a photograph reaches
 //!
 //! Nothing past the door: a photograph that pressed `n` would open a
@@ -25,13 +33,17 @@
 //! Both go through one field ([`Reach`]); a photograph's writes down what
 //! would have happened instead, and reads on the spot ([`Reader::Here`]).
 
-use crate::agents::{Open, Press};
+use crate::agents::Open;
 pub use crate::agents::{Reach, Reader};
-use crate::door::{Content, Door, Ui};
+use crate::door::{Canvas, Content, Door, Hand, Ui};
 use anyhow::Result;
+use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
     reexports::calloop,
-    seat::keyboard::{KeyEvent, Modifiers},
+    seat::{
+        keyboard::{KeyEvent, Modifiers},
+        pointer::{PointerEvent, PointerEventKind},
+    },
 };
 
 /// The window's `app_id`.
@@ -74,6 +86,13 @@ pub struct AgentsWindow {
     /// The one clock, at the nearest reset shown (`agents::next_reset`):
     /// when it rings, and its place on the loop.
     clock: Option<(i64, calloop::RegistrationToken)>,
+    /// The cell of the line the last press landed on — a click is handed
+    /// only its row, and side by side the cell says which half, or which
+    /// tab.
+    clicked_cell: Option<u16>,
+    /// The width and the words last laid out with, for the cursor's line
+    /// (`Content::cursor` is asked with no `Ui`).
+    laid: std::cell::RefCell<Option<(u16, std::rc::Rc<ronoctua_i18n::Texts>)>>,
 }
 
 impl AgentsWindow {
@@ -91,6 +110,8 @@ impl AgentsWindow {
             open: Open::new(zone, reader, reach, place, OPENING_COLUMNS, texts),
             loop_handle: None,
             clock: None,
+            clicked_cell: None,
+            laid: std::cell::RefCell::new(None),
         }
     }
 
@@ -127,15 +148,60 @@ impl AgentsWindow {
         }
     }
 
-    /// What one key means — from the keyboard, or `RET` from a second click.
-    fn pressed(&mut self, ui: &mut Ui, press: Press) {
-        ui.message = None;
-        self.open.press(press, ui);
-        self.arm_the_clock();
-    }
-
+    /// The view's rows, one list — what a test stands on.
+    #[cfg(test)]
     fn view_rows(&self, ui: &Ui) -> Vec<crate::agents::Row> {
         self.open.rows(ui.columns, &ui.texts)
+    }
+
+    /// The rows and the page they are drawn on.
+    fn page(&self, ui: &Ui) -> (Vec<crate::agents::Row>, crate::agents::Page) {
+        self.laid
+            .replace(Some((ui.columns, std::rc::Rc::clone(&ui.texts))));
+        self.open.page(ui.columns, &ui.texts)
+    }
+
+    /// THE POINTER LIGHTS WHAT THE CLICK TAKES: each hand's band laid only
+    /// where a click there takes something (`Page::lit`, the footer's own
+    /// answer) — the half of a line side by side, a tab, the whole line in
+    /// one list. Its own function, so a test holds it: a frame's canvas
+    /// needs a GPU.
+    fn hover(&self, ui: &Ui, pointers: &[Pointing]) -> Vec<ronoctua_render::quad::Quad> {
+        use crate::region::Lit;
+        let (rows, page) = self.page(ui);
+        let cell_px = ui.frame(0).cell();
+        let all = vec![true; page.lines.len()];
+        let mut out = Vec::new();
+        for &((colour, line), x) in pointers {
+            let Some(line) = line else {
+                continue;
+            };
+            let cell = x.and_then(|x| cell_at(ui, f64::from(x)));
+            let stretch = match page.lit(line, cell, &rows) {
+                Lit::Nothing => continue,
+                Lit::Row => None,
+                Lit::Cells(from, to) => Some((from, to)),
+            };
+            for mut band in crate::door::list::hover_bands(
+                &[(colour, Some(line))],
+                &all,
+                None,
+                ui.offset,
+                ui.room_for_rows(),
+                page.lines.len(),
+                ui.first_of_list(),
+                ui.room.band_width(),
+            ) {
+                if let Some((from, to)) = stretch {
+                    let left = f32::from(ui.margin + from) * cell_px;
+                    let right = (f32::from(ui.margin + to) * cell_px).min(band.width);
+                    band.x = if from == 0 { 0.0 } else { left };
+                    band.width = (right - band.x).max(0.0);
+                }
+                out.push(band);
+            }
+        }
+        out
     }
 
     /// What would have happened — a photograph's.
@@ -166,13 +232,24 @@ impl Content for AgentsWindow {
     }
 
     /// A key, read by its whole notation through the reader the footer calls
-    /// too (`agents::press_of_key`).
+    /// too (`Open::key`): the file picker's, while it is up, then the view's.
     fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
-        if let Some(press) =
-            crate::door::keys::key_of(event, mods).and_then(crate::agents::press_of_key)
-        {
-            self.pressed(ui, press);
+        if let Some(key) = crate::door::keys::key_of(event, mods) {
+            ui.message = None;
+            self.open.view.page_is(ui.room_for_rows());
+            self.open.key(key, ui);
+            self.arm_the_clock();
         }
+    }
+
+    /// The clipboard's text, read off the loop for the file picker's `C-v`.
+    fn pasted(&mut self, ui: &mut Ui, text: &str) {
+        self.open.pasted(text, ui);
+    }
+
+    /// `TAB` crosses the columns — or reaches the file picker.
+    fn walks_sections(&self, _: &Ui) -> bool {
+        false
     }
 
     /// What was typed on this window's line: the same `View::answered` the
@@ -196,35 +273,40 @@ impl Content for AgentsWindow {
     }
 
     /// THE FOCUS IS A COLOUR, NOT A BAND — the same mark the footer's door
-    /// draws for these rows.
+    /// draws for these rows, laid side by side on the same page.
     fn rows(&self, ui: &Ui) -> Vec<Vec<crate::fields::Field>> {
-        self.view_rows(ui).into_iter().map(|r| r.fields).collect()
+        self.page(ui).1.lines
     }
 
-    /// A click takes a row the cursor stands on, and only that row lights
-    /// under the pointer — the view's one answer ([`crate::agents::Row::takes`]),
-    /// which the footer's region gives too.
+    /// A click takes a line where either half takes one — the view's one
+    /// answer ([`crate::agents::Row::takes`]), which the footer's region
+    /// gives too; WHICH half is the pointer's cell ([`Self::hover`]).
     fn takes(&self, ui: &Ui) -> Vec<bool> {
-        self.view_rows(ui)
-            .iter()
-            .map(crate::agents::Row::takes)
+        let (rows, page) = self.page(ui);
+        (0..page.lines.len())
+            .map(|n| page.takes(n, &rows))
             .collect()
     }
 
-    /// A pair wrapped over several lines is one control: its lines light
-    /// together, as in the footer (`View::control_of`, the row a click on
-    /// any of them lands on).
+    /// A pair wrapped over several lines is one control: in one list, its
+    /// lines light together, as in the footer (`View::control_of`). Side by
+    /// side a line is two rows, and the light is the half's.
     fn controls(&self, ui: &Ui) -> Option<Vec<usize>> {
-        let rows = self.view_rows(ui);
-        Some(
+        let (rows, page) = self.page(ui);
+        page.split.is_none().then(|| {
             (0..rows.len())
                 .map(|n| crate::agents::View::control_of(n, &rows))
-                .collect(),
-        )
+                .collect()
+        })
     }
 
+    /// The line the cursor's row is drawn on.
     fn cursor(&self) -> Option<usize> {
-        Some(self.open.view.cursor())
+        let cursor = self.open.view.cursor();
+        match self.laid.borrow().as_ref() {
+            Some((columns, texts)) => self.open.page(*columns, texts).1.line_of(cursor),
+            None => Some(cursor),
+        }
     }
 
     /// A new width is new rows, so the cursor is found again by what it is
@@ -239,22 +321,86 @@ impl Content for AgentsWindow {
         ui.ask_paint();
     }
 
-    /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19.
+    /// THE CLICK SELECTS, AND THE SECOND ONE ACTS — invariant 19 — at the
+    /// cell the press landed on: the half of a line side by side, a tab,
+    /// which shows its account at once.
     fn clicked(&mut self, ui: &mut Ui, row: usize) {
-        let rows = self.view_rows(ui);
-        if self.open.view.clicked(row, &rows) {
-            self.pressed(ui, Press::Enter);
-        } else {
-            ui.ask_paint();
+        ui.message = None;
+        self.open.clicked_at(row, self.clicked_cell, ui);
+        self.arm_the_clock();
+        ui.ask_paint();
+    }
+
+    /// The header, the page, the hover of the half — or the tab — a click
+    /// takes, and the rule between the columns, lit while the accounts' has
+    /// the keyboard (the file manager's focus mark).
+    fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
+        crate::door::list::header(self, ui, canvas);
+        let (rows, page) = self.page(ui);
+        let controls = Content::controls(self, ui);
+        crate::door::list::body(ui, canvas, &page.lines, &[], controls.as_deref());
+        let pointers: Vec<Pointing> = canvas
+            .lit
+            .iter()
+            .copied()
+            .zip(canvas.lit_x.iter().copied().chain(std::iter::repeat(None)))
+            .collect();
+        canvas.under.extend(self.hover(ui, &pointers));
+        if let Some(split) = page.split {
+            let first = ui.first_of_list();
+            let f = ui.frame(first);
+            let cell = f.cell();
+            let x = f32::from(ui.margin + split.saturating_sub(1)) * cell + cell / 2.0;
+            let lit = rows
+                .get(self.open.view.cursor())
+                .is_some_and(|r| r.pane == crate::agents::Pane::Accounts);
+            canvas.under.push(if lit {
+                crate::chrome::divider_lit(x, f.y_of(first), f.bottom())
+            } else {
+                crate::chrome::divider(x, f.y_of(first), f.bottom())
+            });
         }
     }
 
-    /// What a thread or a watch brought: a reading, a refresh, a stir — and
-    /// the clock moved to the reset the reading shows.
+    /// The standard list, and where along the line a press landed, which
+    /// `clicked` needs and is not handed.
+    fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<()>, events: &[PointerEvent]) {
+        for e in events {
+            if let PointerEventKind::Press { button, .. } = e.kind
+                && button == crate::door::LEFT_BUTTON
+            {
+                self.clicked_cell = cell_at(ui, e.position.0);
+            }
+        }
+        crate::door::list::pointer(self, ui, hand, events);
+    }
+
+    /// What a thread or a watch brought: a reading, a refresh, a stir, the
+    /// file picker's folder — and the clock moved to the reset the reading
+    /// shows.
     fn woken(&mut self, ui: &mut Ui) {
         self.open.heard(ui);
         self.arm_the_clock();
     }
+}
+
+/// A hand's colour and line, and where along the line it is.
+type Pointing = ((tokens::Color, Option<usize>), Option<f32>);
+
+/// The cell of the line a pointer at `x` is over, counted from the window's
+/// margin as the fields are.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a pointer inside a window, divided by a cell"
+)]
+fn cell_at(ui: &Ui, x: f64) -> Option<u16> {
+    let cell = f64::from(tokens::metrics::cell_width(tokens::text::size()));
+    if cell <= 0.0 {
+        return None;
+    }
+    let inset = cell * f64::from(ui.margin);
+    Some(((x - inset).max(0.0) / cell) as u16)
 }
 
 #[cfg(test)]

@@ -626,7 +626,8 @@ OSC 7501, que o guardião lê.
   marca tem até 9 instâncias e um módulo até 9 conjuntos (cobra `mark-instances-are-bounded`); a
   instância é `brain:<módulo>/<marca>.<n>`, o conjunto um segmento `brain:<módulo>/<n>` em fundos
   alternados a partir da borda, e o clique entrega ao comando de `MarkId::opening` a chave da
-  instância, ou o número dela, ou o do conjunto.
+  instância, ou o número dela, ou o do conjunto — e o outro botão, o mesmo, ao de
+  `MarkId::opening_aside` quando a marca o declara (o agente novo de uma conta, 2026-11-09).
 - Módulos do brain da pessoa (`$XDG_CONFIG_HOME/ronoctua/brain-modules/<id>/`): o id é `my-` + palavra
   kebab, e `my`/`my-…` são só dela, prefixos de chave inclusive (cobra
   `brain-person-module-ids-are-prefixed`). Precisa só de `manifest.nix`, `module.rs` e um `.ftl` por

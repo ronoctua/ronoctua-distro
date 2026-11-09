@@ -35,7 +35,8 @@
 //! state: `$XDG_STATE_HOME/ronoctua/llm/<id>/` (`limits.json`, `usage.json`,
 //! an API key's `credits.json`) and `$XDG_CACHE_HOME/ronoctua/llm/<id>/` (the
 //! token count), written by [`refresh::run`] and [`credits`]; and the hook's
-//! records of the sessions, `$XDG_RUNTIME_DIR/ronoctua-agents/` — all watched
+//! records of the sessions, `$XDG_RUNTIME_DIR/ronoctua-agents/`; and the
+//! folder each account's last agent was opened in ([`workspaces`]) — all watched
 //! through [`watched`], so nobody else learns those paths.
 
 #![forbid(unsafe_code)]
@@ -52,6 +53,7 @@ pub mod credits;
 mod files;
 pub mod hook;
 mod jsontext;
+pub mod key;
 #[cfg(feature = "fetch")]
 pub mod refresh;
 pub mod sessions;
@@ -60,6 +62,7 @@ mod time;
 pub mod tokens;
 pub mod transcripts;
 pub mod usage;
+pub mod workspaces;
 
 /// Why something was not read or done, as a closed set (`agents-refused-<id>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -645,6 +648,16 @@ impl Accounts {
             statusline::unwrap(gone)?;
         }
         store.write(&now).map_err(|_| Refusal::of(Why::Failed))?;
+        // AND THE FOLDER ITS LAST AGENT WAS OPENED IN, forgotten with it:
+        // an account given the same id later starts afresh. Not a refusal of
+        // the removal when it cannot be — the list is written already, and a
+        // folder remembered for an id nobody has is only offered once more.
+        let gone: Vec<&str> = before
+            .iter()
+            .filter(|a| now.find(&a.id).is_none())
+            .map(|a| a.id.as_str())
+            .collect();
+        let _ = workspaces::Workspaces::forget_in(roots, &gone);
         if let (Some(config), Some(home)) = (&roots.config, &roots.home) {
             files::write_keeping(
                 &config.join(DEFAULT_ENV_FILE),

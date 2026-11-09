@@ -24,10 +24,32 @@
 //! window arms ONE one-shot there, the footer asks on the second it already
 //! beats ([`Open::ring_if_due`]); closed, there is none.
 //!
+//! # Two columns, and a tab per account
+//!
+//! Side by side from `space.agents.besideFrom` columns (owner, 2026-11-09):
+//! on the left what is the whole list's — adding an account, the refresh,
+//! the usage endpoint, the lines a mark changes colour at — and on the right
+//! the accounts, ONE at a time under a row of tabs, one per account. `TAB`
+//! crosses from column to column, each keeping where its cursor was; `←` `→`
+//! and a click on a tab go from account to account. A mark clicked on the
+//! modeline opens its account's tab. Narrower, the two are one list, the
+//! accounts first. The view is still ONE list of rows, each knowing its
+//! column ([`Pane`]); only the doors lay them side by side ([`Page`]).
+//!
+//! # A folder before every agent
+//!
+//! A session and a login — a new account's included — open in a folder the
+//! person chooses first, in the distro's file picker (`file_picker`, the
+//! folder mode): walked to, or typed. It opens where the account's last
+//! agent was (`ronoctua_llm::workspaces`), else where the picker was left.
+//! A right click on an account's mark on the modeline opens it too
+//! (`agents-session <n>`).
+//!
 //! # Per account
 //!
 //! Its agent and folder, its plan, its agents running now — each a row with
-//! its state's glyph, its folder and its state, whose `RET` goes to it
+//! its state's glyph, its folder and its state, and its task under it in a
+//! quiet line, whose `RET` goes to it
 //! (`agents-show <session>`: the keyboard's way to what a click on the
 //! agent's glyph on the modeline does) — the windows its plan has — five hours and
 //! a week, or the week alone (Claude's Ultra) — and the weekly windows by
@@ -70,6 +92,7 @@ use ronoctua_tokens as tokens;
 use crate::agents_words as words;
 use crate::echo::Echo;
 use crate::fields::{Field, Hit as FilesHit, Ink};
+use crate::file_picker::{Hosted, Hosting};
 use crate::region::Doorway;
 use crate::wake::Wake;
 use crate::when::now_s;
@@ -80,6 +103,11 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "agents-down", Where::Anywhere),
     ("<up>", "agents-up", Where::Anywhere),
     ("RET", "agents-enter", Where::Anywhere),
+    // THE TWO COLUMNS AND THE TABS (owner, 2026-11-09): `TAB` crosses from
+    // one column to the other, the arrows across go from account to account.
+    ("TAB", CROSS_COMMAND, Where::Anywhere),
+    ("<left>", "agents-previous-account", Where::Tabs),
+    ("<right>", "agents-next-account", Where::Tabs),
     // ON AN ACCOUNT: single keys, the distro-wide standard for a list view.
     ("n", SESSION_COMMAND, Where::OnAnAccount),
     ("l", LOGIN_COMMAND, Where::OnAnAccount),
@@ -101,10 +129,15 @@ pub const OF_THE_ROWS: &[&str] = &[
     "agents-danger-at",
 ];
 
+/// The command `TAB` is: from one column to the other.
+pub const CROSS_COMMAND: &str = "agents-cross";
+
 /// The command that opens the view in the footer (`LEADER / a a`) — and
 /// the one a mark on the modeline runs, with the account's place.
 pub const OPEN_COMMAND: &str = "agents-open";
-/// A session of an account (`LEADER / a n`, `n` on one).
+/// A session of an account (`LEADER / a n`, `n` on one) — in a folder the
+/// person chooses first; what the OTHER button on an account's mark runs
+/// (the brain module's `STARTS`, one spelling: a test holds the two).
 pub const SESSION_COMMAND: &str = "agents-session";
 /// A login of an account (`LEADER / a l`, `l` on one).
 pub const LOGIN_COMMAND: &str = "agents-login";
@@ -144,8 +177,10 @@ pub fn is_command(id: &str) -> bool {
 pub enum Where {
     /// Always.
     Anywhere,
-    /// On a row of an account.
+    /// While an account is shown.
     OnAnAccount,
+    /// While there are two accounts or more: a tab to go to.
+    Tabs,
 }
 
 /// A key, once the door has read it.
@@ -169,6 +204,12 @@ pub enum Press {
     Remove,
     /// Count and ask again, now.
     Refresh,
+    /// From one column to the other.
+    Cross,
+    /// The account before, its tab.
+    Previous,
+    /// The account after.
+    Next,
     /// Let the usage endpoint's host be asked — the consent row's own key.
     Allow,
     /// Back one level, and out.
@@ -188,6 +229,9 @@ pub fn press_of(id: &str) -> Option<Press> {
         "agents-default" => Press::Default,
         "agents-remove" => Press::Remove,
         "agents-refresh" => Press::Refresh,
+        CROSS_COMMAND => Press::Cross,
+        "agents-previous-account" => Press::Previous,
+        "agents-next-account" => Press::Next,
         _ => return None,
     })
 }
@@ -411,6 +455,98 @@ impl Open {
         self.view.rows(&self.readings, &self.zone, columns, texts)
     }
 
+    /// The rows and the page the doors draw them on ([`Page`]).
+    #[must_use]
+    pub fn page(&self, columns: u16, texts: &ronoctua_i18n::Texts) -> (Vec<Row>, Page) {
+        let rows = self.rows(columns, texts);
+        let page = Page::of(&rows, columns);
+        (rows, page)
+    }
+
+    /// An account by its id — as read, or, before the first reading is
+    /// here (a mark's right click opens the view on it), as the list says.
+    #[must_use]
+    pub fn account(&self, id: &str) -> Option<Account> {
+        self.readings
+            .seen(id)
+            .map(|s| s.account.clone())
+            .or_else(|| match self.reader {
+                Reader::Thread(_) => Accounts::store().read().find(id).cloned(),
+                Reader::Here(_) => None,
+            })
+    }
+
+    /// The wake of a door whose loop turns: what the file picker watches its
+    /// folder through.
+    #[must_use]
+    pub fn wake(&self) -> Option<Wake> {
+        match &self.reader {
+            Reader::Thread(wake) => Some(wake.clone()),
+            Reader::Here(_) => None,
+        }
+    }
+
+    /// A key a door read, by its whole notation — the file picker's first,
+    /// while one is up (every letter is typed into it), then the view's
+    /// (`press_of_key`). Whether it was one.
+    pub fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> bool {
+        if self.view.picker_takes(key) {
+            let errand =
+                self.view
+                    .pick_key(key, &self.readings, &self.zone, way.columns(), way.texts());
+            way.follow();
+            carry_out(errand, self, way);
+            return true;
+        }
+        match press_of_key(key) {
+            Some(press) => {
+                self.press(press, way);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The clipboard's text, read off the loop for the file picker's `C-v`.
+    pub fn pasted(&mut self, text: &str, way: &mut dyn Doorway) {
+        let errand =
+            self.view
+                .picker_pasted(text, &self.readings, &self.zone, way.columns(), way.texts());
+        carry_out(errand, self, way);
+    }
+
+    /// `agents-session [n]` / `agents-login [n]`: a folder chosen for the
+    /// account at place `n` — the view open on it, or opened for it (a mark's
+    /// right click) — or, with no place, for the account shown; and, before
+    /// the first reading is here (`LEADER / a n` with the view closed), for
+    /// the one a gesture with no row means ([`chosen_of`]), as the list says.
+    pub fn choose_at(&mut self, place: Option<usize>, login: bool, way: &mut dyn Doorway) {
+        if place.is_none() && self.readings.read {
+            self.press(if login { Press::Login } else { Press::Session }, way);
+            return;
+        }
+        // THE LIST AS READ — or, while a door's thread has not read it yet,
+        // as the file says it now (a small file, on the loop, as a gesture
+        // reads it); a photograph's has only what it planted.
+        let accounts: Vec<Account> = match self.reader {
+            Reader::Thread(_) if !self.readings.read => Accounts::store().read().accounts,
+            _ => self
+                .readings
+                .accounts
+                .iter()
+                .map(|s| s.account.clone())
+                .collect(),
+        };
+        let errand = match chosen_of(&accounts, place) {
+            Some(account) => {
+                self.view.show(&account.id);
+                Errand::Choose(account.id, login)
+            }
+            None => Errand::Say(way.texts().t(key::AGENTS_NONE)),
+        };
+        carry_out(errand, self, way);
+    }
+
     /// Asks for a reading — at once, or of a thread, one at a time: a change
     /// heard while one is in flight is one more after it.
     pub fn read_again(&mut self) {
@@ -468,6 +604,11 @@ impl Open {
     /// What the threads and the watches left, taken in: a reading kept, a
     /// refresh said on the door's line and read again after, a stir read.
     pub fn heard(&mut self, way: &mut dyn Doorway) {
+        // THE FILE PICKER'S FOLDER, heard through the same wake.
+        if self.view.look() {
+            self.settle(way.columns(), way.texts());
+            way.repaint();
+        }
         let came = self
             .inbox
             .lock()
@@ -553,13 +694,30 @@ impl Open {
         carry_out(errand, self, way);
     }
 
-    /// A click on row `n`: the cursor there, and the second click is `RET`
-    /// (invariant 19).
+    /// A click on row `n` of the view: the cursor there, and the second
+    /// click is `RET` (invariant 19).
     pub fn clicked(&mut self, n: usize, way: &mut dyn Doorway) {
         let rows = self.rows(way.columns(), way.texts());
-        if self.view.clicked(n, &rows) {
+        self.clicked_on(n, None, &rows, way);
+    }
+
+    /// A click on LINE `line` of the page the doors draw, at cell `cell`:
+    /// the row of the view there ([`Page::row_at`]) — a tab shows its
+    /// account at once, every other row is selected by the first click and
+    /// acted on by the second.
+    pub fn clicked_at(&mut self, line: usize, cell: Option<u16>, way: &mut dyn Doorway) {
+        let (rows, page) = self.page(way.columns(), way.texts());
+        if let Some(n) = page.row_at(line, cell) {
+            self.clicked_on(n, cell, &rows, way);
+        }
+    }
+
+    /// The click, on row `n`.
+    fn clicked_on(&mut self, n: usize, cell: Option<u16>, rows: &[Row], way: &mut dyn Doorway) {
+        if self.view.clicked_at(n, cell, rows) {
             self.press(Press::Enter, way);
         } else {
+            self.settle(way.columns(), way.texts());
             way.repaint();
         }
     }
@@ -610,16 +768,77 @@ fn leave(inbox: &Arc<Mutex<Vec<Heard>>>, wake: &Wake, heard: Heard) {
     wake.call();
 }
 
-/// A terminal with these words — the door gives the keyboard up for it
-/// first (the footer's region closes: the launcher's rule) — or, a
-/// photograph's, written down.
-fn terminal(open: &mut Open, words: Vec<String>, way: &mut dyn Doorway) {
+/// Opens the file picker for a session (`false`) or the login (`true`) of
+/// `account` — once the machine says a terminal would open for it (the
+/// agent installed, the account one): a folder chosen for an agent that
+/// cannot start would be a question asked for nothing. It opens where the
+/// account's last agent was, else where the picker was left. A photograph's
+/// asks the machine nothing, and remembers nothing.
+fn choose(open: &mut Open, account: &Account, login: bool, way: &mut dyn Doorway) {
+    let start = match &open.reach {
+        Reach::Machine => {
+            if let Err(r) = terminal_of(account, login, None) {
+                let said = words::refused(r.why, way.texts());
+                way.say(said, Echo::Long);
+                return;
+            }
+            ronoctua_llm::workspaces::Workspaces::last_in(
+                &ronoctua_llm::Roots::of_env(),
+                &account.id,
+            )
+        }
+        Reach::Nowhere(_) => None,
+    };
+    let wake = open.wake();
+    open.view.choose(account, login, start, wake.as_ref());
+    open.settle(way.columns(), way.texts());
+}
+
+/// THE FOLDER CHOSEN: remembered for the account — its next agent is
+/// offered there — and its session or its login opened in it, in the
+/// terminal (the door gives the keyboard up for it first: the footer's
+/// region closes, the launcher's rule); or, a photograph's, written down.
+fn start(open: &mut Open, id: &str, login: bool, dir: &Path, way: &mut dyn Doorway) {
+    let Some(account) = open.account(id) else {
+        let said = way.texts().t(key::AGENTS_NONE);
+        way.say(said, Echo::Normal);
+        return;
+    };
     match &mut open.reach {
         Reach::Machine => {
-            way.step_aside();
-            way.open_window(words);
+            // A FOLDER WHOSE NAME IS NOT TEXT cannot cross to the terminal
+            // as an argument: said, and nothing opened in the wrong place.
+            let opened = dir
+                .to_str()
+                .ok_or(Refusal::of(Why::Invalid))
+                .and_then(|_| terminal_of(&account, login, Some(dir)));
+            match opened {
+                Ok(words) => {
+                    if let Err(r) = ronoctua_llm::workspaces::Workspaces::remember_in(
+                        &ronoctua_llm::Roots::of_env(),
+                        id,
+                        dir,
+                    ) {
+                        tracing::warn!(why = ?r.why, "the agent's folder is not remembered");
+                    }
+                    way.step_aside();
+                    way.open_window(words);
+                }
+                Err(r) => {
+                    let said = words::refused(r.why, way.texts());
+                    way.say(said, Echo::Long);
+                }
+            }
         }
-        Reach::Nowhere(done) => done.push(words.join(" ")),
+        Reach::Nowhere(done) => done.push(format!(
+            "{} {id} {}",
+            if login {
+                LOGIN_COMMAND
+            } else {
+                SESSION_COMMAND
+            },
+            dir.display()
+        )),
     }
 }
 
@@ -647,27 +866,24 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
             if let Some(said) = applied.said {
                 way.say(said, Echo::Long);
             }
-            if let Some(words) = applied.terminal {
-                terminal(open, words, way);
+            // A NEW ACCOUNT'S LOGIN, in a folder the person chooses first.
+            if let Some(account) = applied.login {
+                choose(open, &account, true, way);
             }
         }
-        Errand::Open(id, login) => {
-            let opened = open
-                .readings
-                .seen(&id)
-                .map(|s| terminal_of(&s.account, login));
-            match opened {
-                Some(Ok(words)) => terminal(open, words, way),
-                Some(Err(r)) => {
-                    let said = words::refused(r.why, way.texts());
-                    way.say(said, Echo::Long);
-                }
-                None => {
-                    let said = way.texts().t(key::AGENTS_NONE);
-                    way.say(said, Echo::Normal);
-                }
+        Errand::Choose(id, login) => match open.account(&id) {
+            Some(account) => choose(open, &account, login, way),
+            None => {
+                let said = way.texts().t(key::AGENTS_NONE);
+                way.say(said, Echo::Normal);
             }
-        }
+        },
+        Errand::Start {
+            account,
+            login,
+            dir,
+        } => start(open, &account, login, &dir, way),
+        Errand::Paste => way.paste(),
         Errand::Refresh => {
             let said = way.texts().t(key::AGENTS_REFRESHING);
             way.say(said, Echo::Normal);
@@ -684,21 +900,6 @@ pub fn carry_out(errand: Errand, open: &mut Open, way: &mut dyn Doorway) {
         open.reread_after_a_write(way.columns(), way.texts());
     }
     way.repaint();
-}
-
-/// `agents-session [n]` / `agents-login [n]` from anywhere — the view closed,
-/// or a place given: the account at that place, or the default one, in the
-/// terminal (the view, when open, steps aside for it); or the sentence that
-/// says why not.
-pub fn session_from_anywhere(login: bool, place: Option<usize>, way: &mut dyn Doorway) {
-    let list = Accounts::store().read();
-    match from_anywhere(&list.accounts, place, login, &terminal_of, way.texts()) {
-        Ok(words) => {
-            way.step_aside();
-            way.open_window(words);
-        }
-        Err(said) => way.say(said, Echo::Long),
-    }
 }
 
 /// `agents-show <session>` — a click on an agent's glyph on the modeline, the
@@ -1103,6 +1304,10 @@ pub enum Target {
     Danger,
     /// An answer to the question: yes, or no.
     Answer(bool),
+    /// An account's tab: a click shows it.
+    Tab(String),
+    /// A row of the file picker, while a folder is chosen.
+    Pick(crate::file_picker::Target),
 }
 
 impl Target {
@@ -1117,6 +1322,7 @@ impl Target {
             | Self::Rename(id)
             | Self::Default(id)
             | Self::Remove(id)
+            | Self::Tab(id)
             | Self::Agent(id, _) => Some(id),
             _ => None,
         }
@@ -1150,6 +1356,7 @@ impl Target {
         }
         match self {
             Self::Let => Some(texts.t(key::ABOUT_CONSENT_ALLOW)),
+            Self::Tab(_) => Some(texts.t(key::ABOUT_AGENTS_TAB)),
             Self::Fact(_, Fact::Window(_)) => Some(texts.t(key::ABOUT_AGENTS_WINDOW)),
             Self::Fact(..) | Self::Endpoint => Some(texts.t(key::ABOUT_AGENTS_FACT)),
             _ => None,
@@ -1170,22 +1377,223 @@ pub struct Row {
     /// line of that row's control — it lights with it, and a click on it
     /// takes the same thing ([`View::control_of`]).
     pub continues: bool,
+    /// Which column it stands in.
+    pub pane: Pane,
+    /// STRETCHES OF IT THAT ARE CONTROLS OF THEIR OWN — the tabs: the cells
+    /// `[from, to)` and what a click there takes. The cursor skips such a
+    /// row (the arrows across reach the tabs); the pointer lights the
+    /// stretch under it.
+    pub zones: Vec<(u16, u16, Target)>,
 }
 
 impl Row {
+    /// A line of the column `pane`.
+    #[must_use]
+    pub const fn of(
+        fields: Vec<Field>,
+        target: Option<Target>,
+        continues: bool,
+        pane: Pane,
+    ) -> Self {
+        Self {
+            fields,
+            target,
+            continues,
+            pane,
+            zones: Vec::new(),
+        }
+    }
+
     /// Whether the cursor skips it.
     #[must_use]
     pub const fn heading(&self) -> bool {
         self.target.is_none()
     }
 
-    /// Whether a click takes it — a row the cursor stands on, or a line
-    /// that continues one — and so whether a resting pointer lights it: ONE
-    /// ANSWER for both doors' light and click (the region's `Row::takes`,
-    /// the window's `Content::takes`, [`View::clicked`]).
+    /// Whether a click takes it — a row the cursor stands on, a line that
+    /// continues one, a row of tabs — and so whether a resting pointer
+    /// lights it: ONE ANSWER for both doors' light and click (the region's
+    /// `Row::takes`, the window's `Content::takes`, [`View::clicked`]).
     #[must_use]
-    pub const fn takes(&self) -> bool {
-        !self.heading() || self.continues
+    pub fn takes(&self) -> bool {
+        !self.heading() || self.continues || !self.zones.is_empty()
+    }
+
+    /// The stretch of it at `cell`, when it is a row of stretches.
+    #[must_use]
+    pub fn zone_at(&self, cell: u16) -> Option<&(u16, u16, Target)> {
+        self.zones
+            .iter()
+            .find(|(from, to, _)| (*from..*to).contains(&cell))
+    }
+}
+
+/// Which column a row stands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    /// The accounts — the right column, one account under its tabs.
+    Accounts,
+    /// What is the whole list's — the left column.
+    Options,
+    /// The whole width: a question, the file picker, the first reading.
+    Whole,
+}
+
+/// Where the accounts' column starts, when the two stand side by side at
+/// `columns` (`space.agents.besideFrom`).
+#[must_use]
+pub fn split_of(columns: u16) -> Option<u16> {
+    (columns >= tokens::space::AGENTS_BESIDEFROM)
+        .then(|| columns * tokens::space::AGENTS_OPTIONSPCT / 100)
+}
+
+/// Where a column's rows are drawn at `columns`: side by side, the options
+/// from the left edge to the split (with the modeline's air before it) and
+/// the accounts from the split to the right edge; stacked, or the whole
+/// width, the door's whole extent.
+#[must_use]
+pub fn extent_of(pane: Pane, columns: u16) -> (u16, u16) {
+    let (left, room) = crate::chrome::extent(columns);
+    let Some(split) = split_of(columns).filter(|_| pane != Pane::Whole) else {
+        return (left, room);
+    };
+    let end = left + room;
+    match pane {
+        Pane::Options => (
+            left,
+            split.saturating_sub(left + tokens::space::MODELINE_SEGMENTGAP),
+        ),
+        Pane::Accounts | Pane::Whole => (split, end.saturating_sub(split)),
+    }
+}
+
+/// THE ROWS AS THE DOORS DRAW THEM — the two columns side by side, the
+/// options on the left and the accounts on the right, line by line; or the
+/// rows one under the other, when they are one list (stacked, a question,
+/// the picker). Both doors read light, click and cursor through it, so the
+/// line a pointer is on and the row the view acts on are one answer.
+#[derive(Debug, Clone, Default)]
+pub struct Page {
+    /// Each line's fields, left to right.
+    pub lines: Vec<Vec<Field>>,
+    /// Each line's rows of the view: the cell each stands from, and its index.
+    at: Vec<Vec<(u16, usize)>>,
+    /// Where the accounts' column starts, side by side.
+    pub split: Option<u16>,
+    /// The width it was laid out at.
+    columns: u16,
+}
+
+impl Page {
+    /// The page of `rows` at `columns`: side by side when the width affords
+    /// it and the rows are of both columns.
+    #[must_use]
+    pub fn of(rows: &[Row], columns: u16) -> Self {
+        let split = split_of(columns).filter(|_| rows.iter().any(|r| r.pane == Pane::Options));
+        let Some(split) = split else {
+            return Self {
+                lines: rows.iter().map(|r| r.fields.clone()).collect(),
+                at: (0..rows.len()).map(|n| vec![(0, n)]).collect(),
+                split: None,
+                columns,
+            };
+        };
+        let of = |pane: Pane| -> Vec<usize> {
+            (0..rows.len()).filter(|n| rows[*n].pane == pane).collect()
+        };
+        let (options, accounts) = (of(Pane::Options), of(Pane::Accounts));
+        let mut page = Self {
+            split: Some(split),
+            columns,
+            ..Self::default()
+        };
+        for line in 0..options.len().max(accounts.len()) {
+            let mut fields = Vec::new();
+            let mut at = Vec::new();
+            for (from, column) in [(0, &options), (split, &accounts)] {
+                if let Some(&n) = column.get(line) {
+                    fields.extend(rows[n].fields.iter().cloned());
+                    at.push((from, n));
+                }
+            }
+            page.lines.push(fields);
+            page.at.push(at);
+        }
+        page
+    }
+
+    /// The row of the view on line `line` at cell `cell` — with no cell,
+    /// the line's only one (none where two stand side by side).
+    #[must_use]
+    pub fn row_at(&self, line: usize, cell: Option<u16>) -> Option<usize> {
+        self.stretch(line, cell).map(|(_, _, n)| n)
+    }
+
+    /// The stretch `[from, to)` of line `line` the row at `cell` stands in,
+    /// and the row.
+    #[must_use]
+    pub fn stretch(&self, line: usize, cell: Option<u16>) -> Option<(u16, u16, usize)> {
+        let here = self.at.get(line)?;
+        let Some(split) = self.split else {
+            return here.first().map(|&(_, n)| (0, self.columns, n));
+        };
+        let half = match cell {
+            Some(c) if c >= split => (split, self.columns),
+            Some(_) => (0, split),
+            None if here.len() == 1 => {
+                if here[0].0 == 0 {
+                    (0, split)
+                } else {
+                    (split, self.columns)
+                }
+            }
+            None => return None,
+        };
+        here.iter()
+            .find(|(from, _)| *from == half.0)
+            .map(|&(_, n)| (half.0, half.1, n))
+    }
+
+    /// The line row `row` of the view is drawn on.
+    #[must_use]
+    pub fn line_of(&self, row: usize) -> Option<usize> {
+        self.at
+            .iter()
+            .position(|here| here.iter().any(|(_, n)| *n == row))
+    }
+
+    /// Whether a click anywhere on line `line` takes something.
+    #[must_use]
+    pub fn takes(&self, line: usize, rows: &[Row]) -> bool {
+        self.at
+            .get(line)
+            .is_some_and(|here| here.iter().any(|(_, n)| rows[*n].takes()))
+    }
+
+    /// WHAT THE POINTER AT `cell` OF LINE `line` LIGHTS — the stretch a
+    /// click there takes: a tab, the half of a line side by side, the whole
+    /// line in one list; nothing where a click takes nothing. The footer's
+    /// region answers with it, and the window lays its bands by it.
+    #[must_use]
+    pub fn lit(&self, line: usize, cell: Option<u16>, rows: &[Row]) -> crate::region::Lit {
+        use crate::region::Lit;
+        let Some((from, to, n)) = self.stretch(line, cell) else {
+            return Lit::Nothing;
+        };
+        let row = &rows[n];
+        if !row.takes() {
+            return Lit::Nothing;
+        }
+        if !row.zones.is_empty() {
+            return cell
+                .and_then(|c| row.zone_at(c))
+                .map_or(Lit::Nothing, |(f, t, _)| Lit::Cells(*f, *t));
+        }
+        if self.split.is_some() {
+            Lit::Cells(from, to)
+        } else {
+            Lit::Row
+        }
     }
 }
 
@@ -1201,6 +1609,15 @@ enum Entry {
     },
     /// A sentence under the row before it, wrapped.
     Note(String),
+    /// A QUIET LINE OF THE ROW BEFORE IT, `indent` cells in — an agent's
+    /// task under its folder: part of that row's control, lit and clicked
+    /// with it.
+    Under {
+        /// What it says.
+        text: String,
+        /// How far in from the column's edge.
+        indent: u16,
+    },
     /// A line of air between two parts of one section.
     Air,
 }
@@ -1232,39 +1649,59 @@ const fn note(text: String) -> Entry {
     Entry::Note(text)
 }
 
-/// The rows, as they are built.
+/// The rows, as they are built — a column at a time.
 struct Builder<'a> {
     out: Vec<Row>,
     cursor: usize,
     left: u16,
     room: u16,
     texts: &'a ronoctua_i18n::Texts,
+    /// The column being built.
+    pane: Pane,
+    /// Where its rows start in [`Builder::out`].
+    start: usize,
 }
 
 impl Builder<'_> {
+    /// The rows that follow are column `pane`'s, at its extent — its first
+    /// title with no air before it when the columns stand side by side, and
+    /// after the air every title has when they are one list.
+    fn column(&mut self, pane: Pane, columns: u16) {
+        (self.left, self.room) = extent_of(pane, columns);
+        self.pane = pane;
+        self.start = if split_of(columns).is_some() {
+            self.out.len()
+        } else {
+            0
+        };
+    }
+
+    /// A line of the column being built.
+    fn push(&mut self, fields: Vec<Field>, target: Option<Target>, continues: bool) {
+        self.out.push(Row::of(fields, target, continues, self.pane));
+    }
+
     /// A section: its title, and its entries laid out whole — the values of
     /// every row in one column after the widest label (`section_column`),
     /// a label that does not fit wrapped under itself.
     fn section(&mut self, title: &str, entries: Vec<Entry>) {
-        let end = self.left + self.room;
-        // AIR BEFORE EVERY TITLE but the first — `chrome::AIR`.
-        if !self.out.is_empty() {
-            self.out.push(Row {
-                fields: crate::chrome::AIR,
-                target: None,
-                continues: false,
-            });
+        // AIR BEFORE EVERY TITLE but the column's first — `chrome::AIR`.
+        if self.out.len() > self.start {
+            self.push(crate::chrome::AIR, None, false);
         }
-        self.out.push(Row {
-            fields: vec![piece(
-                self.left,
-                title.to_owned(),
-                tokens::color::TEXT_HEADING,
-                self.room,
-            )],
-            target: None,
-            continues: false,
-        });
+        let heading = vec![piece(
+            self.left,
+            title.to_owned(),
+            tokens::color::TEXT_HEADING,
+            self.room,
+        )];
+        self.push(heading, None, false);
+        self.entries(entries);
+    }
+
+    /// Entries with no title of their own — an account's, under its tabs.
+    fn entries(&mut self, entries: Vec<Entry>) {
+        let end = self.left + self.room;
         let pairs: Vec<(u16, u16, u16)> = entries
             .iter()
             .filter_map(|e| match e {
@@ -1294,32 +1731,26 @@ impl Builder<'_> {
                         } else {
                             fields
                         };
-                        self.out.push(Row {
-                            fields,
-                            target: (n == 0).then(|| target.clone()),
-                            continues: n > 0,
-                        });
+                        self.push(fields, (n == 0).then(|| target.clone()), n > 0);
                     }
                 }
                 Entry::Note(text) => {
                     for line in crate::chrome::note_lines(&text, self.room) {
-                        self.out.push(Row {
-                            fields: vec![piece(
-                                self.left,
-                                line,
-                                tokens::color::TEXT_DIM,
-                                self.room,
-                            )],
-                            target: None,
-                            continues: false,
-                        });
+                        let note = vec![piece(self.left, line, tokens::color::TEXT_DIM, self.room)];
+                        self.push(note, None, false);
                     }
                 }
-                Entry::Air => self.out.push(Row {
-                    fields: crate::chrome::AIR,
-                    target: None,
-                    continues: false,
-                }),
+                Entry::Under { text, indent } => {
+                    let room = self.room.saturating_sub(indent);
+                    let under = vec![piece(
+                        self.left + indent,
+                        text,
+                        tokens::color::TEXT_DIM,
+                        room,
+                    )];
+                    self.push(under, None, true);
+                }
+                Entry::Air => self.push(crate::chrome::AIR, None, false),
             }
         }
     }
@@ -1605,9 +2036,21 @@ pub enum Errand {
     Copy(String),
     /// Change the list.
     Edit(Edit),
-    /// A session of this account (`false`) or its login (`true`), in the
-    /// terminal.
-    Open(String, bool),
+    /// Choose the folder a session (`false`) or the login (`true`) of this
+    /// account opens in — the file picker, over the view.
+    Choose(String, bool),
+    /// The folder chosen: a session or the login of the account, in the
+    /// terminal, there — and the folder remembered for its next agent.
+    Start {
+        /// The account's id.
+        account: String,
+        /// Its login, and not a session.
+        login: bool,
+        /// The folder.
+        dir: PathBuf,
+    },
+    /// The clipboard, for the file picker's `C-v` (`Doorway::paste`).
+    Paste,
     /// Count and ask again, off the loop.
     Refresh,
     /// Go to the agent of this session ([`show_agent`]).
@@ -1625,41 +2068,31 @@ impl Errand {
 }
 
 /// What applying an edit came to: what the door's line says, and the
-/// terminal it opens (a new account's login).
+/// account whose login opens next — a new account's, in a folder the person
+/// chooses first.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Applied {
     /// The sentence.
     pub said: Option<String>,
-    /// `ronoctua-shell terminal …`'s words, when a terminal opens.
-    pub terminal: Option<Vec<String>>,
+    /// The new account, whose login the folder is chosen for.
+    pub login: Option<Account>,
 }
-
-/// What opens a terminal for an account: its session (`false`) or its login
-/// (`true`) — the words of `ronoctua-shell terminal …`, or why not. The
-/// machine's is [`terminal_of`]; a test hands its own, and never starts an
-/// agent.
-pub type Terminal<'a> = &'a dyn Fn(&Account, bool) -> Result<Vec<String>, Refusal>;
 
 /// Applies an edit to the list, as the file says it NOW
 /// (`Accounts::keep`), and says what came of it.
 #[must_use]
 pub fn apply(edit: &Edit, texts: &ronoctua_i18n::Texts) -> Applied {
-    apply_in(&ronoctua_llm::Roots::of_env(), &terminal_of, edit, texts)
+    apply_in(&ronoctua_llm::Roots::of_env(), edit, texts)
 }
 
-/// [`apply`], under given roots and with a given terminal — what a test
-/// drives, over a folder of its own.
+/// [`apply`], under given roots — what a test drives, over a folder of its
+/// own.
 #[must_use]
-pub fn apply_in(
-    roots: &ronoctua_llm::Roots,
-    terminal: Terminal<'_>,
-    edit: &Edit,
-    texts: &ronoctua_i18n::Texts,
-) -> Applied {
+pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n::Texts) -> Applied {
     let said = |k: &str, name: &str| Some(texts.t_with(k, &[("name", name)]));
     let refused = |r: Refusal| Applied {
         said: Some(words::refused(r.why, texts)),
-        terminal: None,
+        login: None,
     };
     let store = Accounts::store_in(roots.config.clone());
     let name_of = |id: &str| {
@@ -1676,19 +2109,9 @@ pub fn apply_in(
                     sentence.push(' ');
                     sentence.push_str(&words::refused(why, texts));
                 }
-                match terminal(&account, true) {
-                    Ok(line) => Applied {
-                        said: Some(sentence),
-                        terminal: Some(line),
-                    },
-                    Err(r) => {
-                        sentence.push(' ');
-                        sentence.push_str(&words::refused(r.why, texts));
-                        Applied {
-                            said: Some(sentence),
-                            terminal: None,
-                        }
-                    }
+                Applied {
+                    said: Some(sentence),
+                    login: Some(account),
                 }
             }
             Err(r) => refused(r),
@@ -1696,7 +2119,7 @@ pub fn apply_in(
         Edit::Rename(id, name) => match Accounts::keep_in(roots, |l| l.rename(id, name)) {
             Ok(_) => Applied {
                 said: said(key::AGENTS_RENAMED, name.trim()),
-                terminal: None,
+                login: None,
             },
             Err(r) => refused(r),
         },
@@ -1705,7 +2128,7 @@ pub fn apply_in(
             match Accounts::keep_in(roots, |l| l.remove(id)) {
                 Ok(_) => Applied {
                     said: said(key::AGENTS_REMOVED, &name),
-                    terminal: None,
+                    login: None,
                 },
                 Err(r) => refused(r),
             }
@@ -1713,7 +2136,7 @@ pub fn apply_in(
         Edit::Default(id) => match Accounts::keep_in(roots, |l| l.set_default(id)) {
             Ok(_) => Applied {
                 said: said(key::AGENTS_MADE_DEFAULT, &name_of(id)),
-                terminal: None,
+                login: None,
             },
             Err(r) => refused(r),
         },
@@ -1738,7 +2161,7 @@ pub fn apply_in(
                         },
                         &account.name,
                     ),
-                    terminal: None,
+                    login: None,
                 },
                 Err(r) => refused(r),
             }
@@ -1789,42 +2212,41 @@ fn made_private(dir: &Path) -> Result<(), Refusal> {
 }
 
 /// `ronoctua-shell terminal …`'s words for a session of `account`, or its
-/// login: the crate's own command line (`launch_arguments`,
-/// `login_arguments`) — the agent by the store path the session handed
-/// over, its folder by its variable — in our terminal. The folder is made
-/// first: Codex refuses one that is not there.
+/// login, in the folder `cwd` when one was chosen: the crate's own command
+/// line (`launch_arguments`, `login_arguments`) — the agent by the store
+/// path the session handed over, its folder by its variable — in our
+/// terminal. The account's folder is made first: Codex refuses one that is
+/// not there.
 ///
 /// # Errors
 ///
 /// The crate's: the agent is not installed, the account is not one.
-pub fn terminal_of(account: &Account, login: bool) -> Result<Vec<String>, Refusal> {
+pub fn terminal_of(
+    account: &Account,
+    login: bool,
+    cwd: Option<&Path>,
+) -> Result<Vec<String>, Refusal> {
     let argv = if login {
         ronoctua_llm::login_arguments(account)?
     } else {
         ronoctua_llm::launch_arguments(account)?
     };
     made_private(&account.dir)?;
-    let mut line = vec!["terminal".to_owned()];
-    line.extend(argv);
-    Ok(line)
+    Ok(terminal_words(argv, cwd))
 }
 
-/// What `agents-session [n]` / `agents-login [n]` open from anywhere but the
-/// view: the account at place `n`, or the one a gesture with no row means
-/// ([`chosen_of`]) — the terminal's words, or the sentence that says why not.
-///
-/// # Errors
-///
-/// The sentence: no account yet, or the terminal's refusal.
-pub fn from_anywhere(
-    accounts: &[Account],
-    place: Option<usize>,
-    login: bool,
-    terminal: Terminal<'_>,
-    texts: &ronoctua_i18n::Texts,
-) -> Result<Vec<String>, String> {
-    let account = chosen_of(accounts, place).ok_or_else(|| texts.t(key::AGENTS_NONE))?;
-    terminal(&account, login).map_err(|r| words::refused(r.why, texts))
+/// `terminal [--cwd D] -- argv…`: the agent's command line, in a folder.
+/// `--` before the program, whose path could be taken for a flag of the
+/// terminal's.
+#[must_use]
+pub fn terminal_words(argv: Vec<String>, cwd: Option<&Path>) -> Vec<String> {
+    let mut line = vec!["terminal".to_owned()];
+    if let Some(dir) = cwd {
+        line.extend(["--cwd".to_owned(), crate::region::path_argument(dir)]);
+    }
+    line.push("--".to_owned());
+    line.extend(argv);
+    line
 }
 
 /// The agents a photograph plants (`--agents <file>`), read as the brain
@@ -1885,8 +2307,24 @@ pub fn question_text(q: &Question, texts: &ronoctua_i18n::Texts) -> String {
     }
 }
 
-/// The view: where the cursor is, what is asked, what it is aimed at.
-/// Everything it DRAWS is read from the [`Readings`] each door hands it.
+/// What a folder is being chosen for: a session or the login of an account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picking {
+    /// The account's id.
+    pub account: String,
+    /// Its name, for the page's title.
+    pub name: String,
+    /// Its login, and not a session.
+    pub login: bool,
+}
+
+/// What the file picker remembers its folder under, when the account has
+/// none of its own yet (`file-picker.json`).
+pub const PICKER_PURPOSE: &str = "agents-workspace";
+
+/// The view: where the cursor is, what is asked, what it is aimed at, which
+/// account is shown and whether a folder is being chosen. Everything it
+/// DRAWS is read from the [`Readings`] each door hands it.
 #[derive(Debug, Default)]
 pub struct View {
     cursor: usize,
@@ -1896,6 +2334,15 @@ pub struct View {
     yes: bool,
     /// The row the cursor is on, by what it is — kept across a rebuild.
     aim: Option<Target>,
+    /// THE ACCOUNT SHOWN, by its id — its tab. `None` (or an id the list no
+    /// longer has) shows the first.
+    tab: Option<String>,
+    /// Where the cursor was in the OTHER column, by what it was on — where
+    /// `TAB` takes it back (each column keeps its own place).
+    kept: Option<Target>,
+    /// The file picker, over the view, while a folder is chosen for an
+    /// agent.
+    picking: Option<Hosted<Picking>>,
 }
 
 impl View {
@@ -1918,24 +2365,55 @@ impl View {
         self.question.as_ref()
     }
 
+    /// What a folder is being chosen for, while the file picker is up.
+    #[must_use]
+    pub fn picking(&self) -> Option<&Picking> {
+        self.picking.as_ref().map(|h| &h.asked)
+    }
+
+    /// The account shown — its tab's, or the first.
+    #[must_use]
+    pub fn shown<'a>(&self, r: &'a Readings) -> Option<&'a Seen> {
+        self.tab
+            .as_deref()
+            .and_then(|id| r.seen(id))
+            .or_else(|| r.accounts.first())
+    }
+
+    /// Shows the account `id` — its tab — with the cursor, when it stood on
+    /// the account shown before, on the same row of this one.
+    pub fn show(&mut self, id: &str) {
+        self.tab = Some(id.to_owned());
+        for aim in [&mut self.aim, &mut self.kept] {
+            if let Some(t) = aim.take() {
+                *aim = Some(retarget(t, id));
+            }
+        }
+    }
+
     /// Aims at the account at `place` (from 1) — a mark clicked, `agents-open
-    /// <n>` typed. A place with no account keeps the cursor where it is.
+    /// <n>` typed: its tab, the cursor on its first row. A place with no
+    /// account keeps the cursor where it is.
     pub fn aim_at_place(&mut self, place: usize, r: &Readings) {
         if let Some(s) = r.at_place(place) {
             self.question = None;
+            self.picking = None;
+            self.tab = Some(s.account.id.clone());
             self.aim = Some(Target::Fact(s.account.id.clone(), Fact::Agent));
         }
     }
 
-    /// The account under the cursor, or the one a gesture with no row means.
-    fn account_here<'a>(&self, rows: &[Row], r: &'a Readings) -> Option<&'a Seen> {
-        rows.get(self.cursor)
-            .and_then(|row| row.target.as_ref())
-            .and_then(Target::account)
-            .and_then(|id| r.seen(id))
+    /// The account the keys of an account act on: the one shown — none while
+    /// a question or the picker is up.
+    fn account_here<'a>(&self, r: &'a Readings) -> Option<&'a Seen> {
+        if self.question.is_some() || self.picking.is_some() {
+            return None;
+        }
+        self.shown(r)
     }
 
-    /// The hint line: the keys that work where the cursor is.
+    /// The hint line: the keys that work where the cursor is — the file
+    /// picker's while it is up.
     #[must_use]
     pub fn hint(
         &self,
@@ -1944,8 +2422,12 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
-        let rows = self.rows(r, zone, columns, texts);
-        let on_one = self.account_here(&rows, r).is_some();
+        let _ = (zone, columns);
+        if let Some(h) = &self.picking {
+            return h.picker.hint(texts);
+        }
+        let on_one = self.account_here(r).is_some();
+        let tabs = r.accounts.len() > 1;
         let mut here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
             .filter(|(_, id, w)| {
@@ -1956,6 +2438,7 @@ impl View {
                 match w {
                     Where::Anywhere => true,
                     Where::OnAnAccount => on_one,
+                    Where::Tabs => tabs,
                 }
             })
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
@@ -1989,14 +2472,28 @@ impl View {
     /// into `RET` (invariant 19). A click on a line that continues a row is
     /// a click on that row ([`Self::control_of`]).
     pub fn clicked(&mut self, n: usize, rows: &[Row]) -> bool {
+        self.clicked_at(n, None, rows)
+    }
+
+    /// The same, at cell `cell` of the row: on a row of tabs, the tab there
+    /// shows its account at once — one click, as a terminal's strip — and on
+    /// the file picker's rows the picker answers.
+    pub fn clicked_at(&mut self, n: usize, cell: Option<u16>, rows: &[Row]) -> bool {
         let n = Self::control_of(n, rows);
-        let Some(target) = rows
-            .get(n)
-            .filter(|r| r.takes())
-            .and_then(|r| r.target.clone())
-        else {
+        let Some(row) = rows.get(n).filter(|r| r.takes()) else {
             return false;
         };
+        if let Some((_, _, Target::Tab(id))) = cell.and_then(|c| row.zone_at(c)) {
+            let id = id.clone();
+            self.show(&id);
+            return false;
+        }
+        let Some(target) = row.target.clone() else {
+            return false;
+        };
+        if let (Some(h), Target::Pick(t)) = (self.picking.as_mut(), &target) {
+            return h.clicked(t.clone());
+        }
         let again = self.cursor == n;
         self.cursor = n;
         if let Target::Answer(yes) = target {
@@ -2010,15 +2507,28 @@ impl View {
     /// its control, the control's.
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        rows.get(Self::control_of(n, rows))?
-            .target
-            .as_ref()?
-            .about(texts)
+        Self::about_at(rows, n, None, texts)
+    }
+
+    /// The same, at cell `cell` of the row: a tab's own.
+    #[must_use]
+    pub fn about_at(
+        rows: &[Row],
+        n: usize,
+        cell: Option<u16>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<String> {
+        let row = rows.get(Self::control_of(n, rows))?;
+        if let Some((_, _, zone)) = cell.and_then(|c| row.zone_at(c)) {
+            return zone.about(texts);
+        }
+        row.target.as_ref()?.about(texts)
     }
 
     /// Puts the cursor back on the row it was aimed at — found by what it
     /// is, since the list may have changed under it — or on the nearest row
-    /// that acts. Called after every reading.
+    /// that acts; on the file picker's row with the cursor while it is up.
+    /// Called after every reading.
     pub fn settle_in(
         &mut self,
         r: &Readings,
@@ -2026,6 +2536,13 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) {
+        if let Some(h) = &self.picking {
+            // UNDER THE PAGE'S TITLE, the picker's own rows.
+            if let Some(n) = h.picker.rows(columns, texts).iter().position(|p| p.focused) {
+                self.cursor = n + 1;
+            }
+            return;
+        }
         // A QUESTION ABOUT AN ACCOUNT THAT IS GONE goes with it.
         if let Some(Question::Remove(id, ..)) = &self.question
             && r.seen(id).is_none()
@@ -2051,7 +2568,10 @@ impl View {
         self.aim = rows.get(self.cursor).and_then(|row| row.target.clone());
     }
 
-    /// The rows to draw, at this width, from what is read now.
+    /// The rows to draw, at this width, from what is read now: the
+    /// accounts' column — the tabs, and the account shown — then the
+    /// options' ([`Page`] lays them side by side); or the whole width's, for
+    /// a question, the file picker and the first reading.
     #[must_use]
     pub fn rows(
         &self,
@@ -2060,6 +2580,9 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Row> {
+        if let Some(h) = &self.picking {
+            return picker_rows(h, columns, texts);
+        }
         let (left, room) = crate::chrome::extent(columns);
         let mut b = Builder {
             out: Vec::new(),
@@ -2067,6 +2590,8 @@ impl View {
             left,
             room,
             texts,
+            pane: Pane::Whole,
+            start: 0,
         };
         if let Some(q) = &self.question {
             self.question_rows(&mut b, q);
@@ -2079,30 +2604,35 @@ impl View {
             );
             return b.out;
         }
+        // THE ACCOUNTS: one, under the tabs of all.
+        b.column(Pane::Accounts, columns);
+        // A PART OF THE LIST NOT READ: an account it could not take has no
+        // tab, and the file keeps it.
+        if let Some(partly) = &r.accounts_unread {
+            b.section(&b.t(key::AGENTS_HEADING), vec![note(partly.said(texts))]);
+        }
         if r.refused {
             b.section(
                 &b.t(key::AGENTS_HEADING),
                 vec![note(words::refused(Why::Unreadable, texts))],
             );
-        } else if r.accounts.is_empty() {
+        } else if let Some(s) = self.shown(r) {
+            tabs(&mut b, r, s);
+            b.push(crate::chrome::AIR, None, false);
+            account_entries(&mut b, r, s, zone);
+        } else {
             b.section(
                 &b.t(key::AGENTS_HEADING),
                 vec![note(texts.t(key::AGENTS_NONE))],
             );
         }
-        // A PART OF THE LIST NOT READ: an account it could not take is not
-        // among the sections below, and the file keeps it.
-        if let Some(partly) = &r.accounts_unread {
-            b.section(&b.t(key::AGENTS_HEADING), vec![note(partly.said(texts))]);
-        }
-        for (n, s) in r.accounts.iter().enumerate() {
-            account_section(&mut b, r, s, n + 1, zone);
+        // AND WHAT IS THE WHOLE LIST'S.
+        b.column(Pane::Options, columns);
+        if !r.refused {
+            add_section(&mut b);
         }
         if r.has_claude() {
             endpoint_section(&mut b, r);
-        }
-        if !r.refused {
-            add_section(&mut b);
         }
         lines_section(&mut b, r);
         b.out
@@ -2129,11 +2659,8 @@ impl View {
             } else {
                 crate::chrome::Kind::Setting.tones(false).0
             };
-            b.out.push(Row {
-                fields: vec![piece(b.left, t.t(k), color, b.room)],
-                target: Some(Target::Answer(yes)),
-                continues: false,
-            });
+            let answer = vec![piece(b.left, t.t(k), color, b.room)];
+            b.push(answer, Some(Target::Answer(yes)), false);
         }
     }
 
@@ -2147,16 +2674,38 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
+        // THE PICKER takes the view's keys that walk, answer and go back — a
+        // second click's `RET`, a command's arrows, the pointer's way back.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match p {
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key, r, zone, columns, texts);
+        }
         let rows = self.rows(r, zone, columns, texts);
         if self.question.is_some() {
             return self.answer_key(p, &rows);
         }
         let target = rows.get(self.cursor).and_then(|row| row.target.clone());
-        let here = self.account_here(&rows, r).map(|s| s.account.id.clone());
+        let here = self.account_here(r).map(|s| s.account.id.clone());
         let on_an_account = |make: fn(String) -> Target| here.clone().map(make);
         match p {
             Press::Up | Press::Down => {
-                self.walk(&rows, p == Press::Down);
+                self.walk(&rows, p == Press::Down, split_of(columns).is_some());
+                Errand::Nothing
+            }
+            Press::Cross => {
+                self.cross(&rows);
+                Errand::Nothing
+            }
+            Press::Previous | Press::Next => {
+                self.turn(r, p == Press::Next);
+                self.settle_in(r, zone, columns, texts);
                 Errand::Nothing
             }
             Press::Escape => Errand::Close,
@@ -2172,15 +2721,10 @@ impl View {
                 }
             }
             Press::Refresh => Errand::Refresh,
-            Press::Session | Press::Login => {
-                // ON A ROW OF AN ACCOUNT, that account; anywhere else, the
-                // one a gesture with no row means.
-                let id = here.or_else(|| r.chosen().map(|s| s.account.id.clone()));
-                match id {
-                    Some(id) => Errand::Open(id, p == Press::Login),
-                    None => Errand::Say(texts.t(key::AGENTS_NONE)),
-                }
-            }
+            Press::Session | Press::Login => match here {
+                Some(id) => Errand::Choose(id, p == Press::Login),
+                None => Errand::Say(texts.t(key::AGENTS_NONE)),
+            },
             Press::Rename | Press::Default | Press::Remove => {
                 let made = match p {
                     Press::Rename => on_an_account(Target::Rename),
@@ -2223,10 +2767,8 @@ impl View {
                 }
             }
             "agents-status-line" => {
-                let rows = self.rows(r, zone, columns, texts);
                 let claude = self
-                    .account_here(&rows, r)
-                    .or_else(|| r.chosen())
+                    .account_here(r)
                     .filter(|s| s.account.kind == Agent::Claude);
                 match claude {
                     Some(s) => Target::StatusLine(s.account.id.clone()),
@@ -2249,9 +2791,10 @@ impl View {
     ) -> Errand {
         match target {
             // A WINDOW ONLY TELLS: its bar is not a value to copy.
-            Target::Fact(_, Fact::Window(_)) | Target::Answer(_) | Target::Endpoint => {
-                Errand::Nothing
-            }
+            Target::Fact(_, Fact::Window(_))
+            | Target::Answer(_)
+            | Target::Endpoint
+            | Target::Pick(_) => Errand::Nothing,
             Target::Fact(..) => {
                 let rows = self.rows(r, zone, columns, texts);
                 rows.iter()
@@ -2267,8 +2810,8 @@ impl View {
                 Some(Err(why)) => Errand::Say(words::refused(why, texts)),
                 None => Errand::Say(words::refused(Why::Invalid, texts)),
             },
-            Target::Session(id) => Errand::Open(id, false),
-            Target::Login(id) => Errand::Open(id, true),
+            Target::Session(id) => Errand::Choose(id, false),
+            Target::Login(id) => Errand::Choose(id, true),
             Target::Rename(id) => self.ask(Ask::Name(id), r),
             Target::Default(id) => {
                 if r.seen(&id).is_some_and(|s| s.account.default) {
@@ -2295,6 +2838,11 @@ impl View {
             Target::Agent(_, session) => Errand::Show(session),
             Target::Warn => self.ask(Ask::Warn, r),
             Target::Danger => self.ask(Ask::Danger, r),
+            Target::Tab(id) => {
+                self.show(&id);
+                self.settle_in(r, zone, columns, texts);
+                Errand::Nothing
+            }
         }
     }
 
@@ -2303,7 +2851,7 @@ impl View {
     fn answer_key(&mut self, p: Press, rows: &[Row]) -> Errand {
         match p {
             Press::Up | Press::Down => {
-                self.walk(rows, p == Press::Down);
+                self.walk(rows, p == Press::Down, false);
                 if let Some(Target::Answer(yes)) =
                     rows.get(self.cursor).and_then(|r| r.target.clone())
                 {
@@ -2395,8 +2943,10 @@ impl View {
         self.asking = None;
     }
 
-    /// Moves the cursor to the next row that acts, round the ends.
-    fn walk(&mut self, rows: &[Row], down: bool) {
+    /// Moves the cursor to the next row that acts, round the ends — inside
+    /// the column it is in, when the two stand side by side (`beside`).
+    fn walk(&mut self, rows: &[Row], down: bool, beside: bool) {
+        let pane = rows.get(self.cursor).map(|r| r.pane);
         let mut at = self.cursor;
         for _ in 0..rows.len() {
             at = if down {
@@ -2404,13 +2954,289 @@ impl View {
             } else {
                 at.checked_sub(1).unwrap_or(rows.len().saturating_sub(1))
             };
-            if rows.get(at).is_some_and(|r| !r.heading()) {
+            if rows
+                .get(at)
+                .is_some_and(|r| !r.heading() && (!beside || Some(r.pane) == pane))
+            {
                 self.cursor = at;
                 self.aim = rows[at].target.clone();
                 return;
             }
         }
     }
+
+    /// `TAB`: the cursor to the other column — to the row it was on there,
+    /// or that column's first that acts.
+    fn cross(&mut self, rows: &[Row]) {
+        let other = match rows.get(self.cursor).map(|r| r.pane) {
+            Some(Pane::Options) => Pane::Accounts,
+            _ => Pane::Options,
+        };
+        let back = self.kept.take();
+        let found = back
+            .as_ref()
+            .and_then(|t| {
+                rows.iter()
+                    .position(|r| r.pane == other && r.target.as_ref() == Some(t))
+            })
+            .or_else(|| rows.iter().position(|r| r.pane == other && !r.heading()));
+        if let Some(n) = found {
+            self.kept = self.aim.take();
+            self.cursor = n;
+            self.aim = rows[n].target.clone();
+        } else {
+            self.kept = back;
+        }
+    }
+
+    /// The account before or after the one shown, round the ends.
+    fn turn(&mut self, r: &Readings, next: bool) {
+        let Some(shown) = self.shown(r) else {
+            return;
+        };
+        let count = r.accounts.len();
+        let Some(at) = r
+            .accounts
+            .iter()
+            .position(|s| s.account.id == shown.account.id)
+        else {
+            return;
+        };
+        let to = if next {
+            (at + 1) % count
+        } else {
+            (at + count - 1) % count
+        };
+        let id = r.accounts[to].account.id.clone();
+        self.show(&id);
+    }
+
+    /// Opens the file picker over the view, for a session or the login of
+    /// `account`: at `start` — its last agent's folder — or where the picker
+    /// was left; its folder watched through `wake` when the door's loop turns.
+    pub fn choose(
+        &mut self,
+        account: &Account,
+        login: bool,
+        start: Option<PathBuf>,
+        wake: Option<&Wake>,
+    ) {
+        use crate::file_picker::{EVERY_FILE, Mode, Request, Start};
+        let request = Request {
+            purpose: PICKER_PURPOSE,
+            mode: Mode::Folder,
+            filters: EVERY_FILE,
+            start: start.map_or(Start::Remembered, Start::At),
+            addresses: false,
+            extras: &[],
+            alternate: None,
+        };
+        self.question = None;
+        self.asking = None;
+        self.picking = Some(Hosted::open(
+            request,
+            Picking {
+                account: account.id.clone(),
+                name: account.name.clone(),
+                login,
+            },
+            key::AGENTS_HEADING,
+            wake,
+        ));
+    }
+
+    /// What the file picker's watch brought: whether its rows changed.
+    pub fn look(&mut self) -> bool {
+        self.picking.as_mut().is_some_and(Hosted::look)
+    }
+
+    /// How many lines the door shows — the picker's `PgUp` and `PgDn` walk
+    /// half of them.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = &self.picking {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// Whether the file picker, while it is up, takes this key — every
+    /// letter, and its own keys.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.picking.as_ref().is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// A key for the file picker.
+    pub fn pick_key(
+        &mut self,
+        key: ronoctua_keymap::Key,
+        r: &Readings,
+        zone: &ronoctua_files::when::Zone,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        let hosting = h.key(key);
+        let errand = self.hosting(hosting, texts);
+        self.settle_in(r, zone, columns, texts);
+        errand
+    }
+
+    /// The clipboard's text, for the file picker.
+    pub fn picker_pasted(
+        &mut self,
+        text: &str,
+        r: &Readings,
+        zone: &ronoctua_files::when::Zone,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Errand {
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        let hosting = h.pasted(text);
+        let errand = self.hosting(hosting, texts);
+        self.settle_in(r, zone, columns, texts);
+        errand
+    }
+
+    /// What a step of the picker is to the view: the folder chosen starts
+    /// the agent there; back, with nothing chosen, is the view again.
+    fn hosting(&mut self, hosting: Hosting<Picking>, texts: &ronoctua_i18n::Texts) -> Errand {
+        match hosting {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked(asked, crate::file_picker::Picked::Paths { paths, .. }) => {
+                self.picking = None;
+                paths
+                    .into_iter()
+                    .next()
+                    .map_or(Errand::Nothing, |dir| Errand::Start {
+                        account: asked.account,
+                        login: asked.login,
+                        dir,
+                    })
+            }
+            Hosting::Picked(..) => Errand::Nothing,
+        }
+    }
+}
+
+/// A row's target, about account `id` in place of the one it was about —
+/// the same row of the account a tab shows next.
+fn retarget(t: Target, id: &str) -> Target {
+    let id = id.to_owned();
+    match t {
+        Target::Fact(_, Fact::Day(_) | Fact::Model(_)) | Target::Agent(..) => {
+            Target::Fact(id, Fact::Agent)
+        }
+        Target::Fact(_, fact) => Target::Fact(id, fact),
+        Target::StatusLine(_) => Target::StatusLine(id),
+        Target::Session(_) => Target::Session(id),
+        Target::Login(_) => Target::Login(id),
+        Target::Rename(_) => Target::Rename(id),
+        Target::Default(_) => Target::Default(id),
+        Target::Remove(_) => Target::Remove(id),
+        other => other,
+    }
+}
+
+/// The file picker's page: its title — whose agent, and whether a session
+/// or the login — then the picker's own rows, the whole width.
+fn picker_rows(h: &Hosted<Picking>, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
+    let (left, room) = crate::chrome::extent(columns);
+    let title = texts.t_with(
+        if h.asked.login {
+            key::AGENTS_PICK_LOGIN
+        } else {
+            key::AGENTS_PICK_SESSION
+        },
+        &[("name", &h.asked.name)],
+    );
+    let mut out = vec![Row::of(
+        vec![piece(left, title, tokens::color::TEXT_HEADING, room)],
+        None,
+        false,
+        Pane::Whole,
+    )];
+    out.extend(h.picker.rows(columns, texts).into_iter().map(|p| {
+        Row::of(
+            p.fields,
+            (!p.heading).then_some(Target::Pick(p.target)),
+            p.continues,
+            Pane::Whole,
+        )
+    }));
+    out
+}
+
+/// The row of tabs at the top of the accounts' column: one per account —
+/// its glyph, its place and its name — the one shown in the cursor's
+/// accent; a tab that does not fit goes to the next line, never off it. The
+/// tab shown is where the person is, and no control: a click there would do
+/// nothing, and nothing lights that a click does not take.
+fn tabs(b: &mut Builder<'_>, r: &Readings, shown: &Seen) {
+    let t = b.texts;
+    let end = b.left + b.room;
+    let air = tokens::space::MODELINE_SEGMENTGAP;
+    let (mut fields, mut zones) = (Vec::new(), Vec::new());
+    let mut at = b.left;
+    for (n, s) in r.accounts.iter().enumerate() {
+        let label = account_title(s, n + 1, t);
+        let width = layout::width(&label).min(b.room);
+        if at > b.left && at + width > end {
+            let row = Row {
+                zones: std::mem::take(&mut zones),
+                ..Row::of(std::mem::take(&mut fields), None, false, b.pane)
+            };
+            b.out.push(row);
+            at = b.left;
+        }
+        let is_shown = s.account.id == shown.account.id;
+        let color = if is_shown {
+            tokens::color::STATE_ACCENT
+        } else {
+            crate::chrome::Kind::Setting.tones(false).0
+        };
+        fields.push(piece(at, label, color, end.saturating_sub(at)));
+        if !is_shown {
+            zones.push((at, at + width, Target::Tab(s.account.id.clone())));
+        }
+        at += width + air;
+    }
+    if !fields.is_empty() {
+        let row = Row {
+            zones,
+            ..Row::of(fields, None, false, b.pane)
+        };
+        b.out.push(row);
+    }
+}
+
+/// An account as its tab says it: its company's glyph, its place in the list
+/// (its mark's set) and its name.
+fn account_title(s: &Seen, place: usize, t: &ronoctua_i18n::Texts) -> String {
+    let glyph = agent_accounts::mark_of(s.account.kind)
+        .and_then(|m| crate::brainlink::glyph_of(&m.glyph))
+        .map(String::from)
+        .unwrap_or_default();
+    t.t_args(
+        key::AGENTS_ACCOUNT,
+        &[
+            ("glyph", Arg::Text(&glyph)),
+            (
+                "place",
+                Arg::Number(i64::try_from(place).unwrap_or(i64::MAX)),
+            ),
+            ("name", Arg::Text(&s.account.name)),
+        ],
+    )
 }
 
 /// Lets the usage endpoint's host be asked — merged into `consent.json`,
@@ -2423,33 +3249,12 @@ fn allow(texts: &ronoctua_i18n::Texts) -> Errand {
     }
 }
 
-/// One account: its heading, its facts, its windows, its tokens and the
-/// rows that act on it.
-fn account_section(
-    b: &mut Builder<'_>,
-    r: &Readings,
-    s: &Seen,
-    place: usize,
-    zone: &ronoctua_files::when::Zone,
-) {
+/// One account, under its tab: its facts, its agents, its windows, its
+/// tokens and the rows that act on it.
+fn account_entries(b: &mut Builder<'_>, r: &Readings, s: &Seen, zone: &ronoctua_files::when::Zone) {
     let t = b.texts;
     let a = &s.account;
     let id = || a.id.clone();
-    let glyph = agent_accounts::mark_of(a.kind)
-        .and_then(|m| crate::brainlink::glyph_of(&m.glyph))
-        .map(String::from)
-        .unwrap_or_default();
-    let title = t.t_args(
-        key::AGENTS_ACCOUNT,
-        &[
-            ("glyph", Arg::Text(&glyph)),
-            (
-                "place",
-                Arg::Number(i64::try_from(place).unwrap_or(i64::MAX)),
-            ),
-            ("name", Arg::Text(&a.name)),
-        ],
-    );
     let mut e = Vec::new();
     e.push(pair(
         t.t(key::AGENTS_ROW_AGENT),
@@ -2503,6 +3308,14 @@ fn account_section(
     }
     for agent in mine {
         e.push(agent_entry(agent, t));
+        // ITS TASK, quietly under its folder (owner, 2026-11-09): what
+        // Claude Code calls the work, when it named it.
+        if let Some(title) = agent.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            e.push(Entry::Under {
+                text: t.t_with(key::AGENTS_AGENT_TASK, &[("title", title)]),
+                indent: layout::width(&tokens::icon::AGENT.to_string()) + 1,
+            });
+        }
     }
 
     // THE WINDOWS, as bars in the colour the marks wear — or, for an API
@@ -2625,7 +3438,7 @@ fn account_section(
         Target::Remove(id()),
         true,
     ));
-    b.section(&title, e);
+    b.entries(e);
 }
 
 /// An agent's row: the agent's glyph (a robot's head, the terminals' own and
@@ -2823,6 +3636,19 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             id: "agents-refresh",
             label: crate::key::CMD_AGENTS_REFRESH,
         },
+        // THE TWO COLUMNS AND THE TABS (owner, 2026-11-09).
+        ronoctua_cmd::Command {
+            id: CROSS_COMMAND,
+            label: crate::key::CMD_AGENTS_CROSS,
+        },
+        ronoctua_cmd::Command {
+            id: "agents-previous-account",
+            label: crate::key::CMD_AGENTS_PREVIOUS_ACCOUNT,
+        },
+        ronoctua_cmd::Command {
+            id: "agents-next-account",
+            label: crate::key::CMD_AGENTS_NEXT_ACCOUNT,
+        },
         ronoctua_cmd::Command {
             id: "agents-add-claude",
             label: crate::key::CMD_AGENTS_ADD_CLAUDE,
@@ -2872,7 +3698,7 @@ fn keys_reached() -> Vec<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const NOW: i64 = 1_791_201_600;
@@ -2938,7 +3764,7 @@ mod tests {
         }
     }
 
-    fn readings() -> Readings {
+    pub(crate) fn readings() -> Readings {
         Readings {
             read: true,
             refused: false,
@@ -2963,7 +3789,24 @@ mod tests {
             .join("\n")
     }
 
+    /// The rows of every account's tab, one after another — what the view
+    /// draws across its tabs.
+    fn every_tab(r: &Readings, columns: u16, t: &ronoctua_i18n::Texts) -> Vec<Row> {
+        let mut out = View::default().rows(r, &zone(), columns, t);
+        for s in r.accounts.iter().skip(1) {
+            let mut v = View::default();
+            v.show(&s.account.id);
+            out.extend(v.rows(r, &zone(), columns, t));
+        }
+        out
+    }
+
+    /// The cursor on the row that is `target` — its account's tab shown
+    /// first, when it is an account's.
     fn stand_on(v: &mut View, r: &Readings, target: &Target, t: &ronoctua_i18n::Texts) {
+        if let Some(id) = target.account() {
+            v.show(id);
+        }
         let rows = v.rows(r, &zone(), 100, t);
         let n = rows
             .iter()
@@ -3016,7 +3859,7 @@ mod tests {
             unread.credits = Some(Err(Why::Unreadable));
             keys.accounts.extend([helped, unread]);
             // A long value WRAPS onto the next line at a space: read as one.
-            let said = drawn(&View::default().rows(&keys, &zone(), 100, &t)).replace('\n', " ");
+            let said = drawn(&every_tab(&keys, 100, &t)).replace('\n', " ");
             for k in [
                 key::AGENTS_PLAN_API_HELPER,
                 key::AGENTS_KIND_CLAUDE_API,
@@ -3030,7 +3873,7 @@ mod tests {
             states.push(keys);
             for r in &states {
                 let v = View::default();
-                let rows = v.rows(r, &zone(), 100, &t);
+                let rows = every_tab(r, 100, &t);
                 assert!(!rows.is_empty(), "{language}: nothing drawn");
                 let text = drawn(&rows);
                 assert!(
@@ -3098,12 +3941,13 @@ mod tests {
         );
     }
 
-    /// FAILS IF: a mark's place does not open its account, a session or a
-    /// login opens another account than the one under the cursor (or the
-    /// default with no row), or a key that acts on an account acts with
-    /// the cursor on none.
+    /// FAILS IF: a mark's place does not open its account's tab with the
+    /// cursor on it, a session or a login is of another account than the one
+    /// shown — wherever the cursor is, the options' column included — opens
+    /// anything but the folder's question first, or `←` `→` do not go from
+    /// account to account, round the ends.
     #[test]
-    fn a_place_opens_its_account_and_a_session_is_the_cursors() {
+    fn a_place_opens_its_accounts_tab_and_a_session_is_the_shown_ones() {
         let t = texts("en-GB");
         let r = readings();
         let mut v = View::default();
@@ -3115,28 +3959,186 @@ mod tests {
             rows[v.cursor()].target,
             Some(Target::Fact("codex-1".to_owned(), Fact::Agent))
         );
+        assert_eq!(v.shown(&r).map(|s| s.account.id.as_str()), Some("codex-1"));
         assert_eq!(
             v.press(Press::Session, &r, &zone(), 100, &t),
-            Errand::Open("codex-1".to_owned(), false)
+            Errand::Choose("codex-1".to_owned(), false)
         );
         assert_eq!(
             v.press(Press::Login, &r, &zone(), 100, &t),
-            Errand::Open("codex-1".to_owned(), true)
+            Errand::Choose("codex-1".to_owned(), true)
         );
         stand_on(&mut v, &r, &Target::Refresh, &t);
         assert_eq!(
             v.press(Press::Session, &r, &zone(), 100, &t),
-            Errand::Open("claude-1".to_owned(), false),
-            "no row of an account: the default Claude Code one"
+            Errand::Choose("codex-1".to_owned(), false),
+            "the options' column: still the account shown"
         );
         assert!(matches!(
             v.press(Press::Rename, &r, &zone(), 100, &t),
-            Errand::Say(_)
+            Errand::Ask(_)
         ));
+        v.let_go();
+        // THE TABS, round the ends.
+        let _ = v.press(Press::Next, &r, &zone(), 100, &t);
+        assert_eq!(v.shown(&r).map(|s| s.account.id.as_str()), Some("claude-1"));
+        let _ = v.press(Press::Previous, &r, &zone(), 100, &t);
+        assert_eq!(v.shown(&r).map(|s| s.account.id.as_str()), Some("codex-1"));
+        // A PLACE WITH NO ACCOUNT keeps everything where it was.
         v.aim_at_place(9, &r);
+        assert_eq!(v.shown(&r).map(|s| s.account.id.as_str()), Some("codex-1"));
         assert_eq!(
             v.command("agents-refresh", &r, &zone(), 100, &t),
             Errand::Refresh
+        );
+    }
+
+    /// FAILS IF: side by side, a row of one column is drawn in the other's
+    /// cells, `TAB` does not cross to the other column — back to the row its
+    /// cursor was on there — the arrows up and down leave the column they
+    /// walk, a click on another account's tab does not show it at once (or
+    /// waits for a second), or the tab shown is a control that does nothing.
+    #[test]
+    fn side_by_side_each_column_keeps_its_cursor_and_a_tab_shows_its_account() {
+        let t = texts("en-GB");
+        let r = readings();
+        let wide = 160;
+        let split = split_of(wide).expect("side by side at 160 columns");
+        assert!(
+            split_of(100).is_none(),
+            "the tests' 100 columns are one list"
+        );
+        let mut v = View::default();
+        v.settle_in(&r, &zone(), wide, &t);
+        let rows = v.rows(&r, &zone(), wide, &t);
+        assert_eq!(Page::of(&rows, wide).split, Some(split));
+        for row in &rows {
+            for f in &row.fields {
+                match row.pane {
+                    Pane::Options => assert!(f.at < split, "{:?} past the split", f.text),
+                    Pane::Accounts => assert!(f.at >= split, "{:?} before the split", f.text),
+                    Pane::Whole => panic!("a whole line side by side: {:?}", f.text),
+                }
+            }
+        }
+        let here = |v: &View| {
+            let rows = v.rows(&r, &zone(), wide, &t);
+            (rows[v.cursor()].pane, rows[v.cursor()].target.clone())
+        };
+        let born = here(&v);
+        assert_eq!(born.0, Pane::Accounts, "the cursor is born on the account");
+        let _ = v.press(Press::Cross, &r, &zone(), wide, &t);
+        assert_eq!(here(&v).0, Pane::Options);
+        let _ = v.press(Press::Down, &r, &zone(), wide, &t);
+        let walked = here(&v);
+        for _ in 0..40 {
+            let _ = v.press(Press::Down, &r, &zone(), wide, &t);
+            assert_eq!(here(&v).0, Pane::Options, "walked out of its column");
+        }
+        while here(&v) != walked {
+            let _ = v.press(Press::Down, &r, &zone(), wide, &t);
+        }
+        let _ = v.press(Press::Cross, &r, &zone(), wide, &t);
+        assert_eq!(here(&v), born, "the accounts' cursor was not kept");
+        let _ = v.press(Press::Cross, &r, &zone(), wide, &t);
+        assert_eq!(here(&v), walked, "the options' cursor was not kept");
+        // ANOTHER ACCOUNT'S TAB: one click shows it.
+        let rows = v.rows(&r, &zone(), wide, &t);
+        let codex = Target::Tab("codex-1".to_owned());
+        let (n, from) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(n, row)| row.zones.iter().find(|z| z.2 == codex).map(|z| (n, z.0)))
+            .expect("codex-1's tab");
+        assert!(
+            !v.clicked_at(n, Some(from), &rows),
+            "a tab waited for a second click"
+        );
+        assert_eq!(v.shown(&r).map(|s| s.account.id.as_str()), Some("codex-1"));
+        let rows = v.rows(&r, &zone(), wide, &t);
+        assert!(
+            rows.iter()
+                .all(|row| row.zones.iter().all(|z| z.2 != codex)),
+            "the tab shown is a control"
+        );
+        assert!(
+            rows.iter().any(|row| row
+                .zones
+                .iter()
+                .any(|z| z.2 == Target::Tab("claude-1".to_owned()))),
+            "the other account has no tab to go back by"
+        );
+    }
+
+    /// FAILS IF: one list — narrower than the columns side by side — draws
+    /// the options' first title right under the account's last row, with no
+    /// air, or side by side draws air above the options' first title.
+    #[test]
+    fn the_two_parts_are_apart_in_one_list_and_level_side_by_side() {
+        let t = texts("en-GB");
+        let r = readings();
+        let title = t.t(key::AGENTS_HEADING_ADD);
+        for (columns, air) in [(100, true), (160, false)] {
+            let rows = View::default().rows(&r, &zone(), columns, &t);
+            let n = rows
+                .iter()
+                .position(|row| row.fields.iter().any(|f| f.text == title))
+                .expect("the options' first title");
+            let options = rows.iter().position(|row| row.pane == Pane::Options);
+            if air {
+                assert!(
+                    rows[n - 1].fields.is_empty(),
+                    "no air above it at {columns}"
+                );
+            } else {
+                assert_eq!(options, Some(n), "air above it side by side");
+            }
+        }
+    }
+
+    /// FAILS IF: an agent's task is not drawn under its row, quietly, or a
+    /// click on that line does not take the agent's row — or an agent that
+    /// named nothing draws a line for it.
+    #[test]
+    fn an_agents_task_is_a_quiet_line_of_its_row() {
+        let t = texts("en-GB");
+        let mut r = readings();
+        r.agents = vec![
+            AgentSeen {
+                title: Some("Contas em duas colunas".to_owned()),
+                ..running("claude-1", 1, Doing::Working, Some("0123456789abcdef"))
+            },
+            running("claude-1", 2, Doing::Done, None),
+        ];
+        let mut v = View::default();
+        v.settle_in(&r, &zone(), 100, &t);
+        let rows = v.rows(&r, &zone(), 100, &t);
+        let task = rows
+            .iter()
+            .position(|row| drawn(std::slice::from_ref(row)).contains("Contas em duas colunas"))
+            .expect("the task is not drawn");
+        let row = &rows[task];
+        assert!(
+            row.continues && row.heading(),
+            "the task is a row of its own"
+        );
+        assert!(
+            row.fields
+                .iter()
+                .all(|f| f.color == tokens::color::TEXT_DIM)
+        );
+        let agent = View::control_of(task, &rows);
+        assert!(matches!(rows[agent].target, Some(Target::Agent(..))));
+        assert!(!v.clicked(task, &rows), "the first click acted");
+        assert_eq!(v.cursor(), agent, "a click on the task took another row");
+        let quiet = r.agents[1].session.clone();
+        let second = rows
+            .iter()
+            .position(|row| matches!(&row.target, Some(Target::Agent(_, s)) if *s == quiet))
+            .expect("the second agent's row");
+        assert!(
+            !rows.get(second + 1).is_some_and(|row| row.continues),
+            "an agent that named nothing drew a task"
         );
     }
 
@@ -3388,7 +4390,7 @@ mod tests {
         let credits = Target::Fact("claude-api-1".to_owned(), Fact::Credits);
         for language in ronoctua_i18n::LANGUAGES {
             let t = texts(language);
-            let rows = View::default().rows(&r, &zone(), 100, &t);
+            let rows = every_tab(&r, 100, &t);
             let api = about_api(&rows);
             assert!(api.contains(&credits), "{language}: no credits row");
             assert!(
@@ -3412,7 +4414,7 @@ mod tests {
         }
         let t = texts("en-GB");
         let value_of = |r: &Readings| {
-            let rows = View::default().rows(r, &zone(), 100, &t);
+            let rows = every_tab(r, 100, &t);
             let row = rows
                 .iter()
                 .find(|row| row.target.as_ref() == Some(&credits))
@@ -3487,20 +4489,9 @@ mod tests {
         let dir = scratch("api");
         let roots = roots_in(&dir);
         std::fs::create_dir_all(dir.join("home")).unwrap();
-        let opened = std::cell::RefCell::new(Vec::new());
-        let terminal = |a: &Account, login: bool| -> Result<Vec<String>, Refusal> {
-            opened.borrow_mut().push((a.id.clone(), login));
-            Ok(vec!["terminal".to_owned(), a.id.clone()])
-        };
-        let _ = apply_in(
-            &roots,
-            &terminal,
-            &Edit::Add(Agent::Claude, "Work".to_owned()),
-            &t,
-        );
+        let _ = apply_in(&roots, &Edit::Add(Agent::Claude, "Work".to_owned()), &t);
         let done = apply_in(
             &roots,
-            &terminal,
             &Edit::Add(Agent::ClaudeApi, "Console".to_owned()),
             &t,
         );
@@ -3521,7 +4512,7 @@ mod tests {
         );
         assert!(!api.default, "the subscription's default moved");
         assert!(list.find("claude-1").is_some_and(|a| a.default));
-        assert_eq!(opened.borrow().last(), Some(&(api.id.clone(), true)));
+        assert_eq!(done.login.as_ref(), Some(&api), "not its login next");
         // REMOVED, it is asked as an account with no status line of ours.
         assert_eq!(
             question_text(
@@ -3734,8 +4725,8 @@ mod tests {
 
     /// FAILS IF: adding an account does not make its folder `0700` before
     /// anything, does not list it, puts no status line in front of a Claude
-    /// Code account (or puts one on Codex), or opens no LOGIN terminal for
-    /// THAT account; or a rename, a default, a status line given back and
+    /// Code account (or puts one on Codex), or does not hand THAT account's
+    /// login on, to a folder chosen first; or a rename, a default, a status line given back and
     /// put in front again, and a removal do not land in the files — or an
     /// account whose folder could not be made is said to be added.
     #[test]
@@ -3745,11 +4736,6 @@ mod tests {
         let roots = roots_in(&dir);
         std::fs::create_dir_all(dir.join("home")).unwrap();
         let t = texts("en-GB");
-        let opened = std::cell::RefCell::new(Vec::new());
-        let terminal = |a: &Account, login: bool| -> Result<Vec<String>, Refusal> {
-            opened.borrow_mut().push((a.id.clone(), login));
-            Ok(vec!["terminal".to_owned(), a.id.clone()])
-        };
         let list = || {
             Accounts::store_in(roots.config.clone())
                 .parsed()
@@ -3757,12 +4743,7 @@ mod tests {
         };
 
         // CLAUDE CODE: the folder, the list, our status line, the login.
-        let done = apply_in(
-            &roots,
-            &terminal,
-            &Edit::Add(Agent::Claude, "Work".to_owned()),
-            &t,
-        );
+        let done = apply_in(&roots, &Edit::Add(Agent::Claude, "Work".to_owned()), &t);
         let work = list().accounts[0].clone();
         assert_eq!((work.kind, work.name.as_str()), (Agent::Claude, "Work"));
         assert!(
@@ -3772,27 +4753,14 @@ mod tests {
         );
         assert_eq!(mode_of(&work.dir), 0o700, "the folder is not private");
         assert_eq!(wrapped(&work), Ok(Wrapping::Ours), "no status line of ours");
-        assert_eq!(
-            done.terminal,
-            Some(vec!["terminal".to_owned(), work.id.clone()])
-        );
-        assert_eq!(
-            opened.borrow().as_slice(),
-            [(work.id.clone(), true)],
-            "not its login"
-        );
+        assert_eq!(done.login.as_ref(), Some(&work), "not its login next");
         assert_eq!(
             done.said,
             Some(t.t_with(key::AGENTS_ADDED, &[("name", "Work")]))
         );
 
         // CODEX: a folder, the list, and no status line.
-        let done = apply_in(
-            &roots,
-            &terminal,
-            &Edit::Add(Agent::Codex, "Home".to_owned()),
-            &t,
-        );
+        let done = apply_in(&roots, &Edit::Add(Agent::Codex, "Home".to_owned()), &t);
         let home = list().accounts[1].clone();
         assert_eq!(home.kind, Agent::Codex);
         assert_eq!(mode_of(&home.dir), 0o700);
@@ -3800,23 +4768,16 @@ mod tests {
             !home.dir.join(SETTINGS_FILE).exists(),
             "Codex has no status line"
         );
-        assert_eq!(opened.borrow().last(), Some(&(home.id, true)));
-        assert!(done.terminal.is_some());
+        assert_eq!(done.login.as_ref(), Some(&home));
 
         // NAME, DEFAULT, THE STATUS LINE BOTH WAYS.
         let side = {
-            let _ = apply_in(
-                &roots,
-                &terminal,
-                &Edit::Add(Agent::Claude, "Side".to_owned()),
-                &t,
-            );
+            let _ = apply_in(&roots, &Edit::Add(Agent::Claude, "Side".to_owned()), &t);
             list().accounts[2].clone()
         };
         assert!(!side.default, "the first of its kind stays the default");
         let _ = apply_in(
             &roots,
-            &terminal,
             &Edit::Rename(work.id.clone(), "Office".to_owned()),
             &t,
         );
@@ -3824,18 +4785,18 @@ mod tests {
             list().find(&work.id).map(|a| a.name.clone()),
             Some("Office".to_owned())
         );
-        let _ = apply_in(&roots, &terminal, &Edit::Default(side.id.clone()), &t);
+        let _ = apply_in(&roots, &Edit::Default(side.id.clone()), &t);
         assert_eq!(
             list().default_of(Agent::Claude).map(|a| a.id.clone()),
             Some(side.id)
         );
-        let _ = apply_in(&roots, &terminal, &Edit::Unwrap(work.id.clone()), &t);
+        let _ = apply_in(&roots, &Edit::Unwrap(work.id.clone()), &t);
         assert_ne!(wrapped(&work), Ok(Wrapping::Ours), "ours still in front");
-        let _ = apply_in(&roots, &terminal, &Edit::Wrap(work.id.clone()), &t);
+        let _ = apply_in(&roots, &Edit::Wrap(work.id.clone()), &t);
         assert_eq!(wrapped(&work), Ok(Wrapping::Ours));
 
         // REMOVED: off the list, its folder kept, its own status line back.
-        let done = apply_in(&roots, &terminal, &Edit::Remove(work.id.clone()), &t);
+        let done = apply_in(&roots, &Edit::Remove(work.id.clone()), &t);
         assert!(list().find(&work.id).is_none());
         assert!(work.dir.is_dir(), "the folder holds its sessions and login");
         assert_ne!(wrapped(&work), Ok(Wrapping::Ours));
@@ -3847,16 +4808,13 @@ mod tests {
         // A FOLDER THAT CANNOT BE MADE: refused, said, nothing listed or opened.
         let blocked = scratch("blocked");
         std::fs::write(blocked.join("home"), b"a file, not a home").unwrap();
-        let before = opened.borrow().len();
         let done = apply_in(
             &roots_in(&blocked),
-            &terminal,
             &Edit::Add(Agent::Codex, "Nowhere".to_owned()),
             &t,
         );
         assert_eq!(done.said, Some(words::refused(Why::Failed, &t)));
-        assert_eq!(done.terminal, None);
-        assert_eq!(opened.borrow().len(), before, "a terminal for no account");
+        assert_eq!(done.login, None, "a login for no account");
         assert!(
             Accounts::store_in(roots_in(&blocked).config)
                 .parsed()
@@ -3866,39 +4824,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(blocked);
     }
 
-    /// FAILS IF: a session or a login opened from anywhere opens another
-    /// account than the one at the place given, or the default with none —
-    /// or says nothing when there is no account, or when it cannot open.
+    /// FAILS IF: a session or a login opens anything before its folder is
+    /// chosen — in the distro's file picker, over the view, for the account
+    /// at the place given (a mark's right click) and with its tab shown —
+    /// `Esc` on the picker does not give the view back, or the folder chosen
+    /// is not where that account's session or login opens.
     #[test]
-    fn a_session_from_anywhere_is_the_places_or_the_defaults() {
+    fn a_session_is_a_folder_chosen_first_and_opens_there() {
+        fn planted(_: &ronoctua_files::when::Zone) -> Readings {
+            readings()
+        }
         let t = texts("en-GB");
-        let accounts: Vec<Account> = readings().accounts.into_iter().map(|s| s.account).collect();
-        let terminal = |a: &Account, login: bool| -> Result<Vec<String>, Refusal> {
-            Ok(vec![a.id.clone(), login.to_string()])
+        let mut open = Open::new(
+            zone(),
+            Reader::Here(planted),
+            Reach::Nowhere(Vec::new()),
+            None,
+            100,
+            &t,
+        );
+        let mut way = recorder("en-GB");
+        open.choose_at(Some(2), false, &mut way);
+        assert_eq!(
+            open.view.picking().map(|p| (p.account.as_str(), p.login)),
+            Some(("codex-1", false))
+        );
+        assert_eq!(
+            open.view
+                .shown(&open.readings)
+                .map(|s| s.account.id.as_str()),
+            Some("codex-1")
+        );
+        let rows = open.rows(100, &t);
+        assert!(
+            drawn(&rows[..1]).contains("Home"),
+            "the page does not say whose agent: {}",
+            drawn(&rows[..1])
+        );
+        let here = Some(Target::Pick(crate::file_picker::Target::Here));
+        assert!(rows.iter().any(|r| r.target == here), "no folder to choose");
+        assert!(open.done().is_empty(), "something opened before the folder");
+        // BACK, with nothing chosen: the view again.
+        let esc = ronoctua_keymap::Key::parse("ESC").expect("a key");
+        assert!(open.key(esc, &mut way));
+        assert!(open.view.picking().is_none());
+        // THE LOGIN, the folder chosen with two clicks: opened there.
+        open.choose_at(Some(1), true, &mut way);
+        let rows = open.rows(100, &t);
+        let n = rows
+            .iter()
+            .position(|r| r.target == here)
+            .expect("the folder's row");
+        open.clicked(n, &mut way);
+        open.clicked(n, &mut way);
+        assert!(open.view.picking().is_none(), "the picker stayed");
+        let [done] = open.done() else {
+            panic!("not one thing opened: {:?}", open.done());
         };
+        let opened = done
+            .strip_prefix(&format!("{LOGIN_COMMAND} claude-1 "))
+            .unwrap_or_else(|| panic!("not claude-1's login: {done}"));
+        assert!(Path::new(opened).is_absolute(), "{done}");
+        // A PLACE WITH NO ACCOUNT opens nothing, and says so.
+        open.choose_at(Some(9), false, &mut way);
+        assert!(open.view.picking().is_none());
+    }
+
+    /// FAILS IF: what the other button on an account's mark runs is not the
+    /// command this view takes for a session — a right click would open
+    /// nothing.
+    #[test]
+    fn the_marks_other_button_is_this_views_session() {
+        assert_eq!(SESSION_COMMAND, agent_accounts::STARTS);
+        assert!(is_command(SESSION_COMMAND));
+    }
+
+    /// FAILS IF: the terminal's words lose the folder, put it after the
+    /// program (where it would be the agent's own argument), or let the
+    /// agent's path be read as a flag of the terminal's.
+    #[test]
+    fn the_terminal_opens_the_agent_in_its_folder() {
+        let argv = vec!["/nix/store/x-env/bin/env".to_owned(), "-u".to_owned()];
         assert_eq!(
-            from_anywhere(&accounts, Some(2), true, &terminal, &t),
-            Ok(vec!["codex-1".to_owned(), "true".to_owned()])
+            terminal_words(argv.clone(), Some(Path::new("/home/p/src"))),
+            [
+                "terminal",
+                "--cwd",
+                "/home/p/src",
+                "--",
+                "/nix/store/x-env/bin/env",
+                "-u"
+            ]
         );
         assert_eq!(
-            from_anywhere(&accounts, None, false, &terminal, &t),
-            Ok(vec!["claude-1".to_owned(), "false".to_owned()])
-        );
-        assert_eq!(
-            from_anywhere(&[], None, false, &terminal, &t),
-            Err(t.t(key::AGENTS_NONE))
-        );
-        assert_eq!(
-            from_anywhere(&accounts, Some(9), false, &terminal, &t),
-            Err(t.t(key::AGENTS_NONE)),
-            "no account at that place"
-        );
-        let refused = |_: &Account, _: bool| -> Result<Vec<String>, Refusal> {
-            Err(Refusal::of(Why::NotInstalled))
-        };
-        assert_eq!(
-            from_anywhere(&accounts, None, false, &refused, &t),
-            Err(words::refused(Why::NotInstalled, &t))
+            terminal_words(argv, None),
+            ["terminal", "--", "/nix/store/x-env/bin/env", "-u"]
         );
     }
 

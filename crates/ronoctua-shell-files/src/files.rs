@@ -17498,6 +17498,8 @@ mod tests {
                 | crate::chrome::Register::Said
                 | crate::chrome::Register::Asked
                 | crate::chrome::Register::Typed
+                | crate::chrome::Register::Named
+                | crate::chrome::Register::Figure
                 | crate::chrome::Register::Pending
                 | crate::chrome::Register::Glyph
                 | crate::chrome::Register::Label

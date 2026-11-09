@@ -1433,6 +1433,12 @@ CONTRAST_GATES = (
     ("text.subtle.leader-alt", ("surface.chrome", "surface.buffer"), 21, 23),
     ("text.subtle.leader-alt", RAISED_GROUNDS, 17, 19),
     ("text.subtle.leader-alt", ("surface.hover", "surface.selection"), 16, 18),
+    # WHAT A MARK TELLS THE POINTER, on the minibuffer's chrome: the person's
+    # name for the thing and the value the hand came for (owner, 2026-11-09),
+    # each read like the key it sits among. Measured 2026-11-09: 48 on every
+    # dark chrome, 65 on the light ones.
+    ("text.subtle.named", ("surface.chrome",), 40, 44),
+    ("text.subtle.figure", ("surface.chrome",), 40, 44),
     # THE ACCENT AND THE ALARM ON THEM TOO. A container is where the brain
     # draws a run that FAILED and a header is where the accent marks the page,
     # so both are drawn on a raised ground on the first screen built out of
@@ -1812,6 +1818,29 @@ DISTANCE_GATES = (
     ("text.subtle.leader-alt", "state.accent", 0.10, 0.12),
     ("text.subtle.inert", "text.subtle.strong", 0.03, 0.04),
     ("text.subtle.inert", "text.subtle.default", 0.03, 0.04),
+    # THE NAME AND THE VALUE A MARK TELLS, each "in another colour" (owner,
+    # 2026-11-09): told from the sentence they sit in, from every other ink of
+    # the line, from the content's ramp, from each other — and the value from
+    # the warning, so a week drawn in orange does not read as one running
+    # out. Measured 2026-11-09: 0.042 (the name, owl's sentence) and 0.044
+    # (the value, papyrus's secondary) at the lowest; 0.083 from the warning.
+    *(
+        (ink, other, 0.03, 0.04)
+        for ink in ("text.subtle.named", "text.subtle.figure")
+        for other in (
+            "text.subtle.strong",
+            "text.subtle.default",
+            "text.subtle.alternate",
+            "text.subtle.contextual",
+            "text.subtle.explain",
+            "text.subtle.leader-alt",
+            "state.accent",
+            "text.primary",
+            "text.secondary",
+        )
+    ),
+    ("text.subtle.named", "text.subtle.figure", 0.03, 0.04),
+    ("text.subtle.figure", "state.warning", 0.06, 0.07),
     ("text.subtle.inert", "text.subtle.contextual", 0.03, 0.04),
     # A LIT SHORTCUT IS ITS OWN TONE, a little lit: told apart from the resting
     # one (the pointer is on it) by a small step, which is what the owner asked

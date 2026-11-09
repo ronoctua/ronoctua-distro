@@ -52940,7 +52940,12 @@ let
     code=0
     "$llm" statusline --profile claude-1 < "$work/in.json" > "$work/none.txt" || code=$?
     [ "$code" = 0 ] || fail "nothing to chain answered $code"
-    [ ! -s "$work/none.txt" ] || fail "nothing to chain printed: $(cat "$work/none.txt")"
+    # WITH NOTHING TO CHAIN, OURS SAYS THE WINDOWS (owner, 2026-11-09): one
+    # line, each window's share — from the build's own texts, which the
+    # wrapper hands it — and a chained child of a person's script says none.
+    [ "$(wc -l < "$work/none.txt")" = 1 ] && grep -q '24%' "$work/none.txt" && grep -q '41%' "$work/none.txt"       || fail "nothing to chain did not say the windows: $(cat "$work/none.txt")"
+    RONOCTUA_LLM_CHAINED=1 "$llm" statusline --profile claude-1 < "$work/in.json" > "$work/chained.txt" || true
+    [ ! -s "$work/chained.txt" ] || fail "a chained run said ours: $(cat "$work/chained.txt")"
     "$llm" unwrap --profile claude-1
     [ ! -e "$acct/settings.json" ] || fail "the settings.json made only to wrap stayed"
 
@@ -52969,7 +52974,7 @@ let
     cmp -s "$work/lost.txt" "$work/expected.txt" \
       || fail "a line whose account the list lost printed: $(cat "$work/lost.txt")"
 
-    echo "OK: the person's line ran behind ours with the same stdin, its stdout and exit code passed through; given back byte for byte, on unwrap and on removal; still run when the list lost its account"
+    echo "OK: the person's line ran behind ours with the same stdin, its stdout and exit code passed through; ours said the windows with nothing to chain; given back byte for byte, on unwrap and on removal; still run when the list lost its account"
   '';
 
   # CLAUDE CODE'S MANAGED HOOK IS THE DISTRO'S, AND ONLY HOOKS.

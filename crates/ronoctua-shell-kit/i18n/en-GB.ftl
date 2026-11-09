@@ -168,6 +168,9 @@ files-explain-owner = { $who } owns it; clicking changes that
 transfers-pause = hold or release this transfer
 cmd-transfers-pause = hold or let go
 # THE PAGE ITSELF.
+# A SHARE IN PER CENT a brain module's sentence carries (`Arg::Percent`): the
+# number with the language's sign, one value.
+mind-percent = { $percent }%
 brain-title = Brain
 brain-why-no-systemctl = No systemd here
 brain-why-runaway = It stopped reporting and the waiting was given up. It may well still be going.

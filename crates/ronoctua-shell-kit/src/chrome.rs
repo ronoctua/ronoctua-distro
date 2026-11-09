@@ -549,6 +549,15 @@ pub enum Register {
     /// WHAT THE PERSON TYPES into a question, in a colour of its own
     /// (`question.typed`). It was `Said`, the key's ink.
     Typed,
+    /// THE PERSON'S OWN NAME FOR WHAT THE LINE IS ABOUT — an account, the
+    /// folder an agent works in — under the pointer on a mark, in an ink of
+    /// its own (`text.subtle.named`; owner, 2026-11-09).
+    Named,
+    /// THE VALUE A MARK TELLS THE POINTER, the one the hand came for — an
+    /// account's week used, an agent's task — in an ink of its own
+    /// (`text.subtle.figure`), told from the name and from the sentence
+    /// around both (owner, 2026-11-09).
+    Figure,
     /// THE CHORD THAT IS WAITING for its next key.
     ///
     /// Blue is what says where the next key goes, and that is not a matter of
@@ -573,6 +582,8 @@ impl Register {
             Self::Pending => tokens::color::STATE_ACCENT,
             Self::Asked => tokens::color::QUESTION_ASKED,
             Self::Typed => tokens::color::QUESTION_TYPED,
+            Self::Named => tokens::color::TEXT_SUBTLE_NAMED,
+            Self::Figure => tokens::color::TEXT_SUBTLE_FIGURE,
             Self::Inert => tokens::color::TEXT_SUBTLE_INERT,
             Self::KeyLit => tokens::color::TEXT_SUBTLE_LIT_KEY,
             Self::AlternateLit => tokens::color::TEXT_SUBTLE_LIT_ALTERNATE,
@@ -2226,6 +2237,104 @@ pub fn sentence(e: &ronoctua_files::mode::Explanation, texts: &ronoctua_i18n::Te
     out
 }
 
+/// A sentence of [`ronoctua_i18n::Texts::t_args`] — a count still a number,
+/// so a plural picks its branch — as runs: each argument in the register
+/// `register_of` names for it, and the words around them, and every argument
+/// it names none for, in `around`.
+///
+/// An argument is told by its value, as [`sentence`] tells them: a count by
+/// its digits, which is how Fluent writes one (it carries no formatter here).
+#[must_use]
+pub fn marked_sentence(
+    texts: &ronoctua_i18n::Texts,
+    key: &str,
+    args: &[(&str, ronoctua_i18n::Arg<'_>)],
+    register_of: impl Fn(&str) -> Option<Register>,
+    around: Register,
+) -> Vec<Piece> {
+    let values: Vec<Option<String>> = args
+        .iter()
+        .map(|(_, a)| match a {
+            ronoctua_i18n::Arg::Text(t) => Some((*t).to_owned()),
+            ronoctua_i18n::Arg::Number(n) => Some(n.to_string()),
+            // A FRACTION is written by the language's own mark, which only
+            // the texts know: it reads as the words around it.
+            ronoctua_i18n::Arg::Fraction(_) => None,
+        })
+        .collect();
+    let marked = texts.t_args_marked(key, args);
+    let mut taken = vec![false; args.len()];
+    let mut out = Vec::with_capacity(marked.at.len() * 2 + 1);
+    for (run, is_arg) in marked.pieces() {
+        let which = is_arg
+            .then(|| {
+                values
+                    .iter()
+                    .enumerate()
+                    .find(|(n, v)| !taken[*n] && v.as_deref() == Some(run))
+                    .map(|(n, _)| n)
+            })
+            .flatten();
+        if let Some(n) = which {
+            taken[n] = true;
+        }
+        out.push(Piece {
+            text: run.to_owned(),
+            register: which.and_then(|n| register_of(args[n].0)).unwrap_or(around),
+            id: None,
+            press: None,
+        });
+    }
+    out
+}
+
+/// A sentence whose ARGUMENTS ARE RUNS already — `first · then`, which joins
+/// what a mark tells the pointer: each argument's runs where the language put
+/// it, the words around them in `around`.
+#[must_use]
+pub fn spliced(
+    texts: &ronoctua_i18n::Texts,
+    key: &str,
+    args: &[(&str, &[Piece])],
+    around: Register,
+) -> Vec<Piece> {
+    let flat: Vec<String> = args
+        .iter()
+        .map(|(_, runs)| runs.iter().map(|p| p.text.as_str()).collect())
+        .collect();
+    let borrowed: Vec<(&str, &str)> = args
+        .iter()
+        .zip(&flat)
+        .map(|((name, _), text)| (*name, text.as_str()))
+        .collect();
+    let marked = texts.t_marked(key, &borrowed);
+    let mut taken = vec![false; args.len()];
+    let mut out = Vec::new();
+    for (run, is_arg) in marked.pieces() {
+        let which = is_arg
+            .then(|| {
+                flat.iter()
+                    .enumerate()
+                    .find(|(n, t)| !taken[*n] && t.as_str() == run)
+                    .map(|(n, _)| n)
+            })
+            .flatten();
+        match which {
+            Some(n) => {
+                taken[n] = true;
+                out.extend(args[n].1.iter().cloned());
+            }
+            None => out.push(Piece {
+                text: run.to_owned(),
+                register: around,
+                id: None,
+                press: None,
+            }),
+        }
+    }
+    out
+}
+
 /// A date written out, with the month as a WORD.
 ///
 /// # Why this exists beside `date_text`
@@ -3547,6 +3656,10 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             // is anybody's characters — a `+` in it is not a modifier.
             | Register::Asked
             | Register::Typed
+            // A NAME AND A VALUE A MARK TELLS are data: a `+` in an
+            // account's name is a character.
+            | Register::Named
+            | Register::Figure
             | Register::Pending
             | Register::Glyph
             | Register::Label

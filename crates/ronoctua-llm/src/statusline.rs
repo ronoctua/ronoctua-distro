@@ -25,6 +25,14 @@
 //! runs in ([`Chain::agent_dir`]), so the person's line never goes blank
 //! behind a name nobody lists.
 //!
+//! # And what it says, alone
+//!
+//! With no line of the person's to chain, ours SAYS the account's windows
+//! from the very answer it was handed — how much of each is used and when it
+//! starts over ([`said`]; owner, 2026-11-09: the empty line under Claude
+//! Code's prompt was ours, saying nothing). A chained child says nothing of
+//! ours: the person's line is what shows.
+//!
 //! The person may change `statusLine` afterwards; [`wrapped`] says so
 //! ([`Wrapping::Replaced`]) and the view offers to wrap again — it is never
 //! done behind their back, and [`unwrap`] then leaves their newer choice
@@ -563,6 +571,108 @@ pub fn run(profile: &str, input: &[u8], chain: &Chain, out: std::process::Stdio)
     }
 }
 
+/// Whether a run for `profile` hands its turn to the person's own line —
+/// and so prints nothing of ours ([`said`] is for when it does not).
+#[must_use]
+pub fn chains(chain: &Chain, profile: &str) -> bool {
+    crate::fine_id(profile)
+        && !chain.chained
+        && chain.shell.is_some()
+        && chained_command(chain, profile).is_some()
+}
+
+/// WHAT OUR STATUS LINE SAYS when it has no line of the person's to chain:
+/// the windows this answer of Claude Code's carries — five hours and a week,
+/// or the week alone — each with how much is used and how long until it
+/// starts over, in the person's language. `None` when the answer carries no
+/// window (an API key's, the first of a session): nothing is said rather
+/// than a line that only waits.
+#[must_use]
+pub fn said(input: &[u8], now_s: i64, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    use crate::key;
+    use ronoctua_i18n::Arg;
+    let limits = limits_of(input)?.at(now_s);
+    let windows = [
+        (limits.five_hour, key::LLM_LINE_FIVE_HOURS),
+        (limits.seven_day, key::LLM_LINE_WEEK),
+    ];
+    windows
+        .into_iter()
+        .filter_map(|(w, k)| {
+            let w = w?;
+            // `as` AFTER THE CLAMP AND THE ROUND: a whole number from 0 to 100.
+            #[allow(clippy::cast_possible_truncation)]
+            let percent = w.used_percent.clamp(0.0, 100.0).round() as i64;
+            let left = left_text(w.resets_at_s.saturating_sub(now_s), texts);
+            Some(texts.t_args(
+                k,
+                &[
+                    ("percent", Arg::Number(percent)),
+                    ("left", Arg::Text(&left)),
+                ],
+            ))
+        })
+        .reduce(|first, then| {
+            texts.t_args(
+                key::LLM_LINE_JOINED,
+                &[("first", Arg::Text(&first)), ("then", Arg::Text(&then))],
+            )
+        })
+}
+
+/// The file the shell keeps the person's language in, under the
+/// configuration's root (`LEADER s l`; the shell's `language` module).
+const LANGUAGE_FILE: &str = "language.json";
+
+/// THE LANGUAGE OUR LINE SPEAKS, in the shell's own order: the person's
+/// choice (`language.json`, under `config`) when it names a declared
+/// language, else the machine's (`LC_ALL`, `LC_MESSAGES`, `LANG`), else the
+/// first declared one — so the line under Claude Code's prompt speaks what
+/// the footer above it does.
+#[must_use]
+pub fn language(config: Option<&Path>) -> String {
+    #[derive(Deserialize)]
+    struct Chosen {
+        language: String,
+    }
+    config
+        .and_then(|c| std::fs::read(c.join(LANGUAGE_FILE)).ok())
+        .and_then(|bytes| serde_json::from_slice::<Chosen>(&bytes).ok())
+        .map(|c| c.language)
+        .filter(|l| ronoctua_i18n::LANGUAGES.contains(&l.as_str()))
+        .unwrap_or_else(ronoctua_i18n::environment_language)
+}
+
+/// How long until a window starts over: minutes under the hour, hours and
+/// minutes under the day, days and hours after.
+fn left_text(seconds: i64, texts: &ronoctua_i18n::Texts) -> String {
+    use crate::key;
+    use ronoctua_i18n::Arg;
+    // ROUNDED UP: a window that starts over in 30 seconds is not said to
+    // have started.
+    let minutes = (seconds.max(0) + 59) / 60;
+    let (days, hours, minutes) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    if days > 0 {
+        texts.t_args(
+            key::LLM_LINE_LEFT_DAYS,
+            &[("days", Arg::Number(days)), ("hours", Arg::Number(hours))],
+        )
+    } else if hours > 0 {
+        texts.t_args(
+            key::LLM_LINE_LEFT_HOURS,
+            &[
+                ("hours", Arg::Number(hours)),
+                ("minutes", Arg::Number(minutes)),
+            ],
+        )
+    } else {
+        texts.t_args(
+            key::LLM_LINE_LEFT_MINUTES,
+            &[("minutes", Arg::Number(minutes))],
+        )
+    }
+}
+
 /// The person's command to chain for an account, when there is one and it
 /// is not ours.
 ///
@@ -683,6 +793,70 @@ mod tests {
         let file = std::fs::File::create(&path).unwrap();
         let code = run(profile, input.as_bytes(), chain, file.into());
         (code, std::fs::read_to_string(&path).unwrap())
+    }
+
+    /// FAILS IF: our line, alone, does not say each window the answer carries
+    /// — how much is used, how long until it starts over — or says one the
+    /// answer did not carry, one that already started over, or anything at
+    /// all for an answer with no window (owner, 2026-11-09).
+    #[test]
+    fn our_line_alone_says_the_windows_the_answer_carries() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let now = 1_791_201_600;
+        let both = format!(
+            r#"{{"rate_limits":{{"five_hour":{{"used_percentage":41.6,"resets_at":{}}},"seven_day":{{"used_percentage":86,"resets_at":{}}}}}}}"#,
+            now + 2 * 3600 + 10 * 60,
+            now + 2 * 86_400 + 5 * 3600,
+        );
+        let said = said(both.as_bytes(), now, &t).expect("a line");
+        for part in ["42%", "2 h 10 min", "86%", "2 d 5 h"] {
+            assert!(said.contains(part), "{part} not in {said:?}");
+        }
+        assert!(said.find("42%") < said.find("86%"), "{said:?}");
+        let week = format!(
+            r#"{{"rate_limits":{{"seven_day":{{"used_percentage":3,"resets_at":{}}}}}}}"#,
+            now + 50 * 60
+        );
+        let said_week = super::said(week.as_bytes(), now, &t).expect("the week");
+        assert!(
+            said_week.contains("3%") && said_week.contains("50 min"),
+            "{said_week:?}"
+        );
+        assert!(
+            !said_week.contains("41"),
+            "a window the answer did not carry"
+        );
+        let gone = format!(
+            r#"{{"rate_limits":{{"seven_day":{{"used_percentage":99,"resets_at":{}}}}}}}"#,
+            now - 60
+        );
+        assert_eq!(
+            super::said(gone.as_bytes(), now, &t),
+            None,
+            "a window that started over"
+        );
+        assert_eq!(super::said(br#"{"rate_limits":null}"#, now, &t), None);
+        assert_eq!(super::said(b"{}", now, &t), None);
+    }
+
+    /// FAILS IF: our line does not speak the person's choice of language
+    /// over the machine's — or takes a choice that is no declared language.
+    #[test]
+    fn our_line_speaks_the_persons_language() {
+        let dir = scratch("language");
+        let other = ronoctua_i18n::LANGUAGES
+            .iter()
+            .find(|l| **l != ronoctua_i18n::environment_language())
+            .expect("two declared languages");
+        std::fs::write(
+            dir.join(LANGUAGE_FILE),
+            format!(r#"{{ "language": "{other}" }}"#),
+        )
+        .unwrap();
+        assert_eq!(language(Some(&dir)), *other);
+        std::fs::write(dir.join(LANGUAGE_FILE), r#"{ "language": "xx-YY" }"#).unwrap();
+        assert_eq!(language(Some(&dir)), ronoctua_i18n::environment_language());
+        assert_eq!(language(None), ronoctua_i18n::environment_language());
     }
 
     /// FAILS IF: the person's status line is not run behind ours with the

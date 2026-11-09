@@ -1340,7 +1340,7 @@ struct Footer {
     /// travels from the mark it explains to the line and its chevron: the
     /// line would otherwise empty the moment the pointer left the mark, and
     /// take the chevron that opens the rest of it with it.
-    lingering_hint: Option<String>,
+    lingering_hint: Option<Vec<crate::chrome::Piece>>,
     /// The room the minibuffer's line gave its text on the last frame, in
     /// cells — what says a hint does not fit (`Footer::lingers`).
     minibuffer_room: u16,
@@ -5827,21 +5827,23 @@ impl Footer {
 
         // A BRAIN MODULE'S MARK, `brain:<module>/<mark>`: its own action, by
         // name through `brain-act`, or its module's page through `brain-open`
-        // (`LEADER b`) — both doors the keyboard has. Either button: a mark
-        // says one thing, and a second meaning would be a menu.
+        // (`LEADER b`) — both doors the keyboard has. Either button runs
+        // it — a second meaning would be a menu — but for a mark that says a
+        // second thing outright (`MarkId::aside`, the owner's 2026-11-09 ask:
+        // a right click on an account opens a new agent of it).
         //
         // A SET is one segment of many marks, each its own click: the one
         // drawn at `cell` (`brain::drawn_at`, the painter's own layout), and
         // nothing on its pads and its air.
         if crate::brain::is_set(id) {
             if let Some(mark) = crate::brain::drawn_at(id, cell) {
-                let (command, argument) = crate::brain::click_of(&mark);
+                let (command, argument) = crate::brain::click_of(&mark, !forward);
                 self.run_with(command, Some(&argument));
             }
             return;
         }
         if let Some(mark) = crate::brain::drawn_mark(id) {
-            let (command, argument) = crate::brain::click_of(&mark);
+            let (command, argument) = crate::brain::click_of(&mark, !forward);
             self.run_with(command, Some(&argument));
             return;
         }
@@ -5902,6 +5904,34 @@ impl Footer {
     /// Only the CLICKABLE ones answer. The others already say what they are —
     /// the buffer's name is the buffer's name — and a sentence explaining each
     /// of them would be a tooltip in everything but the surface it is drawn on.
+    /// [`Self::segment_hint`] as the runs the minibuffer draws: a brain
+    /// module's mark says the person's name for it and the value it stresses
+    /// in their inks (`brain::hint_in`; owner, 2026-11-09), and every other
+    /// segment one sentence in the line's.
+    fn segment_said(&self) -> Option<Vec<crate::chrome::Piece>> {
+        match self.here.segment_under_pointer {
+            Some(id) if crate::brain::is_mark(id) && self.adapter_target(id).is_none() => {
+                self.brain_said(id)
+            }
+            _ => self
+                .segment_hint()
+                .map(|t| vec![crate::chrome::Piece::said(t)]),
+        }
+    }
+
+    /// What a brain module's mark says under the pointer — in a set, the
+    /// mark under it does, and the pads and the air between glyphs say
+    /// nothing.
+    fn brain_said(&self, id: &str) -> Option<Vec<crate::chrome::Piece>> {
+        if crate::brain::is_set(id) {
+            self.here
+                .set_member_under_pointer
+                .and_then(|cell| crate::brain::hint_at(id, cell, &self.texts))
+        } else {
+            crate::brain::hint_of(id, &self.texts)
+        }
+    }
+
     fn segment_hint(&self) -> Option<String> {
         // AN ADAPTER'S SEGMENT says what its adapter says about it.
         if let Some(t) = self
@@ -6191,11 +6221,9 @@ impl Footer {
             // A BRAIN MODULE'S MARK says what its module wrote for it — in a
             // set, the mark under the pointer does, and the pads and the air
             // between glyphs say nothing.
-            id if crate::brain::is_set(id) => self
-                .here
-                .set_member_under_pointer
-                .and_then(|cell| crate::brain::hint_at(id, cell, &self.texts)),
-            id if crate::brain::is_mark(id) => crate::brain::hint_of(id, &self.texts),
+            id if crate::brain::is_mark(id) => self
+                .brain_said(id)
+                .map(|runs| runs.into_iter().map(|p| p.text).collect()),
 
             "state" => {
                 let now = self.state_now()?;
@@ -11991,9 +12019,10 @@ impl Footer {
     /// and the next hint, a row of the region or leaving the footer lets it
     /// go.
     fn linger(&mut self) {
-        let cut = self
-            .segment_hint()
-            .filter(|t| layout::width(t) > self.minibuffer_room);
+        let cut = self.segment_said().filter(|runs| {
+            let said: String = runs.iter().map(|p| p.text.as_str()).collect();
+            layout::width(&said) > self.minibuffer_room
+        });
         if cut.is_some() {
             self.lingering_hint = cut;
             return;
@@ -16784,10 +16813,7 @@ impl Footer {
             .band_hint
             .clone()
             .map(|t| vec![crate::chrome::Piece::said(t)])
-            .or_else(|| {
-                self.segment_hint()
-                    .map(|t| vec![crate::chrome::Piece::said(t)])
-            })
+            .or_else(|| self.segment_said())
             // AND THE BRAIN'S LINE, next down the screen: it sits under the
             // minibuffer and above the region, and this chain is the screen's
             // own order from the top.
@@ -16916,11 +16942,7 @@ impl Footer {
             // AND LAST, A HINT TOO LONG FOR THE LINE that the pointer left
             // on its way to the line and its chevron (`Footer::linger`):
             // anything else that explains itself takes the line first.
-            .or_else(|| {
-                self.lingering_hint
-                    .clone()
-                    .map(|t| vec![crate::chrome::Piece::said(t)])
-            });
+            .or_else(|| self.lingering_hint.clone());
         // WHERE THE POINTER IS, marked by a BACKGROUND — and, since the owner
         // reported it from the screen, where the FOCUS is by another.
         //

@@ -290,7 +290,8 @@ fn parsed(language: &str) -> Option<Result<Parsed, Missing>> {
 
 /// The language the environment names — `LC_ALL`, `LC_MESSAGES` and `LANG`,
 /// in that order, as POSIX does — or [`DEFAULT`]. Always a declared one.
-fn environment_language() -> String {
+#[must_use]
+pub fn environment_language() -> String {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
         let Ok(v) = std::env::var(var) else { continue };
         // `pt_BR.UTF-8` -> `pt-BR`.
@@ -561,11 +562,23 @@ impl Texts {
     /// existing call sites, which have no numbers, keep their shape.
     #[must_use]
     pub fn t_args(&self, key: &str, args: &[(&str, Arg<'_>)]) -> String {
+        self.format(key, self.fluent_of(args), args.is_empty())
+    }
+
+    /// [`Texts::t_args`], and WHERE each argument landed ([`Texts::t_marked`])
+    /// — a count still a number, so a plural picks its branch.
+    #[must_use]
+    pub fn t_args_marked(&self, key: &str, args: &[(&str, Arg<'_>)]) -> Marked {
+        self.marked(key, self.fluent_of(args), args.is_empty())
+    }
+
+    /// The arguments as Fluent takes them.
+    fn fluent_of<'a>(&self, args: &[(&str, Arg<'a>)]) -> fluent_bundle::FluentArgs<'a> {
         let mut fluent = fluent_bundle::FluentArgs::new();
         for (k, v) in args {
             match v {
-                Arg::Text(s) => fluent.set(*k, *s),
-                Arg::Number(n) => fluent.set(*k, *n),
+                Arg::Text(s) => fluent.set(k.to_string(), *s),
+                Arg::Number(n) => fluent.set(k.to_string(), *n),
                 // FORMATTED HERE, WHERE THE LANGUAGE IS. `fluent-bundle` is
                 // built without a number formatter — measured, not assumed:
                 // `225154` comes out ungrouped and `15.6` keeps its full stop
@@ -574,10 +587,10 @@ impl Texts {
                 //
                 // A `Number` is deliberately NOT treated this way: Fluent
                 // selects a plural branch on it, and a string has no branch.
-                Arg::Fraction(n) => fluent.set(*k, self.decimal(*n)),
+                Arg::Fraction(n) => fluent.set(k.to_string(), self.decimal(*n)),
             }
         }
-        self.format(key, fluent, args.is_empty())
+        fluent
     }
 
     /// One number with the separator this language writes.

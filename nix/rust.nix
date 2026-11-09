@@ -851,6 +851,11 @@ let
     ronoctua-rescue = { inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS; };
     ronoctua-install = { inherit (keyed) RONOCTUA_THEMES RONOCTUA_TEXTS; };
     ronoctua-player = { inherit (keyed) RONOCTUA_THEMES; };
+    # AND ONE THAT SPEAKS AND PAINTS NOTHING: the LLM accounts' CLI, whose
+    # status line says the account's windows when it has no line of the
+    # person's to chain (`statusline::said`) — in the person's language, from
+    # the texts of its own build.
+    ronoctua-llm = { inherit (keyed) RONOCTUA_TEXTS; };
   };
   wrapPainters = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (

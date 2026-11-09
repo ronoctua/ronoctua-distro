@@ -10,6 +10,14 @@
 //! over each door's [`Doorway`]. A question is asked on the door's own line
 //! (`Doorway::ask`) and its answer comes back to the region that asked.
 //!
+//! # Two columns, one page
+//!
+//! The view's rows are one list, each knowing its column; the region draws
+//! them side by side through the view's [`crate::agents::Page`], and reads
+//! the light and the click of a line at the cell the pointer is on — the
+//! half of a line, a tab — through the same page. `TAB` crosses the
+//! columns, so it walks no sections here.
+//!
 //! # The one clock
 //!
 //! A window that resets is "not known" from then on, and no file says so:
@@ -24,9 +32,9 @@
 
 use crate::agents::{
     LOGIN_COMMAND, OPEN_COMMAND, Open, Reach, Reader, SESSION_COMMAND, SHOW_COMMAND, View,
-    is_command, place_of, press_of_key, session_from_anywhere, show_agent, window_words,
+    is_command, place_of, show_agent, window_words,
 };
-use crate::region::{Closed, Doorway, Entry, Region, Row, Seen, Taken};
+use crate::region::{Closed, Doorway, Entry, Lit, Region, RegionEasel, Row, Seen, Taken};
 
 /// The id the footer ranks the view under (`surface::PRECEDENCE`).
 pub const ID: &str = "agents";
@@ -43,20 +51,17 @@ pub const ENTRY: Entry = Entry {
 
 /// What a command of the view does while it is CLOSED: the view (a mark's
 /// click hands it the account's place) and every command of the view open
-/// it — then the open region takes the command; its window opens without
-/// it, a session and a login from anywhere open in the terminal, and an
-/// agent named by its session (a click on its glyph on the modeline) is gone
-/// to without the view: the window it works in comes forward. With no
-/// session, the view opens on the agents' rows' way to it.
+/// it — then the open region takes the command; a session and a login open
+/// it on the file picker, the folder chosen before the terminal (a mark's
+/// right click hands them the account's place); its window opens without
+/// it, and an agent named by its session (a click on its glyph on the
+/// modeline) is gone to without the view: the window it works in comes
+/// forward. With no session, the view opens on the agents' rows' way to it.
 fn closed(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Closed {
     match command {
         OPEN_COMMAND => Closed::Opens,
         WINDOW_COMMAND => {
             way.open_window(window_words(argument));
-            Closed::Taken
-        }
-        SESSION_COMMAND | LOGIN_COMMAND => {
-            session_from_anywhere(command == LOGIN_COMMAND, place_of(argument), way);
             Closed::Taken
         }
         SHOW_COMMAND => match argument.map(str::trim).filter(|s| !s.is_empty()) {
@@ -112,12 +117,13 @@ impl Region for AgentsRegion {
     /// Every row a click that selects and a second that acts, each saying
     /// under the pointer what its `RET` does.
     fn rows(&self, seen: &Seen<'_>) -> Vec<Row> {
-        self.open
-            .rows(seen.columns, seen.texts)
-            .into_iter()
-            .map(|r| Row {
-                takes: r.takes(),
-                fields: r.fields,
+        let (rows, page) = self.open.page(seen.columns, seen.texts);
+        page.lines
+            .iter()
+            .enumerate()
+            .map(|(n, fields)| Row {
+                takes: page.takes(n, &rows),
+                fields: fields.clone(),
             })
             .collect()
     }
@@ -137,46 +143,50 @@ impl Region for AgentsRegion {
         Some(self.open.view.cursor())
     }
 
+    /// THE LINE THE CURSOR'S ROW IS DRAWN ON — side by side, a row of the
+    /// accounts' column and one of the options' share a line.
+    fn cursor_in(&self, seen: &Seen<'_>) -> Option<usize> {
+        let (_, page) = self.open.page(seen.columns, seen.texts);
+        page.line_of(self.open.view.cursor())
+    }
+
+    /// What a row does — in one list. Side by side a line is two rows, and
+    /// only the cell says which ([`Self::about_at`]).
     fn about(&self, row: usize, seen: &Seen<'_>) -> Option<String> {
-        let rows = self.open.rows(seen.columns, seen.texts);
-        View::about(&rows, row, seen.texts)
+        let (rows, page) = self.open.page(seen.columns, seen.texts);
+        if page.split.is_some() {
+            return None;
+        }
+        View::about(&rows, page.row_at(row, None)?, seen.texts)
     }
 
-    /// A PAIR WRAPPED OVER SEVERAL LINES IS ONE CONTROL: every line of it
-    /// lights with the one under the pointer, and a click on any takes the
-    /// first (`View::control_of`).
-    fn control_of(&self, row: usize, seen: &Seen<'_>) -> usize {
-        View::control_of(row, &self.open.rows(seen.columns, seen.texts))
+    /// What the row under the pointer does — on a line side by side, the
+    /// half the pointer is on; on the tabs, the tab.
+    fn about_at(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> Option<String> {
+        let (rows, page) = self.open.page(seen.columns, seen.texts);
+        View::about_at(&rows, page.row_at(row, cell)?, cell, seen.texts)
     }
 
-    /// The rows laid out once, each with its control (`Told::control`):
-    /// asked row by row, [`Self::control_of`] lays them out again for each.
-    fn told(&self, seen: &Seen<'_>, skip: usize, take: usize) -> Vec<crate::region::Told> {
-        let rows = self.open.rows(seen.columns, seen.texts);
-        rows.iter()
-            .enumerate()
-            .skip(skip)
-            .take(take)
-            .map(|(n, r)| crate::region::Told {
-                row: Row {
-                    takes: r.takes(),
-                    fields: r.fields.clone(),
-                },
-                control: Some(View::control_of(n, &rows)),
-                ..crate::region::Told::default()
-            })
-            .collect()
+    /// THE POINTER LIGHTS WHAT THE CLICK TAKES, cell by cell: the half of a
+    /// line side by side, one tab, the whole line in one list
+    /// (`Page::lit`, which the click reads too).
+    fn lit(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> Lit {
+        let (rows, page) = self.open.page(seen.columns, seen.texts);
+        page.lit(row, cell, &rows)
+    }
+
+    /// `TAB` crosses the columns — or reaches the file picker.
+    fn walks_sections(&self) -> bool {
+        false
     }
 
     /// Read by the whole notation through the reader the window calls too
-    /// (`agents::press_of_key`).
+    /// (`Open::key`): the file picker's, while it is up, then the view's.
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
-        match press_of_key(key) {
-            Some(press) => {
-                self.open.press(press, way);
-                Taken::Yes
-            }
-            None => Taken::No,
+        if self.open.key(key, way) {
+            Taken::Yes
+        } else {
+            Taken::No
         }
     }
 
@@ -195,18 +205,8 @@ impl Region for AgentsRegion {
             }
             WINDOW_COMMAND => way.open_window(window_words(argument)),
             SESSION_COMMAND | LOGIN_COMMAND => {
-                let login = id == LOGIN_COMMAND;
-                match place_of(argument) {
-                    None => self.open.press(
-                        if login {
-                            crate::agents::Press::Login
-                        } else {
-                            crate::agents::Press::Session
-                        },
-                        way,
-                    ),
-                    place => session_from_anywhere(login, place, way),
-                }
+                self.open
+                    .choose_at(place_of(argument), id == LOGIN_COMMAND, way);
             }
             other if is_command(other) => self.open.command(other, argument, way),
             _ => return Taken::No,
@@ -216,7 +216,47 @@ impl Region for AgentsRegion {
     }
 
     fn clicked(&mut self, row: usize, way: &mut dyn Doorway) {
-        self.open.clicked(row, way);
+        self.clicked_at(row, None, way);
+    }
+
+    /// The row of the view at that cell of the line: the half side by side,
+    /// the tab.
+    fn clicked_at(&mut self, row: usize, cell: Option<u16>, way: &mut dyn Doorway) {
+        self.open.clicked_at(row, cell, way);
+    }
+
+    /// The clipboard's text, for the file picker's `C-v`.
+    fn pasted(&mut self, text: &str, way: &mut dyn Doorway) {
+        self.open.pasted(text, way);
+    }
+
+    /// The file picker's `PgUp` and `PgDn` walk half of what the region
+    /// shows.
+    fn page_is(&self, lines: usize) {
+        self.open.view.page_is(lines);
+    }
+
+    /// THE RULE BETWEEN THE TWO COLUMNS, side by side — lit while the
+    /// accounts' has the keyboard, the file manager's focus mark.
+    fn paint(&self, easel: &mut RegionEasel<'_>) {
+        let columns =
+            ronoctua_tokens::metrics::columns(easel.area.width, ronoctua_tokens::text::size());
+        let (rows, page) = self.open.page(columns, easel.texts);
+        let Some(split) = page.split else {
+            return;
+        };
+        let f = easel.area.frame();
+        let at = split.saturating_sub(1);
+        let x = f32::from(crate::chrome::FIELDS_LEAD + at) * f.cell() + f.cell() / 2.0;
+        let lit = rows
+            .get(self.open.view.cursor())
+            .is_some_and(|r| r.pane == crate::agents::Pane::Accounts);
+        let top = f.y_of(easel.area.first);
+        easel.under.push(if lit {
+            crate::chrome::divider_lit(x, top, f.bottom())
+        } else {
+            crate::chrome::divider(x, top, f.bottom())
+        });
     }
 
     /// What was typed on the footer's line: the same `View::answered` the
@@ -379,6 +419,155 @@ mod tests {
         let esc = ronoctua_keymap::Key::parse("ESC").expect("a key");
         assert_eq!(r.key(esc, &mut w), Taken::Yes);
         assert!(w.owed.contains(&Effect::Close), "{:?}", w.owed);
+    }
+
+    /// The footer's width at which the two columns stand side by side.
+    const WIDE: u16 = 160;
+
+    /// Accounts to draw — never this machine's.
+    fn with_accounts(_: &ronoctua_files::when::Zone) -> crate::agents::Readings {
+        crate::agents::tests::readings()
+    }
+
+    /// FAILS IF: side by side, the pointer over one half of a line lights
+    /// what a click there does not take — the blank beside a row of the
+    /// other column, a title, the tab shown — or leaves unlit a half whose
+    /// click takes it, or lights across both columns; or a click where
+    /// nothing lights does something. The light is read at the cell, as the
+    /// click is (`Page::lit`, `Page::row_at`).
+    #[test]
+    fn side_by_side_the_pointer_lights_the_half_a_click_takes() {
+        use crate::region::Lit;
+        let t = texts();
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &t,
+            columns: WIDE,
+            lines: 80,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let fresh = || AgentsRegion {
+            open: Open::new(
+                ronoctua_files::when::Zone::utc(),
+                Reader::Here(with_accounts),
+                Reach::Nowhere(Vec::new()),
+                None,
+                WIDE,
+                &texts(),
+            ),
+        };
+        let wide_way = || {
+            Recorder::new(
+                std::rc::Rc::new(texts()),
+                WIDE,
+                true,
+                crate::sudo::Gate::shut(),
+                crate::wake::Wake::new(|| {}),
+            )
+        };
+        let split = crate::agents::split_of(WIDE).expect("side by side");
+        let first = fresh();
+        let rows = first.rows(&seen);
+        assert!(rows.len() >= 10, "{} lines", rows.len());
+        let (mut lit_left, mut lit_right, mut dark) = (false, false, false);
+        for (n, row) in rows.iter().enumerate() {
+            for cell in [2, split + 2] {
+                let lit = first.lit(n, Some(cell), &seen);
+                let lights = row.takes && lit != Lit::Nothing;
+                if let Lit::Cells(from, to) = lit {
+                    assert!(
+                        (from..to).contains(&cell) && (to <= split || from >= split),
+                        "line {n} at {cell} lights {from}..{to}, across the columns"
+                    );
+                }
+                let mut r = fresh();
+                let mut w = wide_way();
+                let before = crate::region::seen(&r, &w.owed, &seen);
+                r.clicked_at(n, Some(cell), &mut w);
+                let did = crate::region::seen(&r, &w.owed, &seen) != before;
+                // THE ROW THE CURSOR STANDS ON is the click's whatever its
+                // `RET` does (`region::Held::here`): born on the account.
+                let here = first.cursor_in(&seen) == Some(n) && cell >= split;
+                assert!(
+                    lights == did || (lights && here),
+                    "line {n} at cell {cell} is lit {lights} and a click there did {did}"
+                );
+                lit_left |= lights && cell < split;
+                lit_right |= lights && cell >= split;
+                dark |= !lights;
+            }
+        }
+        assert!(
+            lit_left && lit_right && dark,
+            "the columns were not both reached"
+        );
+    }
+
+    /// FAILS IF: a session or a login named by a mark's place — its right
+    /// click — does anything with the view closed but open it, or the open
+    /// view does not put the folder's question up for that account.
+    #[test]
+    fn a_marks_right_click_opens_the_view_on_the_folder_for_its_account() {
+        let mut w = way();
+        assert_eq!(closed(SESSION_COMMAND, Some("2"), &mut w), Closed::Opens);
+        assert_eq!(closed(LOGIN_COMMAND, None, &mut w), Closed::Opens);
+        assert!(w.owed.is_empty(), "a closed view did {:?}", w.owed);
+        let mut r = AgentsRegion {
+            open: Open::new(
+                ronoctua_files::when::Zone::utc(),
+                Reader::Here(with_accounts),
+                Reach::Nowhere(Vec::new()),
+                None,
+                100,
+                &texts(),
+            ),
+        };
+        assert_eq!(r.command(SESSION_COMMAND, Some("2"), &mut w), Taken::Yes);
+        assert_eq!(
+            r.open.view.picking().map(|p| (p.account.as_str(), p.login)),
+            Some(("codex-1", false))
+        );
+        assert!(
+            r.open.done().is_empty(),
+            "something opened before the folder"
+        );
+    }
+
+    /// FAILS IF: `LEADER / a n` with the view closed — no place, and the
+    /// first reading not here yet — says there is no account instead of
+    /// choosing the folder for the list's default one; or chooses one for a
+    /// list with no account.
+    #[test]
+    fn a_session_before_the_first_reading_is_the_lists_default() {
+        let fresh = |read: fn(&ronoctua_files::when::Zone) -> crate::agents::Readings| {
+            let mut open = Open::new(
+                ronoctua_files::when::Zone::utc(),
+                Reader::Here(read),
+                Reach::Nowhere(Vec::new()),
+                None,
+                100,
+                &texts(),
+            );
+            open.readings.read = false;
+            open
+        };
+        let mut none = fresh(|_| crate::agents::Readings::default());
+        let mut w = way();
+        none.choose_at(None, false, &mut w);
+        assert!(none.view.picking().is_none());
+        assert!(
+            w.owed.iter().any(|e| matches!(e, Effect::Say(..))),
+            "nothing was said: {:?}",
+            w.owed
+        );
+        let mut listed = fresh(with_accounts);
+        listed.choose_at(None, true, &mut way());
+        assert_eq!(
+            listed.view.picking().map(|p| (p.account.as_str(), p.login)),
+            Some(("claude-1", true))
+        );
     }
 
     /// FAILS IF: a resting pointer lights a row of the footer's region a

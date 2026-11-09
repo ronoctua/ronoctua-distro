@@ -916,6 +916,18 @@
     splitAtPct = 60;
   };
 
+  # THE LLM ACCOUNTS IN TWO COLUMNS (owner, 2026-11-09): what is the whole
+  # list's on the left — adding an account, the endpoint, the lines a mark
+  # changes colour at — and the accounts on the right, one at a time under a
+  # row of tabs. Side by side from `besideFrom` columns, the footer's region
+  # at any laptop's width; stacked below it, the accounts first.
+  agents = {
+    besideFrom = 110;
+    # The ACCOUNTS get the wider column: their rows are bars, counts by day
+    # and agents with their folders, where the options are a word or two.
+    optionsPct = 38;
+  };
+
   rule = {
     thickness = 1;
   };

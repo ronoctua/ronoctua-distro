@@ -720,6 +720,23 @@
       # same weight, so nothing on the line jumps) with more of its own hue. The
       # brain lit its keys in `text.once` and its words in the content's grey,
       # which were other colours altogether; these are the same colours, lit.
+      # WHAT A MARK TELLS THE POINTER, IN TWO INKS OF ITS OWN (owner,
+      # 2026-11-09): the person's NAME for what the line is about — an
+      # account, the folder an agent works in — and the VALUE the hand came
+      # for — an account's week used, an agent's task. He asked for each "in
+      # another colour", so each is a HUE and not a weight: the group's
+      # purple for the name, an orange with more of its colour for the value
+      # (the plain one sat on papyrus's warm ink). Both on the text rung, told
+      # from every ink of the line, from each other and from the warning's
+      # yellow by the distance gates — a share drawn in orange must not read
+      # as one running out.
+      named = {
+        of = "group.text";
+      };
+      figure = {
+        of = "orange.text";
+        chroma = 1.5;
+      };
       lit = {
         key = {
           of = "subtle.text";

@@ -975,6 +975,7 @@ mod tests {
                 count,
                 act: None,
                 opens: None,
+                aside: None,
                 instance: 0,
                 label: None,
                 also: Vec::new(),

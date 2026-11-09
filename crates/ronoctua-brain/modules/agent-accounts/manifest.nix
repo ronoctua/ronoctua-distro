@@ -93,8 +93,10 @@
   # (`assets/brain-resting-marks.nix`, AGENTS.md): the account is there while
   # it is quiet, and its colour says when it is not. The set is the
   # account's place in the person's list, the same in the accounts' view, so
-  # nine accounts at most have one; its lead draws no digit, and a click on
-  # it opens the accounts' view on that account (`agents-open <n>`). An API
+  # nine accounts at most have one; its lead draws no digit, a click on it
+  # opens the accounts' view on that account (`agents-open <n>`), and a right
+  # click a new agent of it, in a folder chosen where its last one was
+  # (`agents-session <n>`, `MarkId::aside`; owner, 2026-11-09). An API
   # key's turns to danger while Claude Code says its credits ran out, and is
   # quiet otherwise: a key has no window to fill.
   #

@@ -34,6 +34,12 @@ pub const OPENS: &str = "agents-open";
 /// the click hands the agent's session (`MarkId::key`).
 pub const SHOWS: &str = "agents-show";
 
+/// The shell's command the OTHER button on an account's lead runs: a new
+/// agent of that account, in a folder the person chooses — opened where the
+/// last one was (owner, 2026-11-09). The click hands it the set's number, as
+/// it hands [`OPENS`].
+pub const STARTS: &str = "agents-session";
+
 /// The person's lines, in the module's configuration folder.
 pub const LINES_FILE: &str = "lines.json";
 
@@ -898,7 +904,10 @@ pub fn marks_for(
         let week = seen.week_at(now);
         let used = week.map(|w| whole_percent(w.used_percent));
         out.push(Mark {
-            id: lead.in_set(set, Some(seen.name.clone())).opening(OPENS),
+            id: lead
+                .in_set(set, Some(seen.name.clone()))
+                .opening(OPENS)
+                .opening_aside(STARTS),
             tone: account_tone(seen, lines, now),
             count: used
                 .filter(|p| *p >= u32::from(lines.warn_percent))
@@ -908,7 +917,7 @@ pub fn marks_for(
                 .zip(used)
                 .map(|(w, p)| {
                     Told::of(super::key::AGENT_ACCOUNTS_TOLD_WEEK)
-                        .with("percent", Arg::Number(i64::from(p)))
+                        .stressing("percent", Arg::Percent(p))
                         .with("when", Arg::Moment(w.resets_at_s))
                 })
                 .into_iter()
@@ -971,7 +980,8 @@ fn agent_told(a: &AgentSeen) -> Vec<Told> {
     let mut out = Vec::new();
     if let Some(title) = &a.title {
         out.push(
-            Told::of(super::key::AGENT_ACCOUNTS_TOLD_TITLE).with("title", Arg::Text(title.clone())),
+            Told::of(super::key::AGENT_ACCOUNTS_TOLD_TITLE)
+                .stressing("title", Arg::Text(title.clone())),
         );
     }
     if let Some(doing) = &a.doing_now {
@@ -1070,9 +1080,20 @@ mod tests {
         assert_eq!(
             full.told[0].args,
             vec![
-                ("percent".into(), Arg::Number(85)),
+                ("percent".into(), Arg::Percent(85)),
                 ("when".into(), Arg::Moment(NOON + 3600)),
             ]
+        );
+        // THE SHARE IS WHAT THE HAND CAME FOR: stressed, and the moment not
+        // (owner, 2026-11-09).
+        assert_eq!(
+            full.told[0].stressed,
+            vec![std::borrow::Cow::Borrowed("percent")]
+        );
+        // A CLICK opens the account; THE OTHER BUTTON a new agent of it.
+        assert_eq!(
+            (full.id.opens.as_deref(), full.id.aside.as_deref()),
+            (Some(OPENS), Some(STARTS))
         );
         // BELOW THE LINE: said under the pointer, not drawn beside.
         let half = lead(vec![window(50.0, NOON + 60)]);
@@ -1127,6 +1148,15 @@ mod tests {
                     )]
                 ),
             ]
+        );
+        // ITS TASK IS STRESSED, what it is doing this moment is not.
+        assert_eq!(
+            marks[1]
+                .told
+                .iter()
+                .map(|t| t.stressed.len())
+                .collect::<Vec<_>>(),
+            vec![1, 0]
         );
         assert!(
             marks[2].told.is_empty(),

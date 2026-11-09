@@ -784,6 +784,9 @@ pub struct Drawn {
     /// The shell's command a click runs instead, when the module's mark
     /// opens an app of the shell (`MarkId::opens`) — by name, as `LEADER :`.
     pub opens: Option<&'static str>,
+    /// The command the OTHER button runs, when the mark means a second thing
+    /// from it (`MarkId::aside`) — handed what [`Drawn::opens`] is.
+    pub aside: Option<&'static str>,
     /// Which of its mark's instances it is, from 1 (`MarkId::instance`);
     /// `0` for a mark that is one. Drawn as the digit beside the glyph, and
     /// handed to [`Drawn::opens`] as its argument on a click.
@@ -807,8 +810,9 @@ pub struct Drawn {
     /// Never interned: there are as many as there are agents.
     pub key: Option<String>,
     /// What the pointer is told besides the hint (`Mark::told`), each
-    /// sentence made in the person's language, date and zone.
-    pub told: Vec<String>,
+    /// sentence made in the person's language, date and zone — as the runs
+    /// the minibuffer draws, the values the module stresses in their ink.
+    pub told: Vec<Vec<crate::chrome::Piece>>,
 }
 
 /// The marks one mind publishes, in the order the modules published them —
@@ -880,6 +884,7 @@ fn drawn_of(
         // A COMMAND BY NAME, interned like the segment's id: the click hands
         // it to `run_with`, which takes `&'static str`.
         opens: mark.id.opens.as_deref().and_then(interned),
+        aside: mark.id.aside.as_deref().and_then(interned),
         instance: mark.id.instance,
         label: mark.id.label.as_deref().map(ToOwned::to_owned),
         also: mark.id.also.clone(),
@@ -889,7 +894,7 @@ fn drawn_of(
         told: mark
             .told
             .iter()
-            .map(|t| crate::mind_wire::sentence(&t.says, &t.args, zone, texts))
+            .map(|t| crate::mind_wire::told_runs(t, zone, texts))
             .collect(),
     })
 }
@@ -1056,7 +1061,11 @@ pub fn member_start(id: &str, cell: u16) -> Option<u16> {
 /// What the minibuffer says while the pointer rests on `cell` of a mark's
 /// segment: the hint of the member of a set there, or of the mark.
 #[must_use]
-pub fn hint_at(id: &str, cell: u16, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn hint_at(
+    id: &str,
+    cell: u16,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Vec<crate::chrome::Piece>> {
     hint_in(&drawn_at(id, cell)?, texts)
 }
 
@@ -1092,45 +1101,55 @@ pub fn colour_of(id: &str) -> tokens::Color {
 /// of its instances, the instance's number and the person's name for it —
 /// then the hint of every other case the mark stands for, in its order.
 #[must_use]
-pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn hint_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<Vec<crate::chrome::Piece>> {
     hint_in(&drawn_mark(id)?, texts)
 }
 
-/// The same, for a mark in hand.
+/// The same, for a mark in hand — as the runs the minibuffer draws: the
+/// person's name for the thing (`$label`) in its ink, each value a module
+/// stresses in its own (owner, 2026-11-09), and the rest as the line says.
 #[must_use]
-pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn hint_in(d: &Drawn, texts: &ronoctua_i18n::Texts) -> Option<Vec<crate::chrome::Piece>> {
+    use crate::chrome::Register;
     (!d.hint.is_empty()).then(|| {
         let number = number_of(d).to_string();
-        let own = texts.t_args(&d.hint, &hint_args(d, &number));
+        let own = crate::chrome::marked_sentence(
+            texts,
+            &d.hint,
+            &hint_args(d, &number),
+            |name| (name == "label").then_some(Register::Named),
+            Register::Said,
+        );
+        let also = |first: &[crate::chrome::Piece], then: &[crate::chrome::Piece]| {
+            crate::chrome::spliced(
+                texts,
+                crate::key::BRAIN_MARK_ALSO,
+                &[("first", first), ("then", then)],
+                Register::Said,
+            )
+        };
         // AND WHAT IT TELLS BESIDES, FIRST (owner, 2026-11-09): an account's
         // week and when it starts over, what an agent is working on — what
         // the hand came for, and the hint after it is the part a short line
         // cuts.
-        let own = d.told.iter().rev().fold(own, |said, told| {
-            texts.t_args(
-                crate::key::BRAIN_MARK_ALSO,
-                &[
-                    ("first", ronoctua_i18n::Arg::Text(told)),
-                    ("then", ronoctua_i18n::Arg::Text(&said)),
-                ],
-            )
-        });
+        let own = d
+            .told
+            .iter()
+            .rev()
+            .fold(own, |said, told| also(told, &said));
         // EVERY OTHER CASE, after the mark's own (owner, 2026-11-02): the
         // shield of two things that are off said one of them, and the other
         // went unread. A case is never an instance (the core refuses one),
         // so its `$count` is all its hint is made with.
-        d.also.iter().fold(own, |said, also| {
-            let then = texts.t_args(
-                &also.hint,
-                &[("count", ronoctua_i18n::Arg::Number(i64::from(also.count)))],
+        d.also.iter().fold(own, |said, other| {
+            let then = crate::chrome::marked_sentence(
+                texts,
+                &other.hint,
+                &[("count", ronoctua_i18n::Arg::Number(i64::from(other.count)))],
+                |_| None,
+                Register::Said,
             );
-            texts.t_args(
-                crate::key::BRAIN_MARK_ALSO,
-                &[
-                    ("first", ronoctua_i18n::Arg::Text(&said)),
-                    ("then", ronoctua_i18n::Arg::Text(&then)),
-                ],
-            )
+            also(&said, &then)
         })
     })
 }
@@ -1178,7 +1197,7 @@ pub fn hint_args<'a>(d: &'a Drawn, number: &'a str) -> [(&'static str, ronoctua_
 /// mark's own action through `brain-act`, or the module's page through
 /// `brain-open` — all reachable by name, and `brain-open` is `LEADER b`.
 #[must_use]
-pub fn click_of(d: &Drawn) -> (&str, String) {
+pub fn click_of(d: &Drawn, aside: bool) -> (&str, String) {
     // A MODULE WITH A CENTRE OF ITS OWN: the security centre's watch opens
     // the centre on the section its mark is about — the one every case it
     // stands for is in, or the one that lists them all — which is where what
@@ -1191,7 +1210,10 @@ pub fn click_of(d: &Drawn) -> (&str, String) {
     // module named — with the key after it (an agent's session), or the
     // instance's number, or the set's (the third account's lead opens on the
     // third), nothing for a mark that is one.
-    if let Some(command) = d.opens {
+    // THE OTHER BUTTON, on a mark that means a second thing from it: its
+    // command, handed what the first one is.
+    let opens = if aside { d.aside.or(d.opens) } else { d.opens };
+    if let Some(command) = opens {
         let argument = match (&d.key, d.instance, d.set) {
             (Some(key), _, _) => key.clone(),
             (None, n, _) if n > 0 => n.to_string(),
@@ -1433,6 +1455,59 @@ mod tests {
 
     fn words() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").unwrap()
+    }
+
+    /// What a hint's runs read, whole.
+    fn text_of(runs: &[crate::chrome::Piece]) -> String {
+        runs.iter().map(|p| p.text.as_str()).collect()
+    }
+
+    /// FAILS IF: the person's name for a mark is not drawn in its own ink, a
+    /// value the module stresses is not drawn in the value's (or one it does
+    /// not stress is), the sentence around them leaves the line's ink, or the
+    /// other button of a mark that means a second thing runs anything but
+    /// that thing — with the same argument (owner, 2026-11-09).
+    #[test]
+    fn a_marks_name_and_stressed_value_wear_their_inks_and_its_other_button_its_command() {
+        use crate::chrome::Register;
+        use ronoctua_brain::module::{Arg, Told};
+        let lead =
+            MarkId::declared_in_sets("lead", "fixture-lead", "files-fact-says", 0, true, 9, true)
+                .in_set(2, Some("Work".to_owned()))
+                .opening("fixture-open")
+                .opening_aside("fixture-start");
+        let m = Mind {
+            marks: vec![Posted {
+                module: "fixture".to_owned(),
+                what: Mark {
+                    id: lead,
+                    tone: Tone::Quiet,
+                    count: 0,
+                    act: None,
+                    told: vec![
+                        Told::of("files-fact-says")
+                            .stressing("value", Arg::Text("85%".to_owned()))
+                            .with("label", Arg::Text("The week".to_owned())),
+                    ],
+                },
+            }],
+            ..Mind::default()
+        };
+        let drawn = marks(Some(&m), &ZONE, &words());
+        let runs = hint_in(&drawn[0], &words()).expect("a hint");
+        let ink = |text: &str| runs.iter().find(|p| p.text == text).map(|p| p.register);
+        assert_eq!(ink("Work"), Some(Register::Named), "{runs:?}");
+        assert_eq!(ink("85%"), Some(Register::Figure), "{runs:?}");
+        assert_eq!(ink("The week"), Some(Register::Said), "{runs:?}");
+        assert!(text_of(&runs).starts_with("The week: 85%"), "{runs:?}");
+        assert_eq!(click_of(&drawn[0], false), ("fixture-open", "2".to_owned()));
+        assert_eq!(click_of(&drawn[0], true), ("fixture-start", "2".to_owned()));
+        // A MARK THAT MEANS ONE THING runs it from either button.
+        let one = Drawn {
+            aside: None,
+            ..drawn[0].clone()
+        };
+        assert_eq!(click_of(&one, true), ("fixture-open", "2".to_owned()));
     }
 
     fn announced(total: u16, deadline: i64) -> Announcement {
@@ -2049,9 +2124,12 @@ mod tests {
             tokens::color::MODELINE_FOLLOWING
         );
         assert!(hint_in(&drawn[0], &words()).is_some_and(|h| !h.is_empty()));
-        assert_eq!(click_of(&drawn[0]), ("brain-open", "fixture".to_owned()));
         assert_eq!(
-            click_of(&drawn[1]),
+            click_of(&drawn[0], false),
+            ("brain-open", "fixture".to_owned())
+        );
+        assert_eq!(
+            click_of(&drawn[1], false),
             ("brain-act", "fixture-watch seen".to_owned())
         );
         // AN ACT IS THE MODULE'S, whatever it spells: a command of the
@@ -2061,7 +2139,7 @@ mod tests {
             ..drawn[1].clone()
         };
         assert_eq!(
-            click_of(&spelled),
+            click_of(&spelled, false),
             ("brain-act", "fixture-watch command:fixture-open".to_owned())
         );
         // THE SAME ID IS THE SAME STATIC, however often it is asked for.
@@ -2111,18 +2189,18 @@ mod tests {
             also: Vec::new(),
             ..drawn[0].clone()
         };
-        let first = hint_in(&alone, &texts).unwrap();
+        let first = text_of(&hint_in(&alone, &texts).unwrap());
         let then = texts.t_args(crate::key::BRAIN_BAND_MORE, &[("count", Arg::Number(4))]);
         assert!(then.contains('4'), "{then}");
         assert_eq!(
-            hint_in(&drawn[0], &texts),
+            hint_in(&drawn[0], &texts).map(|h| text_of(&h)),
             Some(texts.t_args(
                 crate::key::BRAIN_MARK_ALSO,
                 &[("first", Arg::Text(&first)), ("then", Arg::Text(&then))],
             ))
         );
         assert_ne!(
-            hint_in(&drawn[0], &texts),
+            hint_in(&drawn[0], &texts).map(|h| text_of(&h)),
             Some(first),
             "the other case said"
         );
@@ -2140,7 +2218,7 @@ mod tests {
                 &ZONE,
                 &words(),
             );
-            let (command, argument) = click_of(&drawn[0]);
+            let (command, argument) = click_of(&drawn[0], false);
             (command.to_owned(), argument)
         };
         assert_eq!(
@@ -2185,7 +2263,7 @@ mod tests {
             ..Mind::default()
         };
         let drawn = marks(Some(&m), &ronoctua_files::when::Zone::utc(), &words());
-        assert_eq!(click_of(&drawn[0]), ("fixture-open", String::new()));
+        assert_eq!(click_of(&drawn[0], false), ("fixture-open", String::new()));
     }
 
     /// FAILS IF: one of a mark's instances is not its own segment
@@ -2220,8 +2298,8 @@ mod tests {
         let glyph = tokens::icon::BRAIN;
         assert_eq!(drawn[0].text, format!("{glyph} 1"));
         assert_eq!(drawn[1].text, format!("{glyph} 3"));
-        assert_eq!(click_of(&drawn[0]), ("fixture-open", "1".to_owned()));
-        assert_eq!(click_of(&drawn[1]), ("fixture-open", "3".to_owned()));
+        assert_eq!(click_of(&drawn[0], false), ("fixture-open", "1".to_owned()));
+        assert_eq!(click_of(&drawn[1], false), ("fixture-open", "3".to_owned()));
         // THE HINT'S VALUES: the number and the person's word, or nothing
         // where they gave none.
         let text = |d: &Drawn, name: &str| {
@@ -2332,7 +2410,7 @@ mod tests {
         };
         let drawn = marks(Some(&m), &ZONE, &words());
         assert!(drawn[0].text.ends_with(" 85%"), "{:?}", drawn[0].text);
-        let said = hint_in(&drawn[0], &words()).expect("a hint");
+        let said = text_of(&hint_in(&drawn[0], &words()).expect("a hint"));
         let (told, own) = said.split_once(" · ").expect("told before the hint");
         assert!(
             told.contains("example.org") && told.contains("14:32"),
@@ -2517,10 +2595,13 @@ mod tests {
                 .find(|d| d.instance == instance && d.count == count)
                 .expect("a member")
         };
-        assert_eq!(click_of(by(0, 0)), ("fixture-open", "2".to_owned()));
-        assert_eq!(click_of(by(3, 0)), ("fixture-open", "abc-123".to_owned()));
-        assert_eq!(click_of(by(5, 0)), ("fixture-open", "5".to_owned()));
-        assert_eq!(click_of(by(0, 4)), ("fixture-open", "2".to_owned()));
+        assert_eq!(click_of(by(0, 0), false), ("fixture-open", "2".to_owned()));
+        assert_eq!(
+            click_of(by(3, 0), false),
+            ("fixture-open", "abc-123".to_owned())
+        );
+        assert_eq!(click_of(by(5, 0), false), ("fixture-open", "5".to_owned()));
+        assert_eq!(click_of(by(0, 4), false), ("fixture-open", "2".to_owned()));
         // AND THE HINT KNOWS ITS SET, as a number.
         let number = by(3, 0).instance.to_string();
         let args = hint_args(by(3, 0), &number);

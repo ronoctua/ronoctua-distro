@@ -163,7 +163,7 @@ let
     privateRoot = program "ronoctua-private-root" plainly;
     incusJob = program "ronoctua-incus-job" "its [[bin]] requires the feature cli, and no member of the build enabled it";
     # The LLM CLI, the push to the person's cache, the stick's root writer.
-    llm = program "ronoctua-llm" plainly;
+    llm = wrapped "ronoctua-llm" "ronoctua-llm";
     # VS Code's extensions: the record the user path unit runs.
     vscode = program "ronoctua-vscode" plainly;
     cachix = program "ronoctua-cachix" plainly;

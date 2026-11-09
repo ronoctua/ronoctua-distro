@@ -163,6 +163,9 @@ files-explain-owner = { $who } é o dono; clicar troca
 transfers-pause = segurar ou soltar esta transferência
 cmd-transfers-pause = segurar ou soltar
 # A TELA EM SI.
+# A SHARE IN PER CENT a brain module's sentence carries (`Arg::Percent`): the
+# number with the language's sign, one value.
+mind-percent = { $percent }%
 brain-title = Brain
 brain-why-no-systemctl = Sem systemd aqui
 brain-why-runaway = Parou de dar notícia e a espera acabou. Pode muito bem ainda estar rodando.
