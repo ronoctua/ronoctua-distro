@@ -95,6 +95,11 @@ pub struct Place {
     /// no gap between them. The sets touch, so their two alternating
     /// grounds read as one ribbon cut into accounts.
     pub touching: bool,
+    /// The air it keeps, BEYOND the line's gap, from the segment nearer the
+    /// edge that it does not touch — the cells after a group: the LLM
+    /// accounts' sets stand a little apart from the glyphs on their right
+    /// (owner, 2026-11-09). `0` for none.
+    pub apart: u16,
 }
 
 /// The rung a right-hand segment is placed at: its [`Place`]'s, or its
@@ -117,6 +122,18 @@ fn touch(a: &Segment, b: &Segment) -> bool {
     }
 }
 
+/// The air between two right-hand neighbours, `nearer` the edge and
+/// `farther` from it: none when they touch, else the line's gap and what the
+/// farther one keeps apart ([`Place::apart`]). ONE ANSWER for the line's cost
+/// ([`gaps`]) and the placing ([`resolve`]).
+fn air(nearer: &Segment, farther: &Segment, gap: u16) -> u16 {
+    if touch(nearer, farther) {
+        0
+    } else {
+        gap + farther.place.map_or(0, |p| p.apart)
+    }
+}
+
 /// The right-hand side in the order it is placed, FROM THE EDGE INWARDS:
 /// by rung, and among one rung in the order the segments were pushed (the
 /// sort is stable). Indices into `segments`.
@@ -129,7 +146,8 @@ fn right_in_place(segments: &[&Segment]) -> Vec<usize> {
 }
 
 /// The cells the GAPS between the drawn segments take: one gap between every
-/// two of them, less one for each pair of right-hand neighbours that touch.
+/// two of them, and between right-hand neighbours what [`air`] says — none
+/// for a pair that touches, more after a group that stands apart.
 ///
 /// ONE ANSWER for the two places that charge the line for its air — the
 /// drop's cost and the shrink's total — so the line that decides what goes
@@ -145,9 +163,8 @@ fn gaps(segments: &[&Segment], widths: &[u16], gap: u16) -> u32 {
         .collect();
     let mut cells = u32::from(gap) * (live.len().saturating_sub(1) as u32);
     for pair in right_in_place(&live).windows(2) {
-        if touch(live[pair[0]], live[pair[1]]) {
-            cells = cells.saturating_sub(u32::from(gap));
-        }
+        let between = air(live[pair[0]], live[pair[1]], gap);
+        cells = cells.saturating_sub(u32::from(gap)) + u32::from(between);
     }
     cells
 }
@@ -568,11 +585,10 @@ pub fn resolve(columns: u16, segments: &[Segment]) -> Vec<Placed> {
     for i in right_in_place(&alive) {
         let s = alive[i];
         let w = widths[i];
-        // THE AIR BEFORE IT, unless it touches the one nearer the edge.
-        if let Some(n) = nearer
-            && !touch(n, s)
-        {
-            dir = dir.saturating_sub(gap);
+        // THE AIR BEFORE IT: none when it touches the one nearer the edge,
+        // more after a group that stands apart (`air`).
+        if let Some(n) = nearer {
+            dir = dir.saturating_sub(air(n, s, gap));
         }
         nearer = Some(s);
         dir = dir.saturating_sub(w);
@@ -757,6 +773,8 @@ mod tests {
         }
         let touching = r.up_to(4) > 0;
         let rung = u8::try_from(10 + r.up_to(10)).unwrap_or(18);
+        // THE AIR THE GROUP KEEPS APART after it, none to some.
+        let apart = u16::try_from(r.up_to(4)).unwrap_or(0);
         for id in SETS.iter().take(r.up_to(10) as usize) {
             out.push(Segment {
                 id,
@@ -766,7 +784,11 @@ mod tests {
                 side: Side::Right,
                 shrink: Shrink::Cut,
                 removable: true,
-                place: Some(Place { rung, touching }),
+                place: Some(Place {
+                    rung,
+                    touching,
+                    apart,
+                }),
             });
         }
         out
@@ -783,25 +805,36 @@ mod tests {
             .collect()
     }
 
-    /// FAILS IF: a place changes WHICH segments go — the drop order is the
-    /// priority's alone, and touching only saves cells, so a placed line
-    /// keeps at least what the same line keeps unplaced — or the segment of
-    /// the highest rung is not the one farthest from the edge.
+    /// FAILS IF: a place leaks past the line — with the air a group keeps
+    /// apart, which the line pays for — or changes WHICH segments go: the
+    /// drop order is the priority's alone, and touching only saves cells, so
+    /// a placed line with no air apart keeps at least what the same line
+    /// keeps unplaced; or the segment of the highest rung is not the one
+    /// farthest from the edge.
     #[test]
     fn a_place_is_not_a_drop_order() {
         let mut r = Draw(0x2026_1102);
         for iteration in 0..5_000 {
             let columns = u16::try_from(r.up_to(160)).unwrap_or(0);
-            let segs = draw_placed(&mut r);
-            let placed = resolve(columns, &segs);
-            let plain = resolve(columns, &unplaced(&segs));
-            for c in &placed {
+            let drawn = draw_placed(&mut r);
+            for c in &resolve(columns, &drawn) {
                 assert!(
                     c.column.saturating_add(width(&c.text)) <= columns,
                     "iteration {iteration}: `{}` leaks at {columns} columns",
                     c.id
                 );
             }
+            // THE AIR APART IS AIR SPENT, so the drop order is asked of the
+            // line without it.
+            let segs: Vec<Segment> = drawn
+                .into_iter()
+                .map(|s| Segment {
+                    place: s.place.map(|p| Place { apart: 0, ..p }),
+                    ..s
+                })
+                .collect();
+            let placed = resolve(columns, &segs);
+            let plain = resolve(columns, &unplaced(&segs));
             for kept in &plain {
                 let there = placed.iter().find(|c| c.id == kept.id);
                 assert!(
@@ -845,7 +878,8 @@ mod tests {
 
     /// FAILS IF: two touching neighbours at one rung have air between them,
     /// or one of them lands on the other — the farther one ends where the
-    /// nearer begins — or a segment that does not touch loses its gap.
+    /// nearer begins — or a segment that does not touch loses its gap, or
+    /// the air a group keeps apart after it ([`Place::apart`]).
     #[test]
     fn touching_segments_touch() {
         let gap = tokens::space::MODELINE_SEGMENTGAP;
@@ -876,8 +910,9 @@ mod tests {
                         farther.id, nearer.id
                     );
                 } else {
+                    let apart = of(farther.id).place.map_or(0, |p| p.apart);
                     assert_eq!(
-                        end + gap,
+                        end + gap + apart,
                         nearer.column,
                         "iteration {iteration}: `{}` and `{}` lost their gap",
                         farther.id,
@@ -902,6 +937,7 @@ mod tests {
                 s.place = Some(Place {
                     rung: u8::try_from(r.up_to(30)).unwrap_or(0),
                     touching: r.up_to(2) == 0,
+                    apart: u16::try_from(r.up_to(4)).unwrap_or(0),
                 });
             }
             assert_eq!(resolve(columns, &with), resolve(columns, &segs));

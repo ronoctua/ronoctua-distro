@@ -24,6 +24,12 @@
     # is drawn. Sets touch one another: the two alternating grounds are what
     # tells one from the next.
     setPad = 1;
+    # THE AIR AFTER THE SETS, beyond `segmentGap` (owner, 2026-11-09): the AI
+    # group — the accounts and their agents, touching one another — stands
+    # a little apart from the glyphs on its right, so it reads as one group
+    # and not as more marks of the line. Only on that side: on its left is
+    # the line's free room. Two cells more, four in all.
+    setsApart = 2;
     # Margin at the screen's edges, in cells.
     #
     # THE RIGHT ONE USED TO BE ZERO, and it was wrong. The reasoning was

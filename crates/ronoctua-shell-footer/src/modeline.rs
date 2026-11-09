@@ -442,6 +442,7 @@ pub fn segments(
             place: Some(Place {
                 rung: WINDOWS_RUNG,
                 touching: false,
+                apart: 0,
             }),
         });
     }
@@ -790,7 +791,8 @@ pub fn segments(
     // agents: ONE segment each, its glyphs on a ground of its own
     // (`brain::sets`), drawn whole or not at all. At their own rung, far from
     // the edge ([`SETS_RUNG`]), and TOUCHING: the two alternating grounds are
-    // what tells one from the next. Pushed from the last to the first, so
+    // what tells one from the next — and the group a little APART from the
+    // glyphs on its right (`modeline.setsApart`; owner, 2026-11-09). Pushed from the last to the first, so
     // they read `1 2 3` from the left — and the price, the one rule's: the
     // first is the first of them to go.
     for set in crate::brain::sets(marks.brain).iter().rev() {
@@ -806,6 +808,7 @@ pub fn segments(
             place: Some(Place {
                 rung: SETS_RUNG,
                 touching: true,
+                apart: tokens::space::MODELINE_SETSAPART,
             }),
         });
     }
@@ -1277,6 +1280,22 @@ mod tests {
                         pair[1].column
                     );
                 }
+                // AND THE GROUP APART from the glyph on its right: the line's
+                // gap and the sets' own air (owner, 2026-11-09).
+                let last = drawn[drawn.len() - 1];
+                let next = placed
+                    .iter()
+                    .filter(|c| c.edge && c.column > last.column && !sets.contains(&c.id))
+                    .map(|c| c.column)
+                    .min()
+                    .expect("a glyph right of the sets");
+                assert_eq!(
+                    last.column
+                        + layout::width(&last.text)
+                        + tokens::space::MODELINE_SEGMENTGAP
+                        + tokens::space::MODELINE_SETSAPART,
+                    next
+                );
                 assert!(column(sets[0]) < column(sets[2]));
             }
             if drawn.len() < 3 {

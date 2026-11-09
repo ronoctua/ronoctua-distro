@@ -134,6 +134,7 @@ fn nine_sets(name: &str) -> Vec<Segment> {
             place: Some(Place {
                 rung: 18,
                 touching: true,
+                apart: tokens::space::MODELINE_SETSAPART,
             }),
         });
     }
