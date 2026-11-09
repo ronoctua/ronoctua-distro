@@ -1,19 +1,108 @@
 //! THE UPDATE'S SHARED HALF: what the update's doors read of the same machine
-//! and the same declaration as the module — the steps it draws, the battery
-//! as the sequence weighs it, the word a held run waits for, and the
-//! machine's own records beside a run.
+//! and the same declaration as the module — the steps it draws and which of
+//! them this machine runs, the battery as the sequence weighs it, the word a
+//! held run waits for, and the machine's own records beside a run.
 //!
 //! It is compiled into the brain's LIBRARY (`ronoctua-brain`), beside the
 //! manifest, because the update's window and view (`update_window.rs`, which
 //! this module's `namedBy` lists) read it; `module.rs`, the daemon's half,
 //! sees it through `super::`. So the door's question and the module's hold
 //! read one battery ([`Charge::read_at`]), and the page and the run one table
-//! of steps ([`steps`]). Nothing here runs, holds or watches: that is
-//! `module.rs`.
+//! of steps ([`steps`]), read the way the run reads it ([`on_here`]).
+//! Nothing here runs, holds or watches: that is `module.rs`.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::mind::StepState;
 use crate::task::{Hold, Step};
+
+/// This machine's table of steps — one `<id> on|off` line each, written by
+/// the NixOS option `ronoctua.update.steps` (`module.nix`) — which both
+/// halves of the run read before anything else (`turned_on`, in
+/// `gen-updates.py`): what this machine runs before the person's flip, and
+/// so what that flip is a flip OF ([`on_here`]).
+///
+/// This module's check `…-switch-reaches-the-run` holds it to a file the
+/// machine's `/etc` has.
+pub const MACHINE_TABLE: &str = "/etc/ronoctua/updates.conf";
+
+/// The file the sequence's own script reads to find out which steps the
+/// person switched, in their state directory:
+/// `$XDG_STATE_HOME/ronoctua/update-steps.conf` — one `<task> <step>` line
+/// per flip over this machine's table ([`flips_of`]).
+///
+/// The script (`gen-updates.py`, the person's half) spells the same leaf, and
+/// this module's check `…-switch-reaches-the-run` plants a file here and asks
+/// the script's own reader about it.
+pub const STEPS_FILE: &str = "update-steps.conf";
+
+/// Which steps this machine runs before the person's flip, in the order of
+/// [`steps`], from its table's text ([`MACHINE_TABLE`]) — `None` when there
+/// is none to read, and then every step is what it ships as.
+///
+/// THE RUNNER'S OWN READING, line for line (`turned_on`, layers 2 and 3): a
+/// table that reads decides alone, so a step it does not list is OFF — the
+/// script starts from "off" and only a line saying `on` turns a step on.
+/// The brain counted from what ships instead, and on a machine whose table
+/// switched a step on, the page drew it off while it ran, and its switch
+/// wrote the flip that turned it off.
+#[must_use]
+pub fn on_here(table: Option<&str>) -> Vec<bool> {
+    steps()
+        .iter()
+        .map(|s| match table {
+            None => s.on_by_default,
+            Some(text) => {
+                read_lines(text)
+                    .find(|(id, _)| *id == s.id)
+                    .map(|(_, state)| state)
+                    == Some("on")
+            }
+        })
+        .collect()
+}
+
+/// The steps of `task` the person flipped, from the text of their
+/// [`STEPS_FILE`] — the `<task> <step>` lines, read as the runner reads them.
+#[must_use]
+pub fn flips_of(text: &str, task: &str) -> BTreeSet<String> {
+    read_lines(text)
+        .filter(|(of, _)| *of == task)
+        .map(|(_, step)| step.to_owned())
+        .collect()
+}
+
+/// The rows of the steps, from the two files the run reads — this machine's
+/// table and the person's flips, each `None` when there is none to read —
+/// the way the brain builds them ([`StepState::of`]). For a door with no
+/// brain to ask: the brain's mind is the answer whenever there is one.
+#[must_use]
+pub fn steps_read(table: Option<&str>, flips: Option<&str>) -> Vec<StepState> {
+    let flipped = flips.map(|f| flips_of(f, super::ID)).unwrap_or_default();
+    steps()
+        .iter()
+        .zip(on_here(table))
+        .map(|(s, here)| StepState::of(s, here, flipped.contains(s.id)))
+        .collect()
+}
+
+/// The lines of a file as the runner's `while read -r first rest` hands them
+/// to its loop: the first word and the rest, with blanks and tabs trimmed
+/// round both; a line whose first word is empty or starts with `#` is not
+/// one. A last line with no newline is not read at all — `read` fails on
+/// it before the loop sees it.
+fn read_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    const BLANK: [char; 2] = [' ', '\t'];
+    text.split_inclusive('\n')
+        .filter_map(|l| l.strip_suffix('\n'))
+        .map(|l| {
+            let l = l.trim_matches(BLANK);
+            l.split_once(BLANK)
+                .map_or((l, ""), |(first, rest)| (first, rest.trim_matches(BLANK)))
+        })
+        .filter(|(first, _)| !first.is_empty() && !first.starts_with('#'))
+}
 
 /// Why the machine's own program refused a step (`ronoctua-machine`, whose
 /// last line is `refused <word>`): the report keeps the word
@@ -30,6 +119,12 @@ pub use ronoctua_machine::{NextBoot, next_boot};
 /// record says them — named here so the update's view reads them through
 /// this module.
 pub use ronoctua_machine::{NoTrial, TrialOutcome};
+/// What the last rehearsal measured, and when — the machine's own record,
+/// left in its run folder (`RUN_DIR`, the file `REHEARSED`) by the rehearsal
+/// that measured: the journal has it only as prose, and the brain keeps no
+/// record of a run that changes nothing. Named here so the update's view
+/// reads it through this module.
+pub use ronoctua_machine::{REHEARSED, RUN_DIR, Rehearsed, last_rehearsal};
 
 // The declared sequence, generated from `steps.nix` by `gen-updates.py`
 // (`tables.nix`), with its own types.
@@ -464,6 +559,148 @@ mod tests {
         assert!(
             steps().iter().any(|s| !s.on_by_default),
             "no step is switched off"
+        );
+    }
+
+    /// A machine's table that is not what ships — the same file this
+    /// module's check `…-switch-reaches-the-run` hands the runner's own
+    /// reader, so the two readers are held to one input.
+    const MACHINE_DIFFERS: &str = include_str!("fixtures/machine-differs.conf");
+
+    /// The lines where two readers of a table could part, and what the
+    /// runner makes of each — the pair the same check holds the runner's
+    /// reader to.
+    const EDGES: &str = include_str!("fixtures/edges.conf");
+    const EDGES_READ: &str = include_str!("fixtures/edges-read.conf");
+
+    /// FAILS IF: the brain's reader parts from the runner's on a line where
+    /// two readers could — blanks and tabs, a note after the state, a line
+    /// commented after a blank, an id said twice, a last line with no
+    /// newline —, as `fixtures/edges-read.conf` says the runner reads them.
+    #[test]
+    fn the_edges_of_a_table_are_read_as_the_runner_reads_them() {
+        let here = on_here(Some(EDGES));
+        let mut asked = 0;
+        for (id, want) in read_lines(EDGES_READ) {
+            let at = steps()
+                .iter()
+                .position(|s| s.id == id)
+                .unwrap_or_else(|| panic!("`{id}` is no step"));
+            assert_eq!(here[at], want == "on", "{id}");
+            asked += 1;
+        }
+        assert!(asked >= 5, "{asked} lines asked");
+    }
+
+    /// FAILS IF: a step this machine's table switches on is read as off, or
+    /// one it switches off or leaves out as on — the runner's answer, which
+    /// the brain must count a flip from; or with no table, a step is not
+    /// what ships.
+    #[test]
+    fn this_machines_table_is_read_as_the_runner_reads_it() {
+        let here = on_here(Some(MACHINE_DIFFERS));
+        assert_eq!(here.len(), steps().len());
+        // THE FIXTURE IS WRITTEN ONE `<id> on|off` PER LINE, so what each
+        // step should read is a whole line, asked of the text as it is.
+        let says = |id: &str, state: &str| {
+            MACHINE_DIFFERS
+                .lines()
+                .any(|l| l == format!("{id} {state}"))
+        };
+        for (s, on) in steps().iter().zip(&here) {
+            assert_eq!(*on, says(s.id, "on"), "{}", s.id);
+        }
+        // AND IT STILL DIFFERS FROM WHAT SHIPS, the three ways a machine can:
+        // read against a table that did not, this test would pass on a
+        // reader that counted from what ships.
+        let listed = |id: &str| says(id, "on") || says(id, "off");
+        let cases = steps().iter().zip(&here);
+        assert!(
+            cases.clone().any(|(s, on)| *on && !s.on_by_default),
+            "no step that ships off is on in the fixture"
+        );
+        assert!(
+            cases
+                .clone()
+                .any(|(s, on)| !*on && s.on_by_default && listed(s.id)),
+            "no step that ships on is off in the fixture"
+        );
+        assert!(
+            cases.clone().any(|(s, _)| s.on_by_default && !listed(s.id)),
+            "no step that ships on is missing from the fixture"
+        );
+        assert!(MACHINE_DIFFERS.lines().any(|l| l.starts_with('#')));
+        assert!(MACHINE_DIFFERS.lines().any(str::is_empty));
+        // NO TABLE TO READ: what ships.
+        assert_eq!(
+            on_here(None),
+            steps().iter().map(|s| s.on_by_default).collect::<Vec<_>>()
+        );
+    }
+
+    /// FAILS IF: a line is split otherwise than the runner's `read -r` splits
+    /// it — blanks and a tab round the words, a `#` after blanks, a note
+    /// after the state, a step listed twice (the first line wins), a last
+    /// line with no newline (never read).
+    #[test]
+    fn a_line_is_split_as_the_runners_read_splits_it() {
+        // REAL IDS, from the table and never written here (`…-has-one-list`).
+        let id = |n: usize| steps().get(n).expect("enough steps").id;
+        let (a, b, c, d, e) = (id(0), id(1), id(2), id(3), id(4));
+        let table =
+            format!("  {a}\ton  \n  # {b} on\n#{b} on\n{c} on # a note\n{d} on\n{d} off\n{e} on");
+        let here = on_here(Some(&table));
+        assert_eq!(&here[..5], [true, false, false, true, false], "{table:?}");
+        assert!(
+            here[5..].iter().all(|on| !on),
+            "a step the table leaves out ran"
+        );
+    }
+
+    /// FAILS IF: a flip of another task, a commented one, or one past the
+    /// last newline is counted; or a flip on a step that needs root moves its
+    /// row — the half that runs it reads no person's file.
+    #[test]
+    fn the_rows_read_without_a_brain_are_the_brains() {
+        let id = |n: usize| steps().get(n).expect("enough steps").id;
+        let mine = super::super::ID;
+        let flips = format!(
+            "# {mine} {}\n{mine} {}\n another-task {}\n {mine}\t{} \n{mine} {}",
+            id(0),
+            id(1),
+            id(2),
+            id(3),
+            id(4)
+        );
+        assert_eq!(
+            flips_of(&flips, mine),
+            [id(1), id(3)]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<BTreeSet<_>>()
+        );
+        let root = steps()
+            .iter()
+            .position(|s| s.needs_root)
+            .expect("a root step");
+        let person = steps()
+            .iter()
+            .position(|s| !s.needs_root && s.on_by_default)
+            .expect("a step of the person's that ships on");
+        let flips = format!("{mine} {}\n{mine} {}\n", id(root), id(person));
+        let rows = steps_read(Some(MACHINE_DIFFERS), Some(&flips));
+        let here = on_here(Some(MACHINE_DIFFERS));
+        for (n, (row, here)) in rows.iter().zip(&here).enumerate() {
+            assert_eq!(row.id, id(n));
+            assert_eq!(row.on_here, Some(*here));
+            assert_eq!(row.on, *here ^ (n == person), "{}", row.id);
+        }
+        // NOTHING TO READ: what ships, and nobody's flip.
+        let shipped = steps_read(None, None);
+        assert!(
+            shipped
+                .iter()
+                .all(|r| r.on == r.on_by_default && !r.by_you())
         );
     }
 

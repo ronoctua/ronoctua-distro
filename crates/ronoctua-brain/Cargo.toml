@@ -67,7 +67,8 @@ env = ["RONOCTUA_BRAIN_MODULES_DIR", "RONOCTUA_MACHINE_DIR", "RONOCTUA_SYSTEMCTL
 run-env = ["RONOCTUA_BRAIN_CATALOGUE", "RONOCTUA_SYSTEMCTL"]
 beside = ["ronoctua-brain"]
 # What this crate compiles of each module's folder: the manifest (which its
-# build script finds a folder by) and the shared half. Never a module's code,
-# its texts or its prose: an edit of those is the daemon's alone, and here it
-# would rebuild the footer.
-data = ["modules/*/manifest.nix", "modules/*/shared.rs"]
+# build script finds a folder by), the shared half and the tables its tests
+# read (`fixtures/*.conf`). Never a module's code, its texts or its prose, nor
+# another fixture: an edit of those is the daemon's alone, and here it would
+# rebuild the footer.
+data = ["modules/*/manifest.nix", "modules/*/shared.rs", "modules/*/fixtures/**/*.conf"]

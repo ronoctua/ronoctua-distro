@@ -399,6 +399,7 @@ fn step_of(s: &ronoctua_brain::StepState) -> ronoctua_protocol::TaskStep {
         needs_root: s.needs_root,
         on: s.on,
         on_by_default: s.on_by_default,
+        on_here: s.here(),
         name_key: s.name_key.clone(),
         does_key: s.does_key.clone(),
     }
@@ -1406,6 +1407,7 @@ mod tests {
             needs_root: false,
             on: true,
             on_by_default: true,
+            on_here: Some(true),
             name_key: "fixture-step-build".to_owned(),
             does_key: "fixture-step-build-does".to_owned(),
         });

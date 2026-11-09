@@ -141,6 +141,10 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
         // later asks again. It leaves the queue here, and the RUNNER writes it
         // down as an event: what moves the next moment is the journal, and the
         // journal belongs to that thread.
+        //
+        // A REHEARSAL IS NOT PUT OFF, it is let go: putting it off would move
+        // the task's real moment, and its ask, left, would make that next
+        // scheduled run a dry one.
         Ask::Postpone => {
             let (mind, _) = desk.shared.snapshot();
             let put_off = mind
@@ -148,8 +152,12 @@ fn answer(desk: &Arc<Desk>, ask: &Ask, out: &mut impl Write) -> Result<()> {
                 .map(|a| a.task)
                 .or_else(|| mind.queue.first().cloned());
             if let Some(task) = put_off {
-                desk.shared.unqueue(&task);
-                desk.shared.change(|m| m.postponed = Some(task.clone()));
+                if mind.rehearsing.as_deref() == Some(task.as_str()) {
+                    desk.shared.abort(&task);
+                } else {
+                    desk.shared.unqueue(&task);
+                    desk.shared.change(|m| m.postponed = Some(task.clone()));
+                }
             }
             Ok(())
         }

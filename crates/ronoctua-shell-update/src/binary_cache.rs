@@ -294,7 +294,7 @@ impl Row {
         }
     }
 
-    /// What it is, as the second register says it.
+    /// What it is, as the door explains it.
     const fn about(self) -> &'static str {
         match self {
             Self::Cache => key::BINARY_CACHE_ABOUT_CACHE,
@@ -312,6 +312,20 @@ impl Row {
     /// Whether a `RET` on it does something.
     const fn acts(self) -> bool {
         !matches!(self, Self::Machine | Self::Last)
+    }
+
+    /// What a `RET` on it does, in a few words — `None` where it does
+    /// nothing.
+    const fn does(self) -> Option<&'static str> {
+        match self {
+            Self::Cache => Some(key::BINARY_CACHE_ACT_NAME),
+            Self::Key => Some(key::BINARY_CACHE_ACT_KEY),
+            Self::Visibility => Some(key::BINARY_CACHE_ACT_MAKE_PUBLIC),
+            Self::Token => Some(key::BINARY_CACHE_ACT_TOKEN),
+            Self::Access => Some(key::BINARY_CACHE_ACT_ACCESS),
+            Self::ForgetToken | Self::Remove => Some(key::BINARY_CACHE_ACT_ASK),
+            Self::Machine | Self::Last => None,
+        }
     }
 }
 
@@ -420,7 +434,7 @@ impl Edit {
 pub enum Errand {
     /// Nothing.
     Nothing,
-    /// The cursor moved: the page follows, the register says the row.
+    /// The cursor moved: the page follows, and the door explains the row.
     Moved,
     /// Back to the steps.
     Close,
@@ -441,19 +455,7 @@ pub struct Page {
     confirm: Option<Confirm>,
 }
 
-/// A line on top of the page: the grave question and its two answers, or
-/// what the row under the cursor is.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TopLine {
-    /// The text, wrapped.
-    pub text: String,
-    /// Its colour.
-    pub color: tokens::Color,
-    /// The answer a click on it gives, when it is one.
-    pub answer: Option<bool>,
-}
-
-/// A line of the page under the top lines: the heading, or a row.
+/// A line of the page: the heading, or a row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLine {
     /// Placed and cut.
@@ -687,66 +689,85 @@ impl Page {
         self.asking = None;
     }
 
-    /// The lines on top of the page: the grave question and its answers
-    /// ("no" first), or what the row under the cursor is. Notes are WRAPPED,
-    /// never cut. Not a heading (the page's heading is in [`Self::lines`]),
-    /// so it is not named like one.
+    /// The grave question's sentence, while it is asked — drawn under the
+    /// row that asked it, its answers under it, "no" first.
     #[must_use]
-    pub fn top_lines(&self, r: &Readings, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<TopLine> {
-        let line = |text, color, answer| TopLine {
-            text,
-            color,
-            answer,
-        };
-        let mut out = Vec::new();
-        if let Some(c) = self.confirm {
-            let (asked, yes_key) = match c.what {
-                Grave::ForgetToken => (
-                    key::BINARY_CACHE_CONFIRM_FORGET,
-                    key::BINARY_CACHE_ANSWER_YES_FORGET,
-                ),
-                Grave::Remove => (
-                    key::BINARY_CACHE_CONFIRM_REMOVE,
-                    key::BINARY_CACHE_ANSWER_YES_REMOVE,
-                ),
-            };
-            for said in crate::chrome::note_lines(&texts.t(asked), room) {
-                out.push(line(said, tokens::color::TEXT_PRIMARY, None));
-            }
-            for (yes, answer) in [(false, key::BINARY_CACHE_ANSWER_NO), (true, yes_key)] {
-                let color = if c.yes == yes {
-                    tokens::color::TEXT_HERE_ACTS
-                } else if yes {
-                    tokens::color::STATE_ERROR
-                } else {
-                    crate::chrome::Kind::Setting.tones(false).0
-                };
-                out.push(line(
-                    ronoctua_render::layout::elide_end(&texts.t(answer), room),
-                    color,
-                    Some(yes),
-                ));
-            }
-            return out;
-        }
-        if let Some(row) = rows_of(r).get(self.cursor).copied() {
-            // WHAT THE ROW IS, and — where its value only names a refusal —
-            // WHY, whole: a value is a few words, a reason is a note, and a
-            // note is wrapped, never cut.
-            let mut said = texts.t(row.about());
-            if let Some(why) = reason_of(row, r) {
-                said.push(' ');
-                said.push_str(&texts.t(why_key(why)));
-            }
-            for wrapped in crate::chrome::note_lines(&said, room) {
-                out.push(line(wrapped, tokens::color::TEXT_SECONDARY, None));
-            }
-        }
-        out
+    pub fn question(&self, texts: &ronoctua_i18n::Texts) -> String {
+        self.confirm.map_or_else(String::new, |c| {
+            texts.t(match c.what {
+                Grave::ForgetToken => key::BINARY_CACHE_CONFIRM_FORGET,
+                Grave::Remove => key::BINARY_CACHE_CONFIRM_REMOVE,
+            })
+        })
     }
 
-    /// The page under the top lines: a heading, and a row a line — the label and
-    /// the value, the cursor a colour.
+    /// The key of the grave question's answer `yes` (`false`: the no), while
+    /// it is asked.
+    #[must_use]
+    pub const fn answer_said(&self, yes: bool) -> Option<&'static str> {
+        match (self.confirm, yes) {
+            (None, _) => None,
+            (Some(_), false) => Some(key::BINARY_CACHE_ANSWER_NO),
+            (
+                Some(Confirm {
+                    what: Grave::ForgetToken,
+                    ..
+                }),
+                true,
+            ) => Some(key::BINARY_CACHE_ANSWER_YES_FORGET),
+            (
+                Some(Confirm {
+                    what: Grave::Remove,
+                    ..
+                }),
+                true,
+            ) => Some(key::BINARY_CACHE_ANSWER_YES_REMOVE),
+        }
+    }
+
+    /// WHAT ROW `n` IS, where the door explains it: its name, what `how`
+    /// the hand takes it does, what it is — and, where its value only names
+    /// a refusal, why, whole, in warning: a value is a few words, a reason is
+    /// a note.
+    #[must_use]
+    pub fn explain(
+        &self,
+        n: usize,
+        r: &Readings,
+        how: crate::door::Gesture,
+        texts: &ronoctua_i18n::Texts,
+    ) -> crate::door::Explained {
+        let Some(row) = rows_of(r).get(n).copied() else {
+            return crate::door::Explained::default();
+        };
+        let mut said = vec![(texts.t(row.about()), tokens::color::TEXT_SECONDARY)];
+        if let Some(why) = reason_of(row, r) {
+            said.push((texts.t(why_key(why)), tokens::color::STATE_WARNING));
+        }
+        // WHAT `RET` DOES, only where it does it — a copy that does not read
+        // refuses what would rewrite it (`enter`) — and the visibility by
+        // which way it turns now.
+        let refused = matches!(r.named, Named::Unreadable | Named::Newer)
+            && matches!(row, Row::Cache | Row::Key | Row::Visibility | Row::Remove);
+        let does = match (row, r.named.cache()) {
+            _ if refused => None,
+            (Row::Visibility, Some(c)) => Some(match c.visibility {
+                Visibility::Public => key::BINARY_CACHE_ACT_MAKE_PRIVATE,
+                Visibility::Private => key::BINARY_CACHE_ACT_MAKE_PUBLIC,
+            }),
+            _ => row.does(),
+        };
+        crate::door::Explained {
+            subject: String::new(),
+            name: texts.t(row.label()),
+            gesture: does.map(|does| crate::door::foot::gesture(texts, how, &texts.t(does))),
+            said,
+        }
+    }
+
+    /// The page: a heading, and a row a line — the label and the value, the
+    /// cursor a colour while it is `here`, on the page's rows (and not on
+    /// the way back above them).
     #[must_use]
     pub fn lines(
         &self,
@@ -754,6 +775,7 @@ impl Page {
         left: u16,
         room: u16,
         zone: &ronoctua_files::when::Zone,
+        here: bool,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<PageLine> {
         // A LINE OF AIR before the heading, which is how a heading stands
@@ -774,7 +796,7 @@ impl Page {
             row: None,
         });
         for (n, row) in rows_of(r).into_iter().enumerate() {
-            let focused = n == self.cursor && self.confirm.is_none();
+            let focused = here && n == self.cursor && self.confirm.is_none();
             let (value, tint) = value_of(row, r, zone, texts);
             let kind = crate::chrome::Kind::of(row.acts());
             let fields = if matches!(row, Row::ForgetToken | Row::Remove) {
@@ -899,8 +921,7 @@ fn value_of(
     }
 }
 
-/// Why a row's value is a refusal — said whole in the top lines while the cursor
-/// is on it.
+/// Why a row's value is a refusal — said whole where the door explains it.
 fn reason_of(row: Row, r: &Readings) -> Option<ronoctua_cachix::Why> {
     match (row, &r.named, r.token, r.last.as_ref().map(|l| l.outcome)) {
         (Row::Cache, Named::Unreadable, _, _) => Some(ronoctua_cachix::Why::Unreadable),
@@ -911,7 +932,7 @@ fn reason_of(row: Row, r: &Readings) -> Option<ronoctua_cachix::Why> {
     }
 }
 
-/// The last push, in a few words — why it was refused is the top lines'.
+/// The last push, in a few words — why it was refused is the explanation's.
 fn last_of(
     last: Option<&Record>,
     zone: &ronoctua_files::when::Zone,

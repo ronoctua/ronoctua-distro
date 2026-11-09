@@ -37,7 +37,7 @@ use ronoctua_person::tree::TreeWhy;
 use ronoctua_person::{Document as _, Why as PersonWhy};
 use ronoctua_tokens as tokens;
 
-use crate::binary_cache::{PageLine, TopLine};
+use crate::binary_cache::PageLine;
 
 /// The command that opens the update's view on this page (`LEADER s u f`).
 pub const OPEN: &str = "distro-follow-open";
@@ -401,7 +401,7 @@ pub enum Press {
 pub enum Errand {
     /// Nothing.
     Nothing,
-    /// The cursor moved: the page follows, the register says the row.
+    /// The cursor moved: the page follows, and the door explains the row.
     Moved,
     /// Back to the steps.
     Close,
@@ -448,7 +448,7 @@ impl Page {
 
     /// Whether a click takes row `n` — and so whether a resting pointer
     /// lights it, in both doors: every row of the page (a click puts the
-    /// cursor there, and its register says what it is).
+    /// cursor there, and the door explains what it is).
     #[must_use]
     pub fn takes(&self, n: usize, r: &Readings) -> bool {
         n < rows_of(r).len()
@@ -482,50 +482,66 @@ impl Page {
         }
     }
 
-    /// The lines on top of the page: what the row under the cursor is, and
-    /// — where its value only names a refusal or a hold — why, whole. Notes
-    /// are WRAPPED, never cut.
+    /// WHAT ROW `n` IS, where the door explains it: its name, what `how`
+    /// the hand takes it does, what it is — and, where its value only names
+    /// a refusal or a hold, why, whole, in warning.
     #[must_use]
-    pub fn top_lines(&self, r: &Readings, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<TopLine> {
-        let Some(row) = rows_of(r).get(self.cursor).copied() else {
-            return Vec::new();
+    pub fn explain(
+        &self,
+        n: usize,
+        r: &Readings,
+        how: crate::door::Gesture,
+        texts: &ronoctua_i18n::Texts,
+    ) -> crate::door::Explained {
+        let Some(row) = rows_of(r).get(n).copied() else {
+            return crate::door::Explained::default();
         };
-        let mut said = texts.t(match row {
-            Row::Follow => key::DISTRO_FOLLOW_ABOUT_FOLLOW,
-            Row::Hosts => key::DISTRO_FOLLOW_ABOUT_HOSTS,
-            Row::Machine => key::DISTRO_FOLLOW_ABOUT_MACHINE,
-            Row::App(_) => key::DISTRO_FOLLOW_ABOUT_APP,
-        });
-        // WHY THE CHOICE CANNOT BE CHANGED: said whole. An app's own reason is
-        // on its row, beside the cursor in both doors.
+        let mut said = vec![(
+            texts.t(match row {
+                Row::Follow => key::DISTRO_FOLLOW_ABOUT_FOLLOW,
+                Row::Hosts => key::DISTRO_FOLLOW_ABOUT_HOSTS,
+                Row::Machine => key::DISTRO_FOLLOW_ABOUT_MACHINE,
+                Row::App(_) => key::DISTRO_FOLLOW_ABOUT_APP,
+            }),
+            tokens::color::TEXT_SECONDARY,
+        )];
+        // WHY THE CHOICE CANNOT BE CHANGED: said whole. An app's own reason
+        // is on its row.
         let why = match (row, r.copy) {
-            (Row::Follow, Choice::Unreadable) => Some(texts.t(key::DISTRO_FOLLOW_WHY_UNREADABLE)),
-            (Row::Follow, Choice::Newer) => Some(texts.t(key::DISTRO_FOLLOW_WHY_NEWER)),
+            (Row::Follow, Choice::Unreadable) => Some(key::DISTRO_FOLLOW_WHY_UNREADABLE),
+            (Row::Follow, Choice::Newer) => Some(key::DISTRO_FOLLOW_WHY_NEWER),
             _ => None,
         };
-        if let Some(why) = why {
-            said.push(' ');
-            said.push_str(&why);
+        if let Some(k) = why {
+            said.push((texts.t(k), tokens::color::STATE_WARNING));
         }
-        crate::chrome::note_lines(&said, room)
-            .into_iter()
-            .map(|text| TopLine {
-                text,
-                color: tokens::color::TEXT_SECONDARY,
-                answer: None,
-            })
-            .collect()
+        let (name, _, _) = label_and_value(row, r, texts);
+        crate::door::Explained {
+            subject: String::new(),
+            name,
+            // WHAT THE TURN WILL DO, by the choice as it is now.
+            gesture: (row.acts() && why.is_none()).then(|| {
+                let does = if matches!(r.copy, Choice::On) {
+                    key::DISTRO_FOLLOW_ACT_TURN_OFF
+                } else {
+                    key::DISTRO_FOLLOW_ACT_TURN_ON
+                };
+                crate::door::foot::gesture(texts, how, &texts.t(does))
+            }),
+            said,
+        }
     }
 
-    /// The page under the top lines: a heading, and a row a line — the label
-    /// and the value, the cursor a colour — and, without one AppImage that
-    /// follows its releases, a line that says so.
+    /// The page: a heading, and a row a line — the label and the value, the
+    /// cursor a colour while it is `here`, on the page's rows — and, without
+    /// one AppImage that follows its releases, a line that says so.
     #[must_use]
     pub fn lines(
         &self,
         r: &Readings,
         left: u16,
         room: u16,
+        here: bool,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<PageLine> {
         let plain = |text: String, color| PageLine {
@@ -552,7 +568,7 @@ impl Page {
             ),
         ];
         for (n, row) in rows_of(r).into_iter().enumerate() {
-            let focused = n == self.cursor;
+            let focused = here && n == self.cursor;
             let (label, value, tint) = label_and_value(row, r, texts);
             out.push(PageLine {
                 fields: crate::chrome::tinted(

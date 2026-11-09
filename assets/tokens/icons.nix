@@ -1079,6 +1079,15 @@
   fast-access-ticked = "md-checkbox_marked_outline";
   fast-access-unticked = "md-checkbox_blank_outline";
 
+  # THE UPDATE'S LIST (`update_list`): a step's box, ticked or empty at the
+  # head of its row — the glyph a click there turns, the player's suggestion
+  # boxes' drawing — and the marks a row that opens a page ends with, and the
+  # row that goes back from one starts with: the calculator's own arrows.
+  update-step-on = "md-checkbox_marked_outline";
+  update-step-off = "md-checkbox_blank_outline";
+  row-opens = "md-chevron_right";
+  row-back = "md-chevron_left";
+
   # THE QUEUE'S LAST THREE ENGINES, one drawing each, so the queue's window
   # tells them apart as the footer's words do: a program is the software
   # center's own package, a file sent to VirusTotal a shield being searched,

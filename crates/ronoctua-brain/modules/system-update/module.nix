@@ -171,6 +171,10 @@ let
       id = "${pkgs.coreutils}/bin/id";
       person = user;
       runtime-root = "/run/user";
+      # WHETHER A FAILURE'S LINE GOES TO THE JOURNAL, and so carries the
+      # `<3>` it keeps as an error: its standard output's `dev:ino` against
+      # `JOURNAL_STREAM`, which a terminal inherits too (`fail`).
+      stat = "${pkgs.coreutils}/bin/stat";
     };
   };
 
@@ -231,7 +235,9 @@ in
       };
       description = ''
         Which steps this machine switches on or off, by id. Whatever is not there
-        here stays as the update's `steps.nix` declares.
+        here stays as the update's `steps.nix` declares. A person's switch of a
+        step is a flip over this: a step switched on here runs until they switch it
+        off.
 
         This is where the language managers come in. They are born
         SWITCHED OFF because what the flake does not put on the machine cannot be a distro

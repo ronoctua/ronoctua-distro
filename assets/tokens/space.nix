@@ -1521,6 +1521,35 @@
     # and a long message wraps up to this many lines — the Brain page's own
     # foot — with a bar for the rest. Never more than half the window.
     messageLines = 6;
+    # A FOOT A WINDOW KEEPS (`door::Content::foot_lines`): the same ground,
+    # always this tall, explaining the thing under the pointer or the cursor
+    # — its name and what a click does on one line, four of sentence under
+    # it — and the message and the question take these rows while they are
+    # up, so nothing above moves. Never more than a third of the window.
+    footLines = 5;
+    # How long the pointer rests on a thing, in tenths of a second, for a
+    # kept foot to go on explaining it once the pointer moves down into the
+    # foot to read the rest — and not the rows it crossed on the way.
+    footRestTenths = 4;
+  };
+
+  # THE UPDATE'S LIST (`update_window_list`): `boxCells` is the cells a
+  # step's box takes at the head of its row — the glyph and the cell of air
+  # after it, as the player's queue's triangle has — and a click on them
+  # switches the step at once, where a click on the rest of the row only
+  # selects it.
+  #
+  # AND ITS LIVE OUTPUT (`update_window`), under the list only while a run
+  # goes: `outputPct` of the lines under the title, never fewer than
+  # `outputMinLines` — its heading and the card the lines are drawn on — and
+  # never so many that the list keeps fewer than `listMinLines` (or half the
+  # room, in a window too short for both): at 40 the default window kept a
+  # step or two in sight while a run went.
+  update = {
+    boxCells = 2;
+    outputMinLines = 6;
+    outputPct = 30;
+    listMinLines = 10;
   };
 
   # THE TERMINAL THINKS IN CELLS (`crate::terminal`): its first size is a grid,

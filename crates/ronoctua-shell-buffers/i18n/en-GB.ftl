@@ -207,7 +207,7 @@ about-brain-rehearse = Rehearse this task: every step is walked and nothing on t
 about-brain-switch = Switch this task off, or on again; switched off, it does nothing by itself.
 about-brain-interval = Step to the next cadence this task runs at.
 about-brain-window = Step to the next part of the day this task may run in.
-about-brain-reset-steps = Put every step of this task back as the distro ships it.
+about-brain-reset-steps = Put every step of this task back to what this machine runs by itself, without your changes.
 about-brain-proceed = Start the task that is counting down now, without waiting for the count.
 about-brain-abort = Put the task that is counting down off to its next moment, or stop the one that is running.
 about-brain-log = Show the brain's own log as it is written — every tick, what it decided, every warning and error — or go back.
@@ -233,6 +233,7 @@ brain-rehearsal = Rehearsing now
 brain-never = Never
 brain-flake-owned = In the flake
 brain-changed = Changed by you
+brain-machine-owned = On this machine
 # THE FOOTER'S FIELDS.
 brain-last-run = Last run
 # WHAT THE FOOTER SAYS ABOUT A RECORD of a task's history: the question the
@@ -305,8 +306,10 @@ about-brain-last-run = When it last ran.
 about-brain-first = When the first of the records folded into this row happened.
 about-brain-times = How many records are folded into this row.
 about-brain-since = Since when this notice has been true.
+brain-needs-root = Runs as root
 about-brain-needs-root = This step runs as root, the system's administrator.
 about-brain-flake-owned = Whether this step runs is set in the system's configuration, so it cannot be switched off here.
+about-brain-machine-owned = This machine runs this step the other way from how it ships, because of what it has installed or its configuration, and not because of you.
 # THE TASKS. `brain-task-<id>` names one and `<id>-does` says what it does —
 # the second is a paragraph in the footer, so it has room to be a whole
 # explanation rather than a line.

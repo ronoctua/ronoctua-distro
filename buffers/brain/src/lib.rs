@@ -51,7 +51,7 @@ use ronoctua_design::types::{
     Effect, Guest, HoldKind, Icon, Input, Knob, Layout, LegendSwatch, LogLevel, LogLine, Mind,
     ModuleRow, ModuleScreen, ModuleSection, Notice, NoticeLevel, OutcomeKind, Request, Role,
     RowFact, Run, RunRecord, Screen, ScreenCell, Scroll, SectionFold, SectionState, Setting,
-    Standing, StepSwitch, Table, TaskKind, TaskState, Timed, Tone,
+    Standing, StepSwitch, Table, TaskKind, TaskState, TaskStep, Timed, Tone,
 };
 use ronoctua_design::{Phrases, Pointed, Region, Slice};
 use std::cell::RefCell;
@@ -114,6 +114,9 @@ mod key {
     pub const FLAKE_OWNED: &str = "brain-flake-owned";
     /// The note beside a step whose switch the person moved.
     pub const CHANGED: &str = "brain-changed";
+    /// The note beside a step this machine turned the other way from what
+    /// ships, and nobody flipped.
+    pub const MACHINE_OWNED: &str = "brain-machine-owned";
 
     // ---- the two things the page can do to a task ---------------------
     pub const RUN_NOW: &str = "brain-run-now";
@@ -232,6 +235,7 @@ mod key {
     pub const ABOUT_SINCE: &str = "about-brain-since";
     pub const ABOUT_NEEDS_ROOT: &str = "about-brain-needs-root";
     pub const ABOUT_FLAKE_OWNED: &str = "about-brain-flake-owned";
+    pub const ABOUT_MACHINE_OWNED: &str = "about-brain-machine-owned";
 
     // ---- what the header teaches --------------------------------------
     pub const DO_OPEN: &str = "brain-do-open";
@@ -1329,6 +1333,7 @@ fn every_phrase() -> Vec<String> {
         key::NEEDS_ROOT,
         key::FLAKE_OWNED,
         key::CHANGED,
+        key::MACHINE_OWNED,
         key::FIRST,
         key::TIMES,
         key::SINCE,
@@ -2206,6 +2211,31 @@ fn put_fact(pen: &mut Pen<'_, Wit>, row: u16, room: (u16, u16), fact: &RowFact) 
 /// neighbour and not as one more word of it.
 const FACT_AIR: u16 = 4 * ronoctua_design::GAP;
 
+/// The note beside a step, when it has one: whose the switch is, or who
+/// turned it the other way.
+fn step_note(step: &TaskStep) -> Option<&'static str> {
+    if step.needs_root {
+        // THE FLAKE OWNS THE ROOT HALF, and the row says so instead of
+        // offering a key that does nothing. The person's switch lives in
+        // their own state directory and the root half runs as root, which
+        // has no way to find it — see `gen-updates.py`, which carries the
+        // whole argument. It is the answer the Syncthing view already gives
+        // for the options the flake fixes (invariant 6).
+        Some(key::FLAKE_OWNED)
+    } else if step.on != step.on_here {
+        // "CHANGED" IS A SUBTRACTION and not a field — from what THIS
+        // MACHINE runs, which the person's flip is a flip of. It was once
+        // computed from a set that assumed every step ships ON, so six rows
+        // said "you changed" on a machine nobody had touched; and then from
+        // what ships, so a step this machine's table turned on said it too.
+        Some(key::CHANGED)
+    } else if step.on_here != step.on_by_default {
+        Some(key::MACHINE_OWNED)
+    } else {
+        None
+    }
+}
+
 /// What a figure of the footer's last row says under the pointer, by its
 /// label.
 fn fact_about(label: &str) -> &'static str {
@@ -2216,6 +2246,7 @@ fn fact_about(label: &str) -> &'static str {
         key::SINCE => key::ABOUT_SINCE,
         key::NEEDS_ROOT => key::ABOUT_NEEDS_ROOT,
         key::FLAKE_OWNED => key::ABOUT_FLAKE_OWNED,
+        key::MACHINE_OWNED => key::ABOUT_MACHINE_OWNED,
         _ => key::ABOUT_FOOT,
     }
 }
@@ -4612,20 +4643,8 @@ impl State {
         if let Some(name) = key_of(&step.name_key) {
             row.put("name", Run::label(&name));
         }
-        if step.needs_root {
-            // THE FLAKE OWNS THE ROOT HALF, and the row says so instead of
-            // offering a key that does nothing. The person's switch lives in
-            // their own state directory and the root half runs as root, which
-            // has no way to find it — see `gen-updates.py`, which carries the
-            // whole argument. It is the answer the Syncthing view already
-            // gives for the options the flake fixes (invariant 6).
-            row.put("note", Run::label(key::FLAKE_OWNED).dim());
-        } else if step.on != step.on_by_default {
-            // "CHANGED" IS A SUBTRACTION and not a field. It used to be
-            // computed from a set that assumed every step ships ON — and six
-            // of the update's twelve ship OFF, so six rows said "you changed"
-            // on a machine nobody had touched.
-            row.put("note", Run::label(key::CHANGED).dim());
+        if let Some(note) = step_note(step) {
+            row.put("note", Run::label(note).dim());
         }
     }
 
@@ -5060,9 +5079,13 @@ impl State {
                 let mut facts = Vec::new();
                 if step.needs_root {
                     facts.push((key::NEEDS_ROOT.to_owned(), String::new()));
-                    // AND WHY THE SWITCH REFUSES, said in full where there is
-                    // room for it — the SAME fact twice, so the same `if`.
-                    facts.push((key::FLAKE_OWNED.to_owned(), String::new()));
+                }
+                // AND THE NOTE THAT SAYS SOMETHING THE ROW CANNOT — why the
+                // switch refuses, or that this machine turned it — in full
+                // where there is room for it: the note's own answer, so the
+                // row and the foot cannot disagree.
+                if let Some(note @ (key::FLAKE_OWNED | key::MACHINE_OWNED)) = step_note(step) {
+                    facts.push((note.to_owned(), String::new()));
                 }
                 Told {
                     name: key_of(&step.name_key),
@@ -6768,9 +6791,7 @@ ronoctua_design::bindings::export!(Component with_types_in ronoctua_design::bind
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ronoctua_design::types::{
-        Announcement, DayPart, Gate, Heights, Pulse, RunRecord, TaskStep,
-    };
+    use ronoctua_design::types::{Announcement, DayPart, Gate, Heights, Pulse, RunRecord};
 
     fn a_run(task: &str, outcome: OutcomeKind) -> RunRecord {
         RunRecord {
@@ -6866,6 +6887,7 @@ mod tests {
             needs_root: root,
             on,
             on_by_default: ships_on,
+            on_here: ships_on,
             name_key: format!("fixture-step-{id}"),
             does_key: format!("fixture-step-{id}-does"),
         }
@@ -7376,17 +7398,25 @@ mod tests {
         );
     }
 
-    /// A step nobody touched is not marked as changed.
-    ///
-    /// The same defect the daemon's own test pins, seen from the other side:
-    /// `changed` is `on != on_by_default`, and a step that ships off and is
-    /// off differs from neither.
+    /// FAILS IF: a step nobody touched is noted as changed — one that ships
+    /// off and is off, or one this machine's table turned on and runs —, a
+    /// step the person flipped is not, a step the machine turned is not said
+    /// to be the machine's, or a root step says anything but whose its
+    /// switch is.
     #[test]
-    fn a_step_that_ships_off_and_is_off_is_not_changed() {
-        let off = a_step("a-step-that-ships-off", false, false, false);
-        assert_eq!(off.on, off.on_by_default);
-        let flipped = a_step("a-step-that-ships-off", true, false, false);
-        assert_ne!(flipped.on, flipped.on_by_default);
+    fn a_steps_note_says_who_turned_it() {
+        let note = |on: bool, ships: bool, here: bool, root: bool| {
+            let mut step = a_step("a-step", on, ships, root);
+            step.on_here = here;
+            step_note(&step)
+        };
+        assert_eq!(note(false, false, false, false), None);
+        assert_eq!(note(true, true, true, false), None);
+        assert_eq!(note(true, false, false, false), Some(key::CHANGED));
+        assert_eq!(note(true, false, true, false), Some(key::MACHINE_OWNED));
+        assert_eq!(note(false, false, true, false), Some(key::CHANGED));
+        assert_eq!(note(false, true, false, false), Some(key::MACHINE_OWNED));
+        assert_eq!(note(false, true, false, true), Some(key::FLAKE_OWNED));
     }
 
     /// THE FLAKE'S STEPS REFUSE, and refuse silently on the wire.

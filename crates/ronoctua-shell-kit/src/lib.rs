@@ -29,6 +29,9 @@
 #![deny(unsafe_code)]
 
 pub mod actions;
+// MACHINE TEXT WITH COLOUR IN IT — a journal's line — as pieces a grid draws
+// in the terminal's sixteen roles.
+pub mod ansi;
 // WHERE A CLICK LANDS on what a person did not put under the pointer: the
 // first click picks, and only a click on the pick runs it.
 pub mod aim;

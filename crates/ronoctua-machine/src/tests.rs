@@ -1769,20 +1769,47 @@ fn a_switch_is_judged_by_its_exit() {
 }
 
 /// FAILS IF: a rehearsal changes the machine directory, the profile or the
-/// record, or does not read what the dry run said.
+/// record, or does not read what the dry run said — or does not leave what
+/// it measured, readable by the person, where the update's view reads it.
 #[test]
 fn a_rehearsal_measures_and_changes_nothing() {
     let w = World::new("rehearse");
+    assert_eq!(
+        crate::last_rehearsal(&w.m.places),
+        None,
+        "nothing measured yet"
+    );
     std::fs::write(w.s.path("updated-lock"), LOCK_B).unwrap();
     std::fs::write(
         w.s.path("dry-says"),
         "these 2 derivations will be built:\n  /nix/store/x.drv\nthese 3 paths will be fetched (1.00 MiB download, 2.00 MiB unpacked):\n",
     )
     .unwrap();
+    let before = disk::now().unix_s();
     let applied = w.m.apply(Applying::Rehearse).unwrap();
     assert_eq!(applied.result, ApplyResult::Rehearsed);
     let r = applied.rehearsal.unwrap();
     assert_eq!((r.builds, r.download_bytes), (2, 1_048_576));
+    let kept = crate::last_rehearsal(&w.m.places).expect("the measure was kept");
+    assert_eq!((kept.builds, kept.download_bytes), (2, 1_048_576));
+    assert!(
+        kept.at.unix_s() >= before,
+        "stamped before it ran: {}",
+        kept.at
+    );
+    let file = w.m.places.run.join(crate::REHEARSED);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o644,
+        "the person cannot read the measure"
+    );
+    // HALF A FILE IS NO MEASURE.
+    std::fs::write(&file, r#"{"at":"2026-11-08T12:00:00Z","builds":2}"#).unwrap();
+    assert_eq!(
+        crate::last_rehearsal(&w.m.places),
+        None,
+        "a measure made up"
+    );
     assert_eq!(w.lock(), LOCK_A, "the update moved the copy's lock only");
     assert!(
         w.read("calls").contains("flake update"),

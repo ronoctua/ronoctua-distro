@@ -11816,8 +11816,13 @@ let
         # the exceptions above are, with the helper it keeps: asked of the
         # whole file, "records a track" let off every window with a
         # `canvas.bar(` beside its `list_bar` (update, player), and removing
-        # their bar passed.
-        COLUMNS = {"git_browser_window.rs": "git_browser::bars("}
+        # their bar passed. The update's window is one of them: its list and,
+        # while a run goes, its live output, each a band with its own bar
+        # (`UpdateWindow::bars`).
+        COLUMNS = {
+            "git_browser_window.rs": "git_browser::bars(",
+            "update_window.rs": "self.bars(",
+        }
         helper = COLUMNS.get(f.name)
         columns_drawn = (
             helper is not None

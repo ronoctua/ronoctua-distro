@@ -66,13 +66,20 @@ pub struct StepState {
     pub needs_root: bool,
     /// Whether it will run.
     pub on: bool,
-    /// Whether the distro ships it on.
-    ///
-    /// The DECLARED fact, and the only one of the two that is not derived —
-    /// "changed" is `on != on_by_default`, which anybody holding both can
-    /// work out. It travels because the screen wants to say what a step was
-    /// changed FROM, and because the host has to know what flipping one means.
+    /// Whether the distro ships it on — the DECLARED fact, which travels
+    /// because the screen wants to say what a step was changed FROM.
     pub on_by_default: bool,
+    /// Whether THIS MACHINE runs it before the person's flip — its own
+    /// table, where the module reads one (`Module::steps_here`), and what a
+    /// flip is a flip OF: "changed by you" is `on != here()`, and a step the
+    /// machine turned the other way from what ships is no flip of anybody's.
+    ///
+    /// `None` in a mind from a daemon that did not say — a footer is
+    /// switched with the system and a brain is not restarted with it — and
+    /// read then as what ships, which is what that daemon counted from
+    /// ([`StepState::here`]).
+    #[serde(default)]
+    pub on_here: Option<bool>,
     /// The text key of its name ([`crate::task::Step::name_key`]). Empty until
     /// its module declares one, and then no screen builds a key out of the id.
     #[serde(default)]
@@ -80,6 +87,75 @@ pub struct StepState {
     /// The text key of the line under the cursor. Empty for the same reason.
     #[serde(default)]
     pub does_key: String,
+}
+
+impl StepState {
+    /// The row of `step` on a machine that runs it when `here` says so, and
+    /// whose person flipped it when `flipped` does: `on` is the one over the
+    /// other — what the update's runner works out (`turned_on`).
+    ///
+    /// A STEP THAT NEEDS ROOT IS NOT FLIPPED, whatever the preferences say:
+    /// the half that runs it runs as root and reads no person's file, and
+    /// the core refuses the switch (`brain-why-root-step`). A flip left on
+    /// one would draw a row the run does not keep.
+    #[must_use]
+    pub fn of(step: &crate::task::Step, here: bool, flipped: bool) -> Self {
+        Self {
+            id: step.id.to_owned(),
+            command: step.command.to_owned(),
+            needs_root: step.needs_root,
+            on: here ^ (flipped && !step.needs_root),
+            on_by_default: step.on_by_default,
+            on_here: Some(here),
+            name_key: step.name_key.to_owned(),
+            does_key: step.does_key.to_owned(),
+        }
+    }
+
+    /// Whether this machine runs it before the person's flip — what ships,
+    /// when the daemon did not say ([`StepState::on_here`]).
+    #[must_use]
+    pub fn here(&self) -> bool {
+        self.on_here.unwrap_or(self.on_by_default)
+    }
+
+    /// Whether the person turned it the other way from what this machine
+    /// runs.
+    #[must_use]
+    pub fn by_you(&self) -> bool {
+        self.on != self.here()
+    }
+
+    /// Who decided which way it is.
+    #[must_use]
+    pub fn why(&self) -> StepWhy {
+        match (self.on, self.by_you(), self.here() == self.on_by_default) {
+            (true, true, _) => StepWhy::OnByYou,
+            (true, false, true) => StepWhy::Shipped,
+            (true, false, false) => StepWhy::OnHere,
+            (false, true, _) => StepWhy::OffByYou,
+            (false, false, true) => StepWhy::ShippedOff,
+            (false, false, false) => StepWhy::OffHere,
+        }
+    }
+}
+
+/// Who decided which way a step is ([`StepState::why`]): the person's flip
+/// first, then this machine's table, then what ships.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepWhy {
+    /// On, as it ships.
+    Shipped,
+    /// On, because this machine's table turned it on; it ships off.
+    OnHere,
+    /// On, because the person turned it on.
+    OnByYou,
+    /// Off, as it ships.
+    ShippedOff,
+    /// Off, because this machine's table turned it off; it ships on.
+    OffHere,
+    /// Off, because the person turned it off.
+    OffByYou,
 }
 
 /// Something a person can ask of a module by name, as the screen offers it.
@@ -289,6 +365,11 @@ pub struct Mind {
     /// run starts, so a rehearsal asked for today cannot quietly make next
     /// week's scheduled run a dry one.
     pub rehearsing: Option<String>,
+    /// The run under way is a rehearsal: what [`Mind::rehearsing`] said as
+    /// the runner started it — and cleared — kept until it ends, so a screen
+    /// that opens in the middle of one says that nothing on the machine
+    /// changes.
+    pub running_rehearsal: bool,
     /// A task somebody asked to put off, waiting for the runner to write it
     /// down.
     ///
@@ -342,5 +423,61 @@ impl Mind {
     /// One task's row, to change.
     pub fn task_mut(&mut self, id: &str) -> Option<&mut TaskState> {
         self.tasks.iter_mut().find(|t| t.id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FAILS IF: any of the eight ways a step can stand — what ships, what
+    /// this machine runs, whether the person flipped it — is drawn on the
+    /// wrong side or credited to the wrong hand; or a flip counts on a step
+    /// that needs root.
+    #[test]
+    fn a_step_says_who_turned_it_which_way() {
+        use StepWhy::{OffByYou, OffHere, OnByYou, OnHere, Shipped, ShippedOff};
+        let step = |ships: bool, root: bool| crate::task::Step {
+            id: "fixture",
+            command: "true",
+            needs_root: root,
+            on_by_default: ships,
+            name_key: "",
+            does_key: "",
+        };
+        for (ships, here, flipped, on, why) in [
+            (true, true, false, true, Shipped),
+            (true, true, true, false, OffByYou),
+            (true, false, false, false, OffHere),
+            (true, false, true, true, OnByYou),
+            (false, false, false, false, ShippedOff),
+            (false, false, true, true, OnByYou),
+            (false, true, false, true, OnHere),
+            (false, true, true, false, OffByYou),
+        ] {
+            let row = StepState::of(&step(ships, false), here, flipped);
+            assert_eq!(
+                (row.on, row.why(), row.by_you()),
+                (on, why, flipped),
+                "ships {ships}, here {here}, flipped {flipped}"
+            );
+            // A ROOT STEP IS THE MACHINE'S: a flip left on one moves nothing.
+            let root = StepState::of(&step(ships, true), here, flipped);
+            assert_eq!(
+                root.on, here,
+                "ships {ships}, here {here}, flipped {flipped}"
+            );
+            assert!(!root.by_you());
+        }
+        // A DAEMON THAT DID NOT SAY counted from what ships, and so does this.
+        let mut old = StepState::of(&step(false, false), true, false);
+        old.on_here = None;
+        assert!(!old.here());
+        assert_eq!(old.why(), OnByYou);
+        let old: StepState = serde_json::from_str(
+            r#"{"id":"x","command":"x","needs-root":false,"on":false,"on-by-default":false}"#,
+        )
+        .expect("a step from an older daemon still reads");
+        assert_eq!((old.on_here, old.why()), (None, ShippedOff));
     }
 }

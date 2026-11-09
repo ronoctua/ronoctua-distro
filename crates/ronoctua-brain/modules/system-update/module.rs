@@ -15,8 +15,9 @@
 //! Because "the machine will update itself this afternoon" is a sentence a
 //! person should be able to open. Under the cursor the screen says the real
 //! command, whether it needs root, and whether the person has changed it from
-//! what the distro ships — the same rule the disk formatter's two menus follow,
-//! where every line carries a second, quieter line saying what it really means.
+//! what this machine runs — the same rule the disk formatter's two menus
+//! follow, where every line carries a second, quieter line saying what it
+//! really means.
 //!
 //! # The rebuild is borrowed
 //!
@@ -61,7 +62,7 @@ use std::sync::Arc;
 
 // THE SHARED HALF (`shared.rs`, compiled into the library beside the
 // manifest): what the update's doors read of the same machine and table.
-use super::{Charge, HOLD_METERED, steps};
+use super::{Charge, HOLD_METERED, MACHINE_TABLE, STEPS_FILE, on_here, steps};
 use crate::module::{Arg, Birth, Event, Manifest, Module, Noted, Run, Scheduled};
 use crate::moment::{Moment, Offset};
 use crate::prefs::{TaskPrefs, Where};
@@ -69,15 +70,6 @@ use crate::pulse::Pulse;
 use crate::schedule::next_moment;
 use crate::systemd;
 use crate::task::{Due, Hold, Outcome, Step, StepOutcome, Verdict, Watched};
-
-/// The file the sequence's own script reads to find out which steps the
-/// person switched, in their state directory:
-/// `$XDG_STATE_HOME/ronoctua/update-steps.conf`.
-///
-/// The script (`gen-updates.py`, the person's half) spells the same leaf, and
-/// this module's check `…-switch-reaches-the-run` plants a file here and asks
-/// the script's own reader about it.
-pub const STEPS_FILE: &str = "update-steps.conf";
 
 /// The entry: the update, in the birth's zone — [`Scheduled::due`] is PURE, and
 /// "in the afternoon" is an hour in the person's own day.
@@ -91,13 +83,17 @@ pub fn new(birth: &Birth) -> impl Module + use<> {
     }
 }
 
-/// What a run of the update waits on, read off the machine — a seam, so a
-/// test is a metered network or a flat battery without having one.
+/// What a run of the update waits on, and which of its steps this machine
+/// runs, read off the machine — a seam, so a test is a metered network, a
+/// flat battery or a table of its own without having one.
 trait Probe: Send + Sync {
     /// Whether the way out is metered; `None` when nobody could say.
     fn metered(&self) -> Option<bool>;
     /// The machine's battery, as the update weighs it.
     fn charge(&self) -> Charge;
+    /// The text of this machine's table of steps ([`MACHINE_TABLE`]), or
+    /// `None` when there is none to read.
+    fn table(&self) -> Option<String>;
 }
 
 /// The real machine: NetworkManager, and `/sys` under these places.
@@ -112,6 +108,14 @@ impl Probe for TheMachine {
 
     fn charge(&self) -> Charge {
         Charge::read_at(&self.places)
+    }
+
+    /// Read whole each time it is asked — a few hundred bytes, and a
+    /// rebuild may have changed it since.
+    fn table(&self) -> Option<String> {
+        std::fs::read(MACHINE_TABLE)
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 }
 
@@ -142,6 +146,11 @@ impl Module for SystemUpdate {
 
     fn steps(&self) -> &'static [Step] {
         steps()
+    }
+
+    /// This machine's table, read as the runner reads it ([`on_here`]).
+    fn steps_here(&self) -> Vec<bool> {
+        on_here(self.probe.table().as_deref())
     }
 
     fn scheduled(&self) -> Option<&dyn Scheduled> {
@@ -339,21 +348,21 @@ fn last_step(steps: &[StepOutcome]) -> String {
 /// # Why this file exists at all
 ///
 /// Because the switch on the screen did **nothing**. `m t` wrote an entry into
-/// `brain.json` and nothing on the machine ever read it: what decides whether
-/// a step runs is `/etc/ronoctua/updates.conf`, generated from the NixOS
-/// option `ronoctua.update.steps`, which needs a rebuild. So the page offered
-/// a key, the key wrote a file, and the sequence went on running exactly what
-/// it ran before — with no way for anybody to tell.
+/// `brain.json` and nothing on the machine ever read it: what decided whether
+/// a step ran was this machine's table ([`MACHINE_TABLE`]), generated from the
+/// NixOS option `ronoctua.update.steps`, which needs a rebuild. So the page
+/// offered a key, the key wrote a file, and the sequence went on running
+/// exactly what it ran before — with no way for anybody to tell.
 ///
 /// # Why a second file and not a second reader
 ///
 /// There is ONE authority, and it is `brain.json`. This is a derived view of
-/// it, rewritten whenever it changes, in the shape `/etc/ronoctua/updates.conf`
-/// already has — one line per switch — so the script that reads that can read
-/// this with the loop it already has. The alternative was teaching a
-/// `writeShellApplication` to parse JSON, which is either a new runtime
-/// dependency or a `grep` that will one day answer confidently and wrongly
-/// about somebody's machine.
+/// it, rewritten whenever it changes, in the shape the machine's table
+/// already has — one line per switch — so the script that reads that can
+/// read this with the loop it already has, over that table's answer. The
+/// alternative was teaching a `writeShellApplication` to parse JSON, which is
+/// either a new runtime dependency or a `grep` that will one day answer
+/// confidently and wrongly about somebody's machine.
 ///
 /// It is the same relationship the theme's compositor fragment has with
 /// `theme.json`: one file is the decision and the other is the decision
@@ -373,9 +382,10 @@ fn last_step(steps: &[StepOutcome]) -> String {
 /// The directory cannot be created, or the file cannot be written.
 fn write_steps_to(dir: &Path, task: &str, flipped: &BTreeSet<String>) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let mut out = String::from(
+    let mut out = format!(
         "# GENERATED by ronoctua-brain out of brain.json. Do not edit by hand.\n\
-         # One line per step whose switch differs from what the distro ships.\n",
+         # One line per step whose switch differs from this machine's table\n\
+         # ({MACHINE_TABLE}).\n",
     );
     for step in flipped {
         // THE TASK IS IN THE LINE, because the file's reader is a script that
@@ -402,6 +412,7 @@ mod tests {
                 discharging: false,
                 percent: None,
             },
+            table: None,
         })
     }
 
@@ -409,6 +420,7 @@ mod tests {
     struct Probed {
         metered: Option<bool>,
         charge: Charge,
+        table: Option<String>,
     }
 
     impl Probe for Probed {
@@ -418,6 +430,10 @@ mod tests {
 
         fn charge(&self) -> Charge {
             self.charge
+        }
+
+        fn table(&self) -> Option<String> {
+            self.table.clone()
         }
     }
 
@@ -436,6 +452,10 @@ mod tests {
 
         fn charge(&self) -> Charge {
             Charge::read_at(&self.places)
+        }
+
+        fn table(&self) -> Option<String> {
+            None
         }
     }
 
@@ -561,6 +581,38 @@ mod tests {
         a_task()
             .prefs_saved(&mine, &nowhere)
             .expect("nothing to write");
+    }
+
+    /// FAILS IF: what the core counts a flip from is not this machine's
+    /// table as the runner reads it — a step it switches on read as off —
+    /// or, with no table to read, not what ships.
+    #[test]
+    fn what_this_machine_runs_is_its_tables() {
+        let table = steps()
+            .iter()
+            .map(|s| format!("{} {}\n", s.id, if s.on_by_default { "off" } else { "on" }))
+            .collect::<String>();
+        let here = a_task_on(Probed {
+            metered: None,
+            charge: Charge {
+                discharging: false,
+                percent: None,
+            },
+            table: Some(table.clone()),
+        })
+        .steps_here();
+        assert_eq!(here, on_here(Some(&table)));
+        assert!(
+            steps()
+                .iter()
+                .zip(&here)
+                .all(|(s, on)| *on != s.on_by_default),
+            "a step the table turned the other way still reads as it ships"
+        );
+        assert_eq!(
+            a_task().steps_here(),
+            steps().iter().map(|s| s.on_by_default).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -817,6 +869,7 @@ mod tests {
                     discharging,
                     percent,
                 },
+                table: None,
             })
             .needs(&Pulse::default(), &mine)
         };

@@ -229,6 +229,11 @@ impl Shared {
         if mind.announcement.as_ref().is_some_and(|a| a.task == task) {
             mind.announcement = None;
         }
+        // A REHEARSAL ASKED FOR AND STOPPED is gone with its run: left, it
+        // would make the task's next scheduled run a dry one.
+        if mind.rehearsing.as_deref() == Some(task) {
+            mind.rehearsing = None;
+        }
         if let Some(row) = mind.task_mut(task)
             && row.standing == Standing::Queued
         {
@@ -377,5 +382,20 @@ mod tests {
             !shared.stop_flag().load(Ordering::Relaxed),
             "the next run was born already aborted"
         );
+    }
+
+    /// FAILS IF: a rehearsal asked for and stopped before it ran keeps its
+    /// ask — the task's next scheduled run would be a dry one.
+    #[test]
+    fn stopping_a_rehearsal_lets_its_ask_go() {
+        let shared = two_tasks();
+        shared.change(|m| m.rehearsing = Some("one".to_owned()));
+        shared.queue_up("one");
+        shared.abort("two");
+        assert_eq!(shared.snapshot().0.rehearsing.as_deref(), Some("one"));
+        shared.abort("one");
+        let (mind, _) = shared.snapshot();
+        assert_eq!(mind.rehearsing, None);
+        assert!(mind.queue.is_empty());
     }
 }

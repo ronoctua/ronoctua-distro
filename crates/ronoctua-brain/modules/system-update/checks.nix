@@ -86,6 +86,9 @@ let
         id = "/nonexistent/id";
         person = vm.ronoctua.user;
         runtime-root = "/nonexistent/run-user";
+        # A REAL ONE: what `fail` asks of its standard output is asked for
+        # real (`system-update-failure-lines-carry-a-priority`).
+        stat = "${pkgs.coreutils}/bin/stat";
       }
       // wiring;
     };
@@ -633,9 +636,18 @@ in
     # It did not: `m t` wrote an entry into `brain.json` and nothing on the
     # machine read it. The fix is a third layer in `turned_on`, read after the
     # machine's table: the person's own flips, which this module writes out of
-    # `brain.json` (`STEPS_FILE`, in `module.rs`). This RUNS the generated
+    # `brain.json` (`STEPS_FILE`, in `shared.rs`). This RUNS the generated
     # function, with tables planted under it — a check that grepped the
     # script's source once let a sabotage walk past it.
+    #
+    # AND THE FLIP IS OVER THIS MACHINE'S TABLE. The brain counted it from
+    # what ships while the run counted it from `/etc/ronoctua/updates.conf`,
+    # so where the table turned a step on the page drew it off while it ran,
+    # and turning it on turned it off. So the runner here reads a table that
+    # is not what ships — the very file the brain's reader is held to
+    # (`fixtures/machine-differs.conf`, `on_here` in `shared.rs`) — and the
+    # table the brain reads (`MACHINE_TABLE`) is the one the runner is wired
+    # to and the machine's `/etc` has.
     system-update-switch-reaches-the-run =
       let
         personal = builtins.filter (s: !s.root) steps;
@@ -643,6 +655,16 @@ in
           (lib.findFirst (s: s.enable) (throw "${id}: no step of the person's ships on") personal).id;
         offStep =
           (lib.findFirst (s: !s.enable) (throw "${id}: no step of the person's ships off") personal).id;
+        # THE RUNNER OVER A TABLE IN THE FOLDER IT RUNS IN: none planted, it
+        # reads what ships; planted, the table.
+        tabled = runnersWith { config = "updates.conf"; };
+        # Every step, as `<id> person|root on|off` (what ships).
+        declared = pkgs.writeText "${id}-steps.txt" (
+          lib.concatMapStrings (
+            s: "${s.id} ${if s.root then "root" else "person"} ${if s.enable then "on" else "off"}\n"
+          ) steps
+        );
+        etc = pkgs.writeText "${id}-etc.json" (builtins.toJSON (builtins.attrNames vm.environment.etc));
       in
       mkCheck "system-update-switch-reaches-the-run"
         [
@@ -656,25 +678,43 @@ in
           export XDG_STATE_HOME="$HOME/.local/state"
           mkdir -p "$XDG_STATE_HOME/ronoctua"
 
-          # THE FILE THE MODULE WRITES IS THE FILE THE SCRIPT READS: the leaf
-          # comes from the module's Rust, not from here.
+          # THE FILE THE MODULE WRITES IS THE FILE THE SCRIPT READS, and the
+          # table the brain counts from is the one the script reads first:
+          # both names come from the module's Rust, not from here.
           leaf=$(python3 - <<'END'
-          import pathlib, re, sys
+          import json, pathlib, re, sys
           exec(open("${pyPrelude}").read())
-          # FILE-WIDE: one module-level constant of `module.rs`; the needle is
-          # its string literal, so `uncommented` keeps the strings.
-          code = uncommented(pathlib.Path("${self}/${folder}/module.rs").read_text())
-          floor(len(code), 1000, "characters of module.rs")
-          m = re.search(r'pub const STEPS_FILE: &str = "([^"]+)";', code)
-          if not m:
-              sys.exit("ERROR: `STEPS_FILE` went away from module.rs")
-          print(m.group(1))
+          # FILE-WIDE: two module-level constants of `shared.rs` and one
+          # binding of `module.nix`; the needles are their string literals,
+          # so `uncommented` and `hashless` keep the strings.
+          # PARSED: the evaluated machine's `/etc`, by name.
+          code = uncommented(pathlib.Path("${self}/${folder}/shared.rs").read_text())
+          nix = hashless(pathlib.Path("${self}/${folder}/module.nix").read_text())
+          etc = json.load(open("${etc}"))
+          floor(len(code), 1000, "characters of shared.rs")
+          floor(len(nix), 500, "characters of module.nix")
+          floor(len(etc), 10, "files of the machine's /etc")
+          named = {}
+          for name in ("STEPS_FILE", "MACHINE_TABLE"):
+              m = re.search(r'pub const ' + name + r': &str = "([^"]+)";', code)
+              if not m:
+                  sys.exit(f"ERROR: `{name}` went away from shared.rs")
+              named[name] = m.group(1)
+          table = named["MACHINE_TABLE"]
+          wired = re.search(r'configFile = "([^"]+)";', nix)
+          if not wired:
+              sys.exit("ERROR: `configFile`, the table the runners are wired to, went away from module.nix")
+          if wired.group(1) != table:
+              sys.exit(f"ERROR: the brain reads this machine's table at {table}, and the runners {wired.group(1)}")
+          if not table.startswith("/etc/") or table.removeprefix("/etc/") not in etc:
+              sys.exit(f"ERROR: the brain reads this machine's table at {table}, which the machine's /etc does not have")
+          print(named["STEPS_FILE"])
           END
           )
           [ -n "$leaf" ] || exit 1
           file="$XDG_STATE_HOME/ronoctua/$leaf"
 
-          script=${runners}/bin/ronoctua-update
+          script=${tabled}/bin/ronoctua-update
           [ -x "$script" ] || { echo "ERROR: the person's half was not built" >&2; exit 1; }
           grep -q "/ronoctua/$leaf" "$script" || {
             echo "ERROR: the person's half does not read ronoctua/$leaf, which the module writes" >&2; exit 1; }
@@ -711,8 +751,131 @@ in
           printf '%s\n' 'made-up ${onStep}' > "$file"
           ask ${onStep} on "another task's flip was applied to this one"
 
+          # THIS MACHINE'S TABLE, NOT WHAT SHIPS: a step is on where its line
+          # says `on`, and off where it says anything else or is not there.
+          cp ${./fixtures/machine-differs.conf} updates.conf
+          : > "$file"
+          here_on=""
+          missing=""
+          while read -r step whose ships; do
+            if grep -qx "$step on" updates.conf; then want=on; else want=off; fi
+            ask "$step" "$want" "this machine's table"
+            if [ "$whose" = person ] && [ "$ships" = off ] && [ "$want" = on ]; then
+              here_on=$step
+            fi
+            if [ "$ships" = on ] && ! grep -q "^$step " updates.conf; then
+              missing=$step
+            fi
+          done < ${declared}
+          [ -n "$here_on" ] || {
+            echo "ERROR: the fixture runs no step of the person's that ships off" >&2; exit 1; }
+          [ -n "$missing" ] || {
+            echo "ERROR: the fixture leaves out no step that ships on" >&2; exit 1; }
+
+          # AND THE PERSON'S FLIP IS OVER IT: switching off a step the table
+          # runs, though it ships off, is the line the module writes for it.
+          printf '%s\n' "${id} $here_on" > "$file"
+          ask "$here_on" off "the person switched off a step this machine's table runs"
+          printf '%s\n' "${id} $missing" > "$file"
+          ask "$missing" on "the person switched on a step this machine's table leaves out"
+
+          # AND THE LINES WHERE TWO READERS COULD PART — blanks and tabs, a
+          # note after the state, a line commented after a blank, an id said
+          # twice, a last line with no newline —, each held to what the
+          # brain's reader is held to as well (`edges-read.conf`, `shared.rs`).
+          rm -f updates.conf
+          cp ${./fixtures/edges.conf} updates.conf
+          : > "$file"
+          edges=0
+          while read -r step want; do
+            case "$step" in "#"*|"") continue ;; esac
+            ask "$step" "$want" "a line of the edges' table"
+            edges=$((edges + 1))
+          done < ${./fixtures/edges-read.conf}
+          [ "$edges" -ge 5 ] || {
+            echo "ERROR: the edges' table asks $edges steps" >&2; exit 1; }
+
           [ "$failed" = 0 ] || exit 1
-          echo "OK: a step switched on the brain's page is a step the sequence runs"
+          echo "OK: a step switched on the brain's page is a step the sequence runs, over this machine's table"
+        '';
+
+    # A FAILURE'S LINE IS AN ERROR IN THE JOURNAL, and only there.
+    #
+    # The update's window colours a line by the priority journald gave it, and
+    # a unit's output is `info` unless the line says otherwise: the runner's
+    # `!!` lines said nothing, so a failed step drew like any other line (nix
+    # colours nothing under systemd). `fail` opens them with `<3>` — but only
+    # when its output IS the journal's stream: `JOURNAL_STREAM` is inherited,
+    # and a runner started by hand from a terminal inside a unit's session has
+    # it too, where `<3>` would be printed as text.
+    #
+    # So `fail` is lifted out of both generated halves and RUN: into a file
+    # the variable names (`<3>`), into one it does not name (an inherited
+    # value), with none, and into a pipe while the variable names the file.
+    # And no `!!` line of either half is printed any other way.
+    system-update-failure-lines-carry-a-priority =
+      mkCheck "system-update-failure-lines-carry-a-priority" [ pkgs.bash pkgs.python3 ]
+        ''
+          python3 - <<'END'
+          import os, pathlib, subprocess, sys
+          exec(open("${pyPrelude}").read())
+          # FILE-WIDE: the two generated halves are shell scripts, read line by
+          # line with their comments off (`hashless`); `fail` is one line,
+          # lifted whole and run.
+          wrong = []
+          lifted = set()
+          for half in ("bin/ronoctua-update", "libexec/ronoctua-update-system"):
+              script = hashless(pathlib.Path("${runners}/" + half).read_text())
+              floor(len(script), 1000, f"characters of {half}")
+              lines = script.splitlines()
+              fails = [l for l in lines if l.startswith("fail() {")]
+              if len(fails) != 1:
+                  wrong.append(f"{half} defines `fail` {len(fails)} times, not once")
+              lifted.update(fails)
+              told = [l.strip() for l in lines if '"!!' in l]
+              floor(len(told), 2, f"failure lines of {half}")
+              for line in told:
+                  if not line.startswith('fail "!!'):
+                      wrong.append(f"{half} prints a failure some other way: {line}")
+          if len(lifted) != 1:
+              sys.exit(f"ERROR: the two halves do not share one `fail`: {sorted(lifted)}")
+          fail = lifted.pop()
+
+          def run(stream, out):
+              env = {k: v for k, v in os.environ.items() if k != "JOURNAL_STREAM"}
+              if stream is not None:
+                  env["JOURNAL_STREAM"] = stream
+              return subprocess.run(["bash", "-uc", fail + "\nfail '!! a step: failed'"],
+                                    env=env, stdout=out, stderr=subprocess.PIPE, text=True)
+
+          def into_a_file(stream_of):
+              f = pathlib.Path("journal.out")
+              f.write_text("")
+              with f.open("a") as out:
+                  identity = f"{os.fstat(out.fileno()).st_dev}:{os.fstat(out.fileno()).st_ino}"
+                  run(stream_of(identity), out)
+              return f.read_text()
+
+          said = into_a_file(lambda identity: identity)
+          if said != "<3>!! a step: failed\n":
+              wrong.append(f"into the stream JOURNAL_STREAM names, the line is not an error: {said!r}")
+          said = into_a_file(lambda identity: "1:1")
+          if said != "!! a step: failed\n":
+              wrong.append(f"an inherited JOURNAL_STREAM put a priority on another file: {said!r}")
+          said = into_a_file(lambda identity: None)
+          if said != "!! a step: failed\n":
+              wrong.append(f"with no journal, the line is not plain: {said!r}")
+          f = pathlib.Path("journal.out")
+          named = os.stat(f)
+          piped = run(f"{named.st_dev}:{named.st_ino}", subprocess.PIPE)
+          if piped.stdout != "!! a step: failed\n":
+              wrong.append(f"into a pipe, a priority was printed as text: {piped.stdout!r}")
+
+          if wrong:
+              print("\n".join("ERROR: " + w for w in wrong), file=sys.stderr)
+              sys.exit(1)
+          print("OK: every failure line goes through `fail`, an error in the journal and plain anywhere else")
+          END
         '';
 
     # THE BRAIN READS WHERE THE SCRIPT WRITES, rehearsal included.
@@ -996,7 +1159,7 @@ in
                       if line == "}":
                           break
               return "\n".join(lines)
-          one_liners = [l for l in script.splitlines() if l.startswith(("say() {", "record() {"))]
+          one_liners = [l for l in script.splitlines() if l.startswith(("say() {", "fail() {", "record() {"))]
           body = cut(fn + "() {")
           must(body, "the trim's step function in the root half")
           lifted = "\n".join(["set -uo pipefail", *one_liners, cut("turned_on() {"), cut("default_on() {"), body])
@@ -1510,7 +1673,7 @@ in
           else:
               word = declining["declines"][0]
               fn = "step_" + declining["id"].replace("-", "_")
-              helpers = ["say() {", "record() {"]
+              helpers = ["say() {", "fail() {", "record() {"]
               lifted = "\n".join(
                   ["set -uo pipefail"]
                   + [l for l in script.splitlines() if l.startswith(tuple(helpers))]
@@ -1740,7 +1903,7 @@ in
           for name, body in zip(wanted, bodies):
               if not body:
                   sys.exit(f"ERROR: the root half has no `{name}` to lift")
-          one_liners = [l for l in script.splitlines() if l.startswith(("say() {", "record() {"))]
+          one_liners = [l for l in script.splitlines() if l.startswith(("say() {", "fail() {", "record() {"))]
           lifted = "\n".join(["set -uo pipefail", *one_liners, *bodies])
 
           ORIGINAL = "the lock the running system was built from\n"

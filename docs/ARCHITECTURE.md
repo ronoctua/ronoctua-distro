@@ -9846,14 +9846,15 @@ sequência, as duas metades, o interruptor de um passo e a vista da atualizaçã
 `journal-errors`, `containers`, `search-index`, `video-metrics`, `belongings-reminder` e
 `security-watch`. Este documento não repete o que mora lá.
 
-#### Um passo é um giro sobre o padrão declarado
+#### Um passo é um giro sobre o que a máquina roda
 
 `TaskPrefs::steps_off` era um conjunto de "desligados", e um conjunto assim só diz *a pessoa desligou
 um passo que vem ligado* — supõe que todo passo vem ligado. A atualização entrega seis dos doze
 desligados, e a página dizia `você mudou` sobre os seis numa máquina em que ninguém tinha mexido. O
-campo virou `steps_flipped`: `on = on_by_default ^ flipped`, `changed = flipped`, com um
-`serde(alias)` no nome antigo (sob as duas leituras uma entrada quer dizer a mesma coisa, e nada em
-disco migra). O que atravessa o fio é `on_by_default`, o único fato declarado dos dois.
+campo virou `steps_flipped`, e o giro é sobre o que ESTA MÁQUINA roda (`Module::steps_here`, a
+tabela dela): `on = here ^ flipped`, `changed = flipped`. Um arquivo de antes contava do padrão, e o
+núcleo o relê uma vez na partida (`Prefs::steps_over`, `Core::heal_steps`). Atravessam o fio
+`on_by_default` e `on_here`.
 
 #### Nada que ele faça pode PERGUNTAR
 
@@ -9971,7 +9972,8 @@ cada batida. Tirar da fila não é o que a para: meio minuto depois ela volta, *
 responderia a mesma pergunta a cada meio minuto"*. O que move o próximo momento é o ADIAMENTO, que o
 runner anota como evento. Então `brain-abort` é um comando só e dois pedidos — `Postpone` enquanto
 nada está rodando, `Abort { task }` depois que alguma coisa está. Quem escolhe é uma função de três
-linhas, e não quem aperta a tecla.
+linhas, e não quem aperta a tecla. Uma simulação pedida não se adia: o `Postpone` a desfaz, porque
+adiá-la moveria o momento da atualização de verdade e faria da próxima agendada um ensaio.
 
 #### A cor é a única de fundo com matiz, e é um passo PARA O LADO
 

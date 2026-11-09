@@ -481,6 +481,15 @@ pub trait Module: Send + Sync {
         &[]
     }
 
+    /// Whether THIS MACHINE runs each step before the person's flip, in the
+    /// order of [`Module::steps`] — what a flip is a flip OF. What ships,
+    /// unless the module reads a table of the machine's (the update's
+    /// `ronoctua.update.steps`). Asked when needed, never under the mind's
+    /// lock: it may read a file.
+    fn steps_here(&self) -> Vec<bool> {
+        self.steps().iter().map(|s| s.on_by_default).collect()
+    }
+
     /// Its run, when it has a schedule.
     fn scheduled(&self) -> Option<&dyn Scheduled> {
         None

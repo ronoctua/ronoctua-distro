@@ -7,7 +7,6 @@
 # The names are compiled (`key`, written from them by `nix/text-keys.nix`); the
 # sentences are read at run time (`RONOCTUA_TEXTS`), so editing one compiles nothing.
 
-brain-needs-root = Roda como root
 # THE UPDATE, WATCHED — the modeline's mark, the leader's group for the view
 # that watches a run, and the countdown's two answers that view teaches too.
 #
@@ -57,7 +56,7 @@ cmd-machine-let-go = Solta a retenção da máquina, e a próxima atualização 
 
 ## The person's brain modules that wait for an approval, on the update's records: a module whose NixOS half runs as root enters a build only at the hash an approval names. Each is asked on the page, the no first, then in the sudo bar.
 
-machine-approve-waiting = Seu módulo do brain { $id } espera a sua aprovação, porque uma parte dele roda como root. A máquina o mediu como { $hash }.
+machine-approve-waiting = Seu módulo do Brain { $id } espera a sua aprovação, porque uma parte dele roda como root. A máquina o mediu como { $hash }.
 machine-approve-row = Aprovar { $id } como ele está agora.
 machine-approve-question = Aprovar { $id } em { $hash }? A partir da próxima atualização, uma parte dele roda como root nesta máquina, até o módulo mudar.
 machine-approve-no = não, deixar esperando
@@ -71,8 +70,8 @@ machine-approve-said-unhashable = A máquina não conseguiu medir { $id }, entã
 machine-approve-said-unwritable = A máquina não conseguiu registrar a aprovação de { $id }.
 machine-approve-said-unasked = O pedido para aprovar { $id } chegou incompleto. Peça de novo.
 machine-approve-said-unstaged = O pedido para aprovar { $id } não pôde ser passado à máquina.
-machine-approve-said-none = Nenhum módulo do brain seu espera aprovação.
-cmd-machine-approve-module = Aprova um módulo do brain seu que espera, no hash que a máquina mediu — pedido pelo sudo
+machine-approve-said-none = Nenhum módulo do Brain seu espera aprovação.
+cmd-machine-approve-module = Aprova um módulo do Brain seu que espera, no hash que a máquina mediu — pedido pelo sudo
 # O CACHE BINÁRIO DA PESSOA — uma página da vista da atualização (`c`, `LEADER s u c`),
 # nas duas portas, e o que a instalação e o netrc do root dizem dele.
 binary-cache-open = cache binário
@@ -114,14 +113,21 @@ binary-cache-copy-newer = de um formato mais novo
 binary-cache-glance-public = { $name }, público
 binary-cache-glance-private = { $name }, privado
 binary-cache-does = Abre o seu cache binário: o seu próprio cache no Cachix, de onde esta máquina baixa e para onde envia depois de cada atualização.
+binary-cache-act-name = pergunta o nome
+binary-cache-act-key = pergunta a chave
+binary-cache-act-make-private = torna o cache privado
+binary-cache-act-make-public = torna o cache público
+binary-cache-act-token = pergunta o token
+binary-cache-act-access = escreve de novo o acesso do root
+binary-cache-act-ask = pergunta antes
 binary-cache-down = próxima linha
 about-binary-cache-down = Põe o cursor na próxima linha da página do cache binário.
 binary-cache-up = linha anterior
 about-binary-cache-up = Põe o cursor na linha anterior da página do cache binário.
 binary-cache-enter = mudar
 about-binary-cache-enter = Faz o que a linha sob o cursor diz: pede um nome, uma chave ou o token, alterna quem lê o cache, grava o netrc do root, ou pergunta antes de um gesto que não volta.
-binary-cache-steps = os passos
-about-binary-cache-steps = De volta aos passos da atualização.
+binary-cache-steps = voltar à lista
+about-binary-cache-steps = Fecha a página e volta à lista da atualização.
 binary-cache-access-written = sim, pelo netrc do root
 binary-cache-access-missing = não: o netrc do root não está gravado
 binary-cache-machine-in-use = em uso, antes do cache.nixos.org
@@ -170,6 +176,8 @@ binary-cache-said-netrc-footer = O netrc do root é pedido na barra do sudo, aci
 # deixar a atualização de rotina levá-los além das versões que a distro testou.
 distro-follow-open = seguir versões
 distro-follow-does = Abre os apps da distro que seguem as próprias versões: se cada atualização os leva além das versões que a distro testou.
+distro-follow-act-turn-on = liga: as versões passam a ser seguidas
+distro-follow-act-turn-off = desliga: fica a versão que a distro testou
 cmd-distro-follow-open = Os apps da distro que seguem as próprias versões: se cada atualização os leva além das versões que a distro testou
 distro-follow-heading = Os apps da distro que seguem as próprias versões
 distro-follow-row-follow = seguir as versões
@@ -220,10 +228,14 @@ distro-follow-up = linha anterior
 about-distro-follow-up = Põe o cursor na linha anterior da página dos apps que seguem as próprias versões.
 distro-follow-enter = mudar
 about-distro-follow-enter = Liga ou desliga o seguir, na linha dele.
-distro-follow-steps = os passos
-about-distro-follow-steps = De volta aos passos da atualização.
+distro-follow-steps = voltar à lista
+about-distro-follow-steps = Fecha a página e volta à lista da atualização.
 distro-parts-open = partes
 distro-parts-does = Abre as partes da máquina: o que chega depois da instalação, e os outros jeitos de trazer um download que continua falhando.
+distro-parts-act-update = atualiza o sistema de novo
+distro-parts-act-retry = tenta agora
+distro-parts-act-pick = escolhe a pasta
+distro-parts-act-mirrors = pergunta os espelhos
 distro-parts-glance = { $count ->
         [0] nenhuma esperando
         [one] uma esperando
@@ -343,5 +355,5 @@ distro-parts-enter = tentar agora
 about-distro-parts-enter = Tenta agora a parte sob o cursor; na linha de um pendrive, pergunta a pasta dele.
 distro-parts-hand = entregar arquivo
 about-distro-parts-hand = Entrega um arquivo que você baixou em outro lugar para a parte sob o cursor.
-distro-parts-steps = os passos
-about-distro-parts-steps = De volta aos passos da atualização.
+distro-parts-steps = voltar à lista
+about-distro-parts-steps = Fecha a página e volta à lista da atualização.

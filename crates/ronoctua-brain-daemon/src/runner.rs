@@ -510,6 +510,7 @@ impl Runner {
 
         core.shared.change(|m| {
             m.running = id.to_owned();
+            m.running_rehearsal = rehearsal;
             if let Some(at) = m.queue.iter().position(|q| q == id) {
                 m.queue.remove(at);
             }
@@ -537,6 +538,7 @@ impl Runner {
 
         core.shared.change(|m| {
             m.running.clear();
+            m.running_rehearsal = false;
             if let Some(row) = m.task_mut(id) {
                 row.standing = Standing::Idle;
                 row.last = Some(record.clone());
@@ -1236,7 +1238,8 @@ mod tests {
             Step {
                 id: "on-by-default",
                 command: "a",
-                needs_root: true,
+                // THE PERSON'S: a step that needs root is not flipped at all.
+                needs_root: false,
                 on_by_default: true,
                 name_key: "",
                 does_key: "",

@@ -1548,9 +1548,12 @@ pub struct TaskStep {
     /// on the daemon's side. The default never crossed, so the screen could
     /// say "you changed this" and could not say what it had been changed
     /// FROM, and the host had no way to know what flipping a step meant.
-    /// Sending the default makes "changed" an `!=` anybody can do and leaves
-    /// one authority for it.
+    /// Sending the default leaves one authority for it.
     pub on_by_default: bool,
+    /// Whether this machine runs it before the person's flip — what a flip
+    /// is a flip OF: "changed by you" is `on != on_here`, and `on_here !=
+    /// on_by_default` unflipped is the machine's choice.
+    pub on_here: bool,
     /// The key of its name, declared by the module that owns the step — never
     /// built out of the id on this side.
     pub name_key: String,
@@ -2019,7 +2022,7 @@ pub enum Knob {
     Enabled(bool),
     /// One step, on or off.
     Step(StepSwitch),
-    /// Every step back to what the distro ships.
+    /// Every step back to what this machine runs.
     ///
     /// It carries nothing: there is one default and it is the flake's.
     ResetSteps,

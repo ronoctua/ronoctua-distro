@@ -68,8 +68,10 @@ uma unidade que não existe ao lado de uma unidade que ninguém podia iniciar.
 `m t` na página do cérebro escrevia no `brain.json` e nada na máquina lia: quem decide se um passo
 roda é `/etc/ronoctua/updates.conf`, que vem de uma opção do NixOS e pede rebuild. Agora o módulo,
 no `prefs_saved`, escreve as viradas da pessoa em `$XDG_STATE_HOME/ronoctua/update-steps.conf`, na
-forma que o roteiro já lê, e o roteiro da pessoa as aplica por último. A metade de root não lê esse
-arquivo — root não tem como saber de quem é a sessão —, e a página diz isso nos passos dela.
+forma que o roteiro já lê, e o roteiro da pessoa as aplica por último, sobre a tabela da máquina — que
+o cérebro lê do mesmo jeito (`on_here`): contada a partir do que a distro entrega, a virada de um
+passo que a tabela ligava o desligava. A metade de root não lê esse arquivo — root não tem como
+saber de quem é a sessão —, e o cérebro recusa virar um passo dela.
 
 ## O ensaio ensaia a aparagem de verdade (D5)
 

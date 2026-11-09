@@ -68,13 +68,13 @@ pub mod tail;
 pub mod task;
 pub mod wire;
 
-pub use mind::{Announcement, Mind, Standing, StepState, TaskState};
+pub use mind::{Announcement, Mind, Standing, StepState, StepWhy, TaskState};
 // THE VOCABULARY'S DOORS at the root; the rest of it (`Face`, `Mark`, the
 // module's `Notice`…) is named through `module::`, because the root's `Notice`
 // was once the old one-line notice the footer reads.
 pub use module::{Birth, Manifest};
 pub use moment::{Clock, Moment, Offset};
-pub use prefs::{Gate, PartOfDay, Prefs, TaskPrefs, Where};
+pub use prefs::{Gate, PartOfDay, Prefs, StepsOver, TaskPrefs, Where};
 pub use pulse::Pulse;
 pub use task::{
     Due, Hold, Kind, Outcome, OutcomeKind, RunRecord, Sheet, Step, StepOutcome, Verdict,

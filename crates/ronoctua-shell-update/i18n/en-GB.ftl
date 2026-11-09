@@ -7,7 +7,6 @@
 # The names are compiled (`key`, written from them by `nix/text-keys.nix`); the
 # sentences are read at run time (`RONOCTUA_TEXTS`), so editing one compiles nothing.
 
-brain-needs-root = Runs as root
 # THE UPDATE, WATCHED — the modeline's mark, the leader's group for the view
 # that watches a run, and the countdown's two answers that view teaches too.
 #
@@ -57,7 +56,7 @@ cmd-machine-let-go = Lets go of the machine's hold, so the next update moves the
 
 ## The person's brain modules that wait for an approval, on the update's records: a module whose NixOS half runs as root enters a build only at the hash an approval names. Each is asked on the page, the no first, then in the sudo bar.
 
-machine-approve-waiting = Your brain module { $id } is waiting for your approval, because part of it runs as root. The machine measured it as { $hash }.
+machine-approve-waiting = Your Brain module { $id } is waiting for your approval, because part of it runs as root. The machine measured it as { $hash }.
 machine-approve-row = Approve { $id } as it is now.
 machine-approve-question = Approve { $id } at { $hash }? From the next update, part of it runs as root on this machine until the module changes.
 machine-approve-no = no, leave it waiting
@@ -71,8 +70,8 @@ machine-approve-said-unhashable = The machine could not measure { $id }, so noth
 machine-approve-said-unwritable = The machine could not record the approval of { $id }.
 machine-approve-said-unasked = The request to approve { $id } arrived incomplete. Ask again.
 machine-approve-said-unstaged = The request to approve { $id } could not be passed to the machine.
-machine-approve-said-none = No brain module of yours waits for an approval.
-cmd-machine-approve-module = Approves a brain module of yours that waits, at the hash the machine measured — asked through sudo
+machine-approve-said-none = No Brain module of yours waits for an approval.
+cmd-machine-approve-module = Approves a Brain module of yours that waits, at the hash the machine measured — asked through sudo
 # THE PERSON'S BINARY CACHE — a page of the update's view (`c`, `LEADER s u c`),
 # in both doors, and what the installation and root's netrc say of it.
 binary-cache-open = binary cache
@@ -114,14 +113,21 @@ binary-cache-copy-newer = of a newer format
 binary-cache-glance-public = { $name }, public
 binary-cache-glance-private = { $name }, private
 binary-cache-does = Opens your binary cache: your own Cachix cache, which this machine downloads from and pushes to after each update.
+binary-cache-act-name = asks for the name
+binary-cache-act-key = asks for the key
+binary-cache-act-make-private = makes the cache private
+binary-cache-act-make-public = makes the cache public
+binary-cache-act-token = asks for the token
+binary-cache-act-access = writes root's access again
+binary-cache-act-ask = asks first
 binary-cache-down = next row
 about-binary-cache-down = Puts the cursor on the next row of the binary cache's page.
 binary-cache-up = previous row
 about-binary-cache-up = Puts the cursor on the previous row of the binary cache's page.
 binary-cache-enter = change
 about-binary-cache-enter = Does what the row under the cursor says: asks a name, a key or the token, switches who reads the cache, writes root's netrc, or asks before a gesture that does not come back.
-binary-cache-steps = the steps
-about-binary-cache-steps = Back to the update's steps.
+binary-cache-steps = back to the list
+about-binary-cache-steps = Closes the page and goes back to the update's list.
 binary-cache-access-written = yes, through root's netrc
 binary-cache-access-missing = no: root's netrc is not written
 binary-cache-machine-in-use = in use, before cache.nixos.org
@@ -170,6 +176,8 @@ binary-cache-said-netrc-footer = Root's netrc is asked for in the sudo bar, abov
 # update move them past the versions the distro tested.
 distro-follow-open = follow releases
 distro-follow-does = Opens the distro's apps that follow their releases: whether each update moves them past the versions the distro tested.
+distro-follow-act-turn-on = switches it on: the releases are followed
+distro-follow-act-turn-off = switches it off: the version the distro tested stays
 cmd-distro-follow-open = The distro's apps that follow their releases: whether each update moves them past the versions the distro tested
 distro-follow-heading = The distro's apps that follow their releases
 distro-follow-row-follow = follow their releases
@@ -220,10 +228,14 @@ distro-follow-up = previous row
 about-distro-follow-up = Puts the cursor on the previous row of the page of the apps that follow their releases.
 distro-follow-enter = change
 about-distro-follow-enter = Turns following on or off, on its row.
-distro-follow-steps = the steps
-about-distro-follow-steps = Back to the update's steps.
+distro-follow-steps = back to the list
+about-distro-follow-steps = Closes the page and goes back to the update's list.
 distro-parts-open = parts
 distro-parts-does = Opens the machine's parts: what arrives after the installation, and the other ways to bring in a download that keeps failing.
+distro-parts-act-update = updates the system again
+distro-parts-act-retry = tries it now
+distro-parts-act-pick = picks the folder
+distro-parts-act-mirrors = asks for the mirrors
 distro-parts-glance = { $count ->
         [0] none waiting
         [one] one waiting
@@ -343,5 +355,5 @@ distro-parts-enter = try now
 about-distro-parts-enter = Tries the part under the cursor now; on a stick's row, asks for the stick's folder.
 distro-parts-hand = hand in a file
 about-distro-parts-hand = Hands in a file you downloaded elsewhere for the part under the cursor.
-distro-parts-steps = the steps
-about-distro-parts-steps = Back to the update's steps.
+distro-parts-steps = back to the list
+about-distro-parts-steps = Closes the page and goes back to the update's list.

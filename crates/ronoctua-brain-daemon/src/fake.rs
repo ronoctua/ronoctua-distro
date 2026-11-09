@@ -16,7 +16,7 @@ use crate::module::{
     Scheduled, Screen, Source, Units, Watcher,
 };
 use crate::moment::Moment;
-use crate::prefs::{PartOfDay, TaskPrefs};
+use crate::prefs::{PartOfDay, TaskPrefs, Where};
 use crate::pulse::Pulse;
 use crate::task::{Due, Outcome, Step, Verdict};
 
@@ -91,11 +91,14 @@ type StartedFn = dyn Fn(Moment, &Ctx) + Send + Sync;
 type PassFn = dyn Fn(Moment, &Ctx) -> Option<Pass> + Send + Sync;
 type PassedFn = dyn Fn(Passed<'_>, &Ctx) + Send + Sync;
 type OwedFn = dyn Fn() -> bool + Send + Sync;
+type SavedFn = dyn Fn(&TaskPrefs) + Send + Sync;
 
 /// A module made of closures.
 pub struct Fake {
     manifest: &'static Manifest,
     steps: &'static [Step],
+    /// What its machine runs of each step; `None`: what ships.
+    here: Option<&'static [bool]>,
     due: Box<DueFn>,
     wanted: Box<WantedFn>,
     needs: Box<NeedsFn>,
@@ -115,6 +118,7 @@ pub struct Fake {
     pass: Box<PassFn>,
     passed: Box<PassedFn>,
     owed: Box<OwedFn>,
+    saved: Box<SavedFn>,
     /// Every dismissal and snooze the core passed on, in order.
     pub put_away: Mutex<Vec<(String, Option<Moment>)>>,
 }
@@ -125,6 +129,7 @@ impl Fake {
         Self {
             manifest: leak(manifest),
             steps: &[],
+            here: None,
             due: Box::new(|_, _, _| Due::Not { why: "test" }),
             wanted: Box::new(|_, _, _, _| false),
             needs: Box::new(|_, _| Verdict::Go),
@@ -142,6 +147,7 @@ impl Fake {
             pass: Box::new(|_, _| None),
             passed: Box::new(|_, _| {}),
             owed: Box::new(|| false),
+            saved: Box::new(|_| {}),
             put_away: Mutex::new(Vec::new()),
         }
     }
@@ -231,6 +237,20 @@ impl Fake {
         self
     }
 
+    /// What its machine runs of each step, in their order.
+    #[must_use]
+    pub const fn here(mut self, here: &'static [bool]) -> Self {
+        self.here = Some(here);
+        self
+    }
+
+    /// What it does when its preferences were written.
+    #[must_use]
+    pub fn saves(mut self, f: impl Fn(&TaskPrefs) + Send + Sync + 'static) -> Self {
+        self.saved = Box::new(f);
+        self
+    }
+
     /// What it listens to, and what it does with what it hears.
     #[must_use]
     pub fn listens(
@@ -308,6 +328,13 @@ impl Module for Fake {
         self.steps
     }
 
+    fn steps_here(&self) -> Vec<bool> {
+        self.here.map_or_else(
+            || self.steps.iter().map(|s| s.on_by_default).collect(),
+            <[bool]>::to_vec,
+        )
+    }
+
     fn scheduled(&self) -> Option<&dyn Scheduled> {
         self.manifest.schedule.map(|_| self as &dyn Scheduled)
     }
@@ -340,6 +367,11 @@ impl Module for Fake {
             .lock()
             .expect("put away")
             .push((notice.to_owned(), Some(until)));
+    }
+
+    fn prefs_saved(&self, mine: &TaskPrefs, _dirs: &Where) -> std::io::Result<()> {
+        (self.saved)(mine);
+        Ok(())
     }
 }
 

@@ -37,6 +37,8 @@ pub mod screens;
 pub mod text_input;
 pub mod touch;
 
+pub use foot::{Explained, Gesture};
+
 use anyhow::{Context as _, Result};
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::{
@@ -101,7 +103,8 @@ pub struct Ui {
     /// Columns of text, net of both margins.
     pub columns: u16,
     /// Lines of text the window's CONTENT holds — the window's, less the
-    /// area at its foot while it says or asks something ([`foot`]).
+    /// area at its foot while it says or asks something, or always, for a
+    /// foot the window keeps ([`foot`]).
     pub lines: u16,
     /// Lines of text the whole window holds, the foot's included.
     pub all_lines: u16,
@@ -129,7 +132,8 @@ pub struct Ui {
     pub offset: usize,
     /// The header: the line that teaches the keys, and its drawer.
     pub hinted: crate::chrome::Hinted,
-    /// WHAT THE WINDOW SAYS AND ASKS AT ITS FOOT, with no header ([`foot`]).
+    /// WHAT THE WINDOW SAYS AND ASKS AT ITS FOOT, with no header — and what
+    /// it explains there, in a foot it keeps ([`foot`]).
     pub foot: foot::Foot,
     /// Where the list's BAR was drawn on the last frame, if one was.
     ///
@@ -946,7 +950,8 @@ impl Ui {
         let lines = (self.height as f32 / line).floor().max(0.0) as u16;
         self.all_lines = lines;
         // THE FOOT'S ROWS ARE NOT THE CONTENT'S: a window lays itself out in
-        // what is left above the message it says ([`foot`]).
+        // what is left above the message it says, or the foot it keeps
+        // ([`foot`]).
         self.lines = lines.saturating_sub(self.foot.rows);
     }
 }
@@ -1404,8 +1409,21 @@ pub fn compose<C: Content>(content: &mut C, ui: &mut Ui, easel: Easel<'_>) -> Co
         ..
     } = canvas;
     // WHAT THE WINDOW SAYS OR ASKS, at its foot, over nothing the window drew:
-    // its rows were taken from the window's before it painted ([`foot`]).
-    foot::paint(ui, &mut spans, &mut under, &mut over, bars);
+    // its rows were taken from the window's before it painted ([`foot`]) —
+    // or, in a foot the window keeps, what it explains there.
+    let explained = if ui.foot.own > 0 && !foot::says_it(ui) {
+        content.explained(ui)
+    } else {
+        None
+    };
+    foot::paint(
+        ui,
+        explained.as_ref(),
+        &mut spans,
+        &mut under,
+        &mut over,
+        bars,
+    );
     // THE SWEEP ITSELF, over the letters it covers (`crate::text_select`).
     if let Some(sel) = selection {
         let f = ui.frame(0);
@@ -1700,6 +1718,43 @@ pub trait Content: Sized + 'static {
     /// The margin inside the window, in cells.
     fn margin(&self) -> u16 {
         crate::chrome::FIELDS_LEAD
+    }
+
+    /// THE FOOT THE WINDOW KEEPS, in lines: `space.window.footLines` for a
+    /// window that explains there the thing under the pointer or the cursor
+    /// ([`Content::explained`]), and `0`, the default, for every other — the
+    /// door then takes rows at its foot only while it says or asks something.
+    /// A kept foot is always this tall (never more than a third of the
+    /// window): the door's message and question take the same rows while
+    /// they are up, and the explanation comes back when they go, so nothing
+    /// above it moves ([`foot`]). Asked before every frame.
+    fn foot_lines(&self, ui: &Ui) -> u16 {
+        let _ = ui;
+        0
+    }
+
+    /// WHAT THE KEPT FOOT EXPLAINS NOW ([`Content::foot_lines`]): the thing
+    /// under the pointer, or the cursor's — its name, what a click or a key
+    /// does to it ([`foot::gesture`]) and the sentences about it, each in its
+    /// tone. Asked after [`Content::paint`], at every frame the foot is not
+    /// saying the door's own message or question.
+    fn explained(&self, ui: &Ui) -> Option<Explained> {
+        let _ = ui;
+        None
+    }
+
+    /// THE POINTER WENT INTO THE FOOT ([`foot`]) — at a motion's `time`, in
+    /// the compositor's milliseconds, when it was one —: the foot hears it
+    /// from now on, and the window none of its motions. A window that keeps
+    /// a foot keeps it explaining what the pointer last rested on, not the
+    /// rows it crossed on its way there. Nothing by default.
+    fn pointer_went_to_the_foot(
+        &mut self,
+        ui: &mut Ui,
+        hand: &mut Hand<Self::Hand>,
+        time: Option<u32>,
+    ) {
+        let _ = (ui, hand, time);
     }
 
     /// The PAGE the window wears (`crate::theme::Page`): the palette solved
@@ -2248,6 +2303,8 @@ pub(crate) fn hang_the_echo<D: 'static>(
     let now = std::time::Instant::now();
     let clock = crate::echo::Countdown::start(lasts(class), now);
     ui.foot.clock = Some((mine, clock));
+    // A POINTER ALREADY RESTING on a kept foot holds the new sentence too.
+    foot::hold_the_clock(ui);
     let armed = handle.insert_source(
         calloop::timer::Timer::from_duration(clock.next_step(now)),
         move |_, (), held: &mut D| {
@@ -2256,7 +2313,7 @@ pub(crate) fn hang_the_echo<D: 'static>(
             match ui.foot.clock.filter(|(m, _)| *m == mine) {
                 Some((_, c)) if !c.spent(now) && ui.message.as_deref() == Some(&*text) => {
                     // A STEP OF THE PIE, drawn only where there is one.
-                    if ui.foot.rows > 0 {
+                    if foot::says_it(ui) {
                         ui.ask_paint();
                     }
                     calloop::timer::TimeoutAction::ToDuration(c.next_step(now))
@@ -2969,11 +3026,10 @@ impl<C: Content> Door<C> {
         }
         self.ui.last_orders_sent(!untaken);
         // THE FOOT'S ROWS, taken from the window's BEFORE the frame: a message
-        // or a question came or went, or wraps to more lines — the window is
-        // laid out again in what is left above it ([`foot`]).
-        let wanted = foot::wanted(&self.ui);
-        if wanted != self.ui.foot.rows {
-            self.ui.foot.rows = wanted;
+        // or a question came or went, or wraps to more lines, or the window
+        // keeps a foot of its own — the window is laid out again in what is
+        // left above it ([`foot`]).
+        if foot::settle_rows(&self.content, &mut self.ui) {
             self.ui.size_owed = true;
             self.ui.owed = true;
         }
@@ -3741,13 +3797,33 @@ fn pointer_into<C: Content>(
     let mut acts: Vec<Option<(Option<&'static str>, crate::chrome::Act)>> = Vec::new();
     for e in events {
         // THE FOOT FIRST — what the window says or asks under its list is the
-        // door's, and so is a pointer on it ([`foot::pointer`]).
-        match foot::pointer(ui, e) {
-            foot::Took::Passed => {}
-            foot::Took::Kept => continue,
-            foot::Took::Pressed(id, act) => {
-                acts.push(Some((id, act)));
-                continue;
+        // door's, and so is a pointer on it ([`foot::pointer`]) — but for a
+        // press the WINDOW holds, which is the window's to its end: a drag
+        // goes on over the foot, and a release there lets go of what it
+        // grabbed (a press the foot took never reaches `held`).
+        let the_windows_press = here.held
+            && !ui.foot.dragging
+            && matches!(
+                e.kind,
+                PointerEventKind::Motion { .. } | PointerEventKind::Release { .. }
+            );
+        if !the_windows_press {
+            match foot::pointer(ui, e) {
+                foot::Took::Passed => {}
+                foot::Took::Kept => continue,
+                // THE POINTER WENT INTO THE FOOT: no row of the window's
+                // stays lit under it, and the window keeps what the foot
+                // explains.
+                foot::Took::Entered(time) => {
+                    here.row_under_pointer = None;
+                    here.x_under_pointer = None;
+                    content.pointer_went_to_the_foot(ui, here, time);
+                    continue;
+                }
+                foot::Took::Pressed(id, act) => {
+                    acts.push(Some((id, act)));
+                    continue;
+                }
             }
         }
         // THE SHORTCUT UNDER THE POINTER LIGHTS, in every door — the header
@@ -3947,9 +4023,7 @@ impl<C: Content> Detached<C> {
             ));
         }
         // THE FOOT'S ROWS, as `Door::settle` takes them ([`foot`]).
-        let wanted = foot::wanted(&self.ui);
-        if wanted != self.ui.foot.rows {
-            self.ui.foot.rows = wanted;
+        if foot::settle_rows(&self.content, &mut self.ui) {
             self.ui.size_owed = true;
         }
         if std::mem::take(&mut self.ui.size_owed) {
@@ -4097,10 +4171,8 @@ impl<C: Content> Detached<C> {
         // none of its lines. It answers once (`Hinted::settled`). AND IF THE
         // FRAME WAS THE FIRST TO SAY THROUGH THE DOOR what the foot now wants
         // rows for ([`foot`]): the window is laid out again above it.
-        let wanted = foot::wanted(&self.ui);
-        let foot_moved = wanted != self.ui.foot.rows;
+        let foot_moved = foot::settle_rows(&self.content, &mut self.ui);
         if foot_moved {
-            self.ui.foot.rows = wanted;
             self.lay_out();
         }
         if self.ui.hinted.settled() || foot_moved {
@@ -4611,6 +4683,132 @@ mod tests {
         ui.hinted.hide_header(false);
         assert!(list::the_question(&ui).is_some());
         assert_eq!(foot::wanted(&ui), 0);
+    }
+
+    /// A window that keeps a foot ([`Content::foot_lines`]), and the lines
+    /// it was laid out in, each time — with the releases it heard and the
+    /// times it was told the pointer went into the foot.
+    #[derive(Default)]
+    struct Kept {
+        laid_in: Vec<u16>,
+        released: usize,
+        to_the_foot: Vec<Option<u32>>,
+    }
+
+    impl Content for Kept {
+        type Hand = ();
+
+        fn app_id(&self) -> &'static str {
+            "test.kept"
+        }
+
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+
+        fn typed(&mut self, _: &mut Ui, _: &KeyEvent, _: Modifiers) {}
+
+        fn resized(&mut self, ui: &mut Ui) {
+            self.laid_in.push(ui.lines);
+        }
+
+        fn foot_lines(&self, _: &Ui) -> u16 {
+            tokens::space::WINDOW_FOOTLINES
+        }
+
+        /// A held button is the window's own gesture here — a bar's drag —
+        /// and never a sweep of text.
+        fn text_area(&self, _: &Ui, _: u16, _: u16) -> Option<crate::text_select::Area> {
+            None
+        }
+
+        fn pointer(&mut self, _: &mut Ui, _: &mut Hand<()>, events: &[PointerEvent]) {
+            use smithay_client_toolkit::seat::pointer::PointerEventKind;
+            self.released += events
+                .iter()
+                .filter(|e| matches!(e.kind, PointerEventKind::Release { .. }))
+                .count();
+        }
+
+        fn pointer_went_to_the_foot(&mut self, _: &mut Ui, _: &mut Hand<()>, time: Option<u32>) {
+            self.to_the_foot.push(time);
+        }
+    }
+
+    /// FAILS IF: a press the window holds is cut short at its kept foot —
+    /// a release over the foot never reaching the window, whose bar would
+    /// stay grabbed —, or the pointer going into the foot leaves a row of
+    /// the window lit under it, or the window is not told it went there.
+    #[test]
+    fn a_press_the_window_holds_ends_over_the_foot_and_the_foot_is_told() {
+        use smithay_client_toolkit::seat::pointer::PointerEventKind;
+        let mut d = Detached::new(ui(), Kept::default());
+        d.ui.hinted.hide_header(true);
+        d.turn();
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let list = (10.0, line * 1.5);
+        let foot = (10.0, line * (f64::from(d.ui.lines) + 1.5));
+        let at = |ui: &Ui, position, kind| PointerEvent {
+            surface: ui.surface.clone(),
+            position,
+            kind,
+        };
+        let (press, release) = (
+            PointerEventKind::Press {
+                time: 0,
+                button: LEFT_BUTTON,
+                serial: 0,
+            },
+            PointerEventKind::Release {
+                time: 0,
+                button: LEFT_BUTTON,
+                serial: 0,
+            },
+        );
+        let events = [
+            at(&d.ui, list, press),
+            at(&d.ui, foot, PointerEventKind::Motion { time: 5 }),
+            at(&d.ui, foot, release),
+        ];
+        d.pointer(&events);
+        assert_eq!(d.content.released, 1, "the release over the foot was kept");
+        assert!(!d.here.held, "the button is still held");
+        assert!(
+            d.content.to_the_foot.is_empty(),
+            "a drag went into the foot"
+        );
+        // WITH NO BUTTON, the pointer going into the foot is the foot's.
+        d.here.row_under_pointer = Some(1);
+        let events = [
+            at(&d.ui, list, PointerEventKind::Motion { time: 10 }),
+            at(&d.ui, foot, PointerEventKind::Motion { time: 20 }),
+        ];
+        d.pointer(&events);
+        assert_eq!(d.content.to_the_foot, vec![Some(20)]);
+        assert_eq!(d.here.row_under_pointer, None, "a row stays lit");
+    }
+
+    /// FAILS IF: the door does not ask a window for the foot it keeps before
+    /// laying it out — its list would be drawn under the foot — or lays it
+    /// out again when a message comes and goes (the list would move).
+    #[test]
+    fn a_window_that_keeps_a_foot_is_laid_out_above_it_once() {
+        let mut d = Detached::new(ui(), Kept::default());
+        d.ui.hinted.hide_header(true);
+        d.turn();
+        let rows = d.ui.foot.rows;
+        assert_eq!(
+            rows,
+            tokens::space::WINDOW_FOOTLINES.min(d.ui.all_lines / 3)
+        );
+        assert_eq!(d.ui.lines, d.ui.all_lines - rows);
+        assert_eq!(d.content.laid_in, vec![d.ui.lines]);
+        d.ui.foot.routed.set(true);
+        d.ui.say("It was saved".to_owned());
+        d.turn();
+        d.ui.message = None;
+        d.turn();
+        assert_eq!(d.content.laid_in.len(), 1, "{:?}", d.content.laid_in);
     }
 
     /// A window that closes on `ESC` as most do (`Errand::Close`, which is

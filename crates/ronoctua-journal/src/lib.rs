@@ -886,6 +886,33 @@ impl Keeper {
     }
 }
 
+/// Whether this process may read the SYSTEM journal — the active file of
+/// this machine's (`<machine-id>/system.journal`), persistent under
+/// `var/log/journal` or volatile under `run/log/journal`, opened for reading
+/// under `root` (`/`, or a test's or a photograph's folder).
+///
+/// # Why it is asked, and not read off what journalctl says
+///
+/// Because journalctl run by somebody the journal's ACL does not name
+/// (`wheel`, `adm`, `systemd-journal`) shows the user journals alone and
+/// FAILS NOTHING: a follower of a system unit then waits quietly forever,
+/// and a view that draws what it follows draws an empty area that looks
+/// like a unit that said nothing. Opening the file is the same question the
+/// kernel answers journalctl.
+#[must_use]
+pub fn system_readable(root: &Path) -> bool {
+    let Ok(id) = std::fs::read_to_string(root.join("etc/machine-id")) else {
+        return false;
+    };
+    let id = id.trim();
+    if id.is_empty() || id.contains('/') {
+        return false;
+    }
+    ["var/log/journal", "run/log/journal"]
+        .iter()
+        .any(|dir| std::fs::File::open(root.join(dir).join(id).join("system.journal")).is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1430,5 +1457,34 @@ mod tests {
         nowhere.flush().expect("nowhere is not a failure");
         assert_eq!(nowhere.saved(), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a planted machine whose system journal opens is not
+    /// readable — persistent or volatile —, or one with no machine id, no
+    /// journal, or a journal that cannot be opened (a link to nothing, which
+    /// refuses root too) is.
+    #[test]
+    fn the_system_journal_is_readable_when_its_file_opens() {
+        let root = scratch("system-readable");
+        assert!(!system_readable(&root), "no machine id");
+        std::fs::create_dir_all(root.join("etc")).expect("mkdir");
+        std::fs::write(root.join("etc/machine-id"), "0123abcd\n").expect("plant");
+        assert!(!system_readable(&root), "no journal at all");
+        let persistent = root.join("var/log/journal/0123abcd");
+        std::fs::create_dir_all(&persistent).expect("mkdir");
+        std::os::unix::fs::symlink(root.join("nowhere"), persistent.join("system.journal"))
+            .expect("plant a link to nothing");
+        assert!(!system_readable(&root), "a journal that does not open");
+        std::fs::remove_file(persistent.join("system.journal")).expect("unplant");
+        std::fs::write(persistent.join("system.journal"), "").expect("plant");
+        assert!(system_readable(&root), "the persistent journal");
+        std::fs::remove_file(persistent.join("system.journal")).expect("unplant");
+        let volatile = root.join("run/log/journal/0123abcd");
+        std::fs::create_dir_all(&volatile).expect("mkdir");
+        std::fs::write(volatile.join("system.journal"), "").expect("plant");
+        assert!(system_readable(&root), "the volatile journal");
+        std::fs::write(root.join("etc/machine-id"), "another\n").expect("plant");
+        assert!(!system_readable(&root), "another machine's journal");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

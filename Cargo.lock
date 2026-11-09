@@ -5841,6 +5841,7 @@ dependencies = [
  "ronoctua-design",
  "ronoctua-files",
  "ronoctua-i18n",
+ "ronoctua-journal",
  "ronoctua-keymap",
  "ronoctua-parts",
  "ronoctua-person",

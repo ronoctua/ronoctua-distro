@@ -152,6 +152,9 @@
     # And the update's two doors' one handler and its footer region, which
     # follow a run the module's door started (`update_region::Open`).
     "crates/ronoctua-shell-update/src/update_region.rs" = "*";
+    # And the list both doors draw under the status (`update_window_list`): the
+    # steps' rows, the schedule's words and every sentence of the list.
+    "crates/ronoctua-shell-update/src/update_window_list.rs" = "*";
     # And the mark the footer draws while a run is under way, with the door
     # a click on it opens: a leaf under the view and the footer.
     "crates/ronoctua-shell-update-words/src/update_mark.rs" = "*";

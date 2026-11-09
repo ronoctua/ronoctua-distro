@@ -145,6 +145,36 @@ pub struct Prefs {
     /// way a section ships is the page's, built only when asked, and whoever
     /// writes this ([`crate::wire::Knob::Fold`]) never sees it.
     pub folds: BTreeMap<String, BTreeMap<String, bool>>,
+    /// What the step flips of this file are flips OF
+    /// ([`TaskPrefs::steps_flipped`]). A file that does not say was written
+    /// when they counted from what ships; the daemon reads those once, as
+    /// it starts, into flips over what this machine runs, and says so here.
+    #[serde(default = "StepsOver::declared")]
+    pub steps_over: StepsOver,
+}
+
+/// What a step's flip is a flip OF ([`Prefs::steps_over`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StepsOver {
+    /// What the module declared — every file written before 2026-11-08.
+    ///
+    /// The brain counted from there and the update's runner from this
+    /// machine's table (`/etc/ronoctua/updates.conf`), so on a machine whose
+    /// table turned a step the other way the page drew it off while it ran,
+    /// and turning it on turned it off.
+    Declared,
+    /// What this machine runs before the flip (`Module::steps_here`), as the
+    /// runner counts.
+    #[default]
+    Machine,
+}
+
+impl StepsOver {
+    /// What a file that does not say meant.
+    const fn declared() -> Self {
+        Self::Declared
+    }
 }
 
 impl Prefs {
@@ -317,11 +347,13 @@ pub struct TaskPrefs {
     /// what it has is a number its own author chose, in its manifest.
     #[serde(skip_serializing)]
     pub every_minutes: Option<u32>,
-    /// The steps the person moved AWAY FROM the default, by id.
+    /// The steps the person moved AWAY FROM what this machine runs, by id —
+    /// its own table where the module reads one (`Module::steps_here`), what
+    /// ships otherwise ([`Prefs::steps_over`]).
     ///
     /// A set of exceptions and not a list of what to run: the order and the
     /// contents belong to the task, so a step added by a later version takes
-    /// its declared default instead of being missing from everybody's file.
+    /// the machine's answer instead of being missing from everybody's file.
     ///
     /// # Why it is a FLIP and not an "off" list
     ///
@@ -337,15 +369,14 @@ pub struct TaskPrefs {
     /// INTO the set, `on` became false and `changed` became false, so the row
     /// read "not touched, ships off" immediately after they touched it.
     ///
-    /// As a flip both answers fall out of one line —
-    /// `on = on_by_default ^ flipped`, `changed = flipped` — and the doc
-    /// comment's promise above survives, which is what matters for a file on
-    /// somebody's disk.
+    /// As a flip both answers fall out of one line — `on = here ^ flipped`,
+    /// `changed = flipped` (`StepState::of`) — and the doc comment's promise
+    /// above survives, which is what matters for a file on somebody's disk.
     ///
-    /// The old spelling is kept as an alias. Under the old reading an entry
-    /// could only ever be a step that ships on and was switched off, and under
-    /// this one that is exactly what it still means, so nothing on disk has to
-    /// be migrated or lost.
+    /// The old spelling is kept as an alias: an entry of it is a step that
+    /// ships on and was switched off, which is a flip over what ships — and
+    /// the daemon reads those once into flips over this machine's table
+    /// ([`StepsOver::Declared`]).
     #[serde(alias = "steps-off")]
     pub steps_flipped: BTreeSet<String>,
     /// The sections of its page the person opened or shut, by the section's
@@ -677,6 +708,26 @@ mod tests {
         let quiet: Prefs = serde_json::from_str(r#"{"quiet": true}"#).expect("parse");
         assert!(quiet.quiet);
         assert!(quiet.tasks.is_empty());
+    }
+
+    /// FAILS IF: a file that does not say what its step flips count from is
+    /// read as counting from this machine — every file written before the
+    /// field, whose flips count from what ships — or a file written now
+    /// does not say it.
+    #[test]
+    fn a_file_says_what_its_flips_are_flips_of() {
+        let old: Prefs = serde_json::from_str(r#"{"tasks": {}}"#).expect("parse");
+        assert_eq!(old.steps_over, StepsOver::Declared);
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-brain-prefs-over-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut mine = Prefs::default();
+        mine.chosen_mut(&fussy()).enabled = false;
+        write_to(&dir, &mine).expect("write");
+        assert_eq!(read_from(&dir).steps_over, StepsOver::Machine);
+        let text = std::fs::read_to_string(dir.join(PREFERENCES_FILE)).expect("read");
+        assert!(text.contains(r#""steps-over": "machine""#), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -77,11 +77,11 @@ system-update-needs-network = Esta máquina não está conectada a uma rede.
 # the pointer, `update now` (the key the view teaches for the whole sequence),
 # what starting said, and the word beside each step.
 system-update-next-step = próximo
-about-system-update-next-step = Desce uma linha: o status, as ações e as escolhas dos registros, depois os passos. Diz o que a linha é.
+about-system-update-next-step = Desce uma linha na lista: o status, os avisos, o que fazer, as opções e os passos.
 system-update-previous-step = anterior
-about-system-update-previous-step = Sobe uma linha, dos passos de volta às ações e ao status. Diz o que a linha é.
+about-system-update-previous-step = Sobe uma linha na lista.
 system-update-section = seção
-about-system-update-section = Pula entre as linhas do topo e os passos, cada um mantendo o seu lugar.
+about-system-update-section = Pula para o começo da próxima parte da lista, ou da anterior: avisos, o que fazer, opções, passos.
 system-update-output-down = saída abaixo
 about-system-update-output-down = Desce a saída uma página, rumo ao fim.
 system-update-output-up = saída acima
@@ -92,12 +92,11 @@ system-update = atualizar agora
 echo-system-update-queued = Entrou na fila — começa quando a máquina estiver livre
 echo-system-update-started = A atualização começou
 echo-system-update-nowhere = Não há nada aqui que consiga começá-la
-system-update-no-output = ainda não disse nada
 system-update-verdict-ran = deu certo
 system-update-verdict-failed = falhou
 system-update-verdict-off = desligado
 system-update-verdict-skipped = não se aplica
-system-update-verdict-rehearsed = só ensaiou
+system-update-verdict-rehearsed = só simulou
 system-update-verdict-stopped = parou aqui
 system-update-verdict-pending = ainda vem
 
@@ -108,17 +107,23 @@ system-update-verdict-pending = ainda vem
 # while they mean something.
 system-update-proceed-does = Começa agora a atualização em contagem regressiva, sem esperar a contagem.
 system-update-abort-does = Adia a atualização em contagem regressiva para o próximo horário dela.
+system-update-proceed-rehearsal-does = Começa agora a simulação em contagem regressiva, sem esperar a contagem.
+system-update-abort-rehearsal-does = Desiste da simulação em contagem regressiva: nada muda, e a atualização agendada fica como estava.
 system-update-stop = parar a atualização
 about-system-update-stop = Para a atualização em andamento. Os passos que ela já fez continuam feitos.
+system-update-stop-rehearsal = parar a simulação
+about-system-update-stop-rehearsal = Para a simulação em andamento. Nada na máquina mudou.
 system-update-start-does = Começa uma atualização completa agora, depois de uma contagem regressiva curta que você pode pular ou cancelar.
 system-update-start-queued = A atualização já está na fila, então não há o que começar. Ela começa sozinha assim que nada a segurar.
 system-update-status-running = Uma atualização está em andamento.
 system-update-status-counting-down = Uma atualização vai começar: a contagem regressiva está correndo.
+system-update-status-rehearsing = Uma simulação está em andamento: nada na máquina muda.
+system-update-status-rehearsal-soon = Uma simulação vai começar: a contagem regressiva está correndo. Nada na máquina vai mudar.
 system-update-status-queued = Uma atualização está na fila e começa quando a máquina estiver livre.
 system-update-status-waiting-ram = Uma atualização está esperando: a memória está ocupada.
 system-update-status-waiting-cpu = Uma atualização está esperando: o processador está ocupado.
 system-update-status-waiting-battery = Uma atualização está esperando o carregador.
-system-update-status-waiting-busy = Uma atualização está esperando outra tarefa do cérebro terminar.
+system-update-status-waiting-busy = Uma atualização está esperando outra tarefa do Brain terminar.
 system-update-status-waiting-network = Uma atualização está esperando uma rede que não cobre pela quantidade de dados.
 system-update-status-waiting-asleep = Uma atualização está esperando a máquina acordar.
 system-update-status-restart = Um sistema novo está pronto: reinicie para usá-lo.
@@ -132,7 +137,6 @@ system-update-status-available-both = Há uma atualização disponível: a distr
 system-update-status-up-to-date = O sistema está em dia.
 system-update-status-unchecked = Não foi possível verificar atualizações: { $why }.
 system-update-status-unasked = Ainda não foi verificado se há atualização.
-system-update-status-last = Última atualização: { $when }.
 system-update-unchecked-offline = esta máquina está sem rede
 system-update-unchecked-rate-limited = o GitHub pediu para esperar um pouco
 system-update-unchecked-other = o GitHub não respondeu como esperado
@@ -141,8 +145,6 @@ system-update-unchecked-unreadable = o flake.lock desta máquina não pode ser l
 system-update-unchecked-nothing = o flake desta máquina não segue nenhuma branch no GitHub
 system-update-unchecked-unasked-distro = a distro não segue uma branch nomeada no GitHub, então só uma atualização pode dizer
 system-update-unchecked-unasked-nixpkgs = o nixpkgs não segue uma branch nomeada no GitHub, então só uma atualização pode dizer
-system-update-status-does = Se a distro ou o nixpkgs avançaram além do que esta máquina roda, segundo o GitHub. Escolher pergunta de novo.
-system-update-status-next = A próxima atualização agendada é { $when }.
 system-update-register-belongings = Escolher abre os seus pertences, onde estão os arquivos alterados em duas máquinas.
 system-update-register-asks = Escolher pergunta antes; nada muda até você responder sim.
 
@@ -259,7 +261,7 @@ system-update-applier-refused-misplaced = Nas suas declarações, há um arquivo
 system-update-applier-refused-not-owned = Algo nas suas declarações não pertence a você, então a máquina não aceita nenhuma delas.
 system-update-applier-refused-writable = Outra pessoa pode alterar algo nas suas declarações, então a máquina não aceita nenhuma delas.
 system-update-applier-refused-bad-name = Um nome nas suas declarações não é texto simples.
-system-update-applier-refused-not-a-module = Uma pasta entre os seus módulos do cérebro não se chama my- seguido de uma palavra.
+system-update-applier-refused-not-a-module = Uma pasta entre os seus módulos do Brain não se chama my- seguido de uma palavra.
 system-update-applier-refused-too-large = Um arquivo das suas declarações, ou todas elas juntas, é maior do que a máquina aceita.
 system-update-applier-refused-too-many = As suas declarações têm mais entradas, ícones, módulos ou arquivos do que a máquina aceita.
 system-update-applier-refused-too-deep = As suas declarações têm mais pastas dentro de pastas do que a máquina aceita.
@@ -276,3 +278,147 @@ system-update-applier-refused-bad-key = A chave em que esta máquina confia para
 # THE 2026-10-30 WAVE: the Android apps that wait, and why.
 system-update-declined-android-in-use = O Android estava aberto, então nenhum app dele foi trocado com você usando. Eles esperam a próxima atualização.
 system-update-declined-fdroid-not-let = O F-Droid não está permitido, então os seus apps Android não foram verificados e ficam nas versões que têm. Permita o f-droid.org e a próxima atualização os atualiza.
+
+# THE LIST, 2026-11-08: the view as one list under the status — what the
+# machine wants said, what to do, the options and the steps — and what each
+# thing is, said where the door explains it (the window's foot, the footer's
+# explanation line), never inside the list.
+system-update-section-notices = Avisos
+system-update-section-notices-about = O que esta máquina quer que você saiba sobre as atualizações. Cada aviso diz o que aconteceu e, quando dá, o que você pode fazer.
+system-update-section-do = O que fazer
+system-update-section-do-about = O que você pode fazer agora: atualizar, simular uma atualização sem mudar nada ou ver quando a máquina se atualiza sozinha.
+system-update-section-options = Opções
+system-update-section-options-about = Escolhas que valem para toda atualização. Sob o ponteiro, cada uma diz o que o clique nela faz.
+system-update-section-steps = Passos
+system-update-section-steps-about = O que uma atualização faz, na ordem. A caixa de cada passo diz se ele roda: um passo desligado é pulado.
+system-update-steps-count = { $on ->
+        [0] nenhum de { $all } ligado
+        [one] { $on } de { $all } ligado
+       *[other] { $on } de { $all } ligados
+    }
+system-update-status-name = Se há atualização
+system-update-status-explained = Pergunta ao GitHub se a distro ou o nixpkgs têm versões mais novas do que as que esta máquina roda. Perguntar de novo: o GitHub responde em alguns segundos, e esta linha muda com a resposta.
+system-update-status-stands = Onde a atualização está
+system-update-last-worked = Última atualização que deu certo: { $when }.
+system-update-start-queued-short = já está na fila
+system-update-rehearse = simular, sem mudar nada
+about-system-update-rehearse = Simula uma atualização inteira sem mudar nada, para você ver o que ela baixaria e montaria.
+system-update-rehearse-does = Roda a atualização inteira só de faz de conta: cada passo diz o que faria, e nada na máquina muda. Simular: começa depois da mesma contagem regressiva de uma atualização, e no fim diz quanto baixaria e quantos pacotes montaria.
+system-update-rehearse-busy = Simular espera: uma atualização já está na fila ou em andamento. Quando ela terminar, dá para simular.
+system-update-rehearse-busy-short = espera a atualização atual
+system-update-rehearse-pending = A próxima execução já vai ser uma simulação, então não há o que pedir de novo.
+system-update-rehearse-pending-short = já pedida
+system-update-rehearse-running = Uma simulação já está em andamento. Quando ela terminar, dá para simular de novo.
+system-update-rehearse-running-short = em andamento
+system-update-rehearse-asked = Simulação pedida: começa depois da contagem regressiva, sem mudar nada.
+echo-system-update-rehearse-started = A simulação começou, sem mudar nada
+echo-system-update-rehearsal-stopped = A simulação parou, e nada mudou
+system-update-rehearsed = Simulação de { $when }: nada mudou. A atualização baixaria { $size } e montaria { $builds ->
+        [0] nenhum pacote
+        [one] 1 pacote
+       *[other] { $builds } pacotes
+    }.
+system-update-schedule = agendamento
+about-system-update-schedule = Abre no Brain a tarefa da atualização, onde você escolhe quando a máquina se atualiza sozinha.
+system-update-schedule-does = O Brain decide quando esta máquina se atualiza sozinha: de quantos em quantos dias, em que parte do dia, e só quando a máquina está livre. Abrir: a tarefa da atualização aparece no Brain, onde você muda isso.
+system-update-schedule-every = { $days ->
+        [1] todo dia
+        [7] toda semana
+        [14] a cada duas semanas
+        [30] todo mês
+       *[other] a cada { $days } dias
+    }
+system-update-schedule-part = { $part ->
+        [night] de madrugada
+        [morning] de manhã
+        [afternoon] à tarde
+        [evening] à noite
+       *[any] a qualquer hora
+    }
+system-update-schedule-next = { $days ->
+        [0] próxima hoje, { $time }
+        [1] próxima amanhã, { $time }
+       *[other] próxima { $weekday } { $date }
+    }
+system-update-schedule-summary = { $every }, { $part } · { $next }
+system-update-schedule-off = desligado — só quando você pedir
+system-update-schedule-quiet = o Brain está quieto — só quando você pedir
+system-update-schedule-overdue = atrasado — começa quando a máquina estiver livre
+system-update-schedule-no-brain = o Brain não está respondendo
+system-update-weekday-short = { $day ->
+        [0] dom
+        [1] seg
+        [2] ter
+        [3] qua
+        [4] qui
+        [5] sex
+       *[6] sáb
+    }
+system-update-step-off-shipped = desligado de fábrica
+system-update-step-off-here = desligado nesta máquina
+system-update-step-off-by-you = desligado por você
+system-update-step-on-here = ligado nesta máquina
+system-update-step-on-by-you = ligado por você
+system-update-step-root-short = como administrador
+system-update-switch-why-shipped-off = A distro entrega este passo desligado.
+system-update-switch-why-off-here = Esta máquina deixa este passo desligado: ela não tem aquilo de que ele cuida, ou a configuração dela o desliga (ronoctua.update.steps). Não foi você que o desligou.
+system-update-switch-why-off-by-you = Você desligou este passo.
+system-update-switch-why-on-here = Esta máquina liga este passo: ela tem aquilo de que ele cuida, ou a configuração dela o liga (ronoctua.update.steps). Não foi você que o ligou.
+system-update-switch-why-on-by-you = Você ligou este passo.
+system-update-switch-root = Este passo roda como administrador, então só a configuração desta máquina o liga ou desliga, em ronoctua.update.steps. Daqui ele não muda.
+system-update-switch-will = { $on ->
+        [on] Ligar: a próxima atualização vai rodar este passo.
+       *[off] Desligar: a próxima atualização vai pular este passo.
+    }
+system-update-switch-will-now = { $on ->
+        [on] Ligar: esta atualização ainda não chegou aqui, e vai rodar este passo.
+       *[off] Desligar: esta atualização ainda não chegou aqui, e vai pular este passo.
+    }
+system-update-switched = { $on ->
+        [on] { $step }: ligado. A próxima atualização vai rodar este passo.
+       *[off] { $step }: desligado. A próxima atualização vai pular este passo.
+    }
+system-update-switch-no-brain = O Brain não está respondendo, e é ele que guarda quais passos estão ligados. Nada mudou.
+system-update-output-open = ver a saída
+about-system-update-output-open = Mostra o que a última atualização escreveu, passo a passo, com as cores dela.
+system-update-output-close = voltar à lista
+about-system-update-output-close = Fecha a saída e volta à lista da atualização.
+system-update-output-line-down = linha abaixo
+about-system-update-output-line-down = Desce a saída uma linha.
+system-update-output-line-up = linha acima
+about-system-update-output-line-up = Sobe a saída uma linha.
+system-update-output-does = O que a última atualização escreveu, passo a passo, como o registro do sistema guardou, com as cores dela. Abrir: a saída toma o lugar da lista, e Voltar traz a lista de volta.
+system-update-output-none = Nenhuma atualização deixou saída no registro do sistema ainda, então não há o que mostrar.
+system-update-output-none-short = nada ainda
+system-update-output-glance = { $lines ->
+        [one] uma linha da última atualização
+       *[other] { $lines } linhas da última atualização
+    }
+system-update-output-system-hidden = A parte que roda como administrador não aparece aqui: para ler o registro do sistema é preciso estar no grupo wheel ou systemd-journal. O resultado de cada passo continua na lista.
+system-update-output-title = Saída da última atualização
+system-update-output-live = Saída ao vivo
+system-update-output-live-does = O que esta atualização escreve enquanto roda, com as cores dela, sempre mostrando a última linha. Some quando nada está rodando; a saída inteira fica em Opções, em ver a saída da última atualização.
+system-update-output-waiting = Nada escrito ainda: as linhas aparecem aqui assim que a atualização escrever.
+system-update-output-system-hidden-short = sem a parte do administrador
+system-update-back = Voltar
+system-update-back-does = Voltar: a lista da atualização aparece de novo no lugar desta página.
+system-update-conflicts-name = arquivos em conflito nos pertences
+system-update-gesture-try-again-name = testar de novo o sistema que não subiu
+system-update-gesture-hold-name = reter nesta versão
+system-update-gesture-let-go-name = soltar a retenção
+system-update-act-recheck = pergunta ao GitHub de novo
+system-update-act-start = começa a atualização
+system-update-act-proceed = começa já
+system-update-act-not-now = adia
+system-update-act-stop = para a atualização
+system-update-act-stop-rehearsal = para a simulação
+system-update-act-let-go = desiste da simulação
+system-update-act-rehearse = começa a simulação
+system-update-act-open-brain = abre a tarefa no Brain
+system-update-act-open-page = abre a página
+system-update-act-back = volta à lista
+system-update-act-switch-on = liga o passo
+system-update-act-switch-off = desliga o passo
+system-update-act-open-belongings = abre os seus pertences
+system-update-act-ask = pergunta antes
+system-update-act-answer = responde

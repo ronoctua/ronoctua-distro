@@ -211,7 +211,7 @@ fn every_window_shortcut_is_one_key() {
         none,
     );
     // THE UPDATE teaches one table a state of it — idle, queued, counting
-    // down, running —, and its pages theirs.
+    // down, running —, and its pages theirs: the output's among them.
     window(
         "update",
         &[
@@ -219,6 +219,8 @@ fn every_window_shortcut_is_one_key() {
             update_window::OF_THE_QUEUE,
             update_window::OF_THE_COUNTDOWN,
             update_window::OF_THE_RUN,
+            update_window::OF_THE_REHEARSAL,
+            update_window::OF_THE_OUTPUT,
             update_window::OF_THE_PAGE,
             update_window::OF_THE_FOLLOW,
             update_window::OF_THE_PARTS,

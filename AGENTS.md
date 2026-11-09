@@ -577,6 +577,10 @@ OSC 7501, que o guardião lê.
   nunca a lê de `Ui::message` — e o terminal não perde linha. O que o ponteiro diz
   (`Carries::About`; num buffer, `Screen::point`) vai para o minibuffer do rodapé
   (`door::pointed_order`, ordem `pointed`).
+- Emenda do dono (2026-11-08): uma janela com pé próprio (`Content::foot_lines`,
+  `space.window.footLines`; hoje a da atualização) o mantém sempre, na mesma altura — a mensagem e
+  a pergunta da porta usam essas linhas, e nada acima se move — e diz nele o que está sob o
+  ponteiro e, sem ele, o que o cursor é (`Content::explained`), nunca no minibuffer.
 - Tecla nunca é texto no `.ftl`: sai do código (`bindings::taught`) + `bindings::label()`, num
   `{ $keys }` (cobra `keys-are-never-text`). "LEADER" em produção é `SUPER`, no `.#dev` `CTRL ALT SPC`.
 

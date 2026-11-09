@@ -77,6 +77,7 @@ brain-why-off = Switched off
 # minute.
 echo-brain-postponed = Not now — it comes back at its next moment
 echo-brain-stopped = Stopped — what it already did stays done
+echo-brain-rehearsal-let-go = Rehearsal let go — nothing on the machine changed
 echo-brain-proceeding = Starting now
 echo-brain-idle = There is nothing about to happen
 brain-abort = not now
@@ -88,6 +89,11 @@ brain-proceed = start now
 door-no-footer = The footer could not be reached to run this
 door-esc-again = { $keys } again closes this window
 door-message-dismiss = take the message off
+# What a click or a key does to the thing a window's own foot explains,
+# with what it will do (`door::foot::gesture`): the key is the code's.
+door-foot-ret = { $keys } or a second click: { $does }
+door-foot-click-selects = a click selects · a second click: { $does }
+door-foot-click-at-once = a click: { $does }
 notif-bluetooth-pairing-body = Open Bluetooth to answer.
 notif-action-bluetooth-accept = Yes, pair it
 notif-action-bluetooth-refuse = No, refuse it

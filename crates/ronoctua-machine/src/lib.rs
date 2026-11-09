@@ -486,6 +486,32 @@ pub struct Rehearsal {
     pub builds: u64,
 }
 
+/// Where the last rehearsal that measured leaves what it measured, in the run
+/// folder ([`Places::run`]): `/run`, because a measure is of the machine as it
+/// was before the boot, and the folder is root's and readable by the person
+/// — what lets the update's view say it without privilege.
+pub const REHEARSED: &str = "rehearsed.json";
+
+/// What the last rehearsal measured, and when ([`REHEARSED`]).
+///
+/// # Why a file, when the verdict already says it
+///
+/// Because the verdict is a line of prose in the journal
+/// (`rehearsed: N bytes to download, …`), and a view that read numbers back
+/// out of prose would be reading a format nobody promised to keep. The brain
+/// keeps no record of a rehearsal either: what changes nothing is not a run
+/// it schedules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rehearsed {
+    /// When it measured.
+    pub at: ronoctua_person::Stamp,
+    /// Bytes the update would download.
+    pub download_bytes: u64,
+    /// Derivations it would build here.
+    pub builds: u64,
+}
+
 /// The places and the system together: what every verb runs against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
@@ -798,6 +824,15 @@ pub fn state(places: &Places) -> Result<MachineState, Refusal> {
 pub fn distro_revision(places: &Places) -> Option<String> {
     let lock = std::fs::read(places.dir.join(LOCK)).ok()?;
     disk::locked_rev(&lock, DISTRO_INPUT)
+}
+
+/// What the last rehearsal that measured left in the run folder
+/// ([`REHEARSED`]); `None` when none did since the boot, or when what is
+/// there is not one — never a measure made up from half a file.
+#[must_use]
+pub fn last_rehearsal(places: &Places) -> Option<Rehearsed> {
+    let bytes = std::fs::read(places.run.join(REHEARSED)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Whether the machine directory's lock names a LOCAL checkout of the

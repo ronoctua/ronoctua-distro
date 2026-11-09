@@ -44,6 +44,10 @@ ronoctua-parts = { path = "../ronoctua-parts", default-features = false }
 # flake follows, asked on a thread as the machine's own updater
 # (`ronoctua_software::heads`), against the revisions its lock holds.
 ronoctua-software = { path = "../ronoctua-software", features = [ "net" ] }
+# THE TWO HALVES' OUTPUT: journalctl's JSON read entry by entry — a MESSAGE
+# that is bytes (an escape in it) included — and whether the system journal
+# is this person's to read at all.
+ronoctua-journal = { path = "../ronoctua-journal" }
 
 smithay-client-toolkit.workspace = true
 anyhow.workspace = true

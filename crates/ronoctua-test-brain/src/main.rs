@@ -245,6 +245,7 @@ fn task(id: &str, standing: Standing, hold: HoldKind, why_not: &str, ran: bool) 
             needs_root: root,
             on,
             on_by_default: true,
+            on_here: true,
             name_key: s.name_key.to_owned(),
             does_key: s.does_key.to_owned(),
         })

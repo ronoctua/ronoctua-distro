@@ -94,6 +94,17 @@ impl Gesture {
         }
     }
 
+    /// The sentence of its row, where the records offer it (`{ $rev }` for
+    /// the hold).
+    #[must_use]
+    pub const fn row_key(self) -> &'static str {
+        match self {
+            Self::TryAgain => key::MACHINE_TRY_AGAIN_ROW,
+            Self::Hold => key::MACHINE_HOLD_ROW,
+            Self::LetGo => key::MACHINE_LET_GO_ROW,
+        }
+    }
+
     /// What is said when it was done.
     #[must_use]
     pub const fn done_key(self) -> &'static str {

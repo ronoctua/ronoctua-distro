@@ -205,7 +205,7 @@ about-brain-rehearse = Ensaia esta tarefa: cada passo é percorrido e nada na m�
 about-brain-switch = Desliga esta tarefa, ou a religa; desligada, ela não faz nada sozinha.
 about-brain-interval = Passa para a próxima cadência em que esta tarefa roda.
 about-brain-window = Passa para a próxima parte do dia em que esta tarefa pode rodar.
-about-brain-reset-steps = Devolve todo passo desta tarefa ao que a distro traz.
+about-brain-reset-steps = Devolve todo passo desta tarefa ao que esta máquina roda por si, sem as suas mudanças.
 about-brain-proceed = Começa agora a tarefa em contagem regressiva, sem esperar a contagem.
 about-brain-abort = Adia para a próxima hora dela a tarefa em contagem regressiva, ou interrompe a que está rodando.
 about-brain-log = Mostra o registro do próprio brain enquanto ele é escrito — cada tick, o que ele decidiu, cada aviso e erro — ou volta.
@@ -231,6 +231,7 @@ brain-rehearsal = Ensaiando agora
 brain-never = Nunca
 brain-flake-owned = No flake
 brain-changed = Alterado por você
+brain-machine-owned = Nesta máquina
 # OS CAMPOS DO RODAPÉ.
 brain-last-run = Última vez
 # WHAT THE FOOTER SAYS ABOUT A RECORD of a task's history: the question the
@@ -303,8 +304,10 @@ about-brain-last-run = Quando ela rodou pela última vez.
 about-brain-first = Quando aconteceu o primeiro dos registros juntados nesta linha.
 about-brain-times = Quantos registros estão juntados nesta linha.
 about-brain-since = Desde quando este aviso vale.
+brain-needs-root = Roda como root
 about-brain-needs-root = Esta etapa roda como root, o administrador do sistema.
 about-brain-flake-owned = Se esta etapa roda é definido na configuração do sistema, então não dá para desligá-la aqui.
+about-brain-machine-owned = Esta máquina roda esta etapa ao contrário de como ela vem de fábrica, pelo que tem instalado ou pela configuração dela, e não por você.
 # AS TAREFAS. `brain-task-<id>` nomeia uma e `<id>-does` diz o que ela faz — a
 # segunda é um parágrafo no rodapé, então tem espaço para ser uma explicação
 # inteira em vez de uma linha.

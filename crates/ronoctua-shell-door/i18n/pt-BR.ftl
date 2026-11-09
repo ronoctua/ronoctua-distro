@@ -75,6 +75,7 @@ brain-why-off = Desligada
 # pessoa responderia à mesma pergunta a cada meio minuto.
 echo-brain-postponed = Agora não — ela volta na próxima hora dela
 echo-brain-stopped = Interrompida — o que ela já fez continua feito
+echo-brain-rehearsal-let-go = Ensaio desfeito — nada na máquina mudou
 echo-brain-proceeding = Começando agora
 echo-brain-idle = Não há nada para acontecer
 brain-abort = agora não
@@ -86,6 +87,11 @@ brain-proceed = começar já
 door-no-footer = Não foi possível chegar ao rodapé para rodar isto
 door-esc-again = { $keys } de novo fecha esta janela
 door-message-dismiss = tirar a mensagem
+# O que um clique ou uma tecla faz com o que o pé próprio de uma janela
+# explica, com o que vai acontecer (`door::foot::gesture`): a tecla é do código.
+door-foot-ret = { $keys } ou 2º clique: { $does }
+door-foot-click-selects = clique seleciona · 2º clique: { $does }
+door-foot-click-at-once = clique: { $does }
 notif-bluetooth-pairing-body = Abra o Bluetooth para responder.
 notif-action-bluetooth-accept = Sim, parear
 notif-action-bluetooth-refuse = Não, recusar

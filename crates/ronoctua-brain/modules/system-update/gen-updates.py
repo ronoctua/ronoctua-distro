@@ -218,6 +218,9 @@ WIRING = {
     "id",
     "person",
     "runtime-root",
+    # `stat`, for what `fail` asks of its own standard output: whether it is
+    # the journal's stream that `JOURNAL_STREAM` names.
+    "stat",
 }
 
 # WHERE THE PERSON'S YES TO A RUN ON BATTERY IS, under the person's runtime
@@ -1327,14 +1330,14 @@ def emit_step(s: dict, wiring: dict[str, str], programs: dict[str, str]) -> list
             f"      {journalctl} --sync 2>/dev/null || true",
             f'      {journalctl} --no-pager --output=cat --after-cursor="$mark" {its_lines} 2>/dev/null || true',
             "    else",
-            '      say "!! $id: the journal gave no place to read its rehearsal from"',
+            '      fail "!! $id: the journal gave no place to read its rehearsal from"',
             "    fi",
             '    if [ "$ok" = 0 ]; then',
             '      record "$id" rehearsed $(( SECONDS - since ))',
             "      return 0",
             "    fi",
             '    record "$id" failed $(( SECONDS - since ))',
-            '    say "!! $id: its rehearsal failed"',
+            '    fail "!! $id: its rehearsal failed"',
             "    return 1",
             "  fi",
         ]
@@ -1391,7 +1394,7 @@ def run_and_record(quoted: str, worked: str, said_failed: str, declines: list[st
             "    return 0",
             "  fi",
             '  record "$id" failed $(( SECONDS - began ))',
-            f'  say "!! $id: {said_failed}"',
+            f'  fail "!! $id: {said_failed}"',
             "  return 1",
         ]
     arms = []
@@ -1423,9 +1426,33 @@ def run_and_record(quoted: str, worked: str, said_failed: str, declines: list[st
         "    *) why=failed-$why ;;",
         "  esac",
         '  record "$id" "$why" $(( SECONDS - began ))',
-        f'  say "!! $id: {said_failed}"',
+        f'  fail "!! $id: {said_failed}"',
         "  return 1",
     ]
+
+
+def fail_helper(wiring: dict[str, str]) -> str:
+    """`fail`: `say` for a line that tells of a failure — the `!!` lines —
+    with journald's `<3>` before it when the line goes to the journal, so the
+    journal keeps it as an ERROR and every reader of it (the update's window
+    in red, `journalctl -p err`) sees it as one. A unit's output is `info`
+    otherwise, and nix colours nothing under systemd.
+
+    ONLY INTO THE JOURNAL: a line run by hand in a terminal keeps no prefix.
+    And `JOURNAL_STREAM` alone does not say that — it is inherited, and a
+    shell a unit started hands it to whatever runs on its terminal — so its
+    `dev:ino` is compared with what this line's standard output really is
+    (`stat` on a copy of it, `3>&1`, read in a `$(…)` whose own output is a
+    pipe). One line, so a check lifts it whole with `say` and `record`.
+    """
+    stat = shlex.quote(wiring["stat"])
+    return (
+        "fail() { local here=; "
+        'if [ -n "${JOURNAL_STREAM:-}" ]; then '
+        f"{{ here=$({stat} -L -c %d:%i /proc/self/fd/3 2>/dev/null); }} 3>&1; fi; "
+        'if [ -n "$here" ] && [ "$here" = "${JOURNAL_STREAM:-}" ]; then '
+        "printf '<3>%s\\n' \"$*\"; else printf '%s\\n' \"$*\"; fi; }"
+    )
 
 
 def emit_helpers(kinds: set[str], *, root_half: bool, wiring: dict[str, str]) -> list[str]:
@@ -1691,6 +1718,7 @@ def emit_runner(
         ': > "$report" 2>/dev/null || report=/dev/null',
         "",
         "say() { printf '%s\\n' \"$*\"; }",
+        fail_helper(wiring),
         "",
         "# The report the view reads: one line per step, tab separated,",
         "# `<id> <verdict> <seconds>`. Ids and verdicts are English and closed;",
@@ -1812,17 +1840,18 @@ def emit_runner(
         "# for it to find out whose session started it. The ways to give it one",
         "# all end in a root-owned directory that a member of `users` may write",
         "# — which would let any account on a shared machine decide what a root",
-        "# update runs. The six root steps take `ronoctua.update.steps`, and the",
-        "# brain's page DRAWS them refusing and says so, which is the same answer",
-        "# the Syncthing view already gives for the fourteen options the flake",
-        "# fixes (invariant 6).",
+        "# update runs. The root steps take `ronoctua.update.steps` alone, the",
+        "# brain refuses to switch one, and its page DRAWS them refusing and says",
+        "# so, which is the same answer the Syncthing view already gives for the",
+        "# fourteen options the flake fixes (invariant 6).",
         "#",
         "# The person's layer is a set of FLIPS and not a set of states: it says",
         "# which steps differ from the answer the other two give, so a step",
-        "# added by a later version takes its declared default instead of being",
-        "# missing from everybody's file. That is the same shape the brain keeps",
-        "# it in, and it is what makes `m t` mean the same thing on a machine",
-        "# whose `/etc` table was changed afterwards.",
+        "# added by a later version takes that answer instead of being missing",
+        "# from everybody's file. The brain keeps it in the same shape, over the",
+        "# same answer — it reads this table as this reads it (`on_here`) —, and",
+        "# that is what makes `m t` mean the same thing on a machine whose `/etc`",
+        "# table was changed afterwards.",
         "#",
         "# Invariant 5 is intact: nothing here decides anything. The numbers and",
         "# the defaults live in Nix, the flips live in the person's own file, and",
@@ -1944,7 +1973,7 @@ def emit_runner(
             'if [ -r "$root_report" ]; then root_before=$(<"$root_report"); fi',
             'say "== $privileged"',
             f"if ! {shlex.quote(wiring['systemctl'])} start \"$privileged\"; then",
-            '  say "!! the privileged half stopped; see: journalctl -u $privileged"',
+            '  fail "!! the privileged half stopped; see: journalctl -u $privileged"',
             "  # WHERE IT STOPPED AND WHY, from its own report: its steps' lines",
             "  # go into this one, so the brain's record names the step that",
             "  # failed and keeps its word (`failed-<word>`) — \"the rebuild was",

@@ -67,10 +67,10 @@ use crate::journal::{ACTIVITY_DAYS, Journal, RECENT_DAYS, since};
 use crate::mind::{ActionState, Posted, SAID_KEPT, Said, Shared, Standing, StepState, TaskState};
 use crate::module::{Act, Acted, Ctx, Event, Face, Look, Module, Noted, Screen, Sink};
 use crate::moment::{Clock, Moment};
-use crate::prefs::{Gate, Prefs, TaskPrefs, Where};
+use crate::prefs::{Gate, Prefs, StepsOver, TaskPrefs, Where};
 use crate::pulse::Pulse;
 use crate::registry::{Registry, SYSTEM_OFF};
-use crate::task::{Due, Hold, OutcomeKind, RunRecord};
+use crate::task::{Due, Hold, OutcomeKind, RunRecord, Step};
 use crate::wire::Knob;
 
 /// How often, at most, the journal's file is rewritten while NOTES keep
@@ -363,22 +363,31 @@ impl Core {
                 .collect()
         };
         let faces = self.faces_now(now, &pulse, &prefs, &recorded);
-        let rows: Vec<(&dyn Module, TaskPrefs, Option<Due>)> = self
+        // WHAT EACH MACHINE RUNS is asked here, with the rest of what a
+        // module answers, and never under the mind's lock: it may read a
+        // file.
+        let rows: Vec<Answered<'_>> = self
             .modules
             .all()
             .map(|m| {
                 let id = m.manifest().id;
                 let mut mine = prefs.of_module(m.manifest());
+                let here = m.steps_here();
                 // SWITCHED OFF BY THE SYSTEM: its row says so, with the
                 // system's word, whatever the person's file says — and the
                 // module is not asked when it would run.
                 if self.modules.off(id) {
                     mine.enabled = false;
-                    return (m, mine, Some(Due::Not { why: SYSTEM_OFF }));
+                    return Answered {
+                        m,
+                        mine,
+                        due: Some(Due::Not { why: SYSTEM_OFF }),
+                        here,
+                    };
                 }
                 let last = lasts.get(id).copied().flatten();
                 let due = due_of(m, now, &mine, last);
-                (m, mine, due)
+                Answered { m, mine, due, here }
             })
             .collect();
         let posted = self.posted(now, &prefs, &faces);
@@ -391,12 +400,13 @@ impl Core {
             let old: Vec<TaskState> = std::mem::take(&mut mind.tasks);
             mind.tasks = rows
                 .iter()
-                .map(|(m, mine, due)| {
+                .map(|Answered { m, mine, due, here }| {
                     let id = m.manifest().id;
                     let was = old.iter().find(|t| t.id == id);
                     row_of(
                         *m,
                         mine,
+                        here,
                         due.as_ref(),
                         prefs.quiet,
                         &running,
@@ -630,7 +640,8 @@ impl Core {
     ///
     /// No such module, or a knob it has nothing to turn: a cadence for a
     /// module that keeps no calendar, a step it does not have, a cadence of
-    /// zero days.
+    /// zero days — or a step that needs root, refused with the key
+    /// `brain-why-root-step`.
     pub fn set(&self, task: &str, knob: &Knob) -> Result<(), String> {
         let m = self.module(task)?;
         // NOT EVEN ITS OWN SWITCH: what the system configuration decided, the
@@ -651,16 +662,18 @@ impl Core {
             Knob::Step { id, .. } if !m.steps().iter().any(|s| s.id == id) => {
                 return Err(format!("`{task}` has no step called `{id}`"));
             }
+            // A STEP THAT NEEDS ROOT IS THE MACHINE'S: the half that runs it
+            // runs as root and reads no person's file, so a flip of it would
+            // be a row saying one thing over a run doing another.
+            Knob::Step { id, .. } if m.steps().iter().any(|s| s.id == id && s.needs_root) => {
+                return Err(why_key(m, "root-step"));
+            }
             _ => {}
         }
-        // WHAT THE STEP SHIPS AS is asked before the lock: nothing of a
+        // WHAT THIS MACHINE RUNS is asked before the lock: nothing of a
         // module is called while the mind is held.
-        let ships_on = match knob {
-            Knob::Step { id, .. } => m
-                .steps()
-                .iter()
-                .find(|s| s.id == id)
-                .is_some_and(|s| s.on_by_default),
+        let here_on = match knob {
+            Knob::Step { id, .. } => step_here(m, id),
             _ => false,
         };
         self.shared.change(|mind| {
@@ -678,9 +691,9 @@ impl Core {
                 // A SET OF EXCEPTIONS, and the state the screen wants — not a
                 // toggle: a key that repeated would land back where it
                 // started. What is written is whether it differs from what
-                // the distro ships.
+                // this machine runs — what the run flips it over.
                 Knob::Step { id, on } => {
-                    if *on == ships_on {
+                    if *on == here_on {
                         entry.steps_flipped.remove(id);
                     } else {
                         entry.steps_flipped.insert(id.clone());
@@ -705,8 +718,13 @@ impl Core {
             return Err(format!("`{task}` has no step called `{step}`"));
         };
         let prefs = self.shared.snapshot().0.prefs;
-        let on_now =
-            declared.on_by_default ^ prefs.of_module(m.manifest()).steps_flipped.contains(step);
+        // WHAT THE ROW SAYS NOW, by the row's own arithmetic.
+        let on_now = StepState::of(
+            declared,
+            step_here(m, step),
+            prefs.of_module(m.manifest()).steps_flipped.contains(step),
+        )
+        .on;
         self.set(
             task,
             &Knob::Step {
@@ -714,6 +732,56 @@ impl Core {
                 on: !on_now,
             },
         )
+    }
+
+    /// Reads the step flips of a file written when they counted from what
+    /// ships ([`StepsOver::Declared`]) as flips over what this machine runs,
+    /// once, as the daemon starts — and writes the file and the modules'
+    /// views of it back. A file that already counts from here has only its
+    /// views written again: they live in the state directory, which the
+    /// belongings do not carry and which may be lost, and the run reads
+    /// nothing else.
+    ///
+    /// EVERY FLIP THE RUN READ STAYS, so the machine runs after this what it
+    /// ran before: the half that runs the steps always counted a flip over
+    /// this machine's table, and only the page counted it from what ships —
+    /// where the two differ, the page now says the flip is the person's,
+    /// which it is. A flip on a step that needs root goes: the half that
+    /// runs it never read one. This machine's table is never asked, because
+    /// the file travels with the belongings and one machine's table says
+    /// nothing of another's.
+    pub fn heal_steps(&self) {
+        let prefs = self.shared.snapshot().0.prefs;
+        if prefs.steps_over == StepsOver::Machine {
+            self.hand_views(&prefs, None);
+            return;
+        }
+        let modules: Vec<(&'static str, &'static [Step])> = self
+            .modules
+            .all()
+            .map(|m| (m.manifest().id, m.steps()))
+            .collect();
+        let mut dropped: Vec<String> = Vec::new();
+        self.shared.change(|mind| {
+            for (id, steps) in &modules {
+                let Some(entry) = mind.prefs.tasks.get_mut(*id) else {
+                    continue;
+                };
+                entry.steps_flipped.retain(|flipped| {
+                    let keep = !steps.iter().any(|s| s.id == flipped && s.needs_root);
+                    if !keep {
+                        dropped.push(format!("{id} {flipped}"));
+                    }
+                    keep
+                });
+            }
+            mind.prefs.steps_over = StepsOver::Machine;
+        });
+        tracing::info!(
+            ?dropped,
+            "the step flips now count from what this machine runs"
+        );
+        self.keep(None);
     }
 
     /// Replaces the general gate, and writes the preferences down.
@@ -732,15 +800,21 @@ impl Core {
         if let Err(e) = self.store.save(&prefs) {
             tracing::error!(error = %e, "could not write the brain's preferences");
         }
+        self.hand_views(&prefs, which);
+        // A WATCHER SWITCHED ON OR OFF is the watch thread's news: it starts
+        // the one that came on, and stops telling the one that went off.
+        self.ring();
+    }
+
+    /// Hands each module (`None`: all of them) its resolved view of
+    /// `prefs` — what a module's own half reads, such as the run's flips.
+    fn hand_views(&self, prefs: &Prefs, which: Option<&dyn Module>) {
         let all: Vec<&dyn Module> = which.map_or_else(|| self.modules.all().collect(), |m| vec![m]);
         for m in all {
             if let Err(e) = m.prefs_saved(&prefs.of_module(m.manifest()), &self.store) {
                 tracing::error!(module = m.manifest().id, error = %e, "a module could not keep its view of the preferences");
             }
         }
-        // A WATCHER SWITCHED ON OR OFF is the watch thread's news: it starts
-        // the one that came on, and stops telling the one that went off.
-        self.ring();
     }
 
     /// Does one of a module's actions.
@@ -979,11 +1053,38 @@ struct Recorded {
     history: Vec<RunRecord>,
 }
 
-/// One module's row, as everybody draws it.
+/// What a module answered for its row, asked before the mind's lock.
+struct Answered<'a> {
+    /// The module.
+    m: &'a dyn Module,
+    /// Its preferences, resolved.
+    mine: TaskPrefs,
+    /// When it is due, if it is.
+    due: Option<Due>,
+    /// What its machine runs of each step ([`Module::steps_here`]).
+    here: Vec<bool>,
+}
+
+/// Whether this machine runs the step `id` of `m` before the person's flip
+/// ([`Module::steps_here`]) — what ships, for a step the module's answer
+/// leaves out.
+fn step_here(m: &dyn Module, id: &str) -> bool {
+    let steps = m.steps();
+    steps.iter().position(|s| s.id == id).is_some_and(|n| {
+        m.steps_here()
+            .get(n)
+            .copied()
+            .unwrap_or(steps[n].on_by_default)
+    })
+}
+
+/// One module's row, as everybody draws it, with `here` what its machine
+/// runs of each step ([`Module::steps_here`]).
 #[allow(clippy::too_many_arguments)]
 fn row_of(
     m: &dyn Module,
     mine: &TaskPrefs,
+    here: &[bool],
     due: Option<&Due>,
     quiet: bool,
     running: &str,
@@ -1034,19 +1135,15 @@ fn row_of(
         why_not: why_not.to_owned(),
         last: recorded.last,
         history: recorded.history,
+        // ONE LINE FOR BOTH ANSWERS: `on` is what this machine runs, flipped
+        // by the person's exception — see `TaskPrefs::steps_flipped`.
         steps: m
             .steps()
             .iter()
-            .map(|s| StepState {
-                id: s.id.to_owned(),
-                command: s.command.to_owned(),
-                needs_root: s.needs_root,
-                // ONE LINE FOR BOTH ANSWERS: `on` is the default flipped by
-                // the person's exception — see `TaskPrefs::steps_flipped`.
-                on: s.on_by_default ^ mine.steps_flipped.contains(s.id),
-                on_by_default: s.on_by_default,
-                name_key: s.name_key.to_owned(),
-                does_key: s.does_key.to_owned(),
+            .enumerate()
+            .map(|(n, s)| {
+                let here = here.get(n).copied().unwrap_or(s.on_by_default);
+                StepState::of(s, here, mine.steps_flipped.contains(s.id))
             })
             .collect(),
         calendar: manifest.schedule.is_some_and(|s| s.calendar),
@@ -1390,6 +1487,226 @@ mod tests {
             1,
             "a refusal wrote"
         );
+    }
+
+    /// Steps of every kind a machine can disagree about: one that ships off
+    /// and one that ships on, both turned the other way by the machine; one
+    /// that ships on and runs; one that needs root.
+    static MACHINED: &[crate::task::Step] = &[
+        crate::task::Step {
+            id: "ships-off-runs",
+            command: "a",
+            needs_root: false,
+            on_by_default: false,
+            name_key: "",
+            does_key: "",
+        },
+        crate::task::Step {
+            id: "ships-on-stops",
+            command: "b",
+            needs_root: false,
+            on_by_default: true,
+            name_key: "",
+            does_key: "",
+        },
+        crate::task::Step {
+            id: "ships-on-runs",
+            command: "c",
+            needs_root: false,
+            on_by_default: true,
+            name_key: "",
+            does_key: "",
+        },
+        crate::task::Step {
+            id: "as-root",
+            command: "d",
+            needs_root: true,
+            on_by_default: true,
+            name_key: "",
+            does_key: "",
+        },
+    ];
+
+    /// A routine with [`MACHINED`]'s steps, on a machine that turned the
+    /// first two the other way from what ships.
+    fn machined() -> Fake {
+        Fake::routine("machined")
+            .steps(MACHINED)
+            .here(&[true, false, true, true])
+    }
+
+    /// The steps of the row of `task`, published now.
+    fn steps_of(core: &Core, task: &str) -> Vec<StepState> {
+        core.publish(1000, Pulse::default());
+        core.shared
+            .snapshot()
+            .0
+            .task(task)
+            .expect("row")
+            .steps
+            .clone()
+    }
+
+    /// FAILS IF: a step this machine runs is drawn off, or one it stops
+    /// drawn on — the page and the run disagreeing about one machine; or a
+    /// switch counts its flip from what ships, so turning on a step the
+    /// machine already runs writes the flip that stops it; or a step that
+    /// needs root takes a flip the half that runs it never reads.
+    #[test]
+    fn a_step_counts_from_what_this_machine_runs() {
+        use crate::mind::StepWhy;
+        let (core, _) = a_core(vec![machined().boxed()], 1000);
+        let flips = |core: &Core| {
+            core.shared
+                .snapshot()
+                .0
+                .prefs
+                .of_module(core.modules().find("machined").expect("module").manifest())
+                .steps_flipped
+        };
+        let steps = steps_of(&core, "machined");
+        assert_eq!(
+            steps.iter().map(|s| (s.on, s.why())).collect::<Vec<_>>(),
+            [
+                (true, StepWhy::OnHere),
+                (false, StepWhy::OffHere),
+                (true, StepWhy::Shipped),
+                (true, StepWhy::Shipped)
+            ]
+        );
+        assert_eq!(steps[0].on_here, Some(true));
+
+        // ON, WHERE IT ALREADY RUNS: no flip. OFF: one, and the row follows.
+        let step = |id: &str, on: bool| Knob::Step {
+            id: id.to_owned(),
+            on,
+        };
+        core.set("machined", &step("ships-off-runs", true))
+            .expect("on");
+        assert!(flips(&core).is_empty(), "{:?}", flips(&core));
+        core.set("machined", &step("ships-off-runs", false))
+            .expect("off");
+        assert_eq!(flips(&core), ["ships-off-runs".to_owned()].into());
+        let steps = steps_of(&core, "machined");
+        assert_eq!((steps[0].on, steps[0].why()), (false, StepWhy::OffByYou));
+        core.set("machined", &step("ships-off-runs", true))
+            .expect("on again");
+        assert!(flips(&core).is_empty());
+
+        // THE TOGGLE flips what the row says, which is the machine's.
+        core.toggle("machined", "ships-on-stops").expect("toggle");
+        let steps = steps_of(&core, "machined");
+        assert_eq!((steps[1].on, steps[1].why()), (true, StepWhy::OnByYou));
+        assert_eq!(flips(&core), ["ships-on-stops".to_owned()].into());
+
+        // ROOT'S IS THE MACHINE'S, by `Set` and by the toggle, and nothing
+        // is written.
+        let before = core.shared.snapshot().0.prefs;
+        for refused in [
+            core.set("machined", &step("as-root", false)),
+            core.toggle("machined", "as-root"),
+        ] {
+            assert_eq!(refused, Err("brain-why-root-step".to_owned()));
+        }
+        assert_eq!(core.shared.snapshot().0.prefs, before);
+    }
+
+    /// FAILS IF: a file whose flips counted from what ships loses one the
+    /// run read — the machine would run something else after it — or keeps
+    /// one on a step that needs root; or is not written back saying it
+    /// counts from here, its modules' views with it; or a second start reads
+    /// it again, or does not write the views again.
+    #[test]
+    fn flips_counted_from_what_ships_are_read_once_from_this_machine() {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-brain-heal-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let saved: Arc<Mutex<Vec<BTreeSet<String>>>> = Arc::default();
+        let into = Arc::clone(&saved);
+        let module = machined().saves(move |mine| {
+            into.lock().expect("saved").push(mine.steps_flipped.clone());
+        });
+        let mut old = Prefs {
+            steps_over: StepsOver::Declared,
+            ..Prefs::default()
+        };
+        old.chosen_mut(module.manifest()).steps_flipped =
+            ["ships-off-runs", "ships-on-runs", "as-root"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+        let core = Arc::new(Core::new(
+            Arc::new(Shared::of(old)),
+            Registry::of(vec![module.boxed()]).expect("the registry"),
+            Where {
+                config: Some(dir.clone()),
+                state: None,
+            },
+            Box::new(Hand::at(1000)),
+        ));
+        core.heal_steps();
+        let kept: BTreeSet<String> =
+            ["ships-off-runs".to_owned(), "ships-on-runs".to_owned()].into();
+        assert_eq!(*saved.lock().expect("saved"), std::slice::from_ref(&kept));
+        let on_disk = crate::prefs::read_from(&dir);
+        assert_eq!(on_disk.steps_over, StepsOver::Machine);
+        assert_eq!(on_disk.tasks["machined"].steps_flipped, kept);
+        // AND EVERY ROW IS WHAT THE RUN DID before: a flip over this
+        // machine's table — which the run always read — the root step as the
+        // machine runs it, and the one nobody flipped the machine's.
+        let steps = steps_of(&core, "machined");
+        assert_eq!(
+            steps.iter().map(|s| s.on).collect::<Vec<_>>(),
+            [false, false, false, true]
+        );
+        // THE NEXT START reads nothing again, and writes the views again.
+        core.heal_steps();
+        assert_eq!(
+            *saved.lock().expect("saved"),
+            [kept.clone(), kept],
+            "it was read twice, or the views were not written"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a start with a file that already counts from here does not
+    /// write the modules' views from it — the run's flips live in the state
+    /// directory, which the belongings do not carry — or writes the file.
+    #[test]
+    fn every_start_writes_the_views_from_the_preferences() {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-brain-views-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let saved: Arc<Mutex<Vec<BTreeSet<String>>>> = Arc::default();
+        let into = Arc::clone(&saved);
+        let module = machined().saves(move |mine| {
+            into.lock().expect("saved").push(mine.steps_flipped.clone());
+        });
+        let mut prefs = Prefs {
+            steps_over: StepsOver::Machine,
+            ..Prefs::default()
+        };
+        let flipped: BTreeSet<String> = ["ships-on-runs".to_owned()].into();
+        prefs.chosen_mut(module.manifest()).steps_flipped = flipped.clone();
+        let core = Arc::new(Core::new(
+            Arc::new(Shared::of(prefs)),
+            Registry::of(vec![module.boxed()]).expect("the registry"),
+            Where {
+                config: Some(dir.clone()),
+                state: None,
+            },
+            Box::new(Hand::at(1000)),
+        ));
+        core.heal_steps();
+        assert_eq!(*saved.lock().expect("saved"), [flipped]);
+        assert!(!dir.exists(), "the preferences were written");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

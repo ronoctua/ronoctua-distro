@@ -108,6 +108,11 @@ fn unit() -> Result<()> {
             &std::env::var(registry::OFF_VARIABLE).unwrap_or_default(),
         ));
     let core = Arc::new(Core::new(shared, modules, store, Box::new(moment::Wall)));
+    // STEP FLIPS WRITTEN WHEN THEY COUNTED FROM WHAT SHIPS are read once into
+    // flips over what this machine runs, before any row is built from them —
+    // and every start writes the modules' views of the preferences again,
+    // which live where the belongings do not reach.
+    core.heal_steps();
     let mut runner = runner::Runner::new(Arc::clone(&core), Box::new(pulse::Machine::here()));
     // ONE PASS BEFORE THE SOCKET OPENS. The rows of the mind are built by the
     // runner, so a client that connected in the first milliseconds would get an

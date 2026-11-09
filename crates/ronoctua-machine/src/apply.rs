@@ -598,6 +598,23 @@ fn switch_to(
     })
 }
 
+/// What a rehearsal measured, written whole where the update's view reads it
+/// ([`crate::REHEARSED`]). A file that cannot be written is said and is no
+/// refusal: the rehearsal measured, and its verdict says so.
+fn keep_the_measure(p: &crate::Places, r: crate::Rehearsal) {
+    let kept = crate::Rehearsed {
+        at: disk::now(),
+        download_bytes: r.download_bytes,
+        builds: r.builds,
+    };
+    let path = p.run.join(crate::REHEARSED);
+    let mut bytes = serde_json::to_vec(&kept).unwrap_or_default();
+    bytes.push(b'\n');
+    if let Err(e) = disk::write_atomically(&path, &bytes, 0o644) {
+        say(4, &format!("{}: {e}", path.display()));
+    }
+}
+
 /// `apply --rehearse`: the machine directory copied under the run folder,
 /// the distro and `nixpkgs` inputs moved THERE (as the update would, unless
 /// held — `nixpkgs` alone where the lock names a local checkout,
@@ -636,6 +653,7 @@ pub(crate) fn rehearse(m: &Machine) -> Result<Applied, Refusal> {
     })();
     let _ = disk::remove(&copy);
     let rehearsal = measured?;
+    keep_the_measure(p, rehearsal);
     Ok(Applied {
         result: ApplyResult::Rehearsed,
         trial: None,

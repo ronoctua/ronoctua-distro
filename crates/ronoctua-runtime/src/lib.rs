@@ -1414,6 +1414,7 @@ fn val_of_mind(m: &ronoctua_protocol::Mind) -> wasmtime::component::Val {
                         ("needs-root".into(), Val::Bool(s.needs_root)),
                         ("on".into(), Val::Bool(s.on)),
                         ("on-by-default".into(), Val::Bool(s.on_by_default)),
+                        ("on-here".into(), Val::Bool(s.on_here)),
                         // THE STEP'S OWN KEYS, as its module declared them.
                         ("name-key".into(), Val::String(s.name_key.clone())),
                         ("does-key".into(), Val::String(s.does_key.clone())),
@@ -2676,7 +2677,7 @@ mod tests {
     fn the_mind_has_the_wit_shape_field_by_field() {
         // THE LISTS BELOW ARE THE `.wit`'s ORDER, COPIED BY HAND, for the same
         // reason as the rack's above — and with more at stake than any of them:
-        // `task-state` carries `enabled`, `ran` and three step booleans, and
+        // `task-state` carries `enabled`, `ran` and four step booleans, and
         // `run-record` carries four strings in a row. Any pair of them traded
         // lowers CLEANLY and comes out on screen as a task that is off when it
         // is on, or a failure attributed to the wrong step.
@@ -2788,6 +2789,9 @@ mod tests {
                     needs_root: false,
                     on: true,
                     on_by_default: false,
+                    // THE MACHINE TURNED IT ON: the third boolean, told apart
+                    // from its neighbour by its value.
+                    on_here: true,
                     name_key: "fixture-step-build".to_owned(),
                     does_key: "fixture-step-build-does".to_owned(),
                 }],
@@ -2974,6 +2978,7 @@ mod tests {
                 "needs-root",
                 "on",
                 "on-by-default",
+                "on-here",
                 "name-key",
                 "does-key"
             ]
@@ -3057,6 +3062,10 @@ mod tests {
         assert_eq!(
             field(&steps[0], "on-by-default"),
             Some(&wasmtime::component::Val::Bool(false))
+        );
+        assert_eq!(
+            field(&steps[0], "on-here"),
+            Some(&wasmtime::component::Val::Bool(true))
         );
         assert_eq!(
             field(&outcomes[0], "ok"),

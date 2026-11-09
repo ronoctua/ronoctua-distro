@@ -2049,6 +2049,14 @@ struct Screen {
     photographed: Option<crate::door::Composed>,
 }
 
+/// The SHOWN REGION'S OWN ROW drawn at index `line` of the page — what its
+/// band, its click and what it says under the pointer are asked by: the page
+/// of a region scrolled past its top starts at its row `offset`, never `0`.
+/// A line that is no region's row is its own index.
+fn region_row_on(visible: &[&ExpansionRow], line: usize) -> usize {
+    visible.get(line).and_then(|l| l.region_row).unwrap_or(line)
+}
+
 /// One line of the expanded region, ready to draw.
 ///
 /// Two columns: the key (when there is one) and the text. It is the form
@@ -16781,8 +16789,12 @@ impl Footer {
             // column — so the answer depends on the cell as well. See
             // `notifications::View::about_at`, which asks the same plan the
             // click does.
+            //
+            // ASKED BY THE REGION'S OWN ROW, as its band and its click are
+            // (`region_row`): the pointer's line is where the row is DRAWN,
+            // which a region scrolled past its top is not.
             .or_else(|| {
-                let row = self.here.row_under_pointer?;
+                let row = region_row_on(&visible, self.here.row_under_pointer?);
                 self.hosted_about_at(row, self.here.cell_under_pointer)
                     .map(|t| vec![crate::chrome::Piece::said(t)])
             })
@@ -23306,6 +23318,30 @@ mod tests {
     ///
     /// So the row is taken from the region: one line fewer there, one line
     /// here, and the sum is what it was.
+    /// FAILS IF: what a scrolled region says under the pointer is asked of
+    /// the SCREEN'S line and not of the region's row drawn there — the
+    /// pointer on the third line of a page scrolled ten rows down would read
+    /// the region's third row, or nothing.
+    #[test]
+    fn a_scrolled_region_explains_the_row_under_the_pointer() {
+        let rows: Vec<super::ExpansionRow> = (10..15)
+            .map(|row| super::ExpansionRow {
+                region_row: Some(row),
+                ..super::ExpansionRow::empty_one()
+            })
+            .collect();
+        let visible: Vec<&super::ExpansionRow> = rows.iter().collect();
+        assert_eq!(super::region_row_on(&visible, 2), 12);
+        assert_eq!(super::region_row_on(&visible, 0), 10);
+        // A LINE PAST THE PAGE, or one that is no region's, is its index.
+        assert_eq!(super::region_row_on(&visible, 7), 7);
+        let plain = [super::ExpansionRow::empty_one()];
+        assert_eq!(
+            super::region_row_on(&plain.iter().collect::<Vec<_>>(), 0),
+            0
+        );
+    }
+
     #[test]
     fn the_explanation_takes_its_row_from_the_region() {
         for full in 2..64_usize {

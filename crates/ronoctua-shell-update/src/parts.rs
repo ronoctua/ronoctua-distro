@@ -58,7 +58,7 @@ use ronoctua_parts::record::{Phase, Record, Waiting, Why};
 use ronoctua_parts::stick::{Outcome, Refusal, Said, Verb};
 use ronoctua_tokens as tokens;
 
-use crate::binary_cache::{PageLine, TopLine};
+use crate::binary_cache::PageLine;
 
 /// The command that opens the update's view on this page (`LEADER s u d`).
 pub const OPEN: &str = "distro-parts-open";
@@ -467,7 +467,7 @@ impl Act {
 pub enum Errand {
     /// Nothing.
     Nothing,
-    /// The cursor moved: the page follows, the register says the row.
+    /// The cursor moved: the page follows, and the door explains the row.
     Moved,
     /// Back to the steps.
     Close,
@@ -567,26 +567,18 @@ pub fn picked(picking: Picking, paths: &[PathBuf]) -> Errand {
     })
 }
 
-/// The lines on top of the page while the picker is up: what to choose,
-/// wrapped.
+/// What the picker is up for, said over its rows while it is: what to
+/// choose.
 #[must_use]
-pub fn picking_lines(picking: &Picking, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<TopLine> {
-    let said = match picking {
+pub fn picking_said(picking: &Picking, texts: &ronoctua_i18n::Texts) -> Vec<String> {
+    vec![match picking {
         Picking::HandIn { download, .. } => texts.t_with(
             key::DISTRO_PARTS_ABOUT_PICK_HAND_IN,
             &[("name", download.as_str())],
         ),
         Picking::Import => texts.t(key::DISTRO_PARTS_ABOUT_IMPORT),
         Picking::Export => texts.t(key::DISTRO_PARTS_ABOUT_EXPORT),
-    };
-    crate::chrome::note_lines(&said, room)
-        .into_iter()
-        .map(|text| TopLine {
-            text,
-            color: tokens::color::TEXT_SECONDARY,
-            answer: None,
-        })
-        .collect()
+    }]
 }
 
 /// The page: its cursor, and whether the mirrors' question is open.
@@ -628,7 +620,7 @@ impl Page {
 
     /// Whether a click takes row `n` — and so whether a resting pointer
     /// lights it, in both doors: every row of the page (a click puts the
-    /// cursor there, and its register says what it is).
+    /// cursor there, and the door explains what it is).
     #[must_use]
     pub fn takes(&self, n: usize, r: &Readings) -> bool {
         n < rows_of(r).len()
@@ -782,19 +774,20 @@ impl Page {
         self.asking_mirrors = false;
     }
 
-    /// The lines on top of the page: what the row under the cursor is, why a
-    /// part's last try failed, and each download it is missing with the ways
-    /// it can come in. Notes are WRAPPED, never cut.
+    /// WHAT ROW `n` IS, where the door explains it: its name, what `how` the
+    /// hand takes it does, what it is, why a part's last try failed, and each
+    /// download it is missing with the ways it can come in.
     #[must_use]
-    pub fn top_lines(
+    pub fn explain(
         &self,
+        n: usize,
         r: &Readings,
-        room: u16,
         zone: &ronoctua_files::when::Zone,
+        how: crate::door::Gesture,
         texts: &ronoctua_i18n::Texts,
-    ) -> Vec<TopLine> {
-        let Some(row) = rows_of(r).get(self.cursor).copied() else {
-            return Vec::new();
+    ) -> crate::door::Explained {
+        let Some(row) = rows_of(r).get(n).copied() else {
+            return crate::door::Explained::default();
         };
         let mut said: Vec<(String, tokens::Color)> = Vec::new();
         let secondary = tokens::color::TEXT_SECONDARY;
@@ -860,22 +853,30 @@ impl Page {
         {
             said.push((stick_said(s, zone, texts), secondary));
         }
-        said.into_iter()
-            .flat_map(|(text, color)| {
-                crate::chrome::note_lines(&text, room)
-                    .into_iter()
-                    .map(move |text| TopLine {
-                        text,
-                        color,
-                        answer: None,
-                    })
-            })
-            .collect()
+        let (name, _, _) = label_and_value(row, r, zone, texts);
+        // WHAT `RET` DOES, only where it does it: a part already here and a
+        // copy of the mirrors that does not read only say why (`enter`).
+        let does = match row {
+            Row::System => Some(key::DISTRO_PARTS_ACT_UPDATE),
+            Row::Part(i) if r.parts.get(i).is_some_and(|p| p.phase == Phase::Here) => None,
+            Row::Part(_) => Some(key::DISTRO_PARTS_ACT_RETRY),
+            Row::Import | Row::Export => Some(key::DISTRO_PARTS_ACT_PICK),
+            Row::Mirrors if matches!(r.mirrors, Mirrors::Named(_)) => {
+                Some(key::DISTRO_PARTS_ACT_MIRRORS)
+            }
+            Row::Mirrors => None,
+        };
+        crate::door::Explained {
+            subject: String::new(),
+            name,
+            gesture: does.map(|does| crate::door::foot::gesture(texts, how, &texts.t(does))),
+            said,
+        }
     }
 
-    /// The page under the top lines: a heading, and a row a line — the label
-    /// and the value, the cursor a colour — and, without one part, a line
-    /// that says so.
+    /// The page: a heading, and a row a line — the label and the value, the
+    /// cursor a colour while it is `here`, on the page's rows — and, without
+    /// one part, a line that says so.
     #[must_use]
     pub fn lines(
         &self,
@@ -883,6 +884,7 @@ impl Page {
         left: u16,
         room: u16,
         zone: &ronoctua_files::when::Zone,
+        here: bool,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<PageLine> {
         let plain = |text: String, color| PageLine {
@@ -914,7 +916,7 @@ impl Page {
             }
         }
         for (n, row) in rows_of(r).into_iter().enumerate() {
-            let focused = n == self.cursor;
+            let focused = here && n == self.cursor;
             let (label, value, tint) = label_and_value(row, r, zone, texts);
             out.push(PageLine {
                 fields: crate::chrome::tinted(

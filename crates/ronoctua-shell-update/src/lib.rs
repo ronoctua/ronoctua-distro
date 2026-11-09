@@ -31,9 +31,13 @@ pub mod binary_cache;
 pub mod follow;
 pub mod key;
 pub mod machine_gesture;
+// THE TWO HALVES' OUTPUT: a journal's line, its colours and its priority, and
+// the lines kept — naming no unit and no step.
+pub mod output;
 pub mod parts;
 pub mod update_region;
 pub mod update_window;
+pub mod update_window_list;
 
 /// THE UPDATE'S WINDOW the binary runs by name (`ronoctua-shell update`):
 /// the update, live — the door the modeline's mark opens.

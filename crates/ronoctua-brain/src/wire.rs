@@ -74,7 +74,7 @@ pub enum Ask {
         /// Which step.
         step: String,
     },
-    /// Put a task's steps back to what the distro ships.
+    /// Put a task's steps back to what this machine runs.
     Reset {
         /// Which.
         task: String,
@@ -162,7 +162,7 @@ pub enum Knob {
         /// Whether it is to run.
         on: bool,
     },
-    /// Every step back to what the distro ships.
+    /// Every step back to what this machine runs: no flip left.
     ResetSteps,
     /// One section of its page, open or shut.
     Fold {
@@ -340,6 +340,7 @@ mod tests {
                     needs_root: true,
                     on: true,
                     on_by_default: true,
+                    on_here: Some(true),
                     name_key: "update-build".to_owned(),
                     does_key: "update-build-does".to_owned(),
                 }],
@@ -367,6 +368,7 @@ mod tests {
             }),
             prefs: Prefs::default(),
             rehearsing: None,
+            running_rehearsal: false,
             postponed: None,
             // THE MODULES' HALF, every kind of it: what a module publishes has
             // to come back from a line of JSON EQUAL, borrowed constants and

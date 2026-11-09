@@ -1421,10 +1421,15 @@ interface types {
         // to work out what flipping meant, because the person's file holds
         // exceptions to a default nobody had told it.
         //
-        // Sending the DEFAULT instead makes "changed" a subtraction anybody
-        // can do (`on != on-by-default`) and leaves exactly one authority for
-        // it: the update's `steps.nix`, where it is declared.
+        // Sending the DEFAULT instead leaves exactly one authority for it:
+        // the update's `steps.nix`, where it is declared.
         on-by-default: bool,
+        // WHETHER THIS MACHINE RUNS IT before the person's flip — its own
+        // table, which may turn a step the other way from what ships. A flip
+        // is a flip OF this, so "changed by you" is `on != on-here`, and a
+        // step whose `on-here` differs from `on-by-default` unflipped is the
+        // machine's choice and nobody's flip.
+        on-here: bool,
         // The keys of its name and of the line under the cursor, declared by
         // the module that owns the step — never `update-<id>` built here.
         name-key: string,
@@ -1679,8 +1684,8 @@ interface types {
         part-of-day(day-part),
         enabled(bool),
         step(step-switch),
-        // Every step back to what the distro ships. It carries nothing: there
-        // is one default and it is the flake's.
+        // Every step back to what this machine runs. It carries nothing:
+        // there is one answer before the person's, and it is the flake's.
         reset-steps,
         // One section of its page, open or shut. The state the screen wants
         // and never a toggle, like `step`.

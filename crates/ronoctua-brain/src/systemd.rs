@@ -65,6 +65,20 @@ pub fn start(unit: &str) -> Result<(), Trouble> {
     ask("start", unit)
 }
 
+/// Asks systemd to start a unit and WAITS for its job: a `Type=oneshot`
+/// unit's ends when its work does, and a refused one at once — for a thread
+/// that may wait as long, and what a door that started a run with no brain
+/// learns its end by.
+///
+/// # Errors
+///
+/// As [`start`] — or the run itself failed, which `systemctl` says the same
+/// way.
+pub fn start_and_wait(unit: &str) -> Result<(), Trouble> {
+    tracing::info!(unit, "asking systemd to start, waiting for the end");
+    spawned(&waiting_argv("start", unit))
+}
+
 /// The arguments a verb takes, so the shape can be checked without a machine.
 ///
 /// # Why this is its own function
@@ -98,13 +112,25 @@ pub fn argv<'a>(verb: &'a str, unit: &'a str) -> [&'a str; 4] {
     ["--user", "--no-block", verb, unit]
 }
 
-/// Runs one verb against one unit. The ONLY place this crate spawns anything.
+/// The arguments of a verb that waits for its job ([`start_and_wait`]):
+/// [`argv`]'s, but `--no-block`.
+#[must_use]
+pub fn waiting_argv<'a>(verb: &'a str, unit: &'a str) -> [&'a str; 3] {
+    ["--user", verb, unit]
+}
+
+/// Runs one verb against one unit, not waiting for its job.
 fn ask(verb: &str, unit: &str) -> Result<(), Trouble> {
+    spawned(&argv(verb, unit))
+}
+
+/// Runs `systemctl` with `args`. The ONLY place this crate spawns anything.
+fn spawned(args: &[&str]) -> Result<(), Trouble> {
     let Some(path) = SYSTEMCTL else {
         return Err(Trouble::Missing("RONOCTUA_SYSTEMCTL"));
     };
     let out = Command::new(path)
-        .args(argv(verb, unit))
+        .args(args)
         .output()
         .map_err(|e| Trouble::Refused(e.to_string()))?;
     if out.status.success() {
@@ -178,6 +204,11 @@ mod tests {
         // oneshot waits for the whole job, which is a thread held for the
         // length of a rebuild.
         assert_eq!(argv("start", "u.service")[1], "--no-block");
+        // …AND ONLY the start a thread waits on goes without it.
+        assert_eq!(
+            waiting_argv("start", "u.service"),
+            ["--user", "start", "u.service"]
+        );
         // And the build's own answer about whether it can reach systemd at all
         // — a `const fn` over an `option_env!`, which spawns nothing.
         assert_eq!(reachable(), SYSTEMCTL.is_some());

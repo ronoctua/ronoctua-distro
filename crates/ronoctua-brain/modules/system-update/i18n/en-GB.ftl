@@ -77,11 +77,11 @@ system-update-needs-network = This machine is not connected to a network.
 # the pointer, `update now` (the key the view teaches for the whole sequence),
 # what starting said, and the word beside each step.
 system-update-next-step = next
-about-system-update-next-step = Moves down one line: the status, the actions and the records' choices, then the steps. Says what the line is.
+about-system-update-next-step = Moves down one line of the list: the status, the notices, what to do, the options and the steps.
 system-update-previous-step = previous
-about-system-update-previous-step = Moves up one line, back from the steps to the actions and the status. Says what the line is.
+about-system-update-previous-step = Moves up one line of the list.
 system-update-section = section
-about-system-update-section = Jumps between the lines at the top and the steps, each keeping its place.
+about-system-update-section = Jumps to the start of the next part of the list, or of the one before: notices, what to do, options, steps.
 system-update-output-down = output down
 about-system-update-output-down = Moves the output a page towards its end.
 system-update-output-up = output up
@@ -92,12 +92,11 @@ system-update = update now
 echo-system-update-queued = In the queue — it starts when the machine is free
 echo-system-update-started = The update has started
 echo-system-update-nowhere = There is nothing here that can start it
-system-update-no-output = nothing has been said yet
 system-update-verdict-ran = it worked
 system-update-verdict-failed = it failed
 system-update-verdict-off = switched off
 system-update-verdict-skipped = did not apply
-system-update-verdict-rehearsed = only rehearsed
+system-update-verdict-rehearsed = only tried
 system-update-verdict-stopped = it stopped here
 system-update-verdict-pending = still to come
 
@@ -108,17 +107,23 @@ system-update-verdict-pending = still to come
 # while they mean something.
 system-update-proceed-does = Starts the update that is counting down now, without waiting for the countdown.
 system-update-abort-does = Puts off the update that is counting down until its next scheduled time.
+system-update-proceed-rehearsal-does = Starts the try-out that is counting down now, without waiting for the countdown.
+system-update-abort-rehearsal-does = Lets go of the try-out that is counting down: nothing changes, and the scheduled update stays as it was.
 system-update-stop = stop the update
 about-system-update-stop = Stops the update that is running. The steps it already did stay done.
+system-update-stop-rehearsal = stop the try-out
+about-system-update-stop-rehearsal = Stops the try-out under way. Nothing on the machine has changed.
 system-update-start-does = Starts a full update now, after a short countdown that you can skip or cancel.
 system-update-start-queued = The update is already in the queue, so there is nothing to start. It begins by itself as soon as nothing holds it.
 system-update-status-running = An update is running now.
 system-update-status-counting-down = An update is about to start: the countdown is on.
+system-update-status-rehearsing = A try-out is running: nothing on the machine changes.
+system-update-status-rehearsal-soon = A try-out is about to start: the countdown is on. Nothing on the machine will change.
 system-update-status-queued = An update is in the queue, and starts when the machine is free.
 system-update-status-waiting-ram = An update is waiting: the memory is busy.
 system-update-status-waiting-cpu = An update is waiting: the processor is busy.
 system-update-status-waiting-battery = An update is waiting for the charger.
-system-update-status-waiting-busy = An update is waiting for another task of the brain to finish.
+system-update-status-waiting-busy = An update is waiting for another task of the Brain to finish.
 system-update-status-waiting-network = An update is waiting for a network that does not charge by the amount of data.
 system-update-status-waiting-asleep = An update is waiting for the machine to wake up.
 system-update-status-restart = A new system is ready: restart to use it.
@@ -132,7 +137,6 @@ system-update-status-available-both = An update is available: the distro and nix
 system-update-status-up-to-date = The system is up to date.
 system-update-status-unchecked = Could not check for updates: { $why }.
 system-update-status-unasked = Not checked for updates yet.
-system-update-status-last = Last updated { $when }.
 system-update-unchecked-offline = this machine has no network
 system-update-unchecked-rate-limited = GitHub asked to wait a while
 system-update-unchecked-other = GitHub did not answer as expected
@@ -141,8 +145,6 @@ system-update-unchecked-unreadable = this machine's flake.lock cannot be read
 system-update-unchecked-nothing = this machine's flake follows no branch on GitHub
 system-update-unchecked-unasked-distro = the distro does not follow a named branch on GitHub, so only an update can tell
 system-update-unchecked-unasked-nixpkgs = nixpkgs does not follow a named branch on GitHub, so only an update can tell
-system-update-status-does = Whether the distro or nixpkgs has moved past what this machine runs, as GitHub says. Choosing it asks again.
-system-update-status-next = The next scheduled update is { $when }.
 system-update-register-belongings = Choosing it opens your belongings, where the files changed on two machines are.
 system-update-register-asks = Choosing it asks you first; nothing changes until you answer yes.
 
@@ -259,7 +261,7 @@ system-update-applier-refused-misplaced = In your declarations, a file stands wh
 system-update-applier-refused-not-owned = Something in your declarations does not belong to you, so the machine accepts none of them.
 system-update-applier-refused-writable = Someone else can change something in your declarations, so the machine accepts none of them.
 system-update-applier-refused-bad-name = A name in your declarations is not plain text.
-system-update-applier-refused-not-a-module = A folder among your brain modules is not named my- followed by one word.
+system-update-applier-refused-not-a-module = A folder among your Brain modules is not named my- followed by one word.
 system-update-applier-refused-too-large = A file in your declarations, or all of them together, is bigger than the machine accepts.
 system-update-applier-refused-too-many = Your declarations have more entries, icons, modules or files than the machine accepts.
 system-update-applier-refused-too-deep = Your declarations have more folders inside folders than the machine accepts.
@@ -276,3 +278,146 @@ system-update-applier-refused-bad-key = The key this machine trusts for you is n
 # THE 2026-10-30 WAVE: the Android apps that wait, and why.
 system-update-declined-android-in-use = Android was open, so none of its apps was replaced while you used it. They wait for the next update.
 system-update-declined-fdroid-not-let = F-Droid is not allowed, so your Android apps were not checked and keep their versions. Allow f-droid.org and the next update moves them.
+
+# THE LIST, 2026-11-08: the view as one list under the status — what the
+# machine wants said, what to do, the options and the steps — and what each
+# thing is, said where the door explains it (the window's foot, the footer's
+# explanation line), never inside the list.
+system-update-section-notices = Notices
+system-update-section-notices-about = What this machine wants you to know about its updates. Each notice says what happened and, where it can, what you can do.
+system-update-section-do = What to do
+system-update-section-do-about = What you can do now: update, try an update out without changing anything, or see when the machine updates itself.
+system-update-section-options = Options
+system-update-section-options-about = Choices that hold for every update. Under the pointer, each says what a click on it does.
+system-update-section-steps = Steps
+system-update-section-steps-about = What an update does, in order. Each step's box says whether it runs: a step that is switched off is skipped.
+system-update-steps-count = { $on ->
+        [0] none of { $all } on
+       *[other] { $on } of { $all } on
+    }
+system-update-status-name = Whether an update is out
+system-update-status-explained = Asks GitHub whether the distro or nixpkgs has newer versions than the ones this machine runs. Asking again: GitHub answers in a few seconds, and this line changes with the answer.
+system-update-status-stands = Where the update stands
+system-update-last-worked = Last update that worked: { $when }.
+system-update-start-queued-short = queued already
+system-update-rehearse = try it, changing nothing
+about-system-update-rehearse = Tries a whole update without changing anything, so you can see what it would download and build.
+system-update-rehearse-does = Runs the whole update as make-believe: each step says what it would do, and nothing on the machine changes. Trying it: it starts after the same countdown as an update, and at the end says how much it would download and how many packages it would build.
+system-update-rehearse-busy = Trying it waits: an update is queued or under way already. Once it ends, you can try one.
+system-update-rehearse-busy-short = waits for the current update
+system-update-rehearse-pending = The next run is a try-out already, so there is nothing to ask again.
+system-update-rehearse-pending-short = asked already
+system-update-rehearse-running = A try-out is under way already. Once it ends, you can try again.
+system-update-rehearse-running-short = under way
+system-update-rehearse-asked = Try-out asked for: it starts after the countdown, changing nothing.
+echo-system-update-rehearse-started = The try-out started, changing nothing
+echo-system-update-rehearsal-stopped = The try-out stopped, and nothing changed
+system-update-rehearsed = Try-out on { $when }: nothing changed. The update would download { $size } and build { $builds ->
+        [0] no package
+        [one] 1 package
+       *[other] { $builds } packages
+    }.
+system-update-schedule = schedule
+about-system-update-schedule = Opens the update's task in the Brain, where you choose when the machine updates itself.
+system-update-schedule-does = The Brain decides when this machine updates itself: every how many days, at what part of the day, and only while the machine is free. Opening it: the update's task shows in the Brain, where you change that.
+system-update-schedule-every = { $days ->
+        [1] every day
+        [7] every week
+        [14] every two weeks
+        [30] every month
+       *[other] every { $days } days
+    }
+system-update-schedule-part = { $part ->
+        [night] at night
+        [morning] in the morning
+        [afternoon] in the afternoon
+        [evening] in the evening
+       *[any] at any hour
+    }
+system-update-schedule-next = { $days ->
+        [0] next today, { $time }
+        [1] next tomorrow, { $time }
+       *[other] next { $weekday } { $date }
+    }
+system-update-schedule-summary = { $every }, { $part } · { $next }
+system-update-schedule-off = off — only when you ask
+system-update-schedule-quiet = the Brain is quiet — only when you ask
+system-update-schedule-overdue = overdue — starts when the machine is free
+system-update-schedule-no-brain = the Brain is not answering
+system-update-weekday-short = { $day ->
+        [0] Sun
+        [1] Mon
+        [2] Tue
+        [3] Wed
+        [4] Thu
+        [5] Fri
+       *[6] Sat
+    }
+system-update-step-off-shipped = off as shipped
+system-update-step-off-here = off by this machine
+system-update-step-off-by-you = off by you
+system-update-step-on-here = on by this machine
+system-update-step-on-by-you = on by you
+system-update-step-root-short = as administrator
+system-update-switch-why-shipped-off = The distro ships this step switched off.
+system-update-switch-why-off-here = This machine leaves this step off: it lacks what the step looks after, or its configuration switches it off (ronoctua.update.steps). You did not switch it off.
+system-update-switch-why-off-by-you = You switched this step off.
+system-update-switch-why-on-here = This machine switches this step on: it has what the step looks after, or its configuration switches it on (ronoctua.update.steps). You did not switch it on.
+system-update-switch-why-on-by-you = You switched this step on.
+system-update-switch-root = This step runs as administrator, so only this machine's configuration switches it on or off, in ronoctua.update.steps. It does not change from here.
+system-update-switch-will = { $on ->
+        [on] Switching it on: the next update will run this step.
+       *[off] Switching it off: the next update will skip this step.
+    }
+system-update-switch-will-now = { $on ->
+        [on] Switching it on: this update has not reached it yet, and will run this step.
+       *[off] Switching it off: this update has not reached it yet, and will skip this step.
+    }
+system-update-switched = { $on ->
+        [on] { $step }: on. The next update will run this step.
+       *[off] { $step }: off. The next update will skip this step.
+    }
+system-update-switch-no-brain = The Brain is not answering, and it is what keeps which steps are on. Nothing changed.
+system-update-output-open = see the output
+about-system-update-output-open = Shows what the last update wrote, step by step, in its own colours.
+system-update-output-close = back to the list
+about-system-update-output-close = Closes the output and goes back to the update's list.
+system-update-output-line-down = a line down
+about-system-update-output-line-down = Moves the output down one line.
+system-update-output-line-up = a line up
+about-system-update-output-line-up = Moves the output up one line.
+system-update-output-does = What the last update wrote, step by step, as the system's log kept it, in its own colours. Opening it: the output takes the list's place, and Back brings the list back.
+system-update-output-none = No update has left any output in the system's log yet, so there is nothing to show.
+system-update-output-none-short = nothing yet
+system-update-output-glance = { $lines ->
+        [one] one line of the last update
+       *[other] { $lines } lines of the last update
+    }
+system-update-output-system-hidden = The part that runs as administrator is not shown here: reading the system's log takes being in the wheel or systemd-journal group. Each step's result is still on the list.
+system-update-output-title = The last update's output
+system-update-output-live = Live output
+system-update-output-live-does = What this update writes as it runs, in its own colours, always showing the newest line. It goes away when nothing runs; the whole output stays under Options, in see the last update's output.
+system-update-output-waiting = Nothing written yet: the lines show here as soon as the update writes them.
+system-update-output-system-hidden-short = without the administrator's part
+system-update-back = Back
+system-update-back-does = Going back: the update's list shows again in this page's place.
+system-update-conflicts-name = files in conflict in your belongings
+system-update-gesture-try-again-name = try the system that did not start again
+system-update-gesture-hold-name = hold at this version
+system-update-gesture-let-go-name = let go of the hold
+system-update-act-recheck = asks GitHub again
+system-update-act-start = starts the update
+system-update-act-proceed = starts it now
+system-update-act-not-now = puts it off
+system-update-act-stop = stops the update
+system-update-act-stop-rehearsal = stops the try-out
+system-update-act-let-go = lets the try-out go
+system-update-act-rehearse = starts the try-out
+system-update-act-open-brain = opens the task in the Brain
+system-update-act-open-page = opens the page
+system-update-act-back = goes back to the list
+system-update-act-switch-on = switches the step on
+system-update-act-switch-off = switches the step off
+system-update-act-open-belongings = opens your belongings
+system-update-act-ask = asks first
+system-update-act-answer = answers

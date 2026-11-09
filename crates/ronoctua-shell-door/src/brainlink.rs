@@ -198,6 +198,23 @@ pub fn put(
     taken: Option<&'static str>,
     back: smithay_client_toolkit::reexports::calloop::channel::Sender<Answer>,
 ) -> bool {
+    put_then(ask, taken, move |answer| {
+        let _ = back.send(answer);
+    })
+}
+
+/// [`put`], with what became of it handed to `then` on the asking thread —
+/// for a door whose threads answer through a post of its own rather than a
+/// channel of answers alone (the update's inbox, which says which ask it
+/// answers).
+///
+/// `false` when the thread could not start; `then` is never called then,
+/// and the caller says so.
+pub fn put_then(
+    ask: ronoctua_brain::Ask,
+    taken: Option<&'static str>,
+    then: impl FnOnce(Answer) + Send + 'static,
+) -> bool {
     let built = std::thread::Builder::new()
         .name("brain-ask".into())
         .spawn(move || {
@@ -207,7 +224,7 @@ pub fn put(
             } else {
                 tracing::warn!(?ask, ?answer, "the brain did not take it");
             }
-            let _ = back.send(answer);
+            then(answer);
         });
     match built {
         Ok(_) => true,
@@ -236,7 +253,13 @@ pub fn answer(mind: Option<&Mind>, proceeding: bool) -> &'static str {
     match tell(&ask) {
         Ok(()) => {
             tracing::info!(?ask, "answer to the brain");
-            said_of(&ask)
+            // A REHEARSAL STOPPED, OR PUT OFF — which the brain lets go of
+            // rather than move the task's real moment — changed nothing.
+            if mind.is_some_and(|m| answers_a_rehearsal(m, &ask)) {
+                crate::key::ECHO_BRAIN_REHEARSAL_LET_GO
+            } else {
+                said_of(&ask)
+            }
         }
         // LOUD, and said on screen. A countdown that goes on running after
         // somebody pressed "not now" is the one failure here that must
@@ -245,6 +268,19 @@ pub fn answer(mind: Option<&Mind>, proceeding: bool) -> &'static str {
             tracing::error!(error = %e, ?ask, "the brain did not get the answer");
             crate::key::ECHO_BRAIN_UNREACHABLE
         }
+    }
+}
+
+/// Whether `ask` stops or puts off a REHEARSAL: the one running, or the one
+/// counting down.
+fn answers_a_rehearsal(m: &Mind, ask: &ronoctua_brain::Ask) -> bool {
+    match ask {
+        ronoctua_brain::Ask::Abort { task } => *task == m.running && m.running_rehearsal,
+        ronoctua_brain::Ask::Postpone => m
+            .announcement
+            .as_ref()
+            .is_some_and(|a| m.rehearsing.as_deref() == Some(a.task.as_str())),
+        _ => false,
     }
 }
 
@@ -523,5 +559,33 @@ mod tests {
             said_of(&ronoctua_brain::Ask::Proceed),
             crate::key::ECHO_BRAIN_PROCEEDING
         );
+    }
+
+    /// FAILS IF: a rehearsal stopped, or put off — which the brain lets go
+    /// of — is not told apart from a run's answer, whose sentence would say
+    /// it comes back or that what it did stays done.
+    #[test]
+    fn a_rehearsal_answered_is_told_apart() {
+        let mut mind = Mind {
+            announcement: Some(ronoctua_brain::Announcement {
+                task: "fixture".to_owned(),
+                total_seconds: 60,
+                deadline: 60,
+                why: "asked".to_owned(),
+            }),
+            ..Mind::default()
+        };
+        let not_now = abort(&mind);
+        assert!(!answers_a_rehearsal(&mind, &not_now), "a run's put off");
+        mind.rehearsing = Some("fixture".to_owned());
+        assert!(answers_a_rehearsal(&mind, &not_now));
+        let mut mind = Mind {
+            running: "fixture".to_owned(),
+            ..Mind::default()
+        };
+        let stop = abort(&mind);
+        assert!(!answers_a_rehearsal(&mind, &stop), "a run's stop");
+        mind.running_rehearsal = true;
+        assert!(answers_a_rehearsal(&mind, &stop));
     }
 }
