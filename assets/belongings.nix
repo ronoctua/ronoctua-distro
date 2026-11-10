@@ -555,6 +555,13 @@
       kept = false;
       reason = "access";
     };
+    # The folder each LLM account's last agent was opened in
+    # (`ronoctua_llm::workspaces`): a folder of THIS machine, the next one's
+    # starting place — the list of accounts travels, where they worked does not.
+    "state/llm-workspaces.json" = {
+      kept = false;
+      reason = "machine";
+    };
     "state/player.json" = {
       kept = false;
       reason = "machine";
