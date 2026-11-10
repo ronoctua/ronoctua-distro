@@ -111,8 +111,10 @@
     }
 
     # THE SENTENCE DRAWN: the kit's value said, by the name every view gives
-    # it (`partly`).
-    SAID = re.compile(r"\bpartly\.said\(")
+    # it (`partly`) — as plain text or with the file's name in the quoted ink
+    # (`said_named`, owner 2026-11-10: a name quoted in a sentence wears its
+    # own colour), the same sentence either way.
+    SAID = re.compile(r"\bpartly\.said(?:_named)?\(")
 
     def sources_of(root, crate):
         found = []

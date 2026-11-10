@@ -12,6 +12,7 @@
 echo-no-buffer = Essa tela não foi construída neste sistema
 files-items = { $n } itens
 files-sidebar-pinned = { $name } está na barra lateral agora
+files-sidebar-pinned-many = { $n } itens estão na barra lateral agora
 
 ## O menu da janela — o nome do app na modeline, clicado (LEADER w o)
 

@@ -1111,7 +1111,7 @@ mod tests {
         r.closing(&mut w);
         assert_eq!(
             w.owed,
-            vec![Effect::Say("no bus".to_owned(), crate::echo::Echo::Normal)],
+            vec![Effect::Say("no bus".into(), crate::echo::Echo::Normal)],
             "what was on the queue as it closed was not said"
         );
         assert!(r.lingers(), "closed with an errand out, and let go");

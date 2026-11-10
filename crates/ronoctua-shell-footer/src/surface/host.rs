@@ -551,6 +551,7 @@ impl Footer {
                 if self.list_cursor().is_some_and(|c| !shown.contains(&c)) {
                     self.follow_cursor();
                 }
+                self.top_placed = true;
             }
             Paging::Pages(pages) => {
                 let page = i32::try_from(self.grid().per_page().max(1)).unwrap_or(1);
@@ -740,6 +741,7 @@ impl Footer {
                         click,
                         description,
                         region_row: Some(n),
+                        ground: told.ground,
                         ..ExpansionRow::empty_one()
                     },
                     // A ROW'S PICTURE in the cell the region named — its
@@ -761,6 +763,7 @@ impl Footer {
                         lit: told.lights,
                         chosen: told.chosen,
                         region_row: Some(n),
+                        ground: told.ground,
                         ..ExpansionRow::empty_one()
                     },
                 }
@@ -2435,6 +2438,32 @@ impl Footer {
     }
 }
 
+impl Footer {
+    /// WHETHER A PLACE A REGION PUT FIRST WITH THE KEY JUST TAKEN STANDS
+    /// (`Paging::Top`, [`Footer::top_placed`]) — taken, once: the follow
+    /// that ends the key ([`Footer::typed`]) leaves it while the cursor is on
+    /// the page, and follows as always when it is not.
+    pub(super) fn top_placed_holds(&mut self) -> bool {
+        let placed = std::mem::take(&mut self.top_placed);
+        a_place_holds(
+            placed,
+            self.list_cursor(),
+            self.current_offset(),
+            self.expansion_ceiling(),
+        )
+    }
+}
+
+/// Whether a place put first holds against the follow that ends a key: one
+/// was `placed`, and the cursor is on the page of `rows` lines at `offset` —
+/// a cursor the place left out of sight is followed, never lost.
+const fn a_place_holds(placed: bool, cursor: Option<usize>, offset: usize, rows: usize) -> bool {
+    match cursor {
+        Some(row) => placed && on_the_page(row, offset, rows),
+        None => placed,
+    }
+}
+
 /// Whether row `row` is on a page of `rows` lines that starts at `offset`.
 const fn on_the_page(row: usize, offset: usize, rows: usize) -> bool {
     row >= offset && row < offset.saturating_add(rows)
@@ -2480,7 +2509,35 @@ fn hover_span_px(from: u16, to: u16, base: u16, cell_px: f32) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{a_click_moves_the_page, hover_span_px, on_the_page};
+    use super::{a_click_moves_the_page, a_place_holds, hover_span_px, on_the_page};
+
+    /// FAILS IF: a row a region put first with a key (`Paging::Top`, a list's
+    /// title once its page turned) is not kept from the follow that ends the
+    /// key while the cursor is on the page — its margin put the title a line
+    /// back, on the key that brought it — or a cursor the place left out of
+    /// sight is not followed, or a key that placed nothing is kept from its
+    /// follow.
+    #[test]
+    fn a_place_put_first_outlives_the_key_s_follow() {
+        let (offset, rows) = (12, 20);
+        assert!(
+            a_place_holds(true, Some(13), offset, rows),
+            "the title went back"
+        );
+        assert!(
+            a_place_holds(true, Some(12), offset, rows),
+            "a title's own arrow"
+        );
+        assert!(
+            !a_place_holds(true, Some(40), offset, rows),
+            "the cursor lost"
+        );
+        assert!(
+            !a_place_holds(false, Some(13), offset, rows),
+            "no place, no follow"
+        );
+        assert!(a_place_holds(true, None, offset, rows));
+    }
 
     /// FAILS IF: a region's span from its row's first cell is lit from one
     /// lead in — a strip of ground left between the footer's edge and the

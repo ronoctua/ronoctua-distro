@@ -30,6 +30,7 @@
 
 use crate::key;
 use ronoctua_broadcast::table::DefaultSource;
+use ronoctua_i18n::Arg;
 use ronoctua_player::wire::{Ask, SourceId, SourceStatus, SourceUrl, State};
 
 use crate::player::{Errand, Press, Target, Typing, View};
@@ -176,7 +177,9 @@ pub fn pasted(said: &str, adult: bool, texts: &ronoctua_i18n::Texts) -> Errand {
             url: SourceUrl(url.to_owned()),
             adult,
         },
-        texts.t_with(key::PLAYER_SOURCE_ADDING, &[("name", &shown)]),
+        texts
+            .t_args_marked(key::PLAYER_SOURCE_ADDING, &[("name", Arg::Name(&shown))])
+            .into(),
     )
 }
 
@@ -213,7 +216,7 @@ impl SourcesView for View {
             // open, and the answer taken only while it still is.
             Target::SourceAddAdult if press == Press::Enter => {
                 if !self.catalog().lock.open() {
-                    return Some(Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN)));
+                    return Some(Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN).into()));
                 }
                 self.typing = Some(Typing::AdultSourceUrl);
                 Some(Errand::Ask(Question::plain(ASK_ADULT_SOURCE, false)))
@@ -229,11 +232,13 @@ impl SourcesView for View {
                         posters: Some(on),
                         adult: None,
                     },
-                    texts.t(if on {
-                        key::PLAYER_SOURCE_POSTERS_ON
-                    } else {
-                        key::PLAYER_SOURCE_POSTERS_OFF
-                    }),
+                    texts
+                        .t(if on {
+                            key::PLAYER_SOURCE_POSTERS_ON
+                        } else {
+                            key::PLAYER_SOURCE_POSTERS_OFF
+                        })
+                        .into(),
                 ))
             }
             Target::SourceAdult(id) if turns => {
@@ -244,11 +249,13 @@ impl SourcesView for View {
                         posters: None,
                         adult: Some(on),
                     },
-                    texts.t(if on {
-                        key::PLAYER_SOURCE_ADULT_ON
-                    } else {
-                        key::PLAYER_SOURCE_ADULT_OFF
-                    }),
+                    texts
+                        .t(if on {
+                            key::PLAYER_SOURCE_ADULT_ON
+                        } else {
+                            key::PLAYER_SOURCE_ADULT_OFF
+                        })
+                        .into(),
                 ))
             }
             // FORGOTTEN AFTER A QUESTION, "no" first: its rows go with it.
@@ -258,10 +265,15 @@ impl SourcesView for View {
                     Ask::RemoveSource {
                         id: SourceId(id.clone()),
                     },
-                    texts.t_with(key::PLAYER_SOURCE_REMOVED, &[("name", &name)]),
+                    texts
+                        .t_args_marked(key::PLAYER_SOURCE_REMOVED, &[("name", Arg::Name(&name))])
+                        .into(),
                 );
                 Some(self.ask_about(
-                    texts.t_with(key::ASK_PLAYER_SOURCE_REMOVE, &[("name", &name)]),
+                    texts.t_args_marked(
+                        key::ASK_PLAYER_SOURCE_REMOVE,
+                        &[("name", Arg::Name(&name))],
+                    ),
                     yes,
                 ))
             }

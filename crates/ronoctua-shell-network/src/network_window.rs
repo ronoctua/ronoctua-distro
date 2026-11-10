@@ -270,8 +270,10 @@ impl Network {
             ronoctua_tunnel::Event::Login(url) => {
                 ui.launch(crate::link_words::OPEN, std::slice::from_ref(&url), None);
                 ui.say_for(
-                    ui.texts
-                        .t_with(crate::key::ECHO_NETWORK_LOGIN, &[("url", &url)]),
+                    ui.texts.t_args_marked(
+                        crate::key::ECHO_NETWORK_LOGIN,
+                        &[("url", ronoctua_i18n::Arg::Name(&url))],
+                    ),
                     crate::echo::Echo::Long,
                 );
                 ui.ask_paint();

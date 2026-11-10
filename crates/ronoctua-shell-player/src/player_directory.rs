@@ -286,14 +286,16 @@ fn put(stream: Stream, name: &str, play: bool, texts: &ronoctua_i18n::Texts) -> 
             // asked whether to add it again (`Told::Asks`, decision A5).
             once: !play,
         },
-        texts.t_with(
-            if play {
-                key::PLAYER_PLAYING_NOW
-            } else {
-                key::PLAYER_ADDED
-            },
-            &[("name", name)],
-        ),
+        texts
+            .t_args_marked(
+                if play {
+                    key::PLAYER_PLAYING_NOW
+                } else {
+                    key::PLAYER_ADDED
+                },
+                &[("name", Arg::Name(name))],
+            )
+            .into(),
     )
 }
 
@@ -345,11 +347,15 @@ impl View {
         if let Some(spot) = here {
             self.follow(&spot, state, columns, texts);
         }
-        Errand::Said(texts.t(if by_name {
-            key::PLAYER_COUNTRIES_BY_NAME
-        } else {
-            key::PLAYER_COUNTRIES_BY_COUNT
-        }))
+        Errand::Said(
+            texts
+                .t(if by_name {
+                    key::PLAYER_COUNTRIES_BY_NAME
+                } else {
+                    key::PLAYER_COUNTRIES_BY_COUNT
+                })
+                .into(),
+        )
     }
 
     /// THE PAGE ON TOP CAME UP — opened, or come back to: its lists are owed
@@ -661,7 +667,7 @@ impl View {
             Ask::Find {
                 query: query.clone(),
             },
-            texts.t_with(key::PLAYER_DESK_ASKING, &[("hosts", d.host())]),
+            crate::player_find::hosts_said(key::PLAYER_DESK_ASKING, &[d.host()], texts),
         );
         if self.prefs.allows_directory(d) {
             return ask;
@@ -685,11 +691,13 @@ impl View {
                 id: id.to_owned(),
                 on,
             },
-            texts.t(if on {
-                key::PLAYER_FAVOURITE_ADDED
-            } else {
-                key::PLAYER_FAVOURITE_REMOVED
-            }),
+            texts
+                .t(if on {
+                    key::PLAYER_FAVOURITE_ADDED
+                } else {
+                    key::PLAYER_FAVOURITE_REMOVED
+                })
+                .into(),
         )
     }
 
@@ -835,10 +843,11 @@ impl View {
             if listed.is_some_and(|l| l.stale) {
                 b.note(key::PLAYER_LISTED_UPDATING);
             } else {
-                let said = b
-                    .texts
-                    .t_with(key::PLAYER_DESK_ASKING, &[("hosts", d.host())]);
-                crate::player_find::note_said(&said, b);
+                b.told_named(&crate::player_find::hosts_said(
+                    key::PLAYER_DESK_ASKING,
+                    &[d.host()],
+                    b.texts,
+                ));
             }
         }
         // REFUSED AT ONCE — the ask never reached its desk, so no page of it
@@ -1459,11 +1468,22 @@ pub(crate) mod tests {
         rows.iter().position(|r| r.target == *target && r.stops())
     }
 
+    /// What the rows read, a field apart from the next — but the RUNS of
+    /// one sentence, a name among its words (`chrome::note_fields`), read
+    /// glued, as they are drawn.
     fn said(rows: &[crate::player_rows::Row]) -> String {
-        rows.iter()
-            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut out: Vec<String> = Vec::new();
+        for r in rows {
+            let mut end = None;
+            for f in &r.fields {
+                match out.last_mut() {
+                    Some(last) if end == Some(f.at) => last.push_str(&f.text),
+                    _ => out.push(f.text.clone()),
+                }
+                end = Some(f.at + ronoctua_render::layout::width(&f.text));
+            }
+        }
+        out.join("\n")
     }
 
     /// FAILS IF: a directory's page asks the player anything before the
@@ -2041,7 +2061,10 @@ pub(crate) mod tests {
                 .expect("O is a key of the page");
             assert_eq!(o, Press::CountriesOrder);
             let said_now = v.key(o, Some(&s), 80, &t);
-            assert_eq!(said_now, Errand::Said(t.t(key::PLAYER_COUNTRIES_BY_NAME)));
+            assert_eq!(
+                said_now,
+                Errand::Said(t.t(key::PLAYER_COUNTRIES_BY_NAME).into())
+            );
             let by_name: Vec<String> = {
                 let mut names: Vec<(String, String)> = ["BR", "PT", "ES", "AR"]
                     .iter()

@@ -22,7 +22,9 @@ cmd-video-metrics-more = O valor sob o cursor um passo acima, ou o vídeo seguin
 cmd-video-metrics-enter = Abrir ou mudar o que está sob o cursor
 cmd-video-metrics-page-back = A página de vídeos anterior
 cmd-video-metrics-page-on = A página de vídeos seguinte
-cmd-video-metrics-layout = Os vídeos em lista, ou numa grade de miniaturas
+cmd-video-metrics-page-first = A primeira página de vídeos
+cmd-video-metrics-page-last = A última página de vídeos
+cmd-video-metrics-layout = Dispor os vídeos do próximo jeito: em lista, em lista com miniaturas, em miniaturas, em miniaturas com o canal
 cmd-video-metrics-search = Buscar nas palavras dos vídeos — títulos, descrições, etiquetas e as suas
 cmd-video-metrics-player = Abrir no player
 cmd-video-metrics-kiosk = Abrir no Chrome, como quiosque
@@ -44,7 +46,9 @@ video-metrics-more = mais
 video-metrics-enter = abrir
 video-metrics-page-back = página anterior
 video-metrics-page-on = próxima página
-video-metrics-layout = lista ou grade
+video-metrics-page-first = primeira página
+video-metrics-page-last = última página
+video-metrics-layout = próxima disposição
 video-metrics-search = buscar
 video-metrics-player = player
 video-metrics-kiosk = Chrome
@@ -160,7 +164,7 @@ video-metrics-points-value = { $points ->
         [1] { $points } ponto
        *[other] { $points } pontos
     }
-# A SCORE AS A BARE NUMBER — a list's, before the faces of the rating — a
+# A SCORE AS A BARE NUMBER — a list's, before the arrows of the rating — a
 # NUMBER to Fluent all the same, as `points` is.
 video-metrics-score-number = { $score }
 video-metrics-days-value = { $days ->
@@ -233,7 +237,10 @@ video-metrics-since-year = no último ano
 video-metrics-filter-layout = Disposição
 video-metrics-layout-list = lista
 video-metrics-layout-grid = miniaturas
+video-metrics-layout-list-thumbnails = lista com miniaturas
+video-metrics-layout-grid-channel = miniaturas com canal
 video-metrics-page = Página
+video-metrics-per-page = Por página
 video-metrics-page-of = { $page } de { $pages } · { $videos ->
         [1] um vídeo
        *[other] { $videos } vídeos
@@ -315,7 +322,7 @@ video-metrics-act-answers = dá esta resposta
 about-video-metrics-last-scan = Quando a última varredura terminou — ou que uma roda agora, ou parou antes do fim.
 about-video-metrics-scan-added = Quantos vídeos novos a última varredura trouxe.
 about-video-metrics-scan-failed = Quantos canais a última varredura não leu; a página de cada um diz por quê.
-about-video-metrics-videos = Todos os vídeos catalogados, por pontuação, com filtros, em lista ou em miniaturas.
+about-video-metrics-videos = Todos os vídeos catalogados, por pontuação, com filtros, em lista — com miniaturas ou sem — ou em miniaturas, com o canal ou sem.
 about-video-metrics-channels = Os canais que você segue, e acrescentar um.
 about-video-metrics-rules = Como cada vídeo é pontuado, quanto tempo os vídeos ficam, e se os Shorts são bloqueados.
 about-video-metrics-weights = O que cada nota sua soma à pontuação de um vídeo.
@@ -346,7 +353,10 @@ about-video-metrics-filter-shorts = Shorts e o resto, só Shorts, ou sem Shorts.
 about-video-metrics-filter-rating = Qualquer nota sua, ou só uma.
 about-video-metrics-filter-hidden = Os ocultos fora, junto, ou só eles.
 about-video-metrics-filter-since = Até quando, pela data de publicação.
-about-video-metrics-page = Qual página da lista aparece.
+about-video-metrics-layouts = Como os vídeos são dispostos: em lista, em lista com miniaturas, em miniaturas ou em miniaturas com o canal.
+# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
+about-video-metrics-page = { $earlier } { $prior } voltam, { $later } { $next } avançam, { $first } { $last } vão à primeira e à última página.
+about-video-metrics-per-page = Quantos vídeos uma página mostra: cada volta dá o próximo tamanho, e recomeça. Vale enquanto a vista está aberta.
 about-video-metrics-video-entry = A página do vídeo: todos os campos, sua nota, etiquetas e descrição, e o que dá para fazer.
 about-video-metrics-published = Quando o YouTube diz que foi publicado.
 about-video-metrics-its-points = Os pontos dele, sem contar a pontuação do canal e a novidade.
@@ -368,7 +378,7 @@ video-metrics-follows-rule-everywhere = Esta é a regra de todo lugar: a página
 # HOW LONG A VIDEO STAYS, WHAT IS SET ASIDE, AND THE GLYPHS of a video in
 # the lists (the owner, 2026-11-09): a video goes when its time is up — the
 # catalogue's, or its channel's own — unless it is set aside, or marked never
-# to be deleted; the four faces of its rating after its score, and its marks
+# to be deleted; the four arrows of its rating after its score, and its marks
 # at the line's end, each acting on the first click. The forms and the hint
 # words of the keys `s` and `f` are the view's (`OF_THE_VIEW`).
 cmd-video-metrics-set-aside = Separar para depois, ou tirar dos vídeos separados
@@ -383,7 +393,6 @@ video-metrics-set-aside-any = separados ou não
 video-metrics-set-aside-only = só eles, os mais recentes primeiro
 video-metrics-set-aside-without = sem os separados
 video-metrics-by-set-aside = Separados mais recentes primeiro
-video-metrics-grid-channel = Canal nas miniaturas
 video-metrics-heading-keep = Quanto tempo os vídeos ficam
 video-metrics-keep-after = Apagados depois de
 video-metrics-keep-never = nunca apagados
@@ -409,7 +418,6 @@ video-metrics-act-picks = dá esta nota
 video-metrics-act-unpicks = tira a nota
 about-video-metrics-set-aside-videos = Os vídeos que você separou, os mais recentes primeiro; separado, um vídeo nunca é apagado.
 about-video-metrics-filter-set-aside = Os separados e o resto, só eles (os mais recentes primeiro), ou nenhum deles.
-about-video-metrics-grid-channel = Se cada miniatura diz o canal, sob o título.
 about-video-metrics-keep-everywhere = Quanto tempo um vídeo fica, contado da publicação, antes de ser apagado — ou para sempre. Os separados, e os marcados para nunca serem apagados, ficam.
 about-video-metrics-channel-keep = Quanto tempo os vídeos deste canal ficam antes de serem apagados: como em todo lugar, dias próprios, ou para sempre.
 about-video-metrics-set-aside-row = Se está entre os vídeos separados; enquanto estiver, nunca é apagado.
@@ -539,6 +547,9 @@ video-metrics-exported = { $count ->
     } em { $file }.
 video-metrics-export-failed = Não foi possível gravar a lista ali.
 player-ranking-reading = Lendo o catálogo de vídeos…
+# How many videos a page of the ranking holds — not the catalogue listing's
+# "Per page", which is another page of the same view.
+player-ranking-page-size = Vídeos por página
 player-ranking-none = Nada pontuado ainda: o catálogo de vídeos ({ $keys }) adiciona os seus canais, e as varreduras dele enchem esta lista.
 player-ranking-empty = Nenhum vídeo pontuado ainda: as varreduras não acharam nenhum, ou todos estão ocultos.
 # A LIST WITH NOTHING ON IT, said for what it is: its Shorts turned away

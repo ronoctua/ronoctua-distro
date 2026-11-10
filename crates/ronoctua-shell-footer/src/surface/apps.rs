@@ -169,9 +169,9 @@ impl Footer {
                 let mut prefs = store::read_from(&dir);
                 let id = format!("app:{}", e.id);
                 if prefs.added.iter().any(|i| i.id == id) {
-                    let m = self.texts.t_with(
+                    let m = self.texts.t_args_marked(
                         crate::key::FILES_SIDEBAR_PINNED,
-                        &[("name", e.name.as_str())],
+                        &[("name", ronoctua_i18n::Arg::Name(&e.name))],
                     );
                     self.echo_message(m);
                     self.draw_and_paint();
@@ -186,15 +186,21 @@ impl Footer {
                     target: Target::Application(e.id.clone()),
                     label: Some(e.name.clone()),
                 });
-                let m = match store::write_to(&dir, &prefs) {
-                    Ok(()) => self.texts.t_with(
-                        crate::key::FILES_SIDEBAR_PINNED,
-                        &[("name", e.name.as_str())],
-                    ),
-                    Err(err) => self.texts.t_with(
-                        crate::key::FILES_SIDEBAR_UNWRITABLE,
-                        &[("why", err.to_string().as_str())],
-                    ),
+                let m: crate::chrome::Named = match store::write_to(&dir, &prefs) {
+                    Ok(()) => self
+                        .texts
+                        .t_args_marked(
+                            crate::key::FILES_SIDEBAR_PINNED,
+                            &[("name", ronoctua_i18n::Arg::Name(&e.name))],
+                        )
+                        .into(),
+                    Err(err) => self
+                        .texts
+                        .t_with(
+                            crate::key::FILES_SIDEBAR_UNWRITABLE,
+                            &[("why", err.to_string().as_str())],
+                        )
+                        .into(),
                 };
                 self.echo_message(m);
                 self.draw_and_paint();
@@ -410,6 +416,7 @@ impl Footer {
                 lit: crate::region::LineLights::Row,
                 chosen: None,
                 region_row: None,
+                ground: None,
             })
             // THE LAST ROW: look for what was typed among what can be
             // INSTALLED. After the matches, and alone when there are none —

@@ -568,16 +568,18 @@ pub fn picked(picking: Picking, paths: &[PathBuf]) -> Errand {
 }
 
 /// What the picker is up for, said over its rows while it is: what to
-/// choose.
+/// choose — the download's name told (`Arg::Name`).
 #[must_use]
-pub fn picking_said(picking: &Picking, texts: &ronoctua_i18n::Texts) -> Vec<String> {
+pub fn picking_said(picking: &Picking, texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Named> {
     vec![match picking {
-        Picking::HandIn { download, .. } => texts.t_with(
-            key::DISTRO_PARTS_ABOUT_PICK_HAND_IN,
-            &[("name", download.as_str())],
-        ),
-        Picking::Import => texts.t(key::DISTRO_PARTS_ABOUT_IMPORT),
-        Picking::Export => texts.t(key::DISTRO_PARTS_ABOUT_EXPORT),
+        Picking::HandIn { download, .. } => texts
+            .t_args_marked(
+                key::DISTRO_PARTS_ABOUT_PICK_HAND_IN,
+                &[("name", ronoctua_i18n::Arg::Name(download.as_str()))],
+            )
+            .into(),
+        Picking::Import => texts.t(key::DISTRO_PARTS_ABOUT_IMPORT).into(),
+        Picking::Export => texts.t(key::DISTRO_PARTS_ABOUT_EXPORT).into(),
     }]
 }
 
@@ -957,15 +959,20 @@ fn missing_said(missing: &[Missing], texts: &ronoctua_i18n::Texts) -> Vec<(Strin
             } else {
                 key::DISTRO_PARTS_ABOUT_MISSING_STICK
             };
+            // THE DOWNLOAD IS A NAME (`Arg::Name`), told as every name is;
+            // what explains a row (`door::Explained`) is said in its own
+            // inks, which quote no name, so only the words go.
             (
-                texts.t_with(
-                    k,
-                    &[
-                        ("name", m.name.as_str()),
-                        ("hosts", hosts.as_str()),
-                        ("keys", HAND_KEY),
-                    ],
-                ),
+                texts
+                    .t_args_marked(
+                        k,
+                        &[
+                            ("name", ronoctua_i18n::Arg::Name(&m.name)),
+                            ("hosts", ronoctua_i18n::Arg::Text(&hosts)),
+                            ("keys", ronoctua_i18n::Arg::Text(HAND_KEY)),
+                        ],
+                    )
+                    .text,
                 tokens::color::TEXT_PRIMARY,
             )
         })
@@ -1400,35 +1407,38 @@ fn stick(file: &str, unit: &str, folder: &Path, places: &Places) -> Came {
     }
 }
 
-/// What came of a gesture, in the door's words.
+/// What came of a gesture, in the door's words — the download it is about
+/// told as the name it is (`Arg::Name`).
 #[must_use]
-pub fn said_of(came: &Came, texts: &ronoctua_i18n::Texts) -> String {
+pub fn said_of(came: &Came, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    let of = |k: &str, name: &str| -> crate::chrome::Named {
+        texts
+            .t_args_marked(k, &[("name", ronoctua_i18n::Arg::Name(name))])
+            .into()
+    };
     match came {
-        Came::Retrying(name) => {
-            texts.t_with(key::DISTRO_PARTS_SAID_RETRYING, &[("name", name.as_str())])
-        }
-        Came::NotStarted => texts.t(key::DISTRO_PARTS_SAID_NOT_STARTED),
-        Came::NoFile => texts.t(key::DISTRO_PARTS_SAID_NO_FILE),
-        Came::NotCopied => texts.t(key::DISTRO_PARTS_SAID_NOT_COPIED),
-        Came::Taken(name) => texts.t_with(key::DISTRO_PARTS_SAID_TAKEN, &[("name", name.as_str())]),
-        Came::TakenForTheSystem(name) => texts.t_with(
-            key::DISTRO_PARTS_SAID_TAKEN_FOR_THE_SYSTEM,
-            &[("name", name.as_str())],
-        ),
-        Came::Refused(name) => {
-            texts.t_with(key::DISTRO_PARTS_SAID_REFUSED, &[("name", name.as_str())])
-        }
-        Came::NotNamed => texts.t(key::DISTRO_PARTS_SAID_NOT_NAMED),
+        Came::Retrying(name) => of(key::DISTRO_PARTS_SAID_RETRYING, name),
+        Came::NotStarted => texts.t(key::DISTRO_PARTS_SAID_NOT_STARTED).into(),
+        Came::NoFile => texts.t(key::DISTRO_PARTS_SAID_NO_FILE).into(),
+        Came::NotCopied => texts.t(key::DISTRO_PARTS_SAID_NOT_COPIED).into(),
+        Came::Taken(name) => of(key::DISTRO_PARTS_SAID_TAKEN, name),
+        Came::TakenForTheSystem(name) => of(key::DISTRO_PARTS_SAID_TAKEN_FOR_THE_SYSTEM, name),
+        Came::Refused(name) => of(key::DISTRO_PARTS_SAID_REFUSED, name),
+        Came::NotNamed => texts.t(key::DISTRO_PARTS_SAID_NOT_NAMED).into(),
         Came::Stick(said) => match (said.verb, said.outcome) {
-            (Verb::Import, Outcome::Done { count }) => texts.t_args(
-                key::DISTRO_PARTS_SAID_IMPORTED,
-                &[("count", ronoctua_i18n::Arg::Number(i64::from(count)))],
-            ),
-            (Verb::Export, Outcome::Done { count }) => texts.t_args(
-                key::DISTRO_PARTS_SAID_EXPORTED,
-                &[("count", ronoctua_i18n::Arg::Number(i64::from(count)))],
-            ),
-            (_, Outcome::Refused { why }) => texts.t(refusal_key(why)),
+            (Verb::Import, Outcome::Done { count }) => texts
+                .t_args(
+                    key::DISTRO_PARTS_SAID_IMPORTED,
+                    &[("count", ronoctua_i18n::Arg::Number(i64::from(count)))],
+                )
+                .into(),
+            (Verb::Export, Outcome::Done { count }) => texts
+                .t_args(
+                    key::DISTRO_PARTS_SAID_EXPORTED,
+                    &[("count", ronoctua_i18n::Arg::Number(i64::from(count)))],
+                )
+                .into(),
+            (_, Outcome::Refused { why }) => texts.t(refusal_key(why)).into(),
         },
     }
 }
@@ -1776,5 +1786,42 @@ mod tests {
                 .all(|l| ronoctua_render::layout::width(l) <= 30)
         );
         assert!(drawn.contains(&"> curl: (22) 404".to_owned()), "{drawn:?}");
+    }
+
+    /// FAILS IF: what came of a gesture, or what the picker asks for, says
+    /// the download in the sentence's own ink — not told as the name it is
+    /// (`Arg::Name`) — in either language, or a sentence with no download
+    /// tells a name.
+    #[test]
+    fn the_download_is_told_as_a_name() {
+        let name = "node-v22.11.0-linux-x64.tar.xz";
+        let names = |said: &crate::chrome::Named| -> Vec<String> {
+            said.names()
+                .iter()
+                .map(|r| said.as_str()[r.clone()].to_owned())
+                .collect()
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            for came in [
+                Came::Retrying(name.to_owned()),
+                Came::Taken(name.to_owned()),
+                Came::TakenForTheSystem(name.to_owned()),
+                Came::Refused(name.to_owned()),
+            ] {
+                assert_eq!(
+                    names(&said_of(&came, &texts)),
+                    [name],
+                    "{language}: {came:?}"
+                );
+            }
+            assert!(said_of(&Came::NoFile, &texts).names().is_empty());
+            let picking = Picking::HandIn {
+                id: "a-part".to_owned(),
+                download: name.to_owned(),
+            };
+            let asked = picking_said(&picking, &texts);
+            assert_eq!(names(&asked[0]), [name], "{language}");
+        }
     }
 }

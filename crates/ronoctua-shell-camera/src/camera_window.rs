@@ -207,10 +207,11 @@ impl CameraWindow {
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                ui.say(
-                    ui.texts
-                        .t_with(crate::key::STUDIO_PHOTO_SAVED, &[("file", &name)]),
-                );
+                // THE PHOTO'S FILE IS A NAME the sentence quotes (`Arg::Name`).
+                ui.say(ui.texts.t_args_marked(
+                    crate::key::STUDIO_PHOTO_SAVED,
+                    &[("file", ronoctua_i18n::Arg::Name(&name))],
+                ));
                 self.view.sign();
             }
             self.told_photo.clone_from(&s.last_photo);
@@ -283,7 +284,7 @@ impl CameraWindow {
     fn tell(ui: &mut Ui, ask: &Ask) {
         match ronoctua_studio::client::ask(ask) {
             Ok(ronoctua_studio::wire::Say::Refused(t)) => {
-                ui.say(camera::trouble_sentence(&t, &ui.texts));
+                ui.say(camera::trouble_named(&t, &ui.texts));
             }
             Ok(_) => {}
             Err(_) => ui.say(ui.texts.t(crate::key::STUDIO_NOT_RUNNING)),
@@ -972,25 +973,36 @@ impl Content for CameraWindow {
 
         // NO PICTURE YET: say why, in the middle, rather than a black window.
         if self.frame.is_none() {
-            let why = self.studio.as_ref().map_or_else(
-                || ui.texts.t(crate::key::STUDIO_NOT_RUNNING),
+            let why: crate::chrome::Named = self.studio.as_ref().map_or_else(
+                || ui.texts.t(crate::key::STUDIO_NOT_RUNNING).into(),
                 |s| {
                     s.troubles
                         .first()
-                        .map_or_else(String::new, |t| camera::trouble_sentence(t, &ui.texts))
+                        .map_or_else(crate::chrome::Named::default, |t| {
+                            camera::trouble_named(t, &ui.texts).into()
+                        })
                 },
             );
-            for (i, l) in crate::chrome::note_lines(&why, ui.columns)
+            // THE SAME BREAKS `note_lines` GIVES, a name the sentence quotes
+            // (the program holding the camera) a span of its own in a name's
+            // ink.
+            let around = tokens::color::TEXT_SECONDARY;
+            for (i, runs) in crate::chrome::wrap_runs(&why.runs(around), around, ui.columns)
                 .into_iter()
                 .enumerate()
             {
-                canvas.spans.push(span(
-                    size,
-                    l,
-                    margin,
-                    ui.lines / 2 + u16::try_from(i).unwrap_or(0),
-                    tokens::color::TEXT_SECONDARY,
-                ));
+                let mut column = margin;
+                for (text, color) in runs {
+                    let cells = ronoctua_render::layout::width(&text);
+                    canvas.spans.push(span(
+                        size,
+                        text,
+                        column,
+                        ui.lines / 2 + u16::try_from(i).unwrap_or(0),
+                        color,
+                    ));
+                    column = column.saturating_add(cells);
+                }
             }
         }
 

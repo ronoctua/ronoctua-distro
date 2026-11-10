@@ -1954,7 +1954,7 @@ impl TerminalWindow {
         if let Some(f) = &self.finding {
             return Some(f.runs(&ui.texts, self.lit));
         }
-        ui.message.as_deref().map(terminal_ask::said)
+        ui.message.as_ref().map(terminal_ask::said)
     }
 
     /// Whether the program in front tracks the mouse now — and the person

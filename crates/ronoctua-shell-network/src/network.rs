@@ -459,8 +459,8 @@ pub enum Errand {
     /// The typed path is not a tunnel's file; the string is the file's name,
     /// for the sentence that says so.
     NotATunnel(String),
-    /// Say this; it is already a sentence.
-    Said(String),
+    /// Say this; it is already a sentence, with the names it quotes told.
+    Said(crate::chrome::Named),
     /// Read the clipboard for the file picker ([`View::picker_pasted`]).
     Paste,
     /// Become an access point, or stop being one.
@@ -2527,7 +2527,7 @@ impl View {
                 self.registering = false;
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Say(e) => Errand::Said(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked((), Picked::Paths { paths, .. }) => {
                 self.picking = None;
@@ -3005,16 +3005,30 @@ impl View {
     /// nothing is the one drawn first and the one the cursor is born on.
     fn remember_rows(b: &mut Builder<'_>, ssid: &str) {
         use crate::key;
-        let said = b.texts.t_with(key::NETWORK_REMEMBER, &[("network", ssid)]);
+        // THE NETWORK IS A NAME the question quotes (`Arg::Name`): it wears
+        // what a name wears in a heading, the heading's own ink
+        // (`chrome::quoted_ink` answers itself there).
+        let said: crate::chrome::Named = b
+            .texts
+            .t_args_marked(
+                key::NETWORK_REMEMBER,
+                &[("network", ronoctua_i18n::Arg::Name(ssid))],
+            )
+            .into();
         // THE GLYPH IS ONE CELL AND THE WORDS START AFTER IT, with a space
         // between — and a long name WRAPS under the words, never under the
         // glyph: a note is wrapped and never cut.
         let words_at = b.left + 2;
-        for (n, line) in crate::chrome::note_lines(&said, b.room.saturating_sub(2))
-            .into_iter()
-            .enumerate()
+        for (n, words) in crate::chrome::note_fields(
+            words_at,
+            &said,
+            tokens::color::TEXT_HEADING,
+            b.room.saturating_sub(2),
+        )
+        .into_iter()
+        .enumerate()
         {
-            let mut fields = Vec::with_capacity(2);
+            let mut fields = Vec::with_capacity(words.len() + 1);
             if n == 0 {
                 fields.push(Builder::piece(
                     b.left,
@@ -3022,7 +3036,7 @@ impl View {
                     tokens::color::TEXT_HEADING,
                 ));
             }
-            fields.push(Builder::piece(words_at, line, tokens::color::TEXT_HEADING));
+            fields.extend(words);
             b.out.push(Row {
                 fields,
                 focused: false,
@@ -3380,12 +3394,13 @@ impl View {
         // now. So the footer reads a preference when the session comes up.
         let autostart = facts.tunnels.autostart;
         // A PART OF `tor.json` NOT READ: the switch below shows the repair in
-        // that place, and the file keeps what it says.
+        // that place, and the file keeps what it says — the file told as a
+        // name (`PartlyRead::said_named`).
         if let Some(partly) = ronoctua_shell_kit::partly_read::PartlyRead::of_repairs(
             ronoctua_tunnel::prefs::FILE,
             &facts.tunnels.prefs_repairs,
         ) {
-            b.sentence(partly.said(b.texts));
+            b.sentence(partly.said_named(b.texts));
         }
         b.pair(
             b.texts.t(key::NETWORK_TOR_AUTOSTART),
@@ -4429,9 +4444,9 @@ impl Builder<'_> {
         self.sentence(text);
     }
 
-    /// The same, for a sentence that carries a number.
-    fn sentence(&mut self, text: String) {
-        self.sentence_coloured(text, tokens::color::TEXT_DIM);
+    /// The same, for a sentence that carries a number or quotes a name.
+    fn sentence(&mut self, said: impl Into<crate::chrome::Named>) {
+        self.sentence_coloured(said, tokens::color::TEXT_DIM);
     }
 
     /// A sentence in a colour of its own — a warning that is not a row.
@@ -4455,22 +4470,32 @@ impl Builder<'_> {
     /// paints the accent on whichever row sits at the cursor's number, so the
     /// line the cursor is on is the line that lights — where rows the cursor
     /// skipped would have left half a sentence accent and half of it dim.
-    fn sentence_coloured(&mut self, text: String, colour: tokens::Color) {
-        for line in crate::chrome::note_lines(&text, self.room) {
+    ///
+    /// # A NAME IT QUOTES wears a name's ink, and the cursor's line is ONE
+    ///
+    /// The lines are [`crate::chrome::note_fields`]: the breaks
+    /// `note_lines` gives, each name a field of its own in the ink a name
+    /// takes in `colour` (`chrome::quoted_ink`). The line the cursor is on
+    /// is the same breaks with no name told, so it is one field in the
+    /// accent — and `RET` copies the LAST field of a row
+    /// (`chrome::information_of`), which on a line cut around a name would
+    /// have been the name or the words after it.
+    fn sentence_coloured(&mut self, said: impl Into<crate::chrome::Named>, colour: tokens::Color) {
+        let said = said.into();
+        // A SENTENCE LINES UP WITH THE LABELS, which since the mark went is
+        // where the titles are too — a section's title and its rows share
+        // one left edge now.
+        let lines = crate::chrome::note_fields(self.left, &said, colour, self.room);
+        let lit = crate::chrome::note_fields(
+            self.left,
+            &crate::chrome::Named::from(said.as_str()),
+            tokens::color::STATE_ACCENT,
+            self.room,
+        );
+        for (line, lit) in lines.into_iter().zip(lit) {
             let focused = self.cursor == self.out.len();
             self.out.push(Row {
-                fields: vec![Self::piece(
-                    // A SENTENCE LINES UP WITH THE LABELS, which since the
-                    // mark went is where the titles are too — a section's
-                    // title and its rows share one left edge now.
-                    self.left,
-                    line,
-                    if focused {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        colour
-                    },
-                )],
+                fields: if focused { lit } else { line },
                 focused,
                 heading: false,
                 target: Target::Nothing,
@@ -5967,6 +5992,63 @@ mod tests {
                 Errand::Copy(_)
             ),
             "`RET` on a door copied instead of acting"
+        );
+    }
+
+    #[test]
+    fn a_file_read_in_part_is_told_as_a_name_and_its_line_copies_whole() {
+        // THE SHEET SAYS WHICH PART OF `tor.json` DID NOT READ, and the file
+        // is a name the sentence quotes: off the cursor it is a field of its
+        // own, in the ink a name takes in a quiet note.
+        let t = texts();
+        let tunnels = ronoctua_tunnel::Scene {
+            prefs_repairs: vec![ronoctua_shell_kit::partly_read::planted(
+                "/autostart",
+                ronoctua_shell_kit::partly_read::Why::WrongType,
+            )],
+            ..ronoctua_tunnel::Scene::default()
+        };
+        let snap = machine();
+        let facts = Facts {
+            net: &snap,
+            seen: &[],
+            watch: &Watch::default(),
+            tunnels: &tunnels,
+        };
+        let file = ronoctua_tunnel::prefs::FILE;
+        let mut v = View::fresh_on_the_tor_sheet();
+        let rows = v.rows(&facts, DECIDING_WIDTH, &t);
+        let (at, line) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.fields.iter().any(|f| f.text == file))
+            .expect("the sheet does not tell the file as a name of its own");
+        assert!(
+            line.fields
+                .iter()
+                .any(|f| f.text == file
+                    && f.color == crate::chrome::quoted_ink(tokens::color::TEXT_DIM)),
+            "the file is not in a name's ink: {:?}",
+            line.fields
+        );
+        let whole: String = line.fields.iter().map(|f| f.text.as_str()).collect();
+        // ON THE CURSOR THE LINE IS ONE FIELD AGAIN, the same words: `RET`
+        // copies a row's last field (`chrome::information_of`), and a line
+        // cut around the name would have copied the words after it.
+        v.clicked(at, &rows);
+        let lit = v.rows(&facts, DECIDING_WIDTH, &t).swap_remove(at);
+        assert_eq!(
+            lit.fields
+                .iter()
+                .map(|f| (f.text.as_str(), f.color))
+                .collect::<Vec<_>>(),
+            [(whole.as_str(), tokens::color::STATE_ACCENT)],
+            "the cursor's line is not the line whole, in the accent"
+        );
+        assert_eq!(
+            v.key(Press::Enter, &facts, DECIDING_WIDTH, &t),
+            Errand::Copy(whole.trim().to_owned()),
+            "`RET` did not copy the line whole"
         );
     }
 

@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use crate::region::{Closed, Doorway, Entry, Region, Row, Seen, Taken};
 use crate::terminals::{Errand, OPEN, Press, Reading, SHOW, Target, View, WINDOW};
+use ronoctua_i18n::Arg;
 use ronoctua_terminals::TerminalId;
 use ronoctua_terminals::registry::{Census, Registry};
 
@@ -309,9 +310,10 @@ pub fn carry_out(errand: Errand, way: &mut dyn Doorway) {
 /// not answer is a dead one or a lost one, and the census is asked to sweep:
 /// a dead holder's files go, and its row with them.
 fn end(id: &TerminalId, name: &str, way: &mut dyn Doorway) {
+    // THE TERMINAL'S NAME IS A NAME the sentence quotes (`Arg::Name`).
     let said = way
         .texts()
-        .t_with(crate::key::TERMINALS_ENDING, &[("name", name)]);
+        .t_args_marked(crate::key::TERMINALS_ENDING, &[("name", Arg::Name(name))]);
     // A PHOTOGRAPH REACHES NOTHING OF THE MACHINE: no holder is told.
     if way.photographing() {
         way.say(said, crate::echo::Echo::Brief);
@@ -335,9 +337,10 @@ fn end(id: &TerminalId, name: &str, way: &mut dyn Doorway) {
         Ok(_) => way.say(said, crate::echo::Echo::Brief),
         Err(e) => {
             tracing::warn!(error = %e, "could not ask a terminal to end");
-            let said = way
-                .texts()
-                .t_with(crate::key::TERMINALS_NOT_ENDED, &[("name", name)]);
+            let said = way.texts().t_args_marked(
+                crate::key::TERMINALS_NOT_ENDED,
+                &[("name", Arg::Name(name))],
+            );
             way.say(said, crate::echo::Echo::Normal);
         }
     }

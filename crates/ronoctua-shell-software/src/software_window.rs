@@ -179,7 +179,7 @@ pub fn host_it(opening: Opening) -> Result<()> {
             Opening::File(path) if ronoctua_software::order::file_source(&path).is_none() => (
                 Opening::Home,
                 Some(Errand::Say(
-                    w.texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE),
+                    w.texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE).into(),
                 )),
             ),
             other => (other, None),

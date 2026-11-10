@@ -84,16 +84,21 @@ pub fn press_of_key(key: ronoctua_keymap::Key) -> Option<crate::display::Press> 
 /// one previewed, nothing is sent at all. What is true either way is what the
 /// person can see: the monitor is gone, and so is whatever was being tried
 /// on it.
+///
+/// THE SCREEN IS A NAME the sentence quotes (`ronoctua_i18n::Arg::Name`), as
+/// both questions about it quote it: the door's line draws it in a name's ink.
 #[must_use]
-pub fn went_away(at: &str, applied: bool, texts: &ronoctua_i18n::Texts) -> String {
-    texts.t_with(
-        if applied {
-            crate::key::DISPLAY_SCREEN_GONE
-        } else {
-            crate::key::DISPLAY_SCREEN_GONE_ALONE
-        },
-        &[("screen", at)],
-    )
+pub fn went_away(at: &str, applied: bool, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    texts
+        .t_args_marked(
+            if applied {
+                crate::key::DISPLAY_SCREEN_GONE
+            } else {
+                crate::key::DISPLAY_SCREEN_GONE_ALONE
+            },
+            &[("screen", ronoctua_i18n::Arg::Name(at))],
+        )
+        .into()
 }
 
 #[cfg(test)]
@@ -121,8 +126,16 @@ mod tests {
         // string in two places, and the one in the `.ftl` is the one a person
         // reads.
         let of = |k| t.t_with(k, &[("screen", "DP-1")]);
-        assert_eq!(applied, of(crate::key::DISPLAY_SCREEN_GONE));
-        assert_eq!(untouched, of(crate::key::DISPLAY_SCREEN_GONE_ALONE));
+        assert_eq!(applied.as_str(), of(crate::key::DISPLAY_SCREEN_GONE));
+        assert_eq!(
+            untouched.as_str(),
+            of(crate::key::DISPLAY_SCREEN_GONE_ALONE)
+        );
+        // AND THE SCREEN IS TOLD AS THE NAME IT IS, in both.
+        for said in [&applied, &untouched] {
+            assert_eq!(said.names().len(), 1, "{said}");
+            assert_eq!(&said[said.names()[0].clone()], "DP-1", "{said}");
+        }
     }
 
     #[test]

@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn an_answer_typed_here_is_checked_as_the_footers_is() {
         use crate::key;
-        let said = |ui: &Ui| ui.message.clone();
+        let said = |ui: &Ui| ui.message.as_deref().map(str::to_owned);
 
         let (mut w, mut ui) = a_window();
         key(&mut w, &mut ui, "z");

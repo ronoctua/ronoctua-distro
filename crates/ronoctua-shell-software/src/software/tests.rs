@@ -462,7 +462,7 @@ fn typing_in_the_window_shows_the_query_on_the_search_row() {
     // `RET` ON THE SEARCH, with nothing typed, says typing is already on.
     assert_eq!(
         press(&mut w, Press::Enter, &r),
-        Errand::Say(en().t(crate::key::SOFTWARE_TYPE_TO_SEARCH))
+        Errand::Say(en().t(crate::key::SOFTWARE_TYPE_TO_SEARCH).into())
     );
     let mut last = Errand::Nothing;
     for c in "gimp".chars() {
@@ -570,10 +570,13 @@ fn typing_on_the_trials_in_the_window_is_to_try_it() {
 /// which `RET` opens on the door's line — the same sentence and the same
 /// question in both doors, since the view no longer knows its door.
 fn type_on_the_row() -> Errand {
-    Errand::Say(en().t_with(
-        crate::key::SOFTWARE_TYPE_ON_A_ROW,
-        &[("keys", notation_of("software-enter").unwrap_or_default())],
-    ))
+    Errand::Say(
+        en().t_with(
+            crate::key::SOFTWARE_TYPE_ON_A_ROW,
+            &[("keys", notation_of("software-enter").unwrap_or_default())],
+        )
+        .into(),
+    )
 }
 
 #[test]
@@ -1380,7 +1383,7 @@ fn a_program_from_a_file_is_not_offered_to_every_computer() {
     assert_eq!(keep.said.as_deref(), Some(sentence.as_str()));
     assert_eq!(
         press(&mut v, Press::Enter, &refusing),
-        Errand::Say(sentence)
+        Errand::Say(sentence.into())
     );
     let offering = readings(Some(full()));
     assert!(!keep_of(&offering, &v).disabled);
@@ -2257,7 +2260,7 @@ fn every_disabled_row_says_why() {
     v.at = Spot::Deed("web-new");
     assert_eq!(
         press(&mut v, Press::Enter, &r),
-        Errand::Say(en().t(words::refusal_key(Refusal::NoBrowser)))
+        Errand::Say(en().t(words::refusal_key(Refusal::NoBrowser)).into())
     );
     for level in [
         Level::Home,
@@ -2747,7 +2750,7 @@ fn the_flake_s_program_is_not_asked_about_and_the_sheet_says_why() {
     assert_eq!(v.level, Level::Sheet(system));
     assert_eq!(
         errand,
-        Errand::Say(t.t(words::refusal_key(Refusal::DeclaredInTheFlake)))
+        Errand::Say(t.t(words::refusal_key(Refusal::DeclaredInTheFlake)).into())
     );
     // THE PERSON'S OWN is asked about, on no.
     let (v, _) = View::fresh(

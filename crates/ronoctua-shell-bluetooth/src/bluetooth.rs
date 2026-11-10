@@ -482,26 +482,40 @@ pub struct View {
 /// sentence the message line says about it. ONE FUNCTION FOR BOTH DOORS: the
 /// footer and the window call it with the same errand and say the same
 /// words. A call to the system bus that returns at once (the activation runs
-/// in the daemon), so it does not hold the loop.
+/// in the daemon), so it does not hold the loop. The phone is a name the
+/// sentence quotes (`Arg::Name`), drawn in a name's ink.
 #[must_use]
-pub fn tethered(address: &str, name: &str, on: bool, texts: &ronoctua_i18n::Texts) -> String {
+pub fn tethered(
+    address: &str,
+    name: &str,
+    on: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     use crate::key;
+    use ronoctua_i18n::Arg;
     match ronoctua_network::Manager::fresh().and_then(|m| m.tether(address, on)) {
-        Ok(()) => texts.t_with(
-            if on {
-                key::ECHO_BLUETOOTH_INTERNET_ON
-            } else {
-                key::ECHO_BLUETOOTH_INTERNET_OFF
-            },
-            &[("device", name)],
-        ),
-        Err(e) => texts.t_with(
-            key::ECHO_BLUETOOTH_INTERNET_FAILED,
-            &[
-                ("device", name),
-                ("reason", &crate::network_refusal::reason(&e, texts)),
-            ],
-        ),
+        Ok(()) => texts
+            .t_args_marked(
+                if on {
+                    key::ECHO_BLUETOOTH_INTERNET_ON
+                } else {
+                    key::ECHO_BLUETOOTH_INTERNET_OFF
+                },
+                &[("device", Arg::Name(name))],
+            )
+            .into(),
+        Err(e) => texts
+            .t_args_marked(
+                key::ECHO_BLUETOOTH_INTERNET_FAILED,
+                &[
+                    ("device", Arg::Name(name)),
+                    (
+                        "reason",
+                        Arg::Text(&crate::network_refusal::reason(&e, texts)),
+                    ),
+                ],
+            )
+            .into(),
     }
 }
 
@@ -1299,36 +1313,8 @@ impl View {
         let name = scene
             .device(&q.device)
             .map_or_else(|| q.device.clone(), |d| d.label.clone());
-        let said = match &q.asked {
-            agent::Asked::Confirm(code) => b.texts.t_with(
-                key::BLUETOOTH_PAIRING_CONFIRM,
-                &[("name", &name), ("code", code)],
-            ),
-            agent::Asked::Passkey(code) => b.texts.t_with(
-                key::BLUETOOTH_PAIRING_PASSKEY,
-                &[("name", &name), ("code", code)],
-            ),
-            agent::Asked::Pin => b
-                .texts
-                .t_with(key::BLUETOOTH_PAIRING_PIN, &[("name", &name)]),
-            // SIX DIGITS AS A NUMBER, which is not the same request as a PIN
-            // and does not read the same: `RequestPasskey` used to be
-            // labelled a PIN, and a keyboard has no code printed on it.
-            agent::Asked::Typed => b
-                .texts
-                .t_with(key::BLUETOOTH_PAIRING_PASSKEY_HERE, &[("name", &name)]),
-            agent::Asked::Authorize => b
-                .texts
-                .t_with(key::BLUETOOTH_PAIRING_AUTHORIZE, &[("name", &name)]),
-            agent::Asked::Service(uuid) => {
-                let service = ronoctua_bluetooth::profile_key(uuid)
-                    .map_or_else(|| uuid.clone(), |k| b.texts.t(k));
-                b.texts.t_with(
-                    key::BLUETOOTH_PAIRING_SERVICE,
-                    &[("name", &name), ("service", &service)],
-                )
-            }
-        };
+        // THE ONE PAIRING SENTENCE the footer's card says too, its names told.
+        let said = crate::bluez_words::pairing_asked(b.texts, &q.asked, &name);
         b.heading(key::BLUETOOTH_TITLE);
         b.sentence(said);
         // `NO` IS THE FIRST ANSWER, and the cursor starts on it — the format
@@ -2203,25 +2189,34 @@ impl Builder<'_> {
     /// itself and it arrives by POINTING; pointing at the second line of a
     /// sentence and being told nothing would be a hole in the middle of a
     /// paragraph.
-    fn sentence(&mut self, text: String) {
+    ///
+    /// # A NAME IT QUOTES wears a name's ink, and the cursor's line is ONE
+    ///
+    /// The lines are [`crate::chrome::note_fields`]: the breaks `note_lines`
+    /// gives, each name a field of its own in the ink a name takes in a dim
+    /// note (`chrome::quoted_ink`). The line the cursor is on is the same
+    /// breaks with no name told, one field in the accent — `RET` copies a
+    /// row's last field, which on a line cut around a name would have been
+    /// the name or the words after it (`network.rs`, `sentence_coloured`).
+    fn sentence(&mut self, text: impl Into<crate::chrome::Named>) {
+        let text = text.into();
         let said = self.said.take();
-        for line in crate::chrome::note_lines(&text, self.room) {
+        // A SENTENCE LINES UP WITH THE LABELS, not with the titles. The
+        // mark's indent is paid by every row of these views on purpose — an
+        // indent only some rows pay is a ragged edge — and a note that
+        // skipped it sat two cells left of everything around it.
+        let lines =
+            crate::chrome::note_fields(self.left, &text, tokens::color::TEXT_DIM, self.room);
+        let lit = crate::chrome::note_fields(
+            self.left,
+            &crate::chrome::Named::from(text.as_str()),
+            tokens::color::STATE_ACCENT,
+            self.room,
+        );
+        for (line, lit) in lines.into_iter().zip(lit) {
             let focused = self.cursor == self.out.len();
             self.out.push(Row {
-                fields: vec![Self::piece(
-                    // A SENTENCE LINES UP WITH THE LABELS, not with the titles.
-                    // The mark's indent is paid by every row of these views on
-                    // purpose — an indent only some rows pay is a ragged edge —
-                    // and a note that skipped it sat two cells left of
-                    // everything around it.
-                    self.left,
-                    line,
-                    if focused {
-                        tokens::color::STATE_ACCENT
-                    } else {
-                        tokens::color::TEXT_DIM
-                    },
-                )],
+                fields: if focused { lit } else { line },
                 focused,
                 heading: false,
                 target: Target::Nothing,

@@ -797,7 +797,7 @@ pub fn hint(texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
 
 // The sentence for a trouble is the studio's words, which the footer's hands
 // say too (`studio_words`): one sentence for one refusal, in every door.
-pub use crate::studio_words::trouble_sentence;
+pub use crate::studio_words::{trouble_named, trouble_sentence};
 
 /// A point of the window as a fraction of the program, when it is on it.
 #[must_use]

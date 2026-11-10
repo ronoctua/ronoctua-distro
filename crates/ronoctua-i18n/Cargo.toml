@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 fluent-bundle.workspace = true
+fluent-syntax.workspace = true
 unic-langid.workspace = true
 tracing.workspace = true
 

@@ -302,8 +302,9 @@ pub enum Errand {
     Cameras(ronoctua_camera::prefs::Preferences),
     /// Every setting back as it came (see [`Target::Defaults`]).
     Defaults,
-    /// Say this; it is already a sentence.
-    Said(String),
+    /// Say this; it is already a sentence — a name it quotes told, so the
+    /// line draws it in a name's ink.
+    Said(crate::chrome::Named),
     /// Read the clipboard for the file picker ([`View::picker_pasted`]).
     Paste,
     /// Set a camera's control now, and remember it.
@@ -735,7 +736,8 @@ impl View {
                 self.picking = None;
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            // AN EXPLANATION CARRIED AS DATA, its names told (`said_of`).
+            Hosting::Say(e) => Errand::Said(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
                 self.picking = None;
@@ -1489,14 +1491,14 @@ pub fn carry_out(
     errand: Errand,
     snap: &Snapshot,
     texts: &ronoctua_i18n::Texts,
-) -> Result<Option<String>, Errand> {
+) -> Result<Option<crate::chrome::Named>, Errand> {
     use crate::key;
     let reload = || {
         let _ = ronoctua_studio::client::tell(&Ask::Reload);
     };
     match errand {
         Errand::Nothing => Ok(None),
-        Errand::Copy(text) => Ok(Some(crate::chrome::copied(&text, texts))),
+        Errand::Copy(text) => Ok(Some(crate::chrome::copied(&text, texts).into())),
         Errand::Run(_) | Errand::Ask(_) | Errand::Close | Errand::Paste => Err(errand),
         Errand::Said(said) => Ok(Some(said)),
         // THE ADDRESS IS WRITTEN OVER WHAT THE FILE SAYS NOW, not over this
@@ -1510,34 +1512,44 @@ pub fn carry_out(
                     reload();
                     None
                 }
-                Err(e) => Some(texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])),
+                Err(e) => Some(
+                    texts
+                        .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                        .into(),
+                ),
             })
         }
         // THE KEY, BY THIS PROCESS, to its `0600` file — never down a socket,
         // never into an `argv` (`stream-key-is-never-an-argument`).
-        Errand::StreamKey(StreamKey(secret)) => Ok(prefs::set_stream_key(&secret)
-            .err()
-            .map(|e| texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())]))),
+        Errand::StreamKey(StreamKey(secret)) => Ok(prefs::set_stream_key(&secret).err().map(|e| {
+            texts
+                .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                .into()
+        })),
         Errand::Script(text) => {
             let book = prefs::book().read();
             match ronoctua_studio::scene::parse_script(&text, &book) {
                 Some(script) => carry_out(Errand::Tell(Ask::ScriptAdd { script }), snap, texts),
-                None => Ok(Some(texts.t(key::CAMERA_SCRIPT_BAD))),
+                None => Ok(Some(texts.t(key::CAMERA_SCRIPT_BAD).into())),
             }
         }
         Errand::Tell(ask) => Ok(match ronoctua_studio::client::ask(&ask) {
             Ok(ronoctua_studio::wire::Say::Refused(t)) => {
-                Some(crate::camera::trouble_sentence(&t, texts))
+                Some(crate::camera::trouble_named(&t, texts).into())
             }
             Ok(_) => None,
-            Err(_) => Some(texts.t(key::STUDIO_NOT_RUNNING)),
+            Err(_) => Some(texts.t(key::STUDIO_NOT_RUNNING).into()),
         }),
         Errand::Studio(p) => Ok(match prefs::keep(&prefs::store(), &p) {
             Ok(()) => {
                 reload();
                 None
             }
-            Err(e) => Some(texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])),
+            Err(e) => Some(
+                texts
+                    .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                    .into(),
+            ),
         }),
         Errand::Cameras(p) => Ok(
             match ronoctua_camera::prefs::keep(&ronoctua_camera::prefs::store(), &p) {
@@ -1545,15 +1557,21 @@ pub fn carry_out(
                     reload();
                     None
                 }
-                Err(e) => Some(texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])),
+                Err(e) => Some(
+                    texts
+                        .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                        .into(),
+                ),
             },
         ),
         Errand::Defaults => Ok(Some(match defaults(snap) {
             Ok(()) => {
                 reload();
-                texts.t(key::CAMERA_DEFAULTS_DONE)
+                texts.t(key::CAMERA_DEFAULTS_DONE).into()
             }
-            Err(e) => texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())]),
+            Err(e) => texts
+                .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                .into(),
         })),
         Errand::Control {
             identity,
@@ -1565,7 +1583,9 @@ pub fn carry_out(
             };
             if let Err(e) = ronoctua_camera::set_control(camera, &control, value) {
                 return Ok(Some(
-                    texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())]),
+                    texts
+                        .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                        .into(),
                 ));
             }
             // REMEMBERED, so the next plug puts it back — a UVC camera forgets
@@ -1575,9 +1595,11 @@ pub fn carry_out(
             let mut per = p.of(&camera.identity);
             per.controls.insert(control, value);
             p.set(&camera.identity, per);
-            Ok(ronoctua_camera::prefs::keep(&store, &p)
-                .err()
-                .map(|e| texts.t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])))
+            Ok(ronoctua_camera::prefs::keep(&store, &p).err().map(|e| {
+                texts
+                    .t_with(key::STUDIO_TROUBLE_WRITE, &[("why", &e.to_string())])
+                    .into()
+            }))
         }
     }
 }

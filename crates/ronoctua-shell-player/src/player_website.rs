@@ -29,6 +29,7 @@
 use crate::key;
 use crate::player::{Errand, Target, View};
 use crate::player_rows::Builder;
+use ronoctua_i18n::Arg;
 use ronoctua_player::queue::Name;
 
 /// The file the addresses are kept in, under the config root.
@@ -93,18 +94,20 @@ pub enum Unkept {
 }
 
 impl Unkept {
-    /// In a sentence.
+    /// In a sentence — the file's name told, for the door's line.
     #[must_use]
-    pub fn sentence(&self, texts: &ronoctua_i18n::Texts) -> String {
+    pub fn sentence(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
         let why = match self {
             Self::NoHome => texts.t(key::PLAYER_FILE_NO_HOME),
             Self::Unparseable => texts.t(key::PLAYER_FILE_UNPARSEABLE),
             Self::Unwritable(e) => e.to_string(),
         };
-        texts.t_with(
-            key::ECHO_SETTING_NOT_WRITTEN,
-            &[("file", FILE), ("why", &why)],
-        )
+        texts
+            .t_args_marked(
+                key::ECHO_SETTING_NOT_WRITTEN,
+                &[("file", Arg::Name(FILE)), ("why", Arg::Text(&why))],
+            )
+            .into()
     }
 }
 
@@ -230,14 +233,16 @@ fn play(address: String, now: bool, texts: &ronoctua_i18n::Texts) -> Errand {
         texts,
         crate::player::NAME_IN_A_SENTENCE,
     );
-    let said = texts.t_with(
-        if now {
-            key::PLAYER_PLAYING_NOW
-        } else {
-            key::PLAYER_ADDED
-        },
-        &[("name", &name)],
-    );
+    let said = texts
+        .t_args_marked(
+            if now {
+                key::PLAYER_PLAYING_NOW
+            } else {
+                key::PLAYER_ADDED
+            },
+            &[("name", Arg::Name(&name))],
+        )
+        .into();
     Errand::Then(
         Box::new(Errand::TellSaying(
             crate::player::put(address.clone(), now),
@@ -333,8 +338,14 @@ impl View {
                 let change = Change::Forget(address.clone());
                 self.websites.changed(&change);
                 Some(Errand::Then(
+                    // THE ADDRESS FORGOTTEN is a name, as the one played is.
                     Box::new(Errand::Said(
-                        texts.t_with(key::PLAYER_WEBSITE_FORGOTTEN, &[("address", address)]),
+                        texts
+                            .t_args_marked(
+                                key::PLAYER_WEBSITE_FORGOTTEN,
+                                &[("address", Arg::Name(address))],
+                            )
+                            .into(),
                     )),
                     Box::new(Errand::Websites(change)),
                 ))
@@ -351,10 +362,14 @@ impl View {
             return Errand::Nothing;
         }
         let Some(address) = address_of(said) else {
-            return Errand::Said(texts.t_with(
-                key::PLAYER_WEBSITE_NOT_AN_ADDRESS,
-                &[("typed", said.trim())],
-            ));
+            return Errand::Said(
+                texts
+                    .t_with(
+                        key::PLAYER_WEBSITE_NOT_AN_ADDRESS,
+                        &[("typed", said.trim())],
+                    )
+                    .into(),
+            );
         };
         self.websites.changed(&Change::Add(address.clone()));
         play(address, id == PLAY, texts)

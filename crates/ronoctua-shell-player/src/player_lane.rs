@@ -105,7 +105,7 @@ pub fn every_screen_turned(
         Screens::Only(_) => Screens::Every,
         Screens::Every => {
             let Some(one) = here.or_else(|| known.first().map(|k| k.connector.as_str())) else {
-                return Errand::Said(texts.t(key::PLAYER_SCREENS_UNKNOWN));
+                return Errand::Said(texts.t(key::PLAYER_SCREENS_UNKNOWN).into());
             };
             Screens::Only(vec![one.to_owned()])
         }
@@ -146,7 +146,7 @@ pub fn screen_turned(
         }
     };
     if these.is_empty() {
-        return Errand::Said(texts.t(key::PLAYER_SCREEN_LAST));
+        return Errand::Said(texts.t(key::PLAYER_SCREEN_LAST).into());
     }
     these.dedup();
     Errand::Tell(Ask::Lane {

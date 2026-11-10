@@ -1385,19 +1385,26 @@ impl FilePicker {
         let mut out: Vec<Row> = Vec::new();
         // A QUESTION ON SCREEN is all that is drawn: it waits for an answer.
         if let Some((path, yes)) = &self.asking {
-            let sentence = texts.t_with(
-                key::FILE_PICKER_ASK_OVERWRITE,
-                &[
-                    ("name", &name_of(path)),
-                    ("folder", &self.shown(path.parent().unwrap_or(path))),
-                ],
-            );
-            for line in crate::chrome::note_lines(&sentence, room) {
-                out.push(inert(vec![piece(
-                    left,
-                    line,
-                    tokens::color::TEXT_SECONDARY,
-                )]));
+            // THE FILE AND ITS FOLDER are the names the question quotes,
+            // each in a name's ink — broken where the one-colour sentence
+            // would break (`chrome::note_fields`).
+            use ronoctua_i18n::Arg;
+            let sentence: crate::chrome::Named = texts
+                .t_args_marked(
+                    key::FILE_PICKER_ASK_OVERWRITE,
+                    &[
+                        ("name", Arg::Name(&name_of(path))),
+                        (
+                            "folder",
+                            Arg::Name(&self.shown(path.parent().unwrap_or(path))),
+                        ),
+                    ],
+                )
+                .into();
+            for line in
+                crate::chrome::note_fields(left, &sentence, tokens::color::TEXT_SECONDARY, room)
+            {
+                out.push(inert(line));
             }
             for (answer, label) in [
                 (false, key::FILE_PICKER_ANSWER_NO),
@@ -2721,7 +2728,8 @@ mod tests {
     }
 
     /// FAILS IF: a save writes over a file without asking, the question is
-    /// not born on its "no", or the extension is not added.
+    /// not born on its "no", the extension is not added, or the question
+    /// does not quote the file and its folder in a name's ink.
     #[test]
     fn a_save_over_a_file_asks_no_first() {
         let root = tree("save");
@@ -2751,6 +2759,13 @@ mod tests {
             .unwrap();
         assert!(no < yes, "no is drawn first");
         assert!(rows[no].focused, "the cursor is born on no");
+        let quoted: Vec<&str> = rows[..no]
+            .iter()
+            .flat_map(|r| &r.fields)
+            .filter(|f| f.color == tokens::color::TEXT_QUOTED_DEFAULT)
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(quoted, ["night.rset", "~/Music"], "the names it quotes");
         assert_eq!(p.key(key("RET")), Step::Changed);
         assert!(!p.asking(), "no leaves the file as it was");
         p.key(key("RET"));

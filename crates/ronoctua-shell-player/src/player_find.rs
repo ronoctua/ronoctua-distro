@@ -482,15 +482,35 @@ pub fn summary(s: &State, kind: DeskKind) -> Option<&DeskSummary> {
     s.desks.iter().find(|d| d.kind == kind)
 }
 
+/// The hosts `services` reach first, one by one — what a sentence that
+/// names them tells as names ([`hosts_said`]).
+#[must_use]
+pub fn host_names(services: &[Service]) -> Vec<&'static str> {
+    services
+        .iter()
+        .flat_map(|s| s.hosts().iter().map(|h| h.name()))
+        .collect()
+}
+
 /// The hosts `services` reach first, in one line — what a row that asks
 /// them names — joined as the language joins a list.
 #[must_use]
 pub fn hosts_of(services: &[Service], texts: &ronoctua_i18n::Texts) -> String {
-    services
-        .iter()
-        .flat_map(|s| s.hosts().iter().map(|h| h.name()))
-        .collect::<Vec<_>>()
-        .join(&texts.t(key::PLAYER_LIST_JOINER))
+    host_names(services).join(&texts.t(key::PLAYER_LIST_JOINER))
+}
+
+/// The sentence `key` with `hosts` in its `{ $hosts }`, joined as the
+/// language joins a list, and each host told as a NAME of its own
+/// (`chrome::names_listed`) — "Asking …", "asks …".
+#[must_use]
+pub fn hosts_said(key: &str, hosts: &[&str], texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    crate::chrome::names_listed(
+        texts,
+        key,
+        "hosts",
+        hosts,
+        &texts.t(key::PLAYER_LIST_JOINER),
+    )
 }
 
 /// The languages a search is in, when the person chose none: the
@@ -622,12 +642,11 @@ pub fn consented(
 /// why the last search gave nothing — a host not let is a row that lets it
 /// and asks again — each service that gave nothing while another answered,
 /// and what the search went out with.
-pub fn status(s: &State, kind: DeskKind, desk: Option<&Desk>, hosts: &str, b: &mut Builder<'_>) {
+pub fn status(s: &State, kind: DeskKind, desk: Option<&Desk>, hosts: &[&str], b: &mut Builder<'_>) {
     let now = summary(s, kind);
     let busy = now.is_some_and(|d| d.busy);
     if busy {
-        let said = b.texts.t_with(key::PLAYER_DESK_ASKING, &[("hosts", hosts)]);
-        note_said(&said, b);
+        b.told_named(&hosts_said(key::PLAYER_DESK_ASKING, hosts, b.texts));
     }
     let Some(desk) = desk else {
         return;
@@ -667,8 +686,16 @@ pub fn status(s: &State, kind: DeskKind, desk: Option<&Desk>, hosts: &str, b: &m
 fn trouble_row(t: &Trouble, desk: &Desk, b: &mut Builder<'_>) {
     b.warning(&trouble_sentence(t, b.texts));
     if let (Trouble::Off { host }, Some(_)) = (t, desk.query.as_ref()) {
+        // THE HOST IS A NAME (`Arg::Name`), told as every name is; a row's
+        // label wears its `Kind`'s tones (`labels-say-what-they-are`), so
+        // only the words go.
         b.pair(
-            b.texts.t_with(key::PLAYER_CONSENT_LET, &[("host", host)]),
+            b.texts
+                .t_args_marked(
+                    key::PLAYER_CONSENT_LET,
+                    &[("host", ronoctua_i18n::Arg::Name(host))],
+                )
+                .text,
             String::new(),
             Target::Let(host.clone()),
             &format!("let-{host}"),
@@ -733,8 +760,12 @@ fn taken_line(desk: &Desk, id: CandidateId, b: &mut Builder<'_>) {
         TakeStatus::Saved { path } => {
             let said = b
                 .texts
-                .t_with(key::PLAYER_TAKE_SAVED, &[("name", &named(path, b.texts))]);
-            note_said(&said, b);
+                .t_args_marked(
+                    key::PLAYER_TAKE_SAVED,
+                    &[("name", Arg::Name(&named(path, b.texts)))],
+                )
+                .into();
+            b.told_named(&said);
         }
         TakeStatus::Refused(t) => b.warning(&trouble_sentence(t, b.texts)),
     }
@@ -813,13 +844,7 @@ pub fn subtitles_page(v: &crate::player::View, s: &State, b: &mut Builder<'_>) {
     b.heading(key::PLAYER_HEADING_RESULTS);
     ask_row(&v.prefs, &services, DeskKind::Subtitles, b);
     let desk = v.found.page_for(DeskKind::Subtitles, &film);
-    status(
-        s,
-        DeskKind::Subtitles,
-        desk,
-        &hosts_of(&services, b.texts),
-        b,
-    );
+    status(s, DeskKind::Subtitles, desk, &host_names(&services), b);
     let Some(desk) = desk else {
         return;
     };
@@ -960,7 +985,7 @@ pub fn lyrics_page(v: &crate::player::View, s: &State, b: &mut Builder<'_>) {
     let services = [Service::Lrclib];
     ask_row(&v.prefs, &services, DeskKind::Lyrics, b);
     let desk = v.found.page_for(DeskKind::Lyrics, &song);
-    status(s, DeskKind::Lyrics, desk, &hosts_of(&services, b.texts), b);
+    status(s, DeskKind::Lyrics, desk, &host_names(&services), b);
     let Some(desk) = desk else {
         return;
     };
@@ -1071,14 +1096,14 @@ pub fn turn(
                 .and_then(|d| d.query.clone())?;
             let service = ronoctua_player::prefs::service_of_host(host)?;
             v.prefs.consent(service);
-            let hosts = hosts_of(&v.services_of(&query), texts);
+            let hosts = host_names(&v.services_of(&query));
             Some(Turned::Errand(Errand::Let {
                 services: vec![service],
                 directories: Vec::new(),
                 on: true,
                 then: Box::new(Errand::TellSaying(
                     Ask::Find { query },
-                    texts.t_with(key::PLAYER_DESK_ASKING, &[("hosts", &hosts)]),
+                    hosts_said(key::PLAYER_DESK_ASKING, &hosts, texts),
                 )),
             }))
         }
@@ -1101,10 +1126,14 @@ pub fn turn(
         }
         // A LANGUAGE'S ROW says what it is and how it goes: a press is no
         // way to take one out by accident.
-        (Target::Language(code), Press::Enter) => Some(Turned::Errand(Errand::Said(texts.t_with(
-            key::PLAYER_FIND_LANGUAGE_SEARCHED,
-            &[("language", &tongue_name(code, texts))],
-        )))),
+        (Target::Language(code), Press::Enter) => Some(Turned::Errand(Errand::Said(
+            texts
+                .t_args_marked(
+                    key::PLAYER_FIND_LANGUAGE_SEARCHED,
+                    &[("language", Arg::Name(&tongue_name(code, texts)))],
+                )
+                .into(),
+        ))),
         // A LANGUAGE taken out of the search — its glyph, or `d` on its row —
         // never the last.
         (Target::Language(code), Press::Remove) | (Target::LanguageOut(code), Press::Enter) => {
@@ -1137,7 +1166,9 @@ pub fn turn(
             };
             Some(Turned::Errand(Errand::TellSaying(
                 take(DeskKind::Subtitles, *id),
-                texts.t_with(key::PLAYER_FIND_TAKING, &[("name", &name)]),
+                texts
+                    .t_args_marked(key::PLAYER_FIND_TAKING, &[("name", Arg::Name(&name))])
+                    .into(),
             )))
         }
         // LYRICS CHOSEN: where the ring says — beside the song, asked first
@@ -1157,18 +1188,27 @@ pub fn turn(
             match to {
                 LyricsTo::Tag => Some(Turned::Errand(Errand::TellSaying(
                     ask,
-                    texts.t_with(key::PLAYER_LYRICS_INTO_TAG, &[("name", &name)]),
+                    texts
+                        .t_args_marked(key::PLAYER_LYRICS_INTO_TAG, &[("name", Arg::Name(&name))])
+                        .into(),
                 ))),
                 LyricsTo::Beside => {
                     let lrc = (!song.contains("://"))
                         .then(|| Path::new(&song).with_extension("lrc"))
                         .filter(|p| p.exists());
-                    let saving = texts.t_with(key::PLAYER_LYRICS_TAKING, &[("name", &name)]);
+                    let saving: crate::chrome::Named = texts
+                        .t_args_marked(key::PLAYER_LYRICS_TAKING, &[("name", Arg::Name(&name))])
+                        .into();
                     match lrc {
                         Some(lrc) => {
                             let file = named(&lrc.to_string_lossy(), texts);
                             Some(Turned::Question(
-                                texts.t_with(key::PLAYER_ASK_REPLACE_LRC, &[("name", &file)]),
+                                texts
+                                    .t_args_marked(
+                                        key::PLAYER_ASK_REPLACE_LRC,
+                                        &[("name", Arg::Name(&file))],
+                                    )
+                                    .into(),
                                 Errand::TellSaying(
                                     Ask::Take {
                                         desk: DeskKind::Lyrics,
@@ -1208,30 +1248,52 @@ fn take(desk: DeskKind, candidate: CandidateId) -> Ask {
 fn language_out(choices: &mut Choices, code: &str, texts: &ronoctua_i18n::Texts) -> Errand {
     let mut all = choices.tongues(texts);
     if all.len() < 2 {
-        return Errand::Said(texts.t(key::PLAYER_FIND_LANGUAGE_LAST));
+        return Errand::Said(texts.t(key::PLAYER_FIND_LANGUAGE_LAST).into());
     }
     all.retain(|c| c != code);
     choices.tongues = Some(all);
-    Errand::Said(texts.t_with(
-        key::PLAYER_FIND_LANGUAGE_REMOVED,
-        &[("language", &tongue_name(code, texts))],
-    ))
+    Errand::Said(
+        texts
+            .t_args_marked(
+                key::PLAYER_FIND_LANGUAGE_REMOVED,
+                &[("language", Arg::Name(&tongue_name(code, texts)))],
+            )
+            .into(),
+    )
 }
 
 /// `code` — one of the table's — added to the languages subtitles are
 /// searched in, named, never by its code.
 fn language_in(choices: &mut Choices, code: &str, texts: &ronoctua_i18n::Texts) -> Errand {
     let Some(tongue) = ronoctua_player::tongues::of(code) else {
-        return Errand::Said(texts.t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", code)]));
+        return Errand::Said(
+            texts
+                .t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", code)])
+                .into(),
+        );
     };
     let name = texts.t(tongue.key);
     let mut all = choices.tongues(texts);
     if all.iter().any(|c| c == tongue.code) {
-        return Errand::Said(texts.t_with(key::PLAYER_FIND_LANGUAGE_THERE, &[("language", &name)]));
+        return Errand::Said(
+            texts
+                .t_args_marked(
+                    key::PLAYER_FIND_LANGUAGE_THERE,
+                    &[("language", Arg::Name(&name))],
+                )
+                .into(),
+        );
     }
     all.push(tongue.code.to_owned());
     choices.tongues = Some(all);
-    Errand::Said(texts.t_with(key::PLAYER_FIND_LANGUAGE_ADDED, &[("language", &name)]))
+    Errand::Said(
+        texts
+            .t_args_marked(
+                key::PLAYER_FIND_LANGUAGE_ADDED,
+                &[("language", Arg::Name(&name))],
+            )
+            .into(),
+    )
 }
 
 /// A language typed to search subtitles in, on the Languages' page: its code
@@ -1248,7 +1310,11 @@ pub fn language_typed(choices: &mut Choices, said: &str, texts: &ronoctua_i18n::
         .find(|t| texts.t(t.key).to_lowercase() == said.to_lowercase());
     match by_name.or_else(|| ronoctua_player::tongues::of(said)) {
         Some(tongue) => language_in(choices, tongue.code, texts),
-        None => Errand::Said(texts.t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", said)])),
+        None => Errand::Said(
+            texts
+                .t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", said)])
+                .into(),
+        ),
     }
 }
 
@@ -1326,12 +1392,52 @@ mod tests {
         ronoctua_i18n::Texts::fresh(language).expect(language)
     }
 
+    /// FAILS IF: a sentence that names a LIST of hosts stops telling each
+    /// host as a name of its own — the list as one name, the joiner inside
+    /// it, a host lost or cut — in either language; or its text stops being
+    /// the key's sentence with the list joined as the language joins one;
+    /// or a list of one is not that one name.
+    #[test]
+    fn a_list_of_hosts_tells_each_host_as_a_name() {
+        let services = [Service::OpenSubtitles, Service::SubDl];
+        let hosts = host_names(&services);
+        assert!(hosts.len() > 1, "two services, one host: {hosts:?}");
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let said = hosts_said(key::PLAYER_DESK_ASKING, &hosts, &t);
+            assert_eq!(
+                said.as_str(),
+                t.t_with(
+                    key::PLAYER_DESK_ASKING,
+                    &[("hosts", &hosts_of(&services, &t))]
+                ),
+                "{language}"
+            );
+            let names: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+            assert_eq!(names, hosts, "{language}");
+            let one = hosts_said(key::PLAYER_CONSENT_HOSTS, &[hosts[0]], &t);
+            let names: Vec<&str> = one.names().iter().map(|r| &one[r.clone()]).collect();
+            assert_eq!(names, [hosts[0]], "{language}");
+        }
+    }
+
     /// Every word on the page, a wrapped sentence whole again.
+    /// What the rows read, a field apart from the next — but the RUNS of
+    /// one sentence, a name among its words (`chrome::note_fields`), read
+    /// glued, as they are drawn.
     fn said(rows: &[crate::player_rows::Row]) -> String {
-        rows.iter()
-            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut out: Vec<String> = Vec::new();
+        for r in rows {
+            let mut end = None;
+            for f in &r.fields {
+                match out.last_mut() {
+                    Some(last) if end == Some(f.at) => last.push_str(&f.text),
+                    _ => out.push(f.text.clone()),
+                }
+                end = Some(f.at + ronoctua_render::layout::width(&f.text));
+            }
+        }
+        out.join(" ")
     }
 
     fn row_of(rows: &[crate::player_rows::Row], target: &Target) -> Option<usize> {
@@ -1522,14 +1628,21 @@ mod tests {
         };
         assert_eq!(
             add(&mut v, "es"),
-            Errand::Said(t.t_with(
-                key::PLAYER_FIND_LANGUAGE_ADDED,
-                &[("language", &t.t("tongue-es"))]
-            ))
+            Errand::Said(
+                t.t_args_marked(
+                    key::PLAYER_FIND_LANGUAGE_ADDED,
+                    &[("language", Arg::Name(&t.t("tongue-es")))]
+                )
+                .into()
+            ),
+            "the language added is said, and as a name"
         );
         assert_eq!(
             add(&mut v, "xx"),
-            Errand::Said(t.t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", "xx")]))
+            Errand::Said(
+                t.t_with(key::PLAYER_FIND_UNKNOWN_LANGUAGE, &[("code", "xx")])
+                    .into()
+            )
         );
         assert!(matches!(add(&mut v, "EN"), Errand::Said(_)));
         assert_eq!(v.finding.tongues(&t), ["pt-BR", "en", "es"]);
@@ -1588,7 +1701,7 @@ mod tests {
         v.grabbed(at);
         assert_eq!(
             v.key(Press::Remove, Some(&s), 80, &t),
-            Errand::Said(t.t(key::PLAYER_FIND_LANGUAGE_LAST))
+            Errand::Said(t.t(key::PLAYER_FIND_LANGUAGE_LAST).into())
         );
     }
 
@@ -1647,10 +1760,11 @@ mod tests {
             v.key(Press::Enter, Some(&s), 80, &t),
             Errand::TellSaying(
                 take(DeskKind::Subtitles, CandidateId(2)),
-                t.t_with(
+                t.t_args_marked(
                     key::PLAYER_FIND_TAKING,
-                    &[("name", "Harbour.2024.1080p.BluRay")]
+                    &[("name", Arg::Name("Harbour.2024.1080p.BluRay"))]
                 )
+                .into()
             )
         );
     }

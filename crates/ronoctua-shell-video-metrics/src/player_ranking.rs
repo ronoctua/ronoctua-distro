@@ -33,7 +33,7 @@
 //!
 //! Each video is its thumbnail (the catalogue's file on disk, decoded off the
 //! loop by `crate::player_posters`), its title, its channel and its score —
-//! a bare number, the four faces of its rating after it and its marks at the
+//! a bare number, the four arrows of its rating after it and its marks at the
 //! line's edge (set aside, hidden, deleted, kept for ever), each a glyph a
 //! click acts on at once, and a key (`b`, `v`, `d`, `F`, `1`–`4`) — a row
 //! each, the picture at its head (`player_posters::strip`), or a grid of
@@ -89,11 +89,6 @@ use crate::player_rows::Builder;
 pub use crate::player_seam::ranking::{
     Act, LAYOUT, MORE, Mark, Outcome, Quick, RankedAct, RankingKey,
 };
-
-/// How many videos a page of the ranking holds — the video catalogue's own
-/// page, whose grid's pictures the renderer's frame is known to keep
-/// (`video_metrics::PICTURES_MOST`).
-pub const PER_PAGE: u32 = crate::video_metrics::PER_PAGE;
 
 /// How the ranking is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -190,10 +185,10 @@ impl Shown {
     }
 }
 
-/// WHAT IS ASKED OF THE CATALOGUE for a list: which list, its filter and its
-/// page — the one question the reading thread answers, and the one a page
-/// held answers ([`Ranking::holds`]): a page read under another filter is
-/// not the page asked.
+/// WHAT IS ASKED OF THE CATALOGUE for a list: which list, its filter, its
+/// page and how many it holds — the one question the reading thread answers,
+/// and the one a page held answers ([`Ranking::holds`]): a page read under
+/// another filter, or at another size, is not the page asked.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Asked {
     /// Which list.
@@ -202,6 +197,8 @@ pub struct Asked {
     pub filter: Filter,
     /// Which page, from 0.
     pub page: u32,
+    /// How many videos a page holds (`paging::PER_PAGES`).
+    pub per_page: u32,
 }
 
 /// What the reading thread is asked.
@@ -312,7 +309,7 @@ impl Reader {
                     &asked.filter,
                     Page {
                         number: asked.page,
-                        per_page: PER_PAGE,
+                        per_page: asked.per_page,
                     },
                 )
                 .and_then(|rows| {
@@ -486,6 +483,9 @@ pub struct Ranking {
     pub aside: Shown,
     /// How both are drawn.
     pub layout: Layout,
+    /// HOW MANY VIDEOS A PAGE OF EITHER HOLDS — a ring of the session's, as
+    /// the catalogue's own list's (`paging::PerPage`).
+    pub per_page: crate::paging::PerPage,
     /// The video whose own page is open.
     pub chosen: Option<VideoId>,
     /// The last page read, of either list, or why it was not.
@@ -572,7 +572,12 @@ impl Default for Ranking {
             path: None,
             ranking: Shown::first(List::Ranking),
             aside: Shown::first(List::SetAside),
-            layout: Layout::default(),
+            // THE THUMBNAILS FIRST (the owner, 2026-11-10: "o player abre em
+            // miniaturas") — both lists, in both doors; `L` still turns to
+            // the list. The enum's own default stays the list, which nothing
+            // opens on.
+            layout: Layout::Grid,
+            per_page: crate::paging::PerPage::default(),
             chosen: None,
             listed: None,
             answered: None,
@@ -671,15 +676,15 @@ impl Ranking {
             list,
             filter,
             page: shown.page,
+            per_page: self.per_page.get(),
         }
     }
 
-    /// How many pages `list` takes, at least one — as its page held says.
+    /// How many pages `list` takes, at least one — as its page held says, at
+    /// the size asked.
     fn pages(&self, list: List) -> u32 {
         match self.listed(list) {
-            Some(Ok(l)) => u32::try_from(l.total.div_ceil(u64::from(PER_PAGE)))
-                .unwrap_or(u32::MAX)
-                .max(1),
+            Some(Ok(l)) => crate::paging::pages_of(l.total, self.per_page.get()).max(1),
             _ => 1,
         }
     }
@@ -786,9 +791,7 @@ impl Ranking {
                 if self.asked_page.as_ref() == Some(&asked) {
                     self.asked_page = None;
                 }
-                let last = u32::try_from(l.total.div_ceil(u64::from(PER_PAGE)))
-                    .unwrap_or(u32::MAX)
-                    .saturating_sub(1);
+                let last = crate::paging::pages_of(l.total, asked.per_page).saturating_sub(1);
                 let shrank = l.rows.is_empty() && asked.page > last;
                 let list = asked.list;
                 let n = asked.page;
@@ -916,35 +919,44 @@ pub fn carry(act: Act) -> Outcome {
     }
 }
 
-/// What a door says of `outcome`.
+/// What a door says of `outcome` — the video by its title, told as the
+/// name the sentence quotes (`Arg::Name`), drawn in a name's ink.
 #[must_use]
-pub fn said(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
-    let refused = |title: &str, why: Why| {
-        texts.t_with(
-            key::PLAYER_RANKING_NOT_CHANGED,
-            &[
-                ("title", title),
-                ("why", &texts.t(crate::video_metrics_words::why_key(why))),
-            ],
-        )
+pub fn said(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    let titled = |k: &str, title: &str| -> crate::chrome::Named {
+        texts
+            .t_args_marked(k, &[("title", Arg::Name(title))])
+            .into()
+    };
+    let refused = |title: &str, why: Why| -> crate::chrome::Named {
+        texts
+            .t_args_marked(
+                key::PLAYER_RANKING_NOT_CHANGED,
+                &[
+                    ("title", Arg::Name(title)),
+                    (
+                        "why",
+                        Arg::Text(&texts.t(crate::video_metrics_words::why_key(why))),
+                    ),
+                ],
+            )
+            .into()
     };
     match outcome {
-        Outcome::Hidden(_, title, Ok(())) => {
-            texts.t_with(key::PLAYER_RANKING_HIDDEN, &[("title", title)])
-        }
-        Outcome::Deleted(_, title, Ok(())) => {
-            texts.t_with(key::PLAYER_RANKING_DELETED, &[("title", title)])
-        }
-        Outcome::Marked(Mark::Rating(_, Some(rating)), title, Ok(())) => texts.t_with(
-            key::PLAYER_RANKING_RATED,
-            &[
-                ("title", title),
-                (
-                    "rating",
-                    &texts.t(crate::video_metrics_words::rating_key(*rating)),
-                ),
-            ],
-        ),
+        Outcome::Hidden(_, title, Ok(())) => titled(key::PLAYER_RANKING_HIDDEN, title),
+        Outcome::Deleted(_, title, Ok(())) => titled(key::PLAYER_RANKING_DELETED, title),
+        Outcome::Marked(Mark::Rating(_, Some(rating)), title, Ok(())) => texts
+            .t_args_marked(
+                key::PLAYER_RANKING_RATED,
+                &[
+                    ("title", Arg::Name(title)),
+                    (
+                        "rating",
+                        Arg::Text(&texts.t(crate::video_metrics_words::rating_key(*rating))),
+                    ),
+                ],
+            )
+            .into(),
         Outcome::Marked(mark, title, Ok(())) => {
             let said = match mark {
                 Mark::Rating(_, _) => key::PLAYER_RANKING_UNRATED,
@@ -955,7 +967,9 @@ pub fn said(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
                 Mark::Hidden(_, true) => key::PLAYER_RANKING_HIDDEN,
                 Mark::Hidden(_, false) => key::PLAYER_RANKING_SHOWN_AGAIN,
             };
-            texts.t_with(said, &[("title", title)])
+            texts
+                .t_args_marked(said, &[("title", Arg::Name(title))])
+                .into()
         }
         Outcome::Hidden(_, title, Err(why))
         | Outcome::Deleted(_, title, Err(why))
@@ -964,20 +978,22 @@ pub fn said(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
             title,
             taken: true,
             keys: Some(keys),
-        } => texts.t_with(
-            key::PLAYER_RANKING_DOWNLOADING,
-            &[("title", title), ("keys", keys)],
-        ),
+        } => texts
+            .t_args_marked(
+                key::PLAYER_RANKING_DOWNLOADING,
+                &[("title", Arg::Name(title)), ("keys", Arg::Text(keys))],
+            )
+            .into(),
         Outcome::Downloading {
             title,
             taken: true,
             keys: None,
-        } => texts.t_with(key::PLAYER_RANKING_DOWNLOADING_PLAIN, &[("title", title)]),
+        } => titled(key::PLAYER_RANKING_DOWNLOADING_PLAIN, title),
         Outcome::Downloading {
             title,
             taken: false,
             ..
-        } => texts.t_with(key::PLAYER_RANKING_NOT_DOWNLOADED, &[("title", title)]),
+        } => titled(key::PLAYER_RANKING_NOT_DOWNLOADED, title),
     }
 }
 
@@ -1001,9 +1017,13 @@ pub fn put(v: &RankedVideo, play: bool, texts: &ronoctua_i18n::Texts) -> Errand 
             once: !play,
         },
         if play {
-            texts.t_with(key::PLAYER_PLAYING_NOW, &[("name", &v.title)])
+            texts
+                .t_args_marked(key::PLAYER_PLAYING_NOW, &[("name", Arg::Name(&v.title))])
+                .into()
         } else {
-            texts.t_with(key::PLAYER_RANKING_ADDED, &[("title", &v.title)])
+            texts
+                .t_args_marked(key::PLAYER_RANKING_ADDED, &[("title", Arg::Name(&v.title))])
+                .into()
         },
     )
 }
@@ -1018,7 +1038,7 @@ pub fn spot_of(id: &VideoId) -> String {
 /// What is said under a video's title, each line in its parts, with its
 /// glyphs (`player_posters::Tile::under`). Its SCORE IS A BARE NUMBER — the
 /// list is by score, and "points" on every line was a word read once and
-/// then only in the way — with the FOUR FACES of its rating right after it
+/// then only in the way — with the FOUR ARROWS of its rating right after it
 /// ([`ratings`]), and its MARKS at the line's right edge ([`marks`]). In a
 /// ROW: its channel and its score, then when it was published and how long
 /// it runs, the marks at that line's end — or at the first's, with neither
@@ -1066,7 +1086,7 @@ fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Tex
     ]
 }
 
-/// THE FOUR FACES OF A VIDEO'S RATING, from very negative to very positive:
+/// THE FOUR ARROWS OF A VIDEO'S RATING, from very negative to very positive:
 /// the one it has lit, and a click on it takes the rating off; on another, it
 /// rates the video so.
 fn ratings(v: &RankedVideo) -> Vec<Control> {
@@ -1180,7 +1200,14 @@ fn video_here(
 /// Why nothing is sent for video `title`: a mark on it is still being
 /// written ([`Ranking::writing`]) — said, and pressed again in a moment.
 fn still_writing(title: &str, texts: &ronoctua_i18n::Texts) -> Errand {
-    Errand::Said(texts.t_with(key::PLAYER_RANKING_STILL_MARKING, &[("title", title)]))
+    Errand::Said(
+        texts
+            .t_args_marked(
+                key::PLAYER_RANKING_STILL_MARKING,
+                &[("title", Arg::Name(title))],
+            )
+            .into(),
+    )
 }
 
 /// A MARK ON VIDEO `id`, as the person's mark makes it of the video held —
@@ -1195,14 +1222,22 @@ fn marked(
     texts: &ronoctua_i18n::Texts,
 ) -> Errand {
     let Some(v) = ranking.row_of(id) else {
-        return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
+        return Errand::Said(
+            texts
+                .t(crate::video_metrics_words::why_key(Why::NotFound))
+                .into(),
+        );
     };
     let (mark, title) = (mark(&v), v.title.clone());
     if ranking.writing(id) {
         return still_writing(&title, texts);
     }
     let Some(catalogue) = ranking.path.clone() else {
-        return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotThere)));
+        return Errand::Said(
+            texts
+                .t(crate::video_metrics_words::why_key(Why::NotThere))
+                .into(),
+        );
     };
     ranking.marking.push(Sent {
         mark: mark.clone(),
@@ -1249,7 +1284,11 @@ fn quick(view: &mut View, id: &VideoId, q: Quick, texts: &ronoctua_i18n::Texts) 
         ),
         Quick::Hide | Quick::Delete => {
             let Some(title) = ranking.row_of(id).map(|v| v.title.clone()) else {
-                return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
+                return Errand::Said(
+                    texts
+                        .t(crate::video_metrics_words::why_key(Why::NotFound))
+                        .into(),
+                );
             };
             // NOT RACING A MARK: shown again and hidden, each on a thread of
             // its own, land in either order.
@@ -1257,7 +1296,11 @@ fn quick(view: &mut View, id: &VideoId, q: Quick, texts: &ronoctua_i18n::Texts) 
                 return still_writing(&title, texts);
             }
             let Some(catalogue) = ranking.path.clone() else {
-                return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotThere)));
+                return Errand::Said(
+                    texts
+                        .t(crate::video_metrics_words::why_key(Why::NotThere))
+                        .into(),
+                );
             };
             let id = id.clone();
             if q == Quick::Hide {
@@ -1267,9 +1310,13 @@ fn quick(view: &mut View, id: &VideoId, q: Quick, texts: &ronoctua_i18n::Texts) 
                     title,
                 });
             }
-            // FOR GOOD, after a question — "no" first: a deleted video never
-            // comes back.
-            let sentence = texts.t_with(key::ASK_PLAYER_RANKING_DELETE, &[("title", &title)]);
+            // FOR GOOD, after a question — "no" first, the yes in the colour
+            // of what is lost: a deleted video never comes back. Its title is
+            // a NAME the sentence quotes, in a name's ink.
+            let sentence = texts.t_args_marked(
+                key::ASK_PLAYER_RANKING_DELETE,
+                &[("title", Arg::Name(&title))],
+            );
             view.ask_about(
                 sentence,
                 Errand::Ranking(Act::Delete {
@@ -1599,6 +1646,17 @@ impl RankingView for View {
             Target::RankingPage,
             "ranking-page",
         );
+        // HOW MANY A PAGE HOLDS, a ring of the session's, under the page —
+        // in words of its own: the catalogue listing's "Per page" is a page
+        // of the same view (`labels-of-a-view-are-distinct`). And SHORT: in
+        // the small column, "Videos per page" beside "without Shorts" broke
+        // over two lines.
+        b.pair(
+            b.t(key::PLAYER_RANKING_PAGE_SIZE),
+            self.ranking().per_page.get().to_string(),
+            Target::RankingPerPage,
+            "ranking-per-page",
+        );
         b.pair(
             b.t(key::PLAYER_CATALOG_LAYOUT),
             b.t(self.ranking().layout.key()),
@@ -1636,16 +1694,26 @@ impl RankingView for View {
             }
             return;
         }
-        let from = u64::from(listed.asked.page) * u64::from(PER_PAGE) + 1;
+        let from = u64::from(listed.asked.page) * u64::from(listed.asked.per_page) + 1;
         let to = from + u64::try_from(listed.rows.len()).unwrap_or(0);
-        b.heading_said(b.texts.t_args(
-            key::PLAYER_CATALOG_SHOWN,
-            &[
-                ("from", n(from)),
-                ("to", n(to.saturating_sub(1).max(from))),
-                ("total", n(listed.total)),
-            ],
-        ));
+        // THE TITLE JUST ABOVE THE VIDEOS, with the arrows of the pages at
+        // its edge (the owner, 2026-11-10) — of the page ASKED, so they never
+        // jump when its reading lands; "1–25 of 230" says the page already,
+        // and takes no mark. One page draws no arrow.
+        let arrows = crate::paging::arrows(shown.page, self.ranking().pages(list));
+        let controls = page_arrows(arrows);
+        b.heading_paged(
+            b.texts.t_args(
+                key::PLAYER_CATALOG_SHOWN,
+                &[
+                    ("from", n(from)),
+                    ("to", n(to.saturating_sub(1).max(from))),
+                    ("total", n(listed.total)),
+                ],
+            ),
+            &controls,
+            crate::paging::LIST_TITLE,
+        );
         let now = now_s();
         // EACH AS READ, with the marks this door sent on it: a glyph lights
         // at the click, not when the catalogue is read again.
@@ -1679,6 +1747,10 @@ impl RankingView for View {
         match self.ranking().layout {
             Layout::List => crate::player_posters::strip(&tiles, shape, b),
             Layout::Grid => crate::player_posters::tiled(&tiles, shape, b),
+        }
+        // AND THE ARROWS AGAIN AT THE LIST'S END, with the page's mark.
+        if let Some(mark) = crate::paging::mark(shown.page, self.ranking().pages(list), b.texts) {
+            b.pager(mark, &controls, crate::paging::LIST_PAGER);
         }
     }
 
@@ -1839,12 +1911,19 @@ impl RankingView for View {
             // THE SHORTS AND A QUICK MARK were answered above.
             RankingKey::Shorts | RankingKey::Quick(_) => return Errand::Nothing,
         }
-        // A NEW PAGE STARTS AT ITS TOP: the cursor's spot is on another page.
-        if matches!(
-            key,
-            RankingKey::Earlier | RankingKey::Later | RankingKey::First | RankingKey::Last
-        ) {
-            self.follow("ranking-page", state, columns, texts);
+        // A NEW PAGE STARTS AT ITS TITLE, brought to the top of the door and
+        // the cursor on its `›` (the owner, 2026-11-10) — `RET` turns again;
+        // on the last page, on its `‹`. The page held stays drawn while the
+        // next one is read, so the title is there now. A key that turned
+        // nothing — the first page's `[` — moves nothing.
+        if self.ranking().shown(list).page != page {
+            self.bring_to_top(
+                crate::paging::LIST_TITLE,
+                &TURNED_ONTO,
+                state,
+                columns,
+                texts,
+            );
         }
         self.settle_in(state, columns, texts);
         Errand::Nothing
@@ -1879,6 +1958,42 @@ impl RankingView for View {
             }
             (Target::RankingPage, Press::Less) => {
                 return Some(self.ranking_pressed(RankingKey::Earlier, state, columns, texts));
+            }
+            // AN ARROW OF THE PAGES, beside the title or at the list's end.
+            (Target::RankingTurn(on), Press::Enter) => {
+                let key = if *on {
+                    RankingKey::Later
+                } else {
+                    RankingKey::Earlier
+                };
+                return Some(self.ranking_pressed(key, state, columns, texts));
+            }
+            // HOW MANY A PAGE HOLDS: `RET` and `→` on, `←` back — the page
+            // that holds the first video on screen asked, and its title
+            // brought to the top, as after a turn. THE SIZE IS BOTH LISTS',
+            // and so is the turn: the other list keeps the page holding the
+            // first video it showed, or a page number kept under the new
+            // size showed it other videos — page 2 of the ones set aside,
+            // 50 on at 25 a page, 200 on at 100.
+            (Target::RankingPerPage, Press::Enter | Press::Less | Press::More) => {
+                List::of(self.page())?;
+                let r = self.ranking_mut();
+                let from = r.per_page;
+                r.per_page = from.turned(press != Press::Less);
+                let to = r.per_page.get();
+                for list in [List::Ranking, List::SetAside] {
+                    let page = r.shown(list).page;
+                    r.shown_mut(list).page = crate::paging::resized(page, from.get(), to);
+                }
+                self.bring_to_top(
+                    crate::paging::LIST_TITLE,
+                    &TURNED_ONTO,
+                    state,
+                    columns,
+                    texts,
+                );
+                self.settle_in(state, columns, texts);
+                Errand::Nothing
             }
             // `RET` ON THE PAGE goes on, and from the last back to the first.
             (Target::RankingPage, Press::Enter | Press::More) => {
@@ -1919,7 +2034,11 @@ impl RankingView for View {
             return Errand::Nothing;
         };
         let Some(v) = self.ranking().row_of(&id).map(Cow::into_owned) else {
-            return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
+            return Errand::Said(
+                texts
+                    .t(crate::video_metrics_words::why_key(Why::NotFound))
+                    .into(),
+            );
         };
         let _ = (state, columns);
         match act {
@@ -1978,6 +2097,42 @@ impl RankingView for View {
         true
     }
 }
+
+/// THE TWO ARROWS OF THE RANKING'S PAGES, `[earlier, later]`, each a control
+/// named by the command its key runs (`chrome::hint_sentence` says it) —
+/// `None` for one that cannot move, whose place stays empty
+/// ([`crate::paging::arrows`]).
+fn page_arrows(arrows: Option<[bool; 2]>) -> [Option<(char, Target, &'static str)>; 2] {
+    let Some([earlier, later]) = arrows else {
+        return [None, None];
+    };
+    [
+        earlier.then_some((
+            tokens::icon::LIST_PAGE_EARLIER,
+            Target::RankingTurn(false),
+            EARLIER,
+        )),
+        later.then_some((
+            tokens::icon::LIST_PAGE_LATER,
+            Target::RankingTurn(true),
+            LATER,
+        )),
+    ]
+}
+
+/// The command of the page before, which its arrow says.
+const EARLIER: &str = "player-ranking-earlier";
+
+/// The command of the page after.
+const LATER: &str = "player-ranking-later";
+
+/// The cells of the title's arrows the cursor goes to after a turn: the
+/// page after's, and the page before's on the last page, which has none
+/// after (`player_rows::Builder::heading_paged` spots each `control-<id>`).
+const TURNED_ONTO: [&str; 2] = [
+    "control-player-ranking-later",
+    "control-player-ranking-earlier",
+];
 
 /// What the view's plugged ranking is missing for: the ranking's page is
 /// installed in every view whose methods here are called (the seam:
@@ -2081,7 +2236,11 @@ impl crate::player_seam::Page for Ranked {
         }
     }
 
-    fn said(&self, answer: &crate::player::Told, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    fn said(
+        &self,
+        answer: &crate::player::Told,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<crate::chrome::Named> {
         match answer {
             crate::player::Told::Ranking(outcome) => Some(said(outcome, texts)),
             _ => None,
@@ -2155,10 +2314,14 @@ pub(crate) mod tests {
         ronoctua_i18n::Texts::fresh(language).expect("a language")
     }
 
-    /// A view on the ranking, handed `count` videos.
+    /// A view on the ranking, handed `count` videos — AS A LIST, which the
+    /// tests of a video's row, its `⋯` and its keys are about; the ranking
+    /// opens on the thumbnails (`opens_on_the_thumbnails`), and a test of
+    /// the grid turns to it.
     fn on_the_ranking(count: u32) -> View {
         let mut v = View::blank(None).plugging(&PAGE);
         *v.ranking_mut() = Ranking::at(None);
+        v.ranking_mut().layout = Layout::List;
         v.ranking_mut()
             .given((0..count).map(video).collect(), u64::from(count));
         v.push(PageId::Ranking, None);
@@ -2351,8 +2514,12 @@ pub(crate) mod tests {
         let t = texts("pt-BR");
         let s = fixture::idle();
         let mut v = on_the_ranking(3);
-        v.ranking_mut()
-            .given((0..PER_PAGE).map(video).collect(), 60);
+        v.ranking_mut().given(
+            (0..crate::paging::PerPage::default().get())
+                .map(video)
+                .collect(),
+            60,
+        );
         assert_eq!(v.ranking().pages(List::Ranking), 3);
         v.key(Press::Ranking(RankingKey::Earlier), Some(&s), 100, &t);
         assert_eq!(v.ranking().ranking.page, 0);
@@ -2367,7 +2534,7 @@ pub(crate) mod tests {
         let rows = v.rows(Some(&s), 100, &t);
         let shelf = row_at(&rows, &format!("shelf-{}", spot_of(&video(0).id)));
         // THE ⋯ LINE is a line of its own, under the titles — the score's,
-        // the four faces of its rating beside it — and the channel's under
+        // the four arrows of its rating beside it — and the channel's under
         // it, the marks at its edge: a click on the picture takes the video,
         // and only a glyph acts.
         let more_line = (shelf..rows.len())
@@ -2416,6 +2583,196 @@ pub(crate) mod tests {
         assert_eq!(lighting(&rows, marks_line + 1), Lighting::Cell(Vec::new()));
         v.key(Press::Ranking(RankingKey::Layout), Some(&s), 100, &t);
         assert_eq!(v.ranking().layout, Layout::List);
+    }
+
+    /// FAILS IF: a turned page of the ranking is not brought to its title —
+    /// owed the top of the door once and once only, the cursor on the
+    /// title's `›` (`RET` turns again), on its `‹` on the last page, which
+    /// has no `›` — or `[` stops being the ranking's page before.
+    #[test]
+    fn a_turned_ranking_page_is_brought_to_its_title() {
+        use crate::player::Target;
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let mut v = on_the_ranking(3);
+        v.ranking_mut().given(
+            (0..crate::paging::PerPage::default().get())
+                .map(video)
+                .collect(),
+            60,
+        );
+        assert_eq!(
+            v.press_of_key(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Char(
+                '['
+            ))),
+            Some(Press::Ranking(RankingKey::Earlier))
+        );
+        assert_eq!(v.take_top(), None);
+        v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
+        let rows = v.rows(Some(&s), 100, &t);
+        let title = row_at(&rows, crate::paging::LIST_TITLE);
+        assert_eq!(v.take_top(), Some(title), "the title was not owed the top");
+        assert_eq!(v.take_top(), None, "owed twice");
+        assert_eq!(v.cursor(), title);
+        assert_eq!(
+            rows[title].target,
+            Target::RankingTurn(true),
+            "not on its `›`"
+        );
+        // `RET` THERE TURNS AGAIN — onto the last page, on its `‹`.
+        v.key(Press::Enter, Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.page, 2);
+        let rows = v.rows(Some(&s), 100, &t);
+        assert_eq!(v.take_top(), Some(title));
+        assert_eq!(
+            rows[title].target,
+            Target::RankingTurn(false),
+            "not on its `‹`"
+        );
+        // A KEY THAT TURNS NOTHING brings nothing.
+        v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
+        assert_eq!(v.take_top(), None, "the last page's `]` moved the door");
+    }
+
+    /// FAILS IF: the arrows beside the ranking's list title stop turning its
+    /// pages at a click, or draw an arrow that cannot move: no `‹` on the
+    /// first page, no `›` on the last, none for a list of one page.
+    #[test]
+    fn the_ranking_title_turns_its_pages() {
+        use crate::player::Target;
+        let t = texts("pt-BR");
+        let s = fixture::idle();
+        let mut v = on_the_ranking(3);
+        v.ranking_mut().given(
+            (0..crate::paging::PerPage::default().get())
+                .map(video)
+                .collect(),
+            60,
+        );
+        let turns = |rows: &[crate::player_rows::Row], n: usize| -> Vec<Target> {
+            rows[n].cells.iter().map(|c| c.target.clone()).collect()
+        };
+        let rows = v.rows(Some(&s), 100, &t);
+        let title = row_at(&rows, crate::paging::LIST_TITLE);
+        assert_eq!(turns(&rows, title), [Target::RankingTurn(true)]);
+        let later = rows[title].cells[0].from;
+        assert!(
+            v.clicked_at(title, later, &rows),
+            "the `›` waits for a second click"
+        );
+        v.key(Press::Enter, Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.page, 1);
+        let rows = v.rows(Some(&s), 100, &t);
+        assert_eq!(
+            turns(&rows, title),
+            [Target::RankingTurn(false), Target::RankingTurn(true)]
+        );
+        assert_eq!(
+            rows[title].cells[1].from, later,
+            "the `›` moved when the `‹` came"
+        );
+        let mut one = on_the_ranking(3);
+        let rows = one.rows(Some(&s), 100, &t);
+        assert!(turns(&rows, row_at(&rows, crate::paging::LIST_TITLE)).is_empty());
+        one.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
+        assert_eq!(one.ranking().ranking.page, 0);
+    }
+
+    /// FAILS IF: the ranking's page size stops turning round 25, 50 and 100
+    /// on its row — `RET` and `→` on, `←` back — or a new size is not asked
+    /// of the catalogue, or its page loses the first video that was on
+    /// screen; or THE OTHER LIST, which the size is also of, keeps its page
+    /// number under the new size, and shows other videos when it is opened.
+    #[test]
+    fn the_ranking_page_size_is_a_ring() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let mut v = on_the_ranking(3);
+        v.ranking_mut().given(
+            (0..crate::paging::PerPage::default().get())
+                .map(video)
+                .collect(),
+            230,
+        );
+        v.ranking_mut().ranking.page = 3;
+        v.ranking_mut().aside.page = 2;
+        let rows = v.rows(Some(&s), 100, &t);
+        v.top_mut().cursor = row_at(&rows, "ranking-per-page");
+        v.key(Press::More, Some(&s), 100, &t);
+        assert_eq!(v.ranking().per_page.get(), 50);
+        assert_eq!(
+            v.ranking().ranking.page,
+            1,
+            "75 is on the second page of fifty"
+        );
+        assert_eq!(
+            v.ranking().aside.page,
+            1,
+            "50 set aside is on the second page of fifty"
+        );
+        assert_eq!(v.ranking().asked(List::Ranking).per_page, 50);
+        assert!(v.take_top().is_some(), "a new size owes its title the top");
+        let rows = v.rows(Some(&s), 100, &t);
+        v.top_mut().cursor = row_at(&rows, "ranking-per-page");
+        v.key(Press::Less, Some(&s), 100, &t);
+        assert_eq!(v.ranking().per_page.get(), 25);
+        let rows = v.rows(Some(&s), 100, &t);
+        v.top_mut().cursor = row_at(&rows, "ranking-per-page");
+        v.key(Press::Enter, Some(&s), 100, &t);
+        v.top_mut().cursor = row_at(&v.rows(Some(&s), 100, &t), "ranking-per-page");
+        v.key(Press::Enter, Some(&s), 100, &t);
+        assert_eq!(v.ranking().per_page.get(), 100);
+        assert_eq!(
+            v.ranking().aside.page,
+            0,
+            "50 set aside is on the first page of a hundred"
+        );
+    }
+
+    /// FAILS IF: the ranking's list does not end with the arrows of its
+    /// pages and its mark — "2 of 3" — or they wear a title's ink (a section
+    /// would begin there, `section_ring`), or the cursor stops there but on
+    /// the arrows; or a list of one page ends with them.
+    #[test]
+    fn the_ranking_ends_with_its_arrows() {
+        use crate::player::Target;
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        for layout in [Layout::List, Layout::Grid] {
+            let mut v = on_the_ranking(3);
+            v.ranking_mut().layout = layout;
+            v.ranking_mut().given(
+                (0..crate::paging::PerPage::default().get())
+                    .map(video)
+                    .collect(),
+                60,
+            );
+            v.ranking_mut().ranking.page = 1;
+            let rows = v.rows(Some(&s), 100, &t);
+            let end = row_at(&rows, crate::paging::LIST_PAGER);
+            assert_eq!(end, rows.len() - 1, "{layout:?}: not at the list's end");
+            let pager = &rows[end];
+            assert!(pager.heading && pager.walked_onto(), "{layout:?}");
+            assert!(
+                pager
+                    .fields
+                    .iter()
+                    .all(|f| f.color != tokens::color::TEXT_HEADING),
+                "{layout:?}: the end wears a title's ink"
+            );
+            assert_eq!(pager.fields[0].text, "2 of 3");
+            assert_eq!(
+                pager
+                    .cells
+                    .iter()
+                    .map(|c| c.target.clone())
+                    .collect::<Vec<_>>(),
+                [Target::RankingTurn(false), Target::RankingTurn(true)]
+            );
+        }
+        let one = on_the_ranking(3);
+        let rows = one.rows(Some(&s), 100, &t);
+        assert!(!rows.iter().any(|r| r.spot == crate::paging::LIST_PAGER));
     }
 
     /// FAILS IF: the list's `⋯` is taken — by a click, or said under the
@@ -2744,7 +3101,7 @@ pub(crate) mod tests {
                 Ok(Got::Page(Listed {
                     asked,
                     rows: Vec::new(),
-                    total: u64::from(PER_PAGE) + 1,
+                    total: u64::from(crate::paging::PerPage::default().get()) + 1,
                 })),
             );
             assert_eq!(r.shown(list).page, 1, "{list:?}");
@@ -2772,6 +3129,8 @@ pub(crate) mod tests {
         let on = |rated: Option<Rating>, aside: bool, forever: Forever| {
             let mut v = View::blank(None).plugging(&PAGE);
             *v.ranking_mut() = Ranking::at(Some(catalogue.clone()));
+            // AS A LIST: the cursor follows a video's row.
+            v.ranking_mut().layout = Layout::List;
             let mut one = video(1);
             one.rating = rated;
             one.set_aside_at_s = aside.then_some(1_700_000_000);
@@ -2974,7 +3333,9 @@ pub(crate) mod tests {
     }
 
     /// FAILS IF: what a hide, a delete, a download or a mark came to stops
-    /// being said — the refusal's reason included — in either language.
+    /// being said — the refusal's reason included — in either language; or
+    /// the video's title in it stops being told as the NAME it quotes, the
+    /// one stretch a door draws in a name's ink (`Arg::Name`).
     #[test]
     fn what_was_done_is_said() {
         for language in ["en-GB", "pt-BR"] {
@@ -3017,6 +3378,8 @@ pub(crate) mod tests {
                 let s = said(&o, &t);
                 assert!(s.contains(title), "{language}: {s}");
                 assert!(!s.contains("player-"), "{language}: {s}");
+                let names: Vec<&str> = s.names().iter().map(|r| &s[r.clone()]).collect();
+                assert_eq!(names, [title], "{language}: {s:?}");
             }
             let busy = said(
                 &Outcome::Deleted(video(1).id, title.into(), Err(Why::Busy)),
@@ -3026,10 +3389,67 @@ pub(crate) mod tests {
         }
     }
 
+    /// FAILS IF: the question a delete asks stops drawing the video's title
+    /// in the ink a name in a question wears (`chrome::quoted_ink`) — on the
+    /// question's own line, the rest of it in the question's ink — in
+    /// either language, or a name's ink reaches any other stretch of it.
+    #[test]
+    fn the_delete_question_draws_the_video_as_a_name() {
+        let s = fixture::idle();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut v = View::blank(None).plugging(&PAGE);
+            *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+            v.ranking_mut().layout = Layout::List;
+            v.ranking_mut().given(vec![video(0), video(1)], 2);
+            v.push(PageId::Ranking, None);
+            v.follow(&spot_of(&video(1).id), Some(&s), 200, &t);
+            v.key(
+                Press::Ranking(RankingKey::Quick(Quick::Delete)),
+                Some(&s),
+                200,
+                &t,
+            );
+            let asked = tokens::color::QUESTION_ASKED;
+            let quoted = crate::chrome::quoted_ink(asked);
+            assert_ne!(quoted, asked, "a name in a question wears its own ink");
+            let rows = v.rows(Some(&s), 200, &t);
+            let line = rows
+                .iter()
+                .find(|r| r.fields.iter().any(|f| f.color == quoted))
+                .unwrap_or_else(|| panic!("{language}: no name in the question"));
+            let read: String = line.fields.iter().map(|f| f.text.as_str()).collect();
+            assert_eq!(
+                read,
+                t.t_with(
+                    key::ASK_PLAYER_RANKING_DELETE,
+                    &[("title", &video(1).title)]
+                ),
+                "{language}: the question is not its sentence"
+            );
+            let named: Vec<&str> = line
+                .fields
+                .iter()
+                .filter(|f| f.color == quoted)
+                .map(|f| f.text.as_str())
+                .collect();
+            assert_eq!(named, [video(1).title.as_str()], "{language}");
+            assert!(
+                line.fields
+                    .iter()
+                    .all(|f| f.color == quoted || f.color == asked),
+                "{language}: {:?}",
+                line.fields
+            );
+        }
+    }
+
     /// A view on the videos set aside, handed `rows`.
     fn on_the_aside(rows: Vec<RankedVideo>) -> View {
         let mut v = View::blank(None).plugging(&PAGE);
         *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+        // AS A LIST: its tests are about a video's row.
+        v.ranking_mut().layout = Layout::List;
         let total = u64::try_from(rows.len()).unwrap_or(u64::MAX);
         v.ranking_mut().given_aside(rows, total);
         v.push(PageId::SetAside, None);
@@ -3056,6 +3476,30 @@ pub(crate) mod tests {
         assert_eq!(shorts_after(Shorts::Only, true), Shorts::Any);
         assert_eq!(shorts_after(Shorts::Any, true), Shorts::Without);
         assert_eq!(shorts_after(Shorts::Without, false), Shorts::Any);
+    }
+
+    /// FAILS IF: the ranking opens anywhere but on its thumbnails (the owner,
+    /// 2026-11-10: "o player abre em miniaturas") — by default, on this
+    /// machine, or in the view a door builds (`Ranked::state`), the window's
+    /// and the footer's column's — or a page opened so draws no shelf.
+    #[test]
+    fn opens_on_the_thumbnails() {
+        use crate::player_seam::Page as _;
+        let built = PAGE.state(false);
+        let built = built
+            .downcast_ref::<Ranking>()
+            .expect("the ranking's state");
+        for r in [&Ranking::default(), &Ranking::of_this_machine(), built] {
+            assert_eq!(r.layout, Layout::Grid);
+        }
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let mut v = View::blank(None).plugging(&PAGE);
+        *v.ranking_mut() = Ranking::at(None);
+        v.ranking_mut().given((0..3).map(video).collect(), 3);
+        v.push(PageId::Ranking, None);
+        let rows = v.rows(Some(&s), 100, &t);
+        row_at(&rows, &format!("shelf-{}", spot_of(&video(0).id)));
     }
 
     /// FAILS IF: turning a list's Shorts — `S`, or the ring's row — leaves
@@ -3087,8 +3531,12 @@ pub(crate) mod tests {
         );
         // FROM THE LAST PAGE: a new filter is read from its first.
         let mut v = on_the_ranking(3);
-        v.ranking_mut()
-            .given((0..PER_PAGE).map(video).collect(), 60);
+        v.ranking_mut().given(
+            (0..crate::paging::PerPage::default().get())
+                .map(video)
+                .collect(),
+            60,
+        );
         v.key(Press::Ranking(RankingKey::Last), Some(&s), 100, &t);
         assert_eq!(v.ranking().ranking.page, 2);
         v.ranking_mut().given(vec![video(0)], 60);
@@ -3248,8 +3696,8 @@ pub(crate) mod tests {
     }
 
     /// FAILS IF: a glyph beside a video's words stops doing at once what it
-    /// shows — the face of its rating lit, and a click on it taking the
-    /// rating off; another face rating it so; the bookmark filled while it is
+    /// shows — the arrow of its rating lit, and a click on it taking the
+    /// rating off; another arrow rating it so; the bookmark filled while it is
     /// set aside, and taking it out; the ∞ lit while its channel keeps it,
     /// and a click putting the video's own mark; the eye hiding it at once;
     /// the bin asking first, "no" first — or, on the set-aside list, the eye
@@ -3389,6 +3837,8 @@ pub(crate) mod tests {
         let id = one.id.clone();
         let mut v = View::blank(None).plugging(&PAGE);
         *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+        // AS A LIST: the cursor follows a video's row.
+        v.ranking_mut().layout = Layout::List;
         v.ranking_mut().given(vec![video(0), one.clone()], 2);
         v.push(PageId::Ranking, None);
         v.follow(&spot_of(&id), Some(&s), 100, &t);

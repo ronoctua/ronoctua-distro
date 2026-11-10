@@ -46,10 +46,11 @@
 //! too.
 
 use crate::key;
-use crate::player::{Errand, PageId, Purpose, Target, TrackKind, trouble_sentence};
+use crate::player::{Errand, PageId, Purpose, Target, TrackKind, trouble_named, trouble_sentence};
 use crate::player_queue::lane_name;
 use crate::player_rows::Builder;
 use crate::wake::Wake;
+use ronoctua_i18n::Arg;
 use ronoctua_player::limit::{Limit, TooMany};
 use ronoctua_player::own::{Lane, LaneKind, Stack};
 use ronoctua_player::session::{SUBTITLES_PER_PICTURE, picture_of, subtitle_slot};
@@ -379,7 +380,7 @@ pub fn lay_over(location: &str, s: &State, texts: &ronoctua_i18n::Texts) -> Erra
         )
     };
     let Some(picture) = film(s) else {
-        return Errand::Said(trouble_sentence(
+        return Errand::Said(trouble_named(
             &Trouble::NoPicture {
                 path: location.to_owned(),
             },
@@ -395,12 +396,12 @@ pub fn lay_over(location: &str, s: &State, texts: &ronoctua_i18n::Texts) -> Erra
         .iter()
         .any(|l| l.source == location && l.track.is_none())
     {
-        return Errand::Said(texts.t(key::PLAYER_TRACK_PLAYS_ALREADY));
+        return Errand::Said(texts.t(key::PLAYER_TRACK_PLAYS_ALREADY).into());
     }
     // THE SEVENTH, refused as the player would refuse it — before it is
     // sent, and in the same words.
     if over.len() >= SUBTITLES_PER_PICTURE {
-        return Errand::Said(trouble_sentence(
+        return Errand::Said(trouble_named(
             &Trouble::TooMany(TooMany {
                 what: Limit::Subtitles,
                 most: SUBTITLES_PER_PICTURE,
@@ -416,7 +417,9 @@ pub fn lay_over(location: &str, s: &State, texts: &ronoctua_i18n::Texts) -> Erra
             start_seconds: 0.0,
             over: Some(picture.id),
         },
-        texts.t_with(key::PLAYER_SUBTITLE_ADDED, &[("name", &named())]),
+        texts
+            .t_args_marked(key::PLAYER_SUBTITLE_ADDED, &[("name", Arg::Name(&named()))])
+            .into(),
     )
 }
 
@@ -640,7 +643,7 @@ mod tests {
         ));
         assert_eq!(
             lay_over("/films/a.pt-BR.srt", &s, &t),
-            Errand::Said(t.t(key::PLAYER_TRACK_PLAYS_ALREADY))
+            Errand::Said(t.t(key::PLAYER_TRACK_PLAYS_ALREADY).into())
         );
         for id in 6..9 {
             s.lanes.push(Lane::new(
@@ -651,13 +654,16 @@ mod tests {
         }
         assert_eq!(
             lay_over("/films/a.fr.srt", &s, &t),
-            Errand::Said(trouble_sentence(
-                &Trouble::TooMany(TooMany {
-                    what: Limit::Subtitles,
-                    most: 6
-                }),
-                &t
-            ))
+            Errand::Said(
+                trouble_sentence(
+                    &Trouble::TooMany(TooMany {
+                        what: Limit::Subtitles,
+                        most: 6
+                    }),
+                    &t
+                )
+                .into()
+            )
         );
         let song = alone("/m/a.flac", vec![track(1, Kind::Audio, None, true)]);
         assert!(matches!(lay_over("/m/a.srt", &song, &t), Errand::Said(_)));

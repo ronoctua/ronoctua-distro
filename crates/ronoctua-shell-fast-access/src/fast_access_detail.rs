@@ -1708,13 +1708,19 @@ fn amend_of(
         }
         D::RemoveLocation => {
             view.detail.confirm = Some(Confirm {
-                title: texts.t_args(
-                    crate::key::FILES_ASK_LOCATION,
-                    &[
-                        ("n", ronoctua_i18n::Arg::Number(1)),
-                        ("name", ronoctua_i18n::Arg::Text(&name)),
-                    ],
-                ),
+                // THE FILE IS A NAME the question quotes (`Arg::Name`), told
+                // as every name is; the question is drawn in a title's ink,
+                // which a name shares (`chrome::quoted_ink`), so only the
+                // words go.
+                title: texts
+                    .t_args_marked(
+                        crate::key::FILES_ASK_LOCATION,
+                        &[
+                            ("n", ronoctua_i18n::Arg::Number(1)),
+                            ("name", ronoctua_i18n::Arg::Name(&name)),
+                        ],
+                    )
+                    .text,
                 answers: vec![
                     texts.t(crate::key::FILES_NO),
                     texts.t(crate::key::FILES_LOCATION_COPY),
@@ -1894,13 +1900,20 @@ fn file_pressed(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             view.detail.confirm = Some(Confirm {
-                title: texts.t_with(
-                    crate::key::FILES_CONFIRM_MODE,
-                    &[
-                        ("what", name.as_str()),
-                        ("mode", &format!("{:04o}", wanted & 0o7777)),
-                    ],
-                ),
+                // THE FILE IS A NAME (`Arg::Name`) — in a title's ink, as
+                // above.
+                title: texts
+                    .t_args_marked(
+                        crate::key::FILES_CONFIRM_MODE,
+                        &[
+                            ("what", ronoctua_i18n::Arg::Name(&name)),
+                            (
+                                "mode",
+                                ronoctua_i18n::Arg::Text(&format!("{:04o}", wanted & 0o7777)),
+                            ),
+                        ],
+                    )
+                    .text,
                 answers: vec![
                     texts.t(crate::key::FILES_NO),
                     texts.t(crate::key::FILES_YES),
@@ -1915,8 +1928,9 @@ fn file_pressed(
         // here, the entry lit and its click said nothing.
         FieldPress::Panel(hit) => {
             match view.detail.panel.as_mut().and_then(|p| p.panel.click(&hit)) {
+                // AN EXPLANATION CARRIED AS DATA, its names told (`said_of`).
                 Some(crate::report::Step::Say(why)) => {
-                    vec![Errand::Say(texts.t_with(why.key, &why.borrowed()))]
+                    vec![Errand::Say(crate::chrome::said_of(texts, &why))]
                 }
                 _ => Vec::new(),
             }

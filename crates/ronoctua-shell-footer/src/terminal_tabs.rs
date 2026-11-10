@@ -315,19 +315,25 @@ impl ModelineAdapter for Adapter<'_> {
         None
     }
 
-    fn hint(&self, t: &Target, texts: &Texts) -> Option<String> {
+    fn hint(&self, t: &Target, texts: &Texts) -> Option<crate::chrome::Named> {
         let count = |n: usize| Arg::Number(i64::try_from(n).unwrap_or(i64::MAX));
+        // A TERMINAL'S TITLE is told as a name (`Arg::Name`): the line draws
+        // it in its own ink.
         Some(match t {
             Target::Tab {
                 front: true, title, ..
-            } => texts.t_with(key::HINT_TERMINAL_TAB_FRONT, &[("title", title)]),
-            Target::Tab { title, .. } => texts.t_with(key::HINT_TERMINAL_TAB, &[("title", title)]),
-            Target::Before(n, _) => {
-                texts.t_args(key::HINT_TERMINAL_TABS_BEFORE, &[("count", count(*n))])
-            }
-            Target::After(n, _) => {
-                texts.t_args(key::HINT_TERMINAL_TABS_AFTER, &[("count", count(*n))])
-            }
+            } => texts
+                .t_args_marked(key::HINT_TERMINAL_TAB_FRONT, &[("title", Arg::Name(title))])
+                .into(),
+            Target::Tab { title, .. } => texts
+                .t_args_marked(key::HINT_TERMINAL_TAB, &[("title", Arg::Name(title))])
+                .into(),
+            Target::Before(n, _) => texts
+                .t_args(key::HINT_TERMINAL_TABS_BEFORE, &[("count", count(*n))])
+                .into(),
+            Target::After(n, _) => texts
+                .t_args(key::HINT_TERMINAL_TABS_AFTER, &[("count", count(*n))])
+                .into(),
         })
     }
 
@@ -412,6 +418,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// FAILS IF: a tab's hover says its terminal's title in the line's own
+    /// ink — not told as a name (`Arg::Name`) — or tells the words around
+    /// it as one.
+    #[test]
+    fn a_tabs_hover_tells_its_title_as_a_name() {
+        let census = [
+            terminal(1, 0, Some(VIEWER), true, "cargo test"),
+            terminal(2, 1, Some(VIEWER), false, "~/main"),
+        ];
+        let a = Adapted::Terminals(Adapter::new(&census));
+        let t = texts();
+        let line: Line = a.line(Vec::new(), &window(VIEWER), &t);
+        let mut told = Vec::new();
+        for (_, target) in &line.targets {
+            let crate::adapt::Target::Terminals(Target::Tab { title, .. }) = target else {
+                continue;
+            };
+            let said = a.hint(target, &t).expect("a sentence");
+            let names: Vec<&str> = said
+                .names()
+                .iter()
+                .map(|r| &said.as_str()[r.clone()])
+                .collect();
+            assert_eq!(names, [title.as_str()], "{said}");
+            told.push(title.clone());
+        }
+        assert_eq!(told, ["cargo test", "~/main"], "a tab was not hovered");
     }
 
     /// FAILS IF: one terminal alone, a group of another window, or a group

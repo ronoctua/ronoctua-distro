@@ -56,6 +56,52 @@ pub fn refused(ask: &Ask, why: Refusal, words: &str, texts: &ronoctua_i18n::Text
     )
 }
 
+/// What a pairing ASKS, in words — the device a name the sentence quotes
+/// (`Arg::Name`), and the service it wants another. ONE SENTENCE FOR BOTH:
+/// the radio's page asks it, drawing each name in a name's ink, and the
+/// footer's pairing card (a notification, `surface/radio.rs`) says the same
+/// words, so the two are never worded apart.
+#[must_use]
+pub fn pairing_asked(
+    texts: &ronoctua_i18n::Texts,
+    asked: &ronoctua_bluetooth::agent::Asked,
+    name: &str,
+) -> ronoctua_i18n::Marked {
+    use crate::key;
+    use ronoctua_bluetooth::agent::Asked;
+    use ronoctua_i18n::Arg;
+    match asked {
+        Asked::Confirm(code) => texts.t_args_marked(
+            key::BLUETOOTH_PAIRING_CONFIRM,
+            &[("name", Arg::Name(name)), ("code", Arg::Text(code))],
+        ),
+        Asked::Passkey(code) => texts.t_args_marked(
+            key::BLUETOOTH_PAIRING_PASSKEY,
+            &[("name", Arg::Name(name)), ("code", Arg::Text(code))],
+        ),
+        Asked::Pin => texts.t_args_marked(key::BLUETOOTH_PAIRING_PIN, &[("name", Arg::Name(name))]),
+        // SIX DIGITS AS A NUMBER, which is not the same request as a PIN and
+        // does not read the same: `RequestPasskey` used to be labelled a PIN,
+        // and a keyboard has no code printed on it.
+        Asked::Typed => texts.t_args_marked(
+            key::BLUETOOTH_PAIRING_PASSKEY_HERE,
+            &[("name", Arg::Name(name))],
+        ),
+        Asked::Authorize => texts.t_args_marked(
+            key::BLUETOOTH_PAIRING_AUTHORIZE,
+            &[("name", Arg::Name(name))],
+        ),
+        Asked::Service(uuid) => {
+            let service =
+                ronoctua_bluetooth::profile_key(uuid).map_or_else(|| uuid.clone(), |k| texts.t(k));
+            texts.t_args_marked(
+                key::BLUETOOTH_PAIRING_SERVICE,
+                &[("name", Arg::Name(name)), ("service", Arg::Name(&service))],
+            )
+        }
+    }
+}
+
 /// The four device marks the modeline can carry at once.
 ///
 /// FOUR literals and not a `format!`: `layout::Segment::id` is a
@@ -470,6 +516,32 @@ pub fn adapter_order(key: AdapterKey, scene: &Scene) -> Option<Ask> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAILS IF: the device a pairing asks about, or the service it wants,
+    /// is said as plain words — the page would draw them in the sentence's
+    /// ink — or the told sentence reads other words than the plain one.
+    #[test]
+    fn a_pairing_tells_the_device_and_the_service() {
+        use ronoctua_bluetooth::agent::Asked;
+        let t = ronoctua_i18n::Texts::fresh("en-GB").unwrap();
+        let named = |m: &ronoctua_i18n::Marked| -> Vec<String> {
+            m.names
+                .iter()
+                .map(|r| m.text[r.clone()].to_owned())
+                .collect()
+        };
+        let pin = pairing_asked(&t, &Asked::Pin, "Keyboard K380");
+        assert_eq!(named(&pin), ["Keyboard K380"], "{pin:?}");
+        assert_eq!(
+            pin.text,
+            t.t_with(
+                crate::key::BLUETOOTH_PAIRING_PIN,
+                &[("name", "Keyboard K380")]
+            )
+        );
+        let service = pairing_asked(&t, &Asked::Service("no-such-uuid".to_owned()), "Phone");
+        assert_eq!(named(&service), ["Phone", "no-such-uuid"], "{service:?}");
+    }
 
     #[test]
     fn every_refusal_has_a_sentence() {

@@ -1050,7 +1050,9 @@ about-player-ranking-forever = Marks this video never to be deleted when its tim
 about-player-ranking-hide = Hides this video from the ranking, or shows a hidden one in it again; it stays in the catalogue.
 about-player-ranking-delete = Deletes this video from the catalogue for good, after a question; it never comes back, not even in a scan.
 # AND WHAT THE PAGE ROW OF A LIST DOES, said under the pointer.
-about-player-ranking-page = Which page of the list is shown: pressing it goes on to the next one, and from the last back to the first.
+# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
+about-player-ranking-page = { $earlier } { $prior } go back, { $later } { $next } on, { $first } { $last } to the first and the last page. Pressing it goes on to the next one, and from the last back to the first.
+about-player-ranking-per-page = How many videos a page of the list shows: pressing it gives the next size, and round again. It holds while the view is open.
 # THE RANKING'S KEYS.
 cmd-player-ranking-more = This video's own page: play, add, Chrome, Nyxt, download, rate, set aside, keep, hide, delete
 cmd-player-ranking-earlier = The ranking's page before

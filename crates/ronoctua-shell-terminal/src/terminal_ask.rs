@@ -23,7 +23,7 @@
 
 use ronoctua_render::cells::{Cell, Grapheme, Rgba, Sheet, Width};
 use ronoctua_shell_kit::aim::Aim;
-use ronoctua_shell_kit::chrome::{Piece, Register};
+use ronoctua_shell_kit::chrome::{Named, Piece, Register};
 use ronoctua_terminals::wire;
 use ronoctua_tokens as tokens;
 use smithay_client_toolkit::seat::keyboard::Keysym;
@@ -109,17 +109,24 @@ impl Question {
     #[must_use]
     pub fn runs(&self, texts: &ronoctua_i18n::Texts, lit: Option<Click>) -> Vec<Run> {
         use crate::key;
-        let (said, no, yes) = match &self.asked {
+        let (said, no, yes): (Named, _, _) = match &self.asked {
             Asked::Paste(..) => (
-                texts.t(key::TERMINAL_PASTE_UNSAFE),
+                texts.t(key::TERMINAL_PASTE_UNSAFE).into(),
                 texts.t(key::TERMINAL_PASTE_REFUSE),
                 texts.t(key::TERMINAL_PASTE_ALLOW),
             ),
             Asked::ClipboardRead(c) => (
                 if c.program.trim().is_empty() {
-                    texts.t(key::TERMINAL_CLIPBOARD_READ_UNNAMED)
+                    texts.t(key::TERMINAL_CLIPBOARD_READ_UNNAMED).into()
                 } else {
-                    texts.t_with(key::TERMINAL_CLIPBOARD_READ, &[("program", &c.program)])
+                    // THE PROGRAM IS A NAME the question quotes
+                    // (`Arg::Name`): drawn in a name's ink in a question.
+                    texts
+                        .t_args_marked(
+                            key::TERMINAL_CLIPBOARD_READ,
+                            &[("program", ronoctua_i18n::Arg::Name(&c.program))],
+                        )
+                        .into()
                 },
                 texts.t(key::TERMINAL_CLIPBOARD_REFUSE),
                 texts.t(key::TERMINAL_CLIPBOARD_ALLOW),
@@ -134,14 +141,14 @@ impl Question {
                 Register::Action
             };
             Run {
-                text: label,
+                text: label.into(),
                 ink: register.color(),
                 does: Some(Click::Answer(which)),
             }
         };
         let separator = || Run::of(&Piece::separator());
         vec![
-            Run::of(&Piece::asked(said)),
+            Run::sentence(said, Register::Asked),
             separator(),
             answer(no, false),
             separator(),
@@ -169,8 +176,10 @@ pub enum Click {
 /// when it does something.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
-    /// The text.
-    pub text: String,
+    /// The text — and the names it quotes, which are drawn in the ink a
+    /// name takes in `ink` (`chrome::quoted_ink`): a run is cut whole at
+    /// its end ([`laid`]), so a sentence stays ONE run, its names inside it.
+    pub text: Named,
     /// Its ink — a role of the chrome, which the line's ground is.
     pub ink: tokens::Color,
     /// What a click on it does.
@@ -182,8 +191,19 @@ impl Run {
     #[must_use]
     pub fn of(piece: &Piece) -> Self {
         Self {
-            text: piece.text.clone(),
+            text: piece.text.clone().into(),
             ink: piece.register.color(),
+            does: None,
+        }
+    }
+
+    /// A sentence, in `register`'s ink — its names in the ink a name takes
+    /// in it.
+    #[must_use]
+    pub fn sentence(said: Named, register: Register) -> Self {
+        Self {
+            text: said,
+            ink: register.color(),
             does: None,
         }
     }
@@ -198,34 +218,37 @@ impl Run {
             Register::Action
         };
         Self {
-            text: label,
+            text: label.into(),
             ink: register.color(),
             does: Some(does),
         }
     }
 }
 
-/// The message the door said, as the line's one run.
+/// The message the door said, as the line's one run — the names it quotes
+/// in a name's ink.
 #[must_use]
-pub fn said(text: &str) -> Vec<Run> {
-    vec![Run::of(&Piece::said(text))]
+pub fn said(text: &Named) -> Vec<Run> {
+    vec![Run::sentence(text.clone(), Register::Said)]
 }
 
 /// The runs laid out across `columns` cells: each run's columns, the first
 /// run — the sentence — cut at its end when the line is too narrow for the
-/// whole of it, so the answers are never the ones that go.
+/// whole of it, so the answers are never the ones that go. A name is cut
+/// where its sentence is (`Named::elided_end`).
 #[must_use]
 pub fn laid(runs: &[Run], columns: u16) -> Vec<(u16, Run)> {
-    use ronoctua_render::layout::{elide_end, width};
+    use ronoctua_render::layout::width;
     let rest: u16 = runs.iter().skip(1).map(|r| width(&r.text)).sum();
     let mut out = Vec::with_capacity(runs.len());
     let mut at = 0u16;
     for (n, run) in runs.iter().enumerate() {
         let room = columns.saturating_sub(at);
         let text = if n == 0 {
-            elide_end(&run.text, columns.saturating_sub(rest).max(1).min(room))
+            run.text
+                .elided_end(columns.saturating_sub(rest).max(1).min(room))
         } else {
-            elide_end(&run.text, room)
+            run.text.elided_end(room)
         };
         let wide = width(&text);
         if wide == 0 {
@@ -265,26 +288,30 @@ pub fn lay_line(sheet: &mut Sheet, line: u16, laid: &[(u16, Run)], ground: Rgba)
     let mut cells = vec![blank; columns];
     for (at, run) in laid {
         let mut x = usize::from(*at);
-        let fg = Rgba::of(run.ink);
-        for g in ronoctua_protocol::cells_of(&run.text) {
-            let wide = ronoctua_protocol::cells_of_one(g) == 2;
-            if x + usize::from(wide) >= columns {
-                break;
-            }
-            cells[x] = Cell {
-                grapheme: Grapheme::of(g),
-                fg,
-                bg: Some(ground),
-                width: if wide { Width::Wide } else { Width::Narrow },
-                ..Cell::default()
-            };
-            if wide {
-                cells[x + 1] = Cell {
-                    width: Width::Spacer,
-                    ..cells[x].clone()
+        // THE NAMES A SENTENCE QUOTES, each in the ink a name takes in the
+        // run's (`chrome::quoted_ink`).
+        'run: for (text, ink) in run.text.runs(run.ink) {
+            let fg = Rgba::of(ink);
+            for g in ronoctua_protocol::cells_of(text) {
+                let wide = ronoctua_protocol::cells_of_one(g) == 2;
+                if x + usize::from(wide) >= columns {
+                    break 'run;
+                }
+                cells[x] = Cell {
+                    grapheme: Grapheme::of(g),
+                    fg,
+                    bg: Some(ground),
+                    width: if wide { Width::Wide } else { Width::Narrow },
+                    ..Cell::default()
                 };
+                if wide {
+                    cells[x + 1] = Cell {
+                        width: Width::Spacer,
+                        ..cells[x].clone()
+                    };
+                }
+                x += 1 + usize::from(wide);
             }
-            x += 1 + usize::from(wide);
         }
     }
     if sheet.row(line) != cells.as_slice() {
@@ -394,5 +421,47 @@ mod tests {
             unnamed.runs(&texts, None)[0].text,
             texts.t(crate::key::TERMINAL_CLIPBOARD_READ_UNNAMED)
         );
+    }
+
+    /// FAILS IF: the program a question quotes is drawn in the question's
+    /// own ink — not told as a name (`Arg::Name`), so not in the ink a name
+    /// takes in a question — or a narrow line, cutting the sentence, leaves
+    /// a name's ink on the `…` or past the cut.
+    #[test]
+    fn the_program_is_drawn_in_a_names_ink_and_cut_with_its_sentence() {
+        let program = "a-long-editor-name";
+        for language in ["en-GB", "pt-BR"] {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            let q = Question::new(Asked::ClipboardRead(consent(program)));
+            let runs = q.runs(&texts, None);
+            let inked = runs[0].text.runs(runs[0].ink);
+            assert!(
+                inked.contains(&(program, Register::QuotedAsked.color())),
+                "{language}: {inked:?}"
+            );
+            assert!(
+                inked
+                    .iter()
+                    .filter(|(_, ink)| *ink == Register::QuotedAsked.color())
+                    .all(|(text, _)| *text == program),
+                "{language}: {inked:?}"
+            );
+            // A LINE TOO NARROW for the whole sentence, cut four cells into
+            // the name: what is left of it is still the name's, and the `…`
+            // is nobody's.
+            use ronoctua_render::layout::width;
+            let sentence = runs[0].text.as_str();
+            let before = width(&sentence[..sentence.find(program).expect("the program")]);
+            let rest: u16 = runs.iter().skip(1).map(|r| width(&r.text)).sum();
+            let narrow = laid(&runs, rest + before + 5);
+            let cut = &narrow[0].1.text;
+            let names: Vec<&str> = cut
+                .names()
+                .iter()
+                .map(|r| &cut.as_str()[r.clone()])
+                .collect();
+            assert_eq!(names, [&program[..4]], "{language}: {cut:?}");
+            assert!(cut.ends_with('…'), "{language}: {cut:?}");
+        }
     }
 }

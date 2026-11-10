@@ -111,8 +111,10 @@ pub trait ModelineAdapter {
     fn draggable(&self, t: &Self::Target) -> bool;
     /// What dropping one segment on another does.
     fn dropped(&self, from: &Self::Target, onto: &Self::Target) -> Option<Act>;
-    /// What the message line says while the pointer rests on a segment.
-    fn hint(&self, t: &Self::Target, texts: &Texts) -> Option<String>;
+    /// What the message line says while the pointer rests on a segment —
+    /// with the names it quotes told (a tab's title, an extension's name),
+    /// so the line draws them in their own ink (`chrome::Named`).
+    fn hint(&self, t: &Self::Target, texts: &Texts) -> Option<crate::chrome::Named>;
     /// A counter's target, told how many it counts.
     fn counted(&self, t: &Self::Target, n: usize) -> Self::Target;
     /// The `,` group while its window is focused: `(sequence, command,
@@ -257,7 +259,7 @@ impl Adapted<'_> {
 
     /// The hover's sentence.
     #[must_use]
-    pub fn hint(&self, t: &Target, texts: &Texts) -> Option<String> {
+    pub fn hint(&self, t: &Target, texts: &Texts) -> Option<crate::chrome::Named> {
         match (self, t) {
             (Self::Kiosk(a), Target::Kiosk(t)) => a.hint(t, texts),
             (Self::Terminals(a), Target::Terminals(t)) => a.hint(t, texts),

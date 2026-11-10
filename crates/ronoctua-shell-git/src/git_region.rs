@@ -267,9 +267,13 @@ impl Git {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let said = way.texts().t_with(
+        // THE FILE IS A NAME the sentence quotes; the id is not.
+        let said = way.texts().t_args_marked(
             crate::key::FILES_GIT_KEPT,
-            &[("path", &name), ("id", crate::git_line::short(id))],
+            &[
+                ("path", ronoctua_i18n::Arg::Name(&name)),
+                ("id", ronoctua_i18n::Arg::Text(crate::git_line::short(id))),
+            ],
         );
         way.say(said, crate::echo::Echo::Normal);
     }
@@ -1078,7 +1082,7 @@ mod tests {
             clone_of(None, argument, &mut w);
             assert_eq!(
                 w.owed,
-                vec![Effect::Say(said.clone(), crate::echo::Echo::Normal)],
+                vec![Effect::Say(said.clone().into(), crate::echo::Echo::Normal)],
                 "{argument:?}"
             );
         }
@@ -1139,7 +1143,7 @@ mod tests {
         assert_eq!(
             w.owed,
             vec![Effect::Say(
-                texts.t(crate::key::DEV_CLONE_UNHEARD),
+                texts.t(crate::key::DEV_CLONE_UNHEARD).into(),
                 crate::echo::Echo::Normal
             )]
         );
@@ -1210,7 +1214,7 @@ mod tests {
         assert_eq!(
             w.owed,
             vec![Effect::Say(
-                texts.t(crate::key::DEV_CLONE_UNHEARD),
+                texts.t(crate::key::DEV_CLONE_UNHEARD).into(),
                 crate::echo::Echo::Normal
             )]
         );

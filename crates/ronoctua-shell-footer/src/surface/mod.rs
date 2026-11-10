@@ -403,6 +403,14 @@ struct Footer {
     /// stale input behind it.
     owes_paint: bool,
 
+    /// A REGION PUT A ROW FIRST ON THE PAGE with the key being taken
+    /// (`Paging::Top`, [`Footer::top_placed_holds`]): a list's title once its
+    /// page turned. The follow that ends the key leaves it there, once,
+    /// while the cursor is on the page — its margin would put the title a
+    /// line back, on the very key that brought it. The window's door keeps
+    /// the same place the same way (`Ui::place_top`).
+    top_placed: bool,
+
     /// Is the locator currently picking a FILE, and not a buffer?
     ///
     /// The same list serves both, so what tells them apart is this — and it is
@@ -747,7 +755,10 @@ struct Footer {
     /// indistinguishable from "it did not register the key". In Doom, the echo
     /// area says `SPC g x is not bound`, and that is what turns a mute error into
     /// information.
-    echo: Option<(String, Option<std::time::Instant>)>,
+    ///
+    /// The sentence with the names it quotes told ([`crate::chrome::Named`]):
+    /// a title or a file in it is drawn in the line's quoted ink.
+    echo: Option<(crate::chrome::Named, Option<std::time::Instant>)>,
     /// What the machine did — every source's last reading, so the next one is
     /// compared with it and the first is only a baseline. See [`crate::events`].
     events: crate::events::Watch,
@@ -2056,6 +2067,22 @@ struct Screen {
     photographed: Option<crate::door::Composed>,
 }
 
+/// THE MINIBUFFER'S ECHO AS THE PIECES OF ITS LINE: the shell's own answer
+/// `echo` — its words in the said register and each name it quotes in the
+/// one a name in it wears (`door::list::said_pieces`, the builder a
+/// window's line 0 and the files window's message are drawn by too) — or,
+/// when the shell has nothing to answer, what `event` says: an event of the
+/// machine or a notification on the line.
+///
+/// The person's answer first, always: it is what they just asked for, and
+/// what it interrupted waits at the front of its queue.
+fn echo_pieces(
+    echo: Option<&crate::chrome::Named>,
+    event: impl FnOnce() -> Option<Vec<crate::chrome::Piece>>,
+) -> Option<Vec<crate::chrome::Piece>> {
+    echo.map(crate::door::list::said_pieces).or_else(event)
+}
+
 /// The SHOWN REGION'S OWN ROW drawn at index `line` of the page — what its
 /// band, its click and what it says under the pointer are asked by: the page
 /// of a region scrolled past its top starts at its row `offset`, never `0`.
@@ -2189,6 +2216,88 @@ struct ExpansionRow {
     /// The region's row this line is, every line of a region's — a line
     /// that takes no click too (`region::Placed`).
     region_row: Option<usize>,
+    /// The line's OWN GROUND, a region's (`region::Told::ground`): painted
+    /// with the containers' grounds, under every band drawn on the line, as
+    /// wide as its band.
+    ground: Option<tokens::Color>,
+}
+
+/// THE GROUNDS A REGION'S LINES STAND ON (`region::Told::ground`): one quad
+/// for each run of lines on screen on the same ground and the same band —
+/// a block of six lines is one ground, where six quads would be six seams
+/// for a renderer that rounds to the pixel (`chrome::row_grounds`, a
+/// window's) — and nothing under a line that has none.
+///
+/// `place_of` is where line `i` of `visible` lands — the band's edge and
+/// the grid's line — and `band_of` how wide a line's band is from that
+/// edge on screen line `line` (the grid's line under `first_line`), `(x,
+/// width)` in pixels: a line's ground is never wider than the light a
+/// pointer on it would get, so a row in the pane beside a picture stops
+/// where the pane does, and a row inside a container where the container
+/// does (`Footer::cut_to_the_shelf`, by the screen line, as the band is
+/// cut). Painted before every band of the line, so those are drawn over it.
+fn row_grounds(
+    visible: &[&ExpansionRow],
+    place_of: impl Fn(usize) -> (u16, u16),
+    first_line: u16,
+    line_px: f32,
+    band_of: impl Fn(&ExpansionRow, u16, u16) -> (f32, f32),
+) -> Vec<ronoctua_render::quad::Quad> {
+    let mut out: Vec<ronoctua_render::quad::Quad> = Vec::new();
+    // THE LINE THE LAST QUAD ENDS ON, so a run grows only down its column.
+    let mut ends: Option<u16> = None;
+    for (i, l) in visible.iter().enumerate() {
+        let Some(color) = l.ground else {
+            ends = None;
+            continue;
+        };
+        let (base, grid_y) = place_of(i);
+        let line = first_line.saturating_add(grid_y);
+        let (x, width) = band_of(l, base, line);
+        match out.last_mut() {
+            Some(q)
+                if ends == Some(line)
+                    && q.color == color
+                    && (q.x - x).abs() < f32::EPSILON
+                    && (q.width - width).abs() < f32::EPSILON =>
+            {
+                q.height += line_px;
+            }
+            _ => out.push(ronoctua_render::quad::Quad {
+                x,
+                y: f32::from(line) * line_px,
+                width,
+                height: line_px,
+                color,
+            }),
+        }
+        ends = Some(line.saturating_add(1));
+    }
+    out
+}
+
+/// THE INK OF A FIELD of a region's line: its own, or the accent where the
+/// pointer lights it (`under`) — the mark of WHICH field the message line
+/// is about.
+///
+/// NEVER ON A LINE WITH A GROUND OF ITS OWN (`region::Told::ground`) — a
+/// question's block — whose pointer says where it is with the band alone,
+/// as the window's question does (it lights no field): the two doors draw
+/// it the same. The accent is the cursor's ink there — `state.accent` and
+/// `text.here.acts` are two names for one hex (`assets/tokens/colors.nix`)
+/// — so a "yes" lit in it read as the one the keyboard is on, the theme
+/// chooser's case, and lost the colour that says what it costs: a "yes"
+/// that deletes went from the error's red to the cursor's blue under the
+/// hand, beside the "no" in that same blue. And half of it: a wrapped
+/// answer's second line holds fields that hit nothing (`fields::lit_with`
+/// lights none of them), so its first line went blue and the rest stayed
+/// red.
+fn field_ink(own: tokens::Color, under: bool, ground: Option<tokens::Color>) -> tokens::Color {
+    if under && ground.is_none() {
+        tokens::color::STATE_ACCENT
+    } else {
+        own
+    }
 }
 
 /// How long the leader's list waits for the hand to stop, with the bars
@@ -2303,6 +2412,7 @@ impl ExpansionRow {
             lit: crate::region::LineLights::Row,
             chosen: None,
             region_row: None,
+            ground: None,
         }
     }
 
@@ -2910,6 +3020,7 @@ fn assemble(
         ending: crate::session_end::Ending::default(),
         session_end_sender: None,
         owes_paint: false,
+        top_placed: false,
         windows: ronoctua_compositor::State::default(),
         seats: SeatState::new(globals, qh),
         keyboards: crate::seats::Seats::default(),
@@ -3340,10 +3451,12 @@ pub(crate) fn photographed(
             }
             // AND THE PAGE FOLLOWS THE CURSOR, as `typed` makes it after
             // every key: without it a view walked by keys was photographed
-            // on its first page, the cursor's row off it.
+            // on its first page, the cursor's row off it — and, as there, a
+            // place the key's region put first is kept from that follow.
             crate::footer_photograph::Step::Key(key) => {
+                state.top_placed = false;
                 state.key_arrived(key);
-                if state.follow_cursor() {
+                if !state.top_placed_holds() && state.follow_cursor() {
                     state.draw_and_paint();
                 }
             }
@@ -3409,7 +3522,7 @@ pub(crate) fn photographed(
     }
     state.draw();
     state.paint();
-    let said = state.echo.as_ref().map(|(s, _)| s.clone());
+    let said = state.echo.as_ref().map(|(s, _)| s.as_str().to_owned());
     let screen = state.screens.first_mut().context("no screen")?;
     let composed = screen
         .photographed
@@ -5907,7 +6020,8 @@ impl Footer {
     /// [`Self::segment_hint`] as the runs the minibuffer draws: a brain
     /// module's mark says the person's name for it and the value it stresses
     /// in their inks (`brain::hint_in`; owner, 2026-11-09), and every other
-    /// segment one sentence in the line's.
+    /// segment one sentence in the line's, each name it quotes in the ink a
+    /// name in it wears (`door::list::said_pieces`).
     fn segment_said(&self) -> Option<Vec<crate::chrome::Piece>> {
         match self.here.segment_under_pointer {
             Some(id) if crate::brain::is_mark(id) && self.adapter_target(id).is_none() => {
@@ -5915,7 +6029,7 @@ impl Footer {
             }
             _ => self
                 .segment_hint()
-                .map(|t| vec![crate::chrome::Piece::said(t)]),
+                .map(|t| crate::door::list::said_pieces(&t)),
         }
     }
 
@@ -5932,7 +6046,10 @@ impl Footer {
         }
     }
 
-    fn segment_hint(&self) -> Option<String> {
+    /// What the segment under the pointer says — with the names it quotes
+    /// told (`Arg::Name`): a device, a tunnel, a tab's title. A sentence
+    /// that quotes none is its words alone.
+    fn segment_hint(&self) -> Option<crate::chrome::Named> {
         // AN ADAPTER'S SEGMENT says what its adapter says about it.
         if let Some(t) = self
             .here
@@ -5952,10 +6069,14 @@ impl Footer {
             } else {
                 crate::key::HINT_WORKSPACE
             };
-            return Some(self.texts.t_args(
-                sentence,
-                &[("number", ronoctua_i18n::Arg::Number(i64::from(n)))],
-            ));
+            return Some(
+                self.texts
+                    .t_args(
+                        sentence,
+                        &[("number", ronoctua_i18n::Arg::Number(i64::from(n)))],
+                    )
+                    .into(),
+            );
         }
         // A DEVICE'S MARK, by its place in the pool: which thing it is, what
         // it is called, and the percentage when there is one — the same two
@@ -5968,22 +6089,31 @@ impl Footer {
             let at = shown.get(i)?;
             let d = self.bluetooth_scene.device(&at.at)?;
             let kind = self.texts.t(&format!("bluetooth-kind-{}", d.kind.id()));
-            return Some(match d.battery {
-                Some(p) => self.texts.t_args(
-                    crate::key::HINT_BLUETOOTH_DEVICE_BATTERY,
-                    &[
-                        ("kind", ronoctua_i18n::Arg::Text(&kind)),
-                        ("name", ronoctua_i18n::Arg::Text(&d.label)),
-                        ("percent", ronoctua_i18n::Arg::Number(i64::from(p))),
-                    ],
-                ),
-                None => self.texts.t_with(
-                    crate::key::HINT_BLUETOOTH_DEVICE,
-                    &[("kind", &kind), ("name", &d.label)],
-                ),
-            });
+            return Some(
+                match d.battery {
+                    Some(p) => self.texts.t_args_marked(
+                        crate::key::HINT_BLUETOOTH_DEVICE_BATTERY,
+                        &[
+                            ("kind", ronoctua_i18n::Arg::Text(&kind)),
+                            ("name", ronoctua_i18n::Arg::Name(&d.label)),
+                            ("percent", ronoctua_i18n::Arg::Number(i64::from(p))),
+                        ],
+                    ),
+                    None => self.texts.t_args_marked(
+                        crate::key::HINT_BLUETOOTH_DEVICE,
+                        &[
+                            ("kind", ronoctua_i18n::Arg::Text(&kind)),
+                            ("name", ronoctua_i18n::Arg::Name(&d.label)),
+                        ],
+                    ),
+                }
+                .into(),
+            );
         }
-        match self.here.segment_under_pointer? {
+        // EVERY OTHER MARK says words alone, but the four that quote a name
+        // — a tailnet, a tunnel, the silent device, the programs holding a
+        // camera — which answer told, and at once.
+        let said = match self.here.segment_under_pointer? {
             // A LINK THAT LEADS NOWHERE says WHICH nowhere: a login page in
             // the way is a different thing to do about it than an uplink
             // that is down, and the mark cannot say which.
@@ -6061,10 +6191,14 @@ impl Footer {
                 } else {
                     t.tailnet.clone()
                 };
-                Some(
+                return Some(
                     self.texts
-                        .t_with(crate::key::HINT_TAILSCALE, &[("tailnet", &name)]),
-                )
+                        .t_args_marked(
+                            crate::key::HINT_TAILSCALE,
+                            &[("tailnet", ronoctua_i18n::Arg::Name(&name))],
+                        )
+                        .into(),
+                );
             }
             "tor" => Some(self.texts.t(crate::key::HINT_TOR)),
             "clip" => Some(self.texts.t(if self.clipcascade.syncing() {
@@ -6079,7 +6213,14 @@ impl Footer {
             })),
             "vpn" => {
                 let name = self.net.tunnel().map(|t| t.id.clone())?;
-                Some(self.texts.t_with(crate::key::HINT_VPN, &[("name", &name)]))
+                return Some(
+                    self.texts
+                        .t_args_marked(
+                            crate::key::HINT_VPN,
+                            &[("name", ronoctua_i18n::Arg::Name(&name))],
+                        )
+                        .into(),
+                );
             }
             // HOW MANY, on the line under the pointer and nowhere else. The
             // number left the modeline at the owner's request; this is where it
@@ -6115,10 +6256,14 @@ impl Footer {
             "muted" => {
                 let s = self.audio_snapshot.as_ref()?;
                 let device = s.default_of(ronoctua_audio::Kind::Sink)?;
-                Some(self.texts.t_with(
-                    crate::key::HINT_VOLUME_MUTED,
-                    &[("device", &device.description)],
-                ))
+                return Some(
+                    self.texts
+                        .t_args_marked(
+                            crate::key::HINT_VOLUME_MUTED,
+                            &[("device", ronoctua_i18n::Arg::Name(&device.description))],
+                        )
+                        .into(),
+                );
             }
             // AND THE MICROPHONE SAYS THAT SOMETHING IS LISTENING. It does
             // not name the program: a capture stream's `application.name` is
@@ -6128,10 +6273,17 @@ impl Footer {
             // THE CAMERA NAMES THE PROGRAMS: unlike a capture stream's name,
             // `/proc`'s `comm` is the program's own file name, which is what a
             // person looks for to close it.
-            "camera" => Some(self.texts.t_with(
-                crate::key::HINT_CAMERA_IN_USE,
-                &[("programs", &self.camera_holders.join(", "))],
-            )),
+            "camera" => {
+                // EACH PROGRAM A NAME of its own; the commas are nobody's.
+                let programs: Vec<&str> = self.camera_holders.iter().map(String::as_str).collect();
+                return Some(crate::chrome::names_listed(
+                    &self.texts,
+                    crate::key::HINT_CAMERA_IN_USE,
+                    "programs",
+                    &programs,
+                    ", ",
+                ));
+            }
             "recording" => Some(self.texts.t(crate::key::HINT_RECORDING)),
             "gestures" => Some(self.texts.t(crate::key::HINT_GESTURES)),
             // THE CUT, in pixels and in the grid — what the curtains' own
@@ -6241,7 +6393,8 @@ impl Footer {
             // click does — a click does nothing until it ends.
             "build-switching" => Some(self.texts.t(crate::key::HINT_BUILD_SWITCHING)),
             _ => None,
-        }
+        };
+        said.map(Into::into)
     }
 
     /// The focused buffer's state, when the focused window is one of ours.
@@ -9806,9 +9959,10 @@ impl Footer {
                 // A WINDOW THAT WAS TO SHOW A GROUP OF TERMINALS did not come:
                 // the group is not held shut waiting for it.
                 self.terminals_window_failed();
-                let m = self
-                    .texts
-                    .t_with(crate::key::ECHO_NO_OPENED, &[("program", program.as_str())]);
+                let m = self.texts.t_args_marked(
+                    crate::key::ECHO_NO_OPENED,
+                    &[("program", ronoctua_i18n::Arg::Name(&program))],
+                );
                 self.echo_message(m);
                 self.draw_and_paint();
             }
@@ -10134,13 +10288,26 @@ impl Footer {
         reason: &ronoctua_notify::Reason,
     ) -> ronoctua_notify::Notification {
         let scope = crate::foreign::scope_from_cgroup(cgroup);
+        // THE PROGRAM IS A NAME the body quotes (`Arg::Name`), told as every
+        // name is; a notification's body is plain text, drawn in the band's
+        // inks, which quote no name (owner, 2026-11-10), so only the words go.
         let body = match (&scope, reason) {
-            (Some(app), ronoctua_notify::Reason::MemoryUsed) => self
-                .texts
-                .t_with(crate::key::NOTIF_OOM_USED, &[("app", app)]),
-            (Some(app), _) => self
-                .texts
-                .t_with(crate::key::NOTIF_OOM_PRESSURE, &[("app", app)]),
+            (Some(app), ronoctua_notify::Reason::MemoryUsed) => {
+                self.texts
+                    .t_args_marked(
+                        crate::key::NOTIF_OOM_USED,
+                        &[("app", ronoctua_i18n::Arg::Name(app))],
+                    )
+                    .text
+            }
+            (Some(app), _) => {
+                self.texts
+                    .t_args_marked(
+                        crate::key::NOTIF_OOM_PRESSURE,
+                        &[("app", ronoctua_i18n::Arg::Name(app))],
+                    )
+                    .text
+            }
             (None, _) => self
                 .texts
                 .t_with(crate::key::NOTIF_OOM_ORPHAN, &[("cgroup", cgroup)]),
@@ -10585,13 +10752,16 @@ impl Footer {
     /// ten-second clock. That is what [`Self::settle_region`] is for: an
     /// arrival CLAMPS, a person's key FOLLOWS.
     fn typed(&mut self, event: KeyEvent) {
+        // A PLACE PUT FIRST BEFORE THIS KEY — by a reading that arrived — is
+        // spent: only one the key's own region asked is kept from its follow.
+        self.top_placed = false;
         self.took_a_key(event);
         // A LIST STILL WAITING COUNTS FROM THIS KEY (`crate::leader::Patience`).
         self.patience_after_a_key();
         // THE PAINT IS ONLY OWED WHEN THE PAGE ACTUALLY MOVED. The branch
         // above has already drawn what the key did; this is the second half of
         // the frame, and it costs nothing on the keys that scroll nothing.
-        if self.follow_cursor() {
+        if !self.top_placed_holds() && self.follow_cursor() {
             self.draw_and_paint();
         }
     }
@@ -11604,9 +11774,10 @@ impl Footer {
     fn follow_the_journal(&mut self) {
         let Some(journalctl) = JOURNALCTL else {
             tracing::error!("journalctl was not set at build time");
-            let m = self
-                .texts
-                .t_with(crate::key::ECHO_NO_OPENED, &[("program", "journalctl")]);
+            let m = self.texts.t_args_marked(
+                crate::key::ECHO_NO_OPENED,
+                &[("program", ronoctua_i18n::Arg::Name("journalctl"))],
+            );
             self.echo_message(m);
             return;
         };
@@ -11876,15 +12047,15 @@ impl Footer {
     /// (`crate::echo`) — and a one-shot timer at its deadline, so a brief one
     /// goes when it should and not on the next second's tick. The timer finds
     /// the message gone, or newer, and does nothing.
-    fn echo_for(&mut self, text: String, class: crate::echo::Echo) {
+    fn echo_for(&mut self, text: impl Into<crate::chrome::Named>, class: crate::echo::Echo) {
         self.echo_lasting(text, class.lasts());
     }
 
     /// [`Self::echo_for`], for as long as a state that stays true lasts at
     /// most — "touch your key" while the vault's unit waits for it; the
     /// work's own answer takes its place sooner.
-    fn echo_lasting(&mut self, text: String, lasts: std::time::Duration) {
-        let Some(text) = self.echo_for_the_footer(text) else {
+    fn echo_lasting(&mut self, text: impl Into<crate::chrome::Named>, lasts: std::time::Duration) {
+        let Some(text) = self.echo_for_the_footer(text.into()) else {
             return;
         };
         tracing::info!(echo = %text, ?lasts, "echo area");
@@ -11916,8 +12087,8 @@ impl Footer {
     /// and no timer, as in the window: nothing would put it back while it is
     /// still true. The next message replaces it, and so does what takes the
     /// line from every message — a person's key of the leader.
-    fn echo_held(&mut self, text: String) {
-        let Some(text) = self.echo_for_the_footer(text) else {
+    fn echo_held(&mut self, text: impl Into<crate::chrome::Named>) {
+        let Some(text) = self.echo_for_the_footer(text.into()) else {
             return;
         };
         tracing::info!(echo = %text, "echo area, held");
@@ -11925,19 +12096,20 @@ impl Footer {
     }
 
     /// `text`, unless a clipboard window's act is being answered: then it
-    /// is said on the window's line, and `None` is left for the footer's.
-    fn echo_for_the_footer(&mut self, text: String) -> Option<String> {
+    /// is said on the window's line — its words, which cross a socket — and
+    /// `None` is left for the footer's.
+    fn echo_for_the_footer(&mut self, text: crate::chrome::Named) -> Option<crate::chrome::Named> {
         // A CLIPBOARD WINDOW'S ACT is answered on the window's line.
         if let Some(said) = self.clip_answering.as_mut() {
             tracing::info!(echo = %text, "said to a clipboard window");
-            said.push(text);
+            said.push(text.into_text());
             return None;
         }
         Some(text)
     }
 
     /// `text` on the minibuffer's line until `until` — `None` holds it.
-    fn put_the_echo(&mut self, text: String, until: Option<std::time::Instant>) {
+    fn put_the_echo(&mut self, text: crate::chrome::Named, until: Option<std::time::Instant>) {
         self.echo = Some((text, until));
         // THE PERSON'S ANSWER TAKES THE LINE AT ONCE, and an event on it goes
         // back to the front of the queue to be said whole afterwards.
@@ -11951,9 +12123,12 @@ impl Footer {
     /// person has to know which of the two they are looking at.
     fn say_a_preference_not_written(&mut self, file: &str, why: &dyn std::fmt::Display) {
         tracing::warn!(error = %why, file, "a preference could not be written");
-        let said = self.texts.t_with(
+        let said = self.texts.t_args_marked(
             crate::key::ECHO_PREFERENCE_NOT_WRITTEN,
-            &[("file", file), ("why", &why.to_string())],
+            &[
+                ("file", ronoctua_i18n::Arg::Name(file)),
+                ("why", ronoctua_i18n::Arg::Text(&why.to_string())),
+            ],
         );
         self.echo_for(said, crate::echo::Echo::Long);
     }
@@ -12319,7 +12494,7 @@ impl Footer {
 
     /// A message of the NORMAL class (`crate::echo`) — every message that
     /// names no class of its own.
-    fn echo_message(&mut self, text: String) {
+    fn echo_message(&mut self, text: impl Into<crate::chrome::Named>) {
         self.echo_for(text, crate::echo::Echo::Normal);
     }
 
@@ -13585,7 +13760,7 @@ impl Footer {
         use ronoctua_studio::client::Heard;
         let seen = match heard {
             Heard::Refused(t) => {
-                let m = crate::studio_words::trouble_sentence(&t, &self.texts);
+                let m = crate::studio_words::trouble_named(&t, &self.texts);
                 self.gestures_off(false);
                 self.echo_message(m);
                 self.draw_and_paint();
@@ -14918,6 +15093,7 @@ impl Footer {
                 lit: crate::region::LineLights::Row,
                 chosen: None,
                 region_row: None,
+                ground: None,
             })
             .collect()
     }
@@ -16301,9 +16477,10 @@ impl Footer {
             ),
             (_, None) => {
                 tracing::error!(variable, "the watcher's variable was not set at build time");
-                let m = self
-                    .texts
-                    .t_with(crate::key::ECHO_NO_OPENED, &[("program", variable)]);
+                let m = self.texts.t_args_marked(
+                    crate::key::ECHO_NO_OPENED,
+                    &[("program", ronoctua_i18n::Arg::Name(variable))],
+                );
                 self.echo_message(m);
             }
             (Err(e), _) => tracing::error!(error = %e, "I do not know my own binary"),
@@ -16503,17 +16680,12 @@ impl Footer {
                 &self.buffer_pending,
             )
         });
-        // THE ECHO, AS PIECES: the shell's own answer in one run, or — when
-        // the shell has nothing to answer — an event of the machine or a
-        // notification, with the actions it offers at the end
-        // (`crate::events`). The person's answer first, always: it is what
-        // they just asked for, and what it interrupted waits at the front of
-        // its queue.
-        let echo: Option<Vec<crate::chrome::Piece>> = self
-            .echo
-            .as_ref()
-            .map(|(t, _)| vec![crate::chrome::Piece::said(t.clone())])
-            .or_else(|| {
+        // THE ECHO, AS PIECES (`echo_pieces`): the shell's own answer, or —
+        // when the shell has nothing to answer — an event of the machine or
+        // a notification, with the actions it offers at the end
+        // (`crate::events`).
+        let echo: Option<Vec<crate::chrome::Piece>> =
+            echo_pieces(self.echo.as_ref().map(|(t, _)| t), || {
                 // AND THE CURSOR ON THE ACTION A CLICK PICKED — or on the
                 // first, where it is born (`chrome::with_the_pick`).
                 self.event_line.on_the_line().map(|s| {
@@ -18429,6 +18601,10 @@ impl Footer {
                     // calculator, whose accent is the mode in use and the
                     // ring's category, and whose mark is the band over what
                     // a press takes.
+                    //
+                    // NOR ON A LINE WITH A GROUND OF ITS OWN — a question's
+                    // block — for the theme chooser's reason, and so a "yes"
+                    // keeps the colour of what it costs (`field_ink`).
                     let hosted_lights = self.hosted_lights();
                     let lights = self.view() != ViewState::Themes
                         && hosted_lights.is_none_or(|l| l == crate::region::Lights::Field);
@@ -18479,11 +18655,9 @@ impl Footer {
                             // the third site, and it had no such line at all.
                             column: base + crate::chrome::FIELDS_LEAD + f.at,
                             line: y,
-                            color: if under {
-                                tokens::color::STATE_ACCENT
-                            } else {
-                                f.color
-                            },
+                            // AND NOT ON A QUESTION'S GROUND, where the band
+                            // alone marks the pointer (`field_ink`).
+                            color: field_ink(f.color, under, line.ground),
                             edge: false,
                             // AND THE TRANSPORT'S ROW IS ANCHORED TO THE FOOT,
                             // the only row in this manager that is — see
@@ -19148,6 +19322,33 @@ impl Footer {
                     bottom,
                 ));
             }
+            // A ROW'S OWN GROUND (`region::Told::ground`), with the
+            // containers' and for their reason: under every band drawn on
+            // the line — the cursor's, the pointer's, a grid's cell — and so
+            // pushed before them. As wide as the row's band: from the band's
+            // edge, to where the band a pointer at its first cell would stop
+            // (`Region::hover_span`) — the rows' pane, beside a picture —
+            // and the whole line where the region says nothing; AND CUT AT
+            // A CONTAINER'S EDGES, as the band is, when the row is inside
+            // one: a ground the region's width would run out over the
+            // shelf's own ground on both sides.
+            {
+                let cell = tokens::metrics::cell_width(tokens::text::size());
+                let band_of = |l: &ExpansionRow, base: u16, line: u16| {
+                    let (x, wide) = l
+                        .region_row
+                        .and_then(|row| self.hosted_hover_px(columns, row, 0, base, cell))
+                        .unwrap_or((f32::from(base) * cell, f32::from(grid.width) * cell));
+                    Self::cut_to_the_shelf(&bands, shelf, line, x, wide, cell)
+                };
+                backgrounds.extend(row_grounds(
+                    &visible,
+                    place_of,
+                    first_of_expansion,
+                    line_height,
+                    band_of,
+                ));
+            }
             if let Some((base, grid_y)) = focused_row {
                 let cell = tokens::metrics::cell_width(tokens::text::size());
                 #[allow(clippy::cast_precision_loss)]
@@ -19331,10 +19532,17 @@ impl Footer {
                     })
                     .unwrap_or((band_at, band_wide));
                 // ONE OF TWO HALVES, from the band's own edge (`base`) when
-                // it is the first (`host::hover_span_px`).
+                // it is the first (`host::hover_span_px`) — asked by the
+                // REGION'S OWN ROW, as the row's ground is (`row_grounds`) and
+                // what it says under the pointer (`region_row_on`): the
+                // pointer's line is where the row is drawn, which on a page
+                // scrolled past the region's top is not its row, and the two
+                // halves of one record are the record's.
                 let (band_at, band_wide) = row_p
-                    .and_then(|line| {
-                        self.hosted_hover_px(columns, line, cell_p.unwrap_or(0), base, cell)
+                    .and_then(|line| visible.get(line))
+                    .and_then(|l| l.region_row)
+                    .and_then(|row| {
+                        self.hosted_hover_px(columns, row, cell_p.unwrap_or(0), base, cell)
                     })
                     .unwrap_or((band_at, band_wide));
                 // A REGION'S LINE, by what its row says it lights
@@ -19349,9 +19557,12 @@ impl Footer {
                     .map(|l| l.lit.clone());
                 // A GLYPH lights on its own line alone (`LineLights::Glyphs`).
                 let mut alone = false;
-                let (band_at, band_wide) = match hosted_lit {
+                // THE ROW'S OWN BAND, before its line says what it lights: what
+                // another line of a row lit line by line lights (below).
+                let row_band = (band_at, band_wide);
+                let (band_at, band_wide) = match &hosted_lit {
                     Some(crate::region::LineLights::UnderX(cells)) => {
-                        match x_p.and_then(|x| Self::region_across(base).band(&cells, x)) {
+                        match x_p.and_then(|x| Self::region_across(base).band(cells, x)) {
                             Some(band) => band,
                             None => continue,
                         }
@@ -19361,9 +19572,9 @@ impl Footer {
                         alone: glyphs,
                     }) => {
                         let across = Self::region_across(base);
-                        match x_p.and_then(|x| across.band(&cells, x)) {
+                        match x_p.and_then(|x| across.band(cells, x)) {
                             Some(band) => {
-                                alone = x_p.is_some_and(|x| across.band(&glyphs, x).is_some());
+                                alone = x_p.is_some_and(|x| across.band(glyphs, x).is_some());
                                 band
                             }
                             None => continue,
@@ -19384,7 +19595,7 @@ impl Footer {
                         }
                     }
                     Some(crate::region::LineLights::From(column)) => {
-                        let (at, _) = Self::region_across(base).band_of(column, 1);
+                        let (at, _) = Self::region_across(base).band_of(*column, 1);
                         (at, (band_at + band_wide - at).max(0.0))
                     }
                     Some(crate::region::LineLights::Nothing) => continue,
@@ -19467,6 +19678,67 @@ impl Footer {
                 #[allow(clippy::cast_precision_loss)]
                 let tall = tall + (above + below) as f32 * line_height;
                 let grid_y = grid_y.saturating_sub(u16::try_from(above).unwrap_or(0));
+                // A ROW WITH A LINE OF GLYPHS LIGHTS LINE BY LINE — a video of
+                // the video metrics' list, with its thumbnails or without —
+                // each line what its own `LineLights` says the row's words
+                // are there, as the window's `lights_at` does: a line of
+                // glyphs its words' box alone (the cells but the glyphs), a
+                // line beside a picture from where its words begin, any other
+                // its band. One light stretched over the row said a click on
+                // the rating's arrows took the video, from the title, and
+                // from the words beside the arrows cut the title's light at
+                // the score's end. A SHELF'S CELL keeps one light over the
+                // shelf, glyphs and all: the cell is one video, the window's
+                // answer too.
+                let row_lines = row_p.map(|line| (line - above)..=(line + below));
+                let by_line = !alone
+                    && !matches!(hosted_lit, Some(crate::region::LineLights::UnderCell(_)))
+                    && row_lines.clone().into_iter().flatten().any(|k| {
+                        visible.get(k).is_some_and(|l| {
+                            l.region_row.is_some()
+                                && matches!(l.lit, crate::region::LineLights::Glyphs { .. })
+                        })
+                    });
+                if by_line {
+                    let across = Self::region_across(base);
+                    for (k, y) in row_lines.into_iter().flatten().zip(grid_y..) {
+                        let band = if Some(k) == row_p {
+                            Some((band_at, band_wide))
+                        } else {
+                            visible.get(k).filter(|l| l.region_row.is_some()).map_or(
+                                Some((band_at, band_wide)),
+                                |l| match &l.lit {
+                                    crate::region::LineLights::Glyphs { cells, alone } => cells
+                                        .iter()
+                                        .find(|c| !alone.contains(c))
+                                        .map(|&(from, width)| across.band_of(from, width)),
+                                    crate::region::LineLights::From(column) => {
+                                        let (at, _) = across.band_of(*column, 1);
+                                        Some((at, (row_band.0 + row_band.1 - at).max(0.0)))
+                                    }
+                                    crate::region::LineLights::UnderX(cells) => {
+                                        x_p.and_then(|x| across.band(cells, x))
+                                    }
+                                    crate::region::LineLights::Row => Some(row_band),
+                                    crate::region::LineLights::UnderCell(_)
+                                    | crate::region::LineLights::Nothing => {
+                                        Some((band_at, band_wide))
+                                    }
+                                },
+                            )
+                        };
+                        if let Some((x, wide)) = band {
+                            backgrounds.push(ronoctua_render::quad::Quad {
+                                x,
+                                y: f32::from(first_of_expansion + y) * line_height,
+                                width: wide,
+                                height: line_height,
+                                color,
+                            });
+                        }
+                    }
+                    continue;
+                }
                 backgrounds.push(ronoctua_render::quad::Quad {
                     x: band_at,
                     y: f32::from(first_of_expansion + grid_y) * line_height,
@@ -22652,6 +22924,172 @@ mod tests {
         // AND A CHORD is still a chord, typing or not.
         let chord = smithay_client_toolkit::seat::keyboard::Modifiers { ctrl: true, ..caps };
         assert!(crate::door::keys::lock_undone(chord, typing));
+    }
+
+    /// FAILS IF: a region's line with a ground of its own
+    /// (`region::Told::ground`) gets none, or one wider than its band — past
+    /// the rows' pane, beside a picture, or past a container's edges, cut by
+    /// the screen line the row is drawn on as its band is — or a line with
+    /// none gets one; or a run of lines on one ground and one band is
+    /// several quads (a seam each), or one quad runs on over a line with no
+    /// ground, another ground, another band, or a line that is not the next
+    /// one down.
+    #[test]
+    fn a_rows_ground_is_one_quad_a_run_as_wide_as_its_band() {
+        use super::{ExpansionRow, Footer, row_grounds};
+        let (ground, other) = (
+            ronoctua_tokens::color::SURFACE_HEADER,
+            ronoctua_tokens::color::SURFACE_HOVER,
+        );
+        let line = |ground: Option<ronoctua_tokens::Color>, row: usize| ExpansionRow {
+            ground,
+            region_row: Some(row),
+            ..ExpansionRow::empty_one()
+        };
+        let rows = [
+            line(None, 0),
+            line(Some(ground), 1),
+            line(Some(ground), 2),
+            line(Some(ground), 3),
+            line(None, 4),
+            line(Some(ground), 5),
+            line(Some(other), 6),
+            line(Some(ground), 7),
+            line(Some(ground), 8),
+            line(Some(ground), 9),
+            line(Some(ground), 10),
+        ];
+        let visible: Vec<&ExpansionRow> = rows.iter().collect();
+        // ROW 3 IS IN A PANE beside a picture, its band the pane's; from row
+        // 8 on the lines land further down the grid than the one before them.
+        let place_of = |i: usize| {
+            let down = if i >= 8 { i + 4 } else { i };
+            (2_u16, u16::try_from(down).unwrap_or(0))
+        };
+        // AND THE LAST ROW IS INSIDE A CONTAINER, on screen line 15 alone:
+        // its band — and so its ground — is cut at the box's edges, cells 4
+        // to 14 (`Footer::cut_to_the_shelf`).
+        let shelf = crate::chrome::ShelfBox {
+            from: 4,
+            cells: 10,
+            room: 8,
+        };
+        let shelves = [(
+            15_u16,
+            1_usize,
+            crate::region::Shelf {
+                id: 0,
+                first: 10,
+                lines: 1,
+                total: 1,
+                offset: 0,
+            },
+        )];
+        let band_of = |l: &ExpansionRow, base: u16, line: u16| {
+            let wide = if l.region_row == Some(3) { 50.0 } else { 200.0 };
+            Footer::cut_to_the_shelf(&shelves, shelf, line, f32::from(base) * 10.0, wide, 10.0)
+        };
+        let quads = row_grounds(&visible, place_of, 1, 20.0, band_of);
+        let seen: Vec<(f32, f32, f32, f32, ronoctua_tokens::Color)> = quads
+            .iter()
+            .map(|q| (q.x, q.y, q.width, q.height, q.color))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (20.0, 40.0, 200.0, 40.0, ground),
+                (20.0, 80.0, 50.0, 20.0, ground),
+                (20.0, 120.0, 200.0, 20.0, ground),
+                (20.0, 140.0, 200.0, 20.0, other),
+                (20.0, 160.0, 200.0, 20.0, ground),
+                (20.0, 260.0, 200.0, 40.0, ground),
+                (40.0, 300.0, 100.0, 20.0, ground),
+            ]
+        );
+    }
+
+    /// FAILS IF: under the pointer, a field on a question's ground — a line
+    /// with a ground of its own (`region::Told::ground`) — leaves its ink
+    /// for the accent, which is the cursor's: a "yes" that deletes stops
+    /// being red, a "yes" that weighs stops being a warning, a "no" at rest
+    /// turns into the cursor; or a field on a line with no ground of its own
+    /// stops lighting in the accent, or lights when the pointer is not on it.
+    /// The band under the hand is not this one's: it is drawn by the line,
+    /// not by its fields, and a ground is painted under it
+    /// (`a_rows_ground_is_one_quad_a_run_as_wide_as_its_band`).
+    #[test]
+    fn a_field_on_a_question_s_ground_keeps_its_ink_under_the_pointer() {
+        use super::field_ink;
+        use ronoctua_tokens::color as c;
+        let ground = Some(c::SURFACE_HEADER);
+        for own in [c::STATE_ERROR, c::STATE_WARNING, c::TEXT_LABEL_ACTS] {
+            assert_eq!(
+                field_ink(own, true, ground),
+                own,
+                "{own:?} lit on its ground"
+            );
+            assert_eq!(field_ink(own, false, ground), own);
+        }
+        assert_eq!(
+            field_ink(c::TEXT_SECONDARY, true, None),
+            c::STATE_ACCENT,
+            "a field of a plain line is not lit"
+        );
+        assert_eq!(field_ink(c::TEXT_SECONDARY, false, None), c::TEXT_SECONDARY);
+    }
+
+    /// FAILS IF: a name the minibuffer's echo quotes (`ronoctua_i18n::Arg::
+    /// Name`) is drawn in the echo's own ink — the line said in one run, as
+    /// it was before a sentence told its names — or the words around it
+    /// leave theirs, or the line reads otherwise than the localiser wrote
+    /// it, its words and its name out of order; or an event on the line
+    /// takes the place of the person's answer, or is not said when there is
+    /// none.
+    #[test]
+    fn the_echo_quotes_its_names_in_their_own_ink() {
+        use ronoctua_tokens::color as c;
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let file = "player.json";
+        let said: crate::chrome::Named = texts
+            .t_args_marked(
+                crate::key::ECHO_PREFERENCE_NOT_WRITTEN,
+                &[
+                    ("file", ronoctua_i18n::Arg::Name(file)),
+                    ("why", ronoctua_i18n::Arg::Text("the disk is full")),
+                ],
+            )
+            .into();
+        let event = || Some(vec![crate::chrome::Piece::said("an event")]);
+        let pieces = super::echo_pieces(Some(&said), event).expect("the echo is said");
+        let read: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(read, said.as_str(), "the line reads otherwise");
+        let inks: Vec<(&str, ronoctua_tokens::Color)> = pieces
+            .iter()
+            .map(|p| (p.text.as_str(), p.register.color()))
+            .filter(|(text, _)| !text.is_empty())
+            .collect();
+        assert!(
+            inks.iter()
+                .any(|&(text, ink)| text == file && ink == c::TEXT_SUBTLE_QUOTED),
+            "{inks:?}"
+        );
+        assert!(
+            inks.iter()
+                .all(|&(text, ink)| (text == file) == (ink == c::TEXT_SUBTLE_QUOTED)),
+            "{inks:?}"
+        );
+        assert!(
+            inks.iter()
+                .filter(|&&(text, _)| text != file)
+                .all(|&(_, ink)| ink == c::TEXT_SUBTLE_STRONG),
+            "{inks:?}"
+        );
+        // NOTHING SAID BY THE SHELL: the event on the line.
+        let pieces = super::echo_pieces(None, event).expect("the event is said");
+        assert_eq!(
+            pieces.iter().map(|p| p.text.as_str()).collect::<String>(),
+            "an event"
+        );
     }
 
     /// FAILS IF: a message HELD on the footer's line (`Doorway::hold`, what

@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(pieces.len(), 1);
         assert_eq!(pieces[0].text, said);
 
-        ui.message = Some("an order said this".to_owned());
+        ui.message = Some("an order said this".into());
         let (pieces, _) = crate::door::list::line_zero(&mut ui, Some(said.clone()), hint);
         assert_eq!(pieces[0].text, "an order said this");
 

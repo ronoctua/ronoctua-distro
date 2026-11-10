@@ -709,9 +709,12 @@ impl View {
         // of its own: a section that repeated the list below it was the first
         // thing this view was photographed doing wrong.
         if let Some(chosen) = s.adrift(kind) {
-            let said = b
-                .texts
-                .t_with(crate::key::AUDIO_CHOSEN_ELSEWHERE, &[("device", chosen)]);
+            // THE DEVICE IS A NAME the sentence quotes (`Arg::Name`), drawn in
+            // a name's ink.
+            let said = b.texts.t_args_marked(
+                crate::key::AUDIO_CHOSEN_ELSEWHERE,
+                &[("device", ronoctua_i18n::Arg::Name(chosen))],
+            );
             b.aside(said);
         }
         if here.is_empty() {
@@ -881,7 +884,7 @@ impl View {
         // A PART OF THE FILE NOT READ: the settings below show the repair in
         // that place, and the file keeps what it says.
         if let Some(partly) = &self.partly {
-            b.aside(partly.said(b.texts));
+            b.aside(partly.said_named(b.texts));
         }
         b.pair(
             b.texts.t(crate::key::AUDIO_SETTING_STEP),
@@ -1068,7 +1071,7 @@ impl Builder<'_> {
     }
 
     /// A second line under a fact, in the fact's own tone.
-    fn aside(&mut self, text: String) {
+    fn aside(&mut self, text: impl Into<crate::chrome::Named>) {
         self.said(text, tokens::color::TEXT_DIM);
     }
 
@@ -1076,11 +1079,14 @@ impl Builder<'_> {
     ///
     /// One `Row` per line, through the one function the eight views of this
     /// shape share — see [`crate::chrome::note_lines`] for why an ellipsis
-    /// here takes exactly the half that matters.
-    fn said(&mut self, text: String, colour: tokens::Color) {
-        for line in crate::chrome::note_lines(&text, self.room) {
+    /// here takes exactly the half that matters. A name the sentence quotes
+    /// is a field of its own in a name's ink ([`crate::chrome::note_fields`],
+    /// the same breaks).
+    fn said(&mut self, text: impl Into<crate::chrome::Named>, colour: tokens::Color) {
+        let text = text.into();
+        for fields in crate::chrome::note_fields(self.left, &text, colour, self.room) {
             self.out.push(Row {
-                fields: vec![Self::piece(self.left, line, colour)],
+                fields,
                 focused: false,
                 heading: true,
                 target: Target::Nothing,
@@ -1519,14 +1525,17 @@ mod tests {
         let mut adrift = a_machine();
         adrift.defaults.configured_sink = Some("a headset that is off".to_owned());
         let rows = v.rows(Some(&adrift), DECIDING_WIDTH, &t);
+        // THE DEVICE IS TOLD: a field of its own, in the ink a name takes in
+        // a quiet note (`chrome::quoted_ink`).
         let at = rows
             .iter()
             .position(|r| {
-                r.fields
-                    .first()
-                    .is_some_and(|f| f.text.contains("a headset that is off"))
+                r.fields.iter().any(|f| {
+                    f.text == "a headset that is off"
+                        && f.color == crate::chrome::quoted_ink(tokens::color::TEXT_DIM)
+                })
             })
-            .expect("the sentence");
+            .expect("the sentence, its device in a name's ink");
         let heading = rows[..at]
             .iter()
             .rev()

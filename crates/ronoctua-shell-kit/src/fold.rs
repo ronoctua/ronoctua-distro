@@ -366,8 +366,25 @@ fn lay(
 /// Spacing is rebuilt as single spaces, exactly as
 /// [`ronoctua_render::layout::wrap`] does with a plain text: a wrap is already
 /// a rewrite of where the words are.
+///
+/// # And a line that teaches NO key is a sentence, wrapped as one
+///
+/// The entries are what a line of shortcuts needs, and a SENTENCE is not one:
+/// what a message, a brain mark's hint or a file's explanation says is one
+/// sentence in several inks — the name it quotes in its own (`“{ $label }”`),
+/// a fact beside the words that name it. Cut into words piece by piece and
+/// joined with a space, its seams opened wherever an ink changed inside a
+/// word: `as “ Title ”. Add` (the minibuffer's drawer, the file manager's,
+/// before 2026-11-10). So such a line is wrapped as the TEXT it reads — the
+/// one wrap every note takes — and its inks are laid back over the lines
+/// that wrap came to ([`sentence_rows`]): what was glued stays glued.
 #[must_use]
 pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate::chrome::Piece>> {
+    if !pieces.iter().any(crate::chrome::Piece::is_a_key)
+        && let Some(rows) = sentence_rows(pieces, width)
+    {
+        return rows;
+    }
     let room = usize::from(width.max(1));
     let mut out: Vec<Vec<Word>> = Vec::new();
     let mut line: Vec<Word> = Vec::new();
@@ -452,6 +469,54 @@ pub fn wrap_pieces(pieces: &[crate::chrome::Piece], width: u16) -> Vec<Vec<crate
     // ` C-m` and the run drawn as a key would start one cell early.
     rebuild(out)
 }
+
+/// A line with no key, wrapped as the sentence it reads: the text whole, by
+/// [`ronoctua_render::layout::wrap`] — under the same [`CEILING`] — and each
+/// line it came to cut back into the pieces' registers, ids and presses by
+/// `chrome::projected`, the walk a note in several inks takes. `None` only
+/// should a line not be the text's, and then the line is wrapped by its words,
+/// as it always was: a seam with a space in it is a smaller loss than a word.
+///
+/// A LINE OF NOTHING BUT BLANKS opens into nothing, as it did: there is no
+/// sentence on it to wrap.
+fn sentence_rows(
+    pieces: &[crate::chrome::Piece],
+    width: u16,
+) -> Option<Vec<Vec<crate::chrome::Piece>>> {
+    let flat: String = pieces.iter().map(|p| p.text.as_str()).collect();
+    if flat.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let runs: Vec<(&str, Worn)> = pieces
+        .iter()
+        .map(|p| (p.text.as_str(), (p.register, p.id, p.press)))
+        .collect();
+    let lines = ronoctua_render::layout::wrap(&flat, width.max(1), CEILING);
+    let rows = crate::chrome::projected(&runs, &lines)?;
+    Some(
+        rows.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|(text, (register, id, press))| crate::chrome::Piece {
+                        text,
+                        register,
+                        id,
+                        press,
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// What a run of a sentence WEARS besides its text: everything a piece is
+/// drawn and answered by. Two neighbours that wear the same are one piece,
+/// as `rebuild` merges them.
+type Worn = (
+    crate::chrome::Register,
+    Option<&'static str>,
+    Option<crate::chrome::Act>,
+);
 
 /// Turns the wrapped words back into pieces, one row at a time.
 fn rebuild(rows: Vec<Vec<Word>>) -> Vec<Vec<crate::chrome::Piece>> {
@@ -1133,5 +1198,83 @@ mod tests {
                 "a row carries a key with no words: {said:?}"
             );
         }
+    }
+
+    /// Every character that is not a blank, in order, with the register it
+    /// is drawn in — what a wrap may never change.
+    fn inked(pieces: &[crate::chrome::Piece]) -> Vec<(char, crate::chrome::Register)> {
+        pieces
+            .iter()
+            .flat_map(|p| p.text.chars().map(move |c| (c, p.register)))
+            .filter(|(c, _)| !c.is_whitespace())
+            .collect()
+    }
+
+    /// FAILS IF: a sentence in several inks — the name it quotes in its own,
+    /// a brain mark's `“{ $label }”` — comes out of the drawer with its seams
+    /// opened (`as “ Title ”. Add`, what the word-by-word wrap did), its rows
+    /// are not the very wrap of its text, or a character of it — of the name
+    /// above all — changes ink or is lost, at any width from 1 to 80.
+    #[test]
+    fn a_sentence_in_several_inks_keeps_its_spacing_in_the_drawer() {
+        use crate::chrome::{Piece, Register};
+        let lines = [
+            vec![
+                Piece::said("It is already in the queue as “"),
+                Piece::key_in("A film: its long title", Register::Quoted),
+                Piece::said("”. Add it again?"),
+            ],
+            vec![
+                Piece::said("An agent in “"),
+                Piece::key_in("Work", Register::Named),
+                Piece::said("” is done — a click takes you to it"),
+            ],
+            vec![
+                Piece::said("Renamed "),
+                Piece::key_in(
+                    "/home/someone/a/rather/long/path/to/notes.md",
+                    Register::Quoted,
+                ),
+                Piece::said(" to "),
+                Piece::key_in("日本語のノート.md", Register::Quoted),
+                Piece::said("."),
+            ],
+        ];
+        let whole = wrap_pieces(&lines[0], 200);
+        assert_eq!(whole.len(), 1);
+        assert_eq!(
+            whole[0].iter().map(|p| p.text.as_str()).collect::<String>(),
+            "It is already in the queue as “A film: its long title”. Add it again?",
+            "the seams of the sentence opened"
+        );
+        assert_eq!(
+            whole[0].iter().map(|p| p.register).collect::<Vec<_>>(),
+            vec![Register::Said, Register::Quoted, Register::Said],
+            "the name is not one run of its own ink"
+        );
+        for line in &lines {
+            let flat: String = line.iter().map(|p| p.text.as_str()).collect();
+            for width in 1..=80u16 {
+                let rows = wrap_pieces(line, width);
+                let texts: Vec<String> = rows
+                    .iter()
+                    .map(|r| r.iter().map(|p| p.text.as_str()).collect())
+                    .collect();
+                assert_eq!(
+                    texts,
+                    ronoctua_render::layout::wrap(&flat, width, CEILING),
+                    "at {width} cells the drawer is not the sentence's own wrap"
+                );
+                let drawn: Vec<crate::chrome::Piece> = rows.into_iter().flatten().collect();
+                assert_eq!(
+                    inked(&drawn),
+                    inked(line),
+                    "at {width} cells a character changed its ink or was lost"
+                );
+            }
+        }
+        // AND A LINE OF BLANKS opens into nothing, as it did.
+        assert!(wrap_pieces(&prose("   "), 20).is_empty());
+        assert!(wrap_pieces(&[], 20).is_empty());
     }
 }

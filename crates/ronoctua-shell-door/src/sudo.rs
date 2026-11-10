@@ -135,22 +135,26 @@ impl Deed {
     }
 
     /// "The security centre asks to open the passwordless window for 15
-    /// minutes" — who asks, and the gesture, as one sentence.
+    /// minutes" — who asks, and the gesture, as one sentence; a name the
+    /// gesture quotes still told as one ([`crate::chrome::Named::with_inner`]),
+    /// whose ink the line it is drawn on decides (`crate::chrome::quoted_ink`).
     #[must_use]
-    pub fn sentence(&self, texts: &ronoctua_i18n::Texts) -> String {
-        texts.t_with(
-            key::SUDO_BAR_ASKS,
-            &[
-                ("who", &texts.t(self.asker.key(self.window))),
-                ("deed", &self.what(texts)),
-            ],
+    pub fn sentence(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+        let who = texts.t(self.asker.key(self.window));
+        let deed = self.what(texts);
+        crate::chrome::Named::with_inner(
+            texts.t_args_marked(
+                key::SUDO_BAR_ASKS,
+                &[("who", Arg::Text(&who)), ("deed", Arg::Text(deed.as_str()))],
+            ),
+            &deed,
         )
     }
 
     /// The gesture alone, as the words after "asks to".
-    fn what(&self, texts: &ronoctua_i18n::Texts) -> String {
+    fn what(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
         let number = |n: usize| Arg::Number(i64::try_from(n).unwrap_or(i64::MAX));
-        match &self.verb {
+        let said = match &self.verb {
             RootVerb::Relax { span } => match span.minutes() {
                 None => texts.t(key::SUDO_BAR_DEED_RELAX_NO_LIMIT),
                 Some(minutes) if minutes >= 60 => texts.t_args(
@@ -193,8 +197,11 @@ impl Deed {
                 &[("count", number(credentials.len()))],
             ),
             RootVerb::PersonSignerPin { .. } => texts.t(key::SUDO_BAR_DEED_SIGNER_PIN),
+            // THE CACHE IS A NAME the gesture quotes — the person's own.
             RootVerb::BinaryCacheNetrc { name } => {
-                texts.t_with(key::SUDO_BAR_DEED_CACHE_NETRC, &[("name", name)])
+                return texts
+                    .t_args_marked(key::SUDO_BAR_DEED_CACHE_NETRC, &[("name", Arg::Name(name))])
+                    .into();
             }
             RootVerb::BinaryCacheNetrcRemove => texts.t(key::SUDO_BAR_DEED_CACHE_NETRC_REMOVE),
             RootVerb::BuildSwitchReference => texts.t(key::SUDO_BAR_DEED_BUILD_REFERENCE),
@@ -204,7 +211,8 @@ impl Deed {
             RootVerb::TpmKeyCreate => texts.t(key::SUDO_BAR_DEED_TPM_KEY_CREATE),
             RootVerb::TpmSigning { on: true } => texts.t(key::SUDO_BAR_DEED_TPM_SIGNING_ON),
             RootVerb::TpmSigning { on: false } => texts.t(key::SUDO_BAR_DEED_TPM_SIGNING_OFF),
-        }
+        };
+        said.into()
     }
 
     /// The vault's operation, said — any of them when none was given.
@@ -445,5 +453,37 @@ mod tests {
         assert_eq!(hear_the_verdict(&mut done, &mut |_| {}), Ok(()));
         let mut gone = std::io::Cursor::new("step x\n".as_bytes());
         assert_eq!(hear_the_verdict(&mut gone, &mut |_| {}), Err(Why::NoFooter));
+    }
+
+    /// FAILS IF: the bar's sentence is not the plain one byte for byte, or
+    /// the cache a gesture names is not told as a name inside it — the one
+    /// name, and nothing of who asks.
+    #[test]
+    fn the_bar_tells_the_cache_it_names_as_a_name() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("the language");
+            let deed = Deed::of(
+                Asker::Security,
+                false,
+                RootVerb::BinaryCacheNetrc {
+                    name: "my-cache".to_owned(),
+                }
+                .into(),
+            );
+            let said = deed.sentence(&t);
+            let plain = t.t_with(
+                key::SUDO_BAR_ASKS,
+                &[
+                    ("who", &t.t(Asker::Security.key(false))),
+                    (
+                        "deed",
+                        &t.t_with(key::SUDO_BAR_DEED_CACHE_NETRC, &[("name", "my-cache")]),
+                    ),
+                ],
+            );
+            assert_eq!(said.as_str(), plain, "{language}");
+            let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+            assert_eq!(quoted, ["my-cache"], "{language}: {said:?}");
+        }
     }
 }

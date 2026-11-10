@@ -1950,10 +1950,12 @@ impl CatalogueView for View {
                     source: SourceId(id.clone()),
                     category: None,
                 },
-                texts.t_with(
-                    key::PLAYER_CATALOG_READING_NOW,
-                    &[("name", &source_name(id, state, texts))],
-                ),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_CATALOG_READING_NOW,
+                        &[("name", Arg::Name(&source_name(id, state, texts)))],
+                    )
+                    .into(),
             )),
             (Target::CatalogLet(id), Press::Enter) => {
                 let hosts: Vec<String> = DefaultSource::of(id)
@@ -1980,7 +1982,7 @@ impl CatalogueView for View {
             }
             (Target::CatalogLock, Press::Enter) => {
                 self.catalog_mut().lock.shut();
-                Some(Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN)))
+                Some(Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN).into()))
             }
             (Target::CatalogItem(store, id), Press::Enter | Press::PlayNow | Press::Add) => {
                 Some(self.item_put(*store, *id, press != Press::Add, texts))
@@ -2110,7 +2112,9 @@ impl CatalogueView for View {
                         source: SourceId("archive".to_owned()),
                         category: Some(key),
                     },
-                    texts.t_with(key::PLAYER_CATALOG_SEARCHING, &[("words", words.trim())]),
+                    texts
+                        .t_with(key::PLAYER_CATALOG_SEARCHING, &[("words", words.trim())])
+                        .into(),
                 ));
             }
             _ => return None,
@@ -2290,10 +2294,14 @@ impl CatalogueView for View {
                     return Errand::Nothing;
                 }
                 let Ok(n) = said_trimmed.parse::<u32>() else {
-                    return Errand::Said(texts.t_with(
-                        key::PLAYER_CATALOG_PAGE_NOT_A_NUMBER,
-                        &[("said", said_trimmed)],
-                    ));
+                    return Errand::Said(
+                        texts
+                            .t_with(
+                                key::PLAYER_CATALOG_PAGE_NOT_A_NUMBER,
+                                &[("said", said_trimmed)],
+                            )
+                            .into(),
+                    );
                 };
                 // PAST THE LAST, the last: the page kept is the one shown.
                 let known = self.pages_known();
@@ -2328,7 +2336,7 @@ impl CatalogueView for View {
                 if self.catalog().lock.open() {
                     crate::player_sources::pasted(said, true, texts)
                 } else {
-                    Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN))
+                    Errand::Said(texts.t(key::PLAYER_ADULT_LOCKED_AGAIN).into())
                 }
             }
             (ASK_PASSWORD, Some(Typing::AdultPassword)) => {
@@ -2351,7 +2359,7 @@ impl CatalogueView for View {
         };
         let item = Reader::open(dir, store).and_then(|r| r.item(ItemId(id)));
         let Ok(Some(item)) = item else {
-            return Errand::Said(texts.t(key::PLAYER_CATALOG_ITEM_GONE));
+            return Errand::Said(texts.t(key::PLAYER_CATALOG_ITEM_GONE).into());
         };
         let name = item.row.title.clone();
         let mut stream = item.stream;
@@ -2367,14 +2375,16 @@ impl CatalogueView for View {
                 replace: false,
                 once: false,
             },
-            texts.t_with(
-                if play {
-                    key::PLAYER_PLAYING_NOW
-                } else {
-                    key::PLAYER_ADDED
-                },
-                &[("name", &name)],
-            ),
+            texts
+                .t_args_marked(
+                    if play {
+                        key::PLAYER_PLAYING_NOW
+                    } else {
+                        key::PLAYER_ADDED
+                    },
+                    &[("name", Arg::Name(&name))],
+                )
+                .into(),
         )
     }
 

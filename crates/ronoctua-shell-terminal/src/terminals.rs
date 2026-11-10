@@ -684,7 +684,7 @@ impl View {
         let sections = sections(r.census);
         if sections.is_empty() {
             b.heading(texts.t(crate::key::TERMINALS_TITLE));
-            b.note(&texts.t(crate::key::TERMINALS_NONE));
+            b.note(&texts.t(crate::key::TERMINALS_NONE).into());
             return b.out;
         }
         // ONE SET OF COLUMNS for the whole view, so a column lines up across
@@ -789,10 +789,13 @@ impl Builder<'_> {
         )]);
     }
 
-    /// A sentence that stands for a section. It WRAPS.
-    fn note(&mut self, text: &str) {
-        for line in crate::chrome::note_lines(text, self.room) {
-            self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
+    /// A sentence that stands for a section. It WRAPS — the names it quotes
+    /// in a name's ink.
+    fn note(&mut self, said: &crate::chrome::Named) {
+        for fields in
+            crate::chrome::note_fields(self.left, said, tokens::color::TEXT_DIM, self.room)
+        {
+            self.inert(fields);
         }
     }
 
@@ -845,14 +848,17 @@ impl Builder<'_> {
         } else {
             crate::key::TERMINALS_TITLE
         }));
-        let asked = t.t_with(
-            if q.ended {
-                crate::key::TERMINALS_CLOSE_QUESTION
-            } else {
-                crate::key::TERMINALS_END_QUESTION
-            },
-            &[("name", &q.name)],
-        );
+        // THE TERMINAL'S NAME IS A NAME the question quotes (`Arg::Name`).
+        let asked = t
+            .t_args_marked(
+                if q.ended {
+                    crate::key::TERMINALS_CLOSE_QUESTION
+                } else {
+                    crate::key::TERMINALS_END_QUESTION
+                },
+                &[("name", Arg::Name(&q.name))],
+            )
+            .into();
         self.note(&asked);
         self.inert(crate::chrome::AIR);
         for (yes, key) in [
@@ -1171,7 +1177,9 @@ mod tests {
     /// FAILS IF: `d` ends a terminal without a question, the question does
     /// not draw "no" first with the cursor born on it, a key other than
     /// `RET` on "yes" ends it, "yes" does not — or the question about a
-    /// terminal whose program already ended says it hangs a program up.
+    /// terminal whose program already ended says it hangs a program up; or
+    /// the terminal's name is drawn in the question's own ink, not in the
+    /// ink a name takes in it (`Arg::Name`, `chrome::quoted_ink`).
     #[test]
     fn ending_asks_first_and_no_is_first() {
         let all = census();
@@ -1220,9 +1228,26 @@ mod tests {
             .unwrap();
         v.clicked(ended, &rows);
         v.key(Press::End, &r, 120, &t);
-        let said = drawn(&v.rows(&r, 120, &t)).join(" ");
+        let rows = v.rows(&r, 120, &t);
+        // A LINE OF THE NOTE IS ITS FIELDS SIDE BY SIDE: a name is a field
+        // of its own, in a name's ink.
+        let said = rows
+            .iter()
+            .map(|r| r.fields.iter().map(|f| f.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" ");
         let close = t.t_with(crate::key::TERMINALS_CLOSE_QUESTION, &[("name", "zsh")]);
         assert!(said.contains(&close), "{said}");
+        let named = rows
+            .iter()
+            .flat_map(|r| &r.fields)
+            .find(|f| f.text == "zsh" && f.color != tokens::color::TEXT_HEADING)
+            .expect("the name, a field of its own");
+        assert_eq!(
+            named.color,
+            crate::chrome::quoted_ink(tokens::color::TEXT_DIM),
+            "{said}"
+        );
     }
 
     /// FAILS IF: a terminal a window shows cannot be asked about from outside

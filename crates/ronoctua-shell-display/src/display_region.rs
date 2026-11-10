@@ -423,12 +423,12 @@ mod tests {
             &mut w,
         );
         let no_thread = crate::display::no_thread(w.texts());
-        assert_eq!(w.owed, vec![Effect::Say(no_thread, Echo::Normal)]);
+        assert_eq!(w.owed, vec![Effect::Say(no_thread.into(), Echo::Normal)]);
         let (line, inbox) = ronoctua_display::Orders::detached();
         let mut w = way();
         carry_out(
             Doing {
-                said: Some("said".to_owned()),
+                said: Some("said".into()),
                 order: Some(ronoctua_display::Order::Undo),
                 close: true,
                 follow: false,
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(inbox.try_recv().ok(), Some(ronoctua_display::Order::Undo));
         assert_eq!(
             w.owed,
-            vec![Effect::Say("said".to_owned(), Echo::Normal), Effect::Close]
+            vec![Effect::Say("said".into(), Echo::Normal), Effect::Close]
         );
     }
 

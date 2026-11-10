@@ -962,8 +962,8 @@ mod tests {
                 "{why:?}: a question on the window's line"
             );
             assert_eq!(
-                ui.message,
-                Some(ui.texts.t(crate::security_words::refusal(why)))
+                ui.message.as_deref(),
+                Some(ui.texts.t(crate::security_words::refusal(why)).as_str())
             );
         }
     }

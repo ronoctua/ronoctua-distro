@@ -428,7 +428,17 @@ impl View {
                 .get(n)
                 .map(|p| p.label.clone())
                 .unwrap_or_default();
-            b.heading_of(texts.t_with(key::GEO_SURE, &[("region", &label)]));
+            // THE REGION IS A NAME the question quotes (`Arg::Name`), told
+            // as every name is; the question is drawn in a title's ink, which
+            // a name shares (`chrome::quoted_ink`), so only the words go.
+            b.heading_of(
+                texts
+                    .t_args_marked(
+                        key::GEO_SURE,
+                        &[("region", ronoctua_i18n::Arg::Name(&label))],
+                    )
+                    .text,
+            );
             b.pair(texts.t(key::GEO_NO), String::new(), Target::Answer(false));
             b.pair(texts.t(key::GEO_YES), String::new(), Target::Answer(true));
             return b.out;

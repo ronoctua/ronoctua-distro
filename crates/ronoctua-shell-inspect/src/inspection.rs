@@ -902,12 +902,17 @@ impl Transport {
     }
 }
 
-/// A bound on the work of wrapping a refusal, in lines.
+/// A bound on a refusal's rows — the rows drawn, and the wrap that counts
+/// them for the bar.
 ///
 /// Not a limit anybody reaches: the longest sentence this system has is 94
 /// cells, which is four rows in the narrowest panel. It is here so that a
-/// refusal carrying something pathological cannot make the wrapper walk a
-/// megabyte — the same bound `fold::wrap_pieces` and `layout::wrap` carry.
+/// refusal carrying something pathological cannot make the counting wrap
+/// walk a megabyte — the same bound `fold::wrap_pieces` and `layout::wrap`
+/// carry. The rows DRAWN are wrapped whole, in their inks
+/// (`chrome::wrap_runs`), and cut here: a wrap's first lines are the same
+/// with a bound or without, and a refusal's arguments are a program's name,
+/// a size and a count of seconds.
 pub const REFUSAL_CEILING: usize = 64;
 
 /// A BLANK ROW AT THE END OF THE FACTS — CONTENT, and never a reserve.
@@ -2480,17 +2485,29 @@ impl Panel {
         // whole width, every sentence this system has fits on one line, and
         // `lines.len()` is 1 — so the file's name goes on the row it always
         // went on.
+        //
+        // A PROGRAM IT NAMES IS A NAME ("{ $program } is not installed…"),
+        // told as one (`chrome::said_of`) and drawn in a name's ink beside
+        // the sentence's: the same words, wrapped into the same rows
+        // (`chrome::wrap_runs`). The ceiling still cuts at the same row — the
+        // first `REFUSAL_CEILING` lines of a wrap are the same with a bound
+        // or without — and what it bounded, the work, has nothing to bound
+        // here: a refusal carries a program's name, a size and a count of
+        // seconds, never a megabyte.
         let refused = looked.and_then(|l| l.why.as_ref());
-        let said = match refused {
-            Some(why) => {
-                let args: Vec<(&str, String)> = why.args();
-                let borrowed: Vec<(&str, &str)> =
-                    args.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                texts.t_with(why.key(), &borrowed)
-            }
-            None => texts.t(NO_PREVIEW),
+        let said: crate::chrome::Named = match refused {
+            Some(why) => crate::chrome::said_of(
+                texts,
+                &Explanation {
+                    key: why.key(),
+                    args: why.args(),
+                },
+            ),
+            None => texts.t(NO_PREVIEW).into(),
         };
-        let wrapped = ronoctua_render::layout::wrap(&said, room, REFUSAL_CEILING);
+        let dim = ronoctua_tokens::color::TEXT_DIM;
+        let mut wrapped = crate::chrome::wrap_runs(&said.runs(dim), dim, room);
+        wrapped.truncate(REFUSAL_CEILING);
         // AND A REFUSAL IS READ, WHICH IS WHY IT IS NOT CENTRED.
         //
         // The owner's words, and he drew the line himself: *"as mensagens de
@@ -2549,20 +2566,31 @@ impl Panel {
         // AND NOTHING PAST THE SENTENCE: a line that does nothing must not look
         // like a line that does something, which is the rule the blank rows of
         // a short listing already follow.
-        let Some(text) = wrapped.get(n).cloned() else {
+        let Some(line) = wrapped.get(n) else {
             return Vec::new();
         };
-        vec![Field {
-            at: start(width_of(&text)),
-            text,
-            // THE DIMMEST TEXT THERE IS, which is the whole of the "very
-            // discreet formatting" that was asked for: no box, no rule, no
-            // second size. Hierarchy is colour and air (invariant 15).
-            color: ronoctua_tokens::color::TEXT_DIM,
-            hit: target,
-            explain: None,
-            ink: Ink::Grid,
-        }]
+        // ONE FIELD PER RUN, each where the ones before it end: the row is
+        // still one press, every field of it the same target.
+        let mut x = start(line.iter().map(|(text, _)| width_of(text)).sum());
+        line.iter()
+            .map(|(text, color)| {
+                let field = Field {
+                    at: x,
+                    text: text.clone(),
+                    // THE DIMMEST TEXT THERE IS, which is the whole of the
+                    // "very discreet formatting" that was asked for: no box,
+                    // no rule, no second size. Hierarchy is colour and air
+                    // (invariant 15) — and a name in it, the quietest name
+                    // ink (`chrome::quoted_ink`).
+                    color: *color,
+                    hit: target.clone(),
+                    explain: None,
+                    ink: Ink::Grid,
+                };
+                x = x.saturating_add(width_of(text));
+                field
+            })
+            .collect()
     }
 
     /// The info panel's line `n`: one fact, label and value.

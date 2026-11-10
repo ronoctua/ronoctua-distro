@@ -195,39 +195,14 @@ impl Footer {
         &self,
         question: &ronoctua_bluetooth::agent::Question,
     ) -> ronoctua_notify::Notification {
-        use ronoctua_bluetooth::agent::Asked;
         let name = self
             .bluetooth_scene
             .device(&question.device)
             .map_or_else(|| question.device.clone(), |d| d.label.clone());
-        let body = match &question.asked {
-            Asked::Confirm(code) => self.texts.t_with(
-                crate::key::BLUETOOTH_PAIRING_CONFIRM,
-                &[("name", &name), ("code", code)],
-            ),
-            Asked::Passkey(code) => self.texts.t_with(
-                crate::key::BLUETOOTH_PAIRING_PASSKEY,
-                &[("name", &name), ("code", code)],
-            ),
-            Asked::Pin => self
-                .texts
-                .t_with(crate::key::BLUETOOTH_PAIRING_PIN, &[("name", &name)]),
-            Asked::Typed => self.texts.t_with(
-                crate::key::BLUETOOTH_PAIRING_PASSKEY_HERE,
-                &[("name", &name)],
-            ),
-            Asked::Authorize => self
-                .texts
-                .t_with(crate::key::BLUETOOTH_PAIRING_AUTHORIZE, &[("name", &name)]),
-            Asked::Service(uuid) => {
-                let service = ronoctua_bluetooth::profile_key(uuid)
-                    .map_or_else(|| uuid.clone(), |k| self.texts.t(k));
-                self.texts.t_with(
-                    crate::key::BLUETOOTH_PAIRING_SERVICE,
-                    &[("name", &name), ("service", &service)],
-                )
-            }
-        };
+        // THE PAGE'S OWN SENTENCE (`bluez_words::pairing_asked`), its names
+        // told; a notification's body is plain text, drawn in the band's
+        // inks, which quote no name (owner, 2026-11-10), so only the words go.
+        let body = crate::bluez_words::pairing_asked(&self.texts, &question.asked, &name).text;
         // AND THE TWO KEYS, on a line of their own.
         //
         // The card lives twenty seconds (`long`, and there is no longer one)

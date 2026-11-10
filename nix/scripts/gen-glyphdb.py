@@ -33,6 +33,7 @@ import pathlib
 import re
 import sys
 import tomllib
+import unicodedata
 from collections import Counter, defaultdict
 
 from fontTools.pens.boundsPen import BoundsPen
@@ -141,6 +142,22 @@ def chrome_size(ink_ratio: float | None, base: float, icon: float, tolerance: fl
 # of the real face, and the ink is measured on the glyph that was written.
 OURS = "ours-"
 
+# The prefix of a glyph the TEXT FACE draws, named by its Unicode name.
+#
+# `glyphnames.json` names the Nerd Fonts' private-use drawings, and nothing
+# else; a character every font has a place for — `⇈`, the text face's own
+# double arrow — has no name there, and its stable name is the one Unicode
+# gave it. `uni-upwards_paired_arrows` is `UPWARDS PAIRED ARROWS`, looked up
+# in Python's own copy of the Unicode database (`unicodedata.lookup`) and
+# then held to the same guard as every other token: the codepoint has to be
+# in the real cmap of the real face, and its ink is measured there. So the
+# names the font gives are still the authority on what EXISTS, and the
+# codepoint is still never written by hand (invariant 9). Unlike every other
+# token, it is NOT in the private-use area: it is text the face draws at
+# the text's own design, which is what the owner asked of the four ratings
+# (2026-11-10: the single and double arrows of the text, not chevrons).
+UNI = "uni-"
+
 
 def build_icon_table(
     tokens: dict,
@@ -214,11 +231,28 @@ def build_icon_table(
                 ),
             }
             continue
-        entry = names.get(glyph)
-        if entry is None:
-            missing.append((token, glyph, "does not exist in glyphnames.json"))
-            continue
-        cp = int(entry["code"], 16)
+        if glyph.startswith(UNI):
+            # `uni-upwards_paired_arrows` -> `UPWARDS PAIRED ARROWS`: the
+            # underscores are the spaces a token name cannot hold.
+            spelled = glyph[len(UNI) :].replace("_", " ").upper()
+            try:
+                found = unicodedata.lookup(spelled)
+            except KeyError:
+                found = ""
+            # ONE CHARACTER: `lookup` also answers a named SEQUENCE, which is
+            # several, and a token is one glyph.
+            if len(found) != 1:
+                missing.append(
+                    (token, glyph, f"`{spelled}` is not the Unicode name of one character")
+                )
+                continue
+            cp = ord(found)
+        else:
+            entry = names.get(glyph)
+            if entry is None:
+                missing.append((token, glyph, "does not exist in glyphnames.json"))
+                continue
+            cp = int(entry["code"], 16)
         if cp not in cmap:
             missing.append((token, glyph, f"U+{cp:04X} is missing from the font's cmap"))
             continue
@@ -251,7 +285,8 @@ def build_icon_table(
         print("       Fix it in assets/tokens/icons.nix. The glyph browser", file=sys.stderr)
         print("       (milestone 7) exists to find the right name without guessing;", file=sys.stderr)
         print(f"       a name starting with `{OURS}` is drawn by this repository and", file=sys.stderr)
-        print("       is declared in assets/icons/marks.nix.", file=sys.stderr)
+        print("       is declared in assets/icons/marks.nix; one starting with", file=sys.stderr)
+        print(f"       `{UNI}` is a character's Unicode name, `_` for each space.", file=sys.stderr)
         sys.exit(1)
 
     print(f"OK: {len(out)} icon tokens resolved against the real cmap")

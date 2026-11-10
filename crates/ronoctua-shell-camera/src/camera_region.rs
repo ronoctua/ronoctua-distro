@@ -52,12 +52,12 @@ fn lent_of(way: &dyn Doorway) -> Option<State> {
 
 /// Tells the studio something, saying on the door's line what refused.
 fn studio_ask(ask: &ronoctua_studio::wire::Ask, way: &mut dyn Doorway) {
-    let said = match ronoctua_studio::client::ask(ask) {
+    let said: crate::chrome::Named = match ronoctua_studio::client::ask(ask) {
         Ok(ronoctua_studio::wire::Say::Refused(t)) => {
-            crate::camera::trouble_sentence(&t, way.texts())
+            crate::camera::trouble_named(&t, way.texts()).into()
         }
         Ok(_) => return,
-        Err(_) => way.texts().t(crate::key::STUDIO_NOT_RUNNING),
+        Err(_) => way.texts().t(crate::key::STUDIO_NOT_RUNNING).into(),
     };
     way.say(said, crate::echo::Echo::Normal);
 }

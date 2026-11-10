@@ -15,10 +15,24 @@ use ronoctua_tags::Field;
 /// cannot be changed (`ronoctua_shell_player::player_metadata`). One for each reason.
 #[must_use]
 pub fn tags_refusal(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> String {
+    tags_named(why, texts).into_text()
+}
+
+/// [`tags_refusal`], with the program it names told
+/// (`ronoctua_i18n::Arg::Name`) — for a door that says it on its line, where
+/// a name is drawn in a name's ink. The same words, byte for byte.
+#[must_use]
+pub fn tags_named(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
     use crate::key;
+    use ronoctua_i18n::Arg;
     use ronoctua_tags::Why;
     let size = |bytes: u64| crate::sizes::size_text(bytes, texts.decimal_mark());
-    match why {
+    let program = |k: &str, program: &ronoctua_tags::Program| -> crate::chrome::Named {
+        texts
+            .t_args_marked(k, &[("program", Arg::Name(program.name()))])
+            .into()
+    };
+    let said = match why {
         Why::NotAFile => texts.t(key::PLAYER_TROUBLE_TAG_NOT_A_FILE),
         Why::Gone => texts.t(key::PLAYER_TROUBLE_TAG_GONE),
         Why::ChangedSince => texts.t(key::PLAYER_TROUBLE_TAG_CHANGED_SINCE),
@@ -65,18 +79,17 @@ pub fn tags_refusal(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> S
             &[("format", &texts.t(tag_format_key(*format)))],
         ),
         Why::OnlyTheFrontCover => texts.t(key::PLAYER_TROUBLE_TAG_ONLY_THE_FRONT_COVER),
+        // THE PROGRAM IS THE SELECTOR here — it picks the sentence's branch,
+        // which names it in words of its own — so it goes in as the plain
+        // value it is selected on.
         Why::Missing { program } => texts.t_with(
             key::PLAYER_TROUBLE_TAG_MISSING,
             &[("program", program.name())],
         ),
-        Why::ProgramFailed { program } => texts.t_with(
-            key::PLAYER_TROUBLE_TAG_PROGRAM_FAILED,
-            &[("program", program.name())],
-        ),
-        Why::TimedOut { program } => texts.t_with(
-            key::PLAYER_TROUBLE_TAG_TIMED_OUT,
-            &[("program", program.name())],
-        ),
+        Why::ProgramFailed { program: p } => {
+            return program(key::PLAYER_TROUBLE_TAG_PROGRAM_FAILED, p);
+        }
+        Why::TimedOut { program: p } => return program(key::PLAYER_TROUBLE_TAG_TIMED_OUT, p),
         Why::TooBig { bytes, most_bytes } => texts.t_with(
             key::PLAYER_TROUBLE_TAG_TOO_BIG,
             &[("bytes", &size(*bytes)), ("most", &size(*most_bytes))],
@@ -93,7 +106,8 @@ pub fn tags_refusal(why: &ronoctua_tags::Why, texts: &ronoctua_i18n::Texts) -> S
         Why::NoSuchThing => texts.t(key::PLAYER_TROUBLE_TAG_NO_SUCH_THING),
         Why::Taken => texts.t(key::PLAYER_TROUBLE_TAG_TAKEN),
         Why::Cancelled => texts.t(key::PLAYER_TROUBLE_TAG_CANCELLED),
-    }
+    };
+    said.into()
 }
 
 /// A kind of tag, as a sentence names it — its key.

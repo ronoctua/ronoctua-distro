@@ -192,13 +192,13 @@ impl ModelineAdapter for Adapter<'_> {
 
     /// WHAT THE WINDOW SAYS OF THE TAB'S SHORTCUT — the sentence it publishes
     /// beside it — and its name where it says none.
-    fn hint(&self, t: &Target, _texts: &Texts) -> Option<String> {
+    fn hint(&self, t: &Target, _texts: &Texts) -> Option<crate::chrome::Named> {
         let said = self
             .shortcuts
             .iter()
             .find(|s| s.command == t.command)
             .and_then(|s| s.sentence.clone());
-        Some(said.unwrap_or_else(|| t.name.clone()))
+        Some(said.unwrap_or_else(|| t.name.clone()).into())
     }
 
     fn counted(&self, t: &Target, _: usize) -> Target {

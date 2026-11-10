@@ -861,9 +861,9 @@ fn cache_errand(e: binary_cache::Errand, open: &mut Open, way: &mut dyn Doorway)
                     open.ask_for_the_netrc(places, way);
                     let footer = way.texts().t(crate::key::BINARY_CACHE_SAID_NETRC_FOOTER);
                     said = if said.is_empty() {
-                        footer
+                        footer.into()
                     } else {
-                        format!("{said} {footer}")
+                        said.then(" ", footer)
                     };
                 }
                 if !said.is_empty() {
@@ -921,7 +921,7 @@ fn parts_errand(e: crate::parts::Errand, open: &mut Open, way: &mut dyn Doorway)
             way.say(said, crate::echo::Echo::Long);
         }
         Page::Explain(e) => {
-            let said = way.texts().t_with(e.key, &e.borrowed());
+            let said = crate::chrome::said_of(way.texts(), &e);
             way.say(said, crate::echo::Echo::Long);
         }
         // `C-v` IN THE PICKER: the door reads the clipboard and hands it to

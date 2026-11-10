@@ -639,8 +639,9 @@ pub enum Errand {
     Shell(String),
     /// Run a command of the registry — the firewall.
     Run(&'static str),
-    /// Say this; it is already a sentence.
-    Say(String),
+    /// Say this; it is already a sentence — a name it quotes told, so the
+    /// line draws it in a name's ink.
+    Say(crate::chrome::Named),
 }
 
 // ---------------------------------------------------------------------------
@@ -735,8 +736,14 @@ impl<'a> Col<'a> {
 
     /// A sentence, wrapped, never cut.
     fn note(&mut self, text: &str, color: tokens::Color) {
-        for line in crate::chrome::note_lines(text, self.room) {
-            self.push(vec![piece(0, line, color)], Target::Nothing, true);
+        self.note_named(&crate::chrome::Named::from(text), color);
+    }
+
+    /// The same, a name it quotes a field of its own in a name's ink
+    /// ([`crate::chrome::note_fields`]: the same breaks).
+    fn note_named(&mut self, text: &crate::chrome::Named, color: tokens::Color) {
+        for fields in crate::chrome::note_fields(0, text, color, self.room) {
+            self.push(fields, Target::Nothing, true);
         }
     }
 
@@ -985,18 +992,24 @@ impl View {
             if !mine || matches!(job.stage, ronoctua_transfers::Stage::Done) {
                 continue;
             }
-            let what = texts.t_with(
+            // WHAT IS WORKED ON IS A NAME the note quotes (`Arg::Name`).
+            let what = texts.t_args_marked(
                 crate::key::CONTAINERS_WORKING,
                 &[
-                    ("what", &words::job_said(which, texts)),
-                    ("name", label),
+                    (
+                        "what",
+                        ronoctua_i18n::Arg::Text(&words::job_said(which, texts)),
+                    ),
+                    ("name", ronoctua_i18n::Arg::Name(label)),
                     (
                         "stage",
-                        &texts.t(&format!("transfers-stage-{}", job.stage.word())),
+                        ronoctua_i18n::Arg::Text(
+                            &texts.t(&format!("transfers-stage-{}", job.stage.word())),
+                        ),
                     ),
                 ],
             );
-            col.note(&what, tokens::color::TEXT_DIM);
+            col.note_named(&what.into(), tokens::color::TEXT_DIM);
         }
         let Some(listing) = &r.listing else {
             col.note(
@@ -1847,25 +1860,36 @@ impl View {
 
     fn question_rows(&self, col: &mut Col<'_>, q: &Question) {
         let texts = col.texts;
-        let sentence = match q {
+        // WHAT IS ASKED ABOUT IS A NAME the question quotes (`Arg::Name`),
+        // drawn in a name's ink.
+        let sentence: crate::chrome::Named = match q {
             Question::Remove { name, why, .. } => {
-                let mut s = texts.t_with(crate::key::CONTAINERS_ASK_REMOVE, &[("name", name)]);
-                if let Some(why) = why {
-                    s.push(' ');
-                    s.push_str(&texts.t(why));
+                let asked: crate::chrome::Named = texts
+                    .t_args_marked(
+                        crate::key::CONTAINERS_ASK_REMOVE,
+                        &[("name", ronoctua_i18n::Arg::Name(name))],
+                    )
+                    .into();
+                match why {
+                    Some(why) => asked.then(" ", texts.t(why)),
+                    None => asked,
                 }
-                s
             }
-            Question::Prune(what) => texts.t(match what {
-                Prune::System => crate::key::CONTAINERS_ASK_PRUNE_SYSTEM,
-                Prune::Images => crate::key::CONTAINERS_ASK_PRUNE_IMAGES,
-                Prune::Volumes => crate::key::CONTAINERS_ASK_PRUNE_VOLUMES,
-            }),
-            Question::Down { name, .. } => {
-                texts.t_with(crate::key::CONTAINERS_ASK_DOWN, &[("name", name)])
-            }
+            Question::Prune(what) => texts
+                .t(match what {
+                    Prune::System => crate::key::CONTAINERS_ASK_PRUNE_SYSTEM,
+                    Prune::Images => crate::key::CONTAINERS_ASK_PRUNE_IMAGES,
+                    Prune::Volumes => crate::key::CONTAINERS_ASK_PRUNE_VOLUMES,
+                })
+                .into(),
+            Question::Down { name, .. } => texts
+                .t_args_marked(
+                    crate::key::CONTAINERS_ASK_DOWN,
+                    &[("name", ronoctua_i18n::Arg::Name(name))],
+                )
+                .into(),
         };
-        col.note(&sentence, tokens::color::TEXT_PRIMARY);
+        col.note_named(&sentence, tokens::color::TEXT_PRIMARY);
         col.push(crate::chrome::AIR, Target::Nothing, true);
         // "NO" FIRST, and the cursor is born on it. "Yes" is in the colour
         // of danger: what it does cannot be undone.
@@ -2521,7 +2545,7 @@ impl View {
             }
             Press::Shell => match self.picked_container(r) {
                 Some(c) if c.state == State::Running => Errand::Shell(c.id.clone()),
-                Some(_) => Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NOT_RUNNING)),
+                Some(_) => Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NOT_RUNNING).into()),
                 None => self.cannot(texts),
             },
             Press::StartStop => self.start_stop(r, texts),
@@ -2611,10 +2635,14 @@ impl View {
     }
 
     fn cannot(&self, texts: &ronoctua_i18n::Texts) -> Errand {
-        Errand::Say(texts.t_with(
-            crate::key::CONTAINERS_REFUSED_NOT_HERE,
-            &[("kind", &texts.t(words::kind_key(self.kind)))],
-        ))
+        Errand::Say(
+            texts
+                .t_with(
+                    crate::key::CONTAINERS_REFUSED_NOT_HERE,
+                    &[("kind", &texts.t(words::kind_key(self.kind)))],
+                )
+                .into(),
+        )
     }
 
     fn picked_container<'r>(&self, r: &'r Readings) -> Option<&'r Container> {
@@ -2658,7 +2686,7 @@ impl View {
                     return Errand::Nothing;
                 };
                 let Some(files) = compose_files(p) else {
-                    return Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NO_FILE));
+                    return Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NO_FILE).into());
                 };
                 let up = p
                     .containers
@@ -2762,7 +2790,7 @@ impl View {
                 Errand::Nothing
             }
             None if self.kind == Kind::Compose => {
-                Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NO_FILE))
+                Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_NO_FILE).into())
             }
             None => Errand::Nothing,
         }
@@ -2847,21 +2875,22 @@ pub fn answered(
                 (Some(rest), Some(home)) => home.join(rest.trim_start_matches('/')),
                 _ => PathBuf::from(said),
             };
+            // THE FOLDER TYPED IS A NAME each refusal quotes (`Arg::Name`).
+            let refused = |k: &str| {
+                Errand::Say(
+                    texts
+                        .t_args_marked(k, &[("path", ronoctua_i18n::Arg::Name(said))])
+                        .into(),
+                )
+            };
             if !context.is_dir() {
-                return Errand::Say(
-                    texts.t_with(crate::key::CONTAINERS_REFUSED_NO_FOLDER, &[("path", said)]),
-                );
+                return refused(crate::key::CONTAINERS_REFUSED_NO_FOLDER);
             }
             if ronoctua_containers::containerfile_in(&context).is_none() {
-                return Errand::Say(texts.t_with(
-                    crate::key::CONTAINERS_REFUSED_NO_CONTAINERFILE,
-                    &[("path", said)],
-                ));
+                return refused(crate::key::CONTAINERS_REFUSED_NO_CONTAINERFILE);
             }
             let Some(tag) = ronoctua_containers::tag_of_folder(&context) else {
-                return Errand::Say(
-                    texts.t_with(crate::key::CONTAINERS_REFUSED_NO_FOLDER, &[("path", said)]),
-                );
+                return refused(crate::key::CONTAINERS_REFUSED_NO_FOLDER);
             };
             Errand::Queue(
                 Job::Build {
@@ -2874,7 +2903,7 @@ pub fn answered(
         }
         LOGIN => match login_of(said) {
             Some(login) => Errand::Password(login),
-            None => Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_LOGIN_WORDS)),
+            None => Errand::Say(texts.t(crate::key::CONTAINERS_REFUSED_LOGIN_WORDS).into()),
         },
         _ => Errand::Nothing,
     }
@@ -3458,6 +3487,16 @@ pub(crate) mod tests {
         let lines = v.lines(&r, WIDE, Layout::Panes, ROOM, &t);
         let said = texts_of(&lines);
         assert!(said.contains("web"), "{said}");
+        // THE NAME IS TOLD: a field of its own, in the ink a name takes in
+        // the question's (`chrome::quoted_ink`), and nothing else in it.
+        let quoted = crate::chrome::quoted_ink(tokens::color::TEXT_PRIMARY);
+        let named: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| &l.fields)
+            .filter(|f| f.color == quoted)
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(named, ["web"], "{said}");
         // `RET` AT ONCE is "no".
         assert_eq!(
             v.key(Press::Enter, &r, WIDE, Layout::Panes, &t),
@@ -3766,8 +3805,15 @@ pub(crate) mod tests {
         // ASKED FROM THE LIST, answered "no": the list again, the keyboard on
         // it, and the strip of kinds on top.
         v.key(Press::Remove, &r, NARROW, Layout::Stacked, &t);
-        let said = texts_of(&v.lines(&r, NARROW, Layout::Stacked, ROOM, &t));
-        assert!(said.contains("Remove web?"), "{said}");
+        let lines = v.lines(&r, NARROW, Layout::Stacked, ROOM, &t);
+        let said = texts_of(&lines);
+        // THE QUESTION'S RUNS READ AS ONE SENTENCE — the name a field of its
+        // own, glued to the words around it.
+        let whole: Vec<String> = lines
+            .iter()
+            .map(|l| l.fields.iter().map(|f| f.text.as_str()).collect())
+            .collect();
+        assert!(whole.iter().any(|l| l.starts_with("Remove web?")), "{said}");
         assert_eq!(
             v.key(Press::Enter, &r, NARROW, Layout::Stacked, &t),
             Errand::Nothing

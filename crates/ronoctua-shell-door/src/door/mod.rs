@@ -111,12 +111,14 @@ pub struct Ui {
     pub all_lines: u16,
     /// The margin inside the window, in cells.
     pub margin: u16,
-    /// What the last order said, on line 0 instead of the keys.
+    /// What the last order said, on line 0 instead of the keys — with the
+    /// names it quotes told ([`crate::chrome::Named`]), so a title or a file
+    /// in it is drawn in an ink of its own wherever the sentence is drawn.
     ///
     /// A sentence the window SAYS goes through [`Ui::say`], which takes it
     /// off again after `ECHO_SECONDS`; one written here directly is a state
     /// that stays until something replaces it (the player not running).
-    pub message: Option<String>,
+    pub message: Option<crate::chrome::Named>,
     /// How many sentences [`Ui::say`] has put on the line — the number of
     /// the one there, so a timer takes off ITS sentence and never a newer one.
     said: u64,
@@ -236,6 +238,10 @@ pub struct Ui {
     /// asked by a view whose followed tail was in sight when data arrived
     /// ([`crate::region::Doorway::follow_if_seen`]).
     pub(crate) follow_owed: bool,
+    /// A view PLACED the list's first row this turn ([`Ui::place_top`]): the
+    /// follow that ends the gesture leaves it where it was put, once, while
+    /// the cursor is on screen.
+    top_placed: bool,
     /// The session is to be opened again at the end of the turn — asked by
     /// a door that holds the lock ([`Ui::unlock`]).
     unlock_owed: bool,
@@ -302,8 +308,12 @@ enum Routed {
 }
 
 /// What a launch's verdict says on a window's line: only a failure is said,
-/// in the footer's own sentence (`echo-no-opened`); the rest is the log's.
-fn launch_said(verdict: &crate::foreign::Launch, texts: &ronoctua_i18n::Texts) -> Option<String> {
+/// in the footer's own sentence (`echo-no-opened`), the program told as the
+/// name it quotes; the rest is the log's.
+fn launch_said(
+    verdict: &crate::foreign::Launch,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<crate::chrome::Named> {
     use crate::foreign::Launch;
     match verdict {
         Launch::WithScope { scope, program } => {
@@ -316,7 +326,14 @@ fn launch_said(verdict: &crate::foreign::Launch, texts: &ronoctua_i18n::Texts) -
         }
         Launch::Failed { program, error } => {
             tracing::error!(error, program, "could not open");
-            Some(texts.t_with(crate::key::ECHO_NO_OPENED, &[("program", program.as_str())]))
+            Some(
+                texts
+                    .t_args_marked(
+                        crate::key::ECHO_NO_OPENED,
+                        &[("program", ronoctua_i18n::Arg::Name(program))],
+                    )
+                    .into(),
+            )
         }
     }
 }
@@ -473,7 +490,11 @@ impl Ui {
     /// replaced — by another sentence, a question, or a state written into
     /// [`Ui::message`] directly — and the timer takes off nothing but the
     /// sentence it was hung for ([`Ui::expire`]).
-    pub fn say(&mut self, text: String) {
+    ///
+    /// ANY SENTENCE: a plain `String` is one that quotes no name, and a
+    /// `ronoctua_i18n::Marked` carries where its names landed
+    /// ([`crate::chrome::Named`]) — the line draws them in their own ink.
+    pub fn say(&mut self, text: impl Into<crate::chrome::Named>) {
         self.say_for(text, crate::echo::Echo::Normal);
     }
 
@@ -483,7 +504,8 @@ impl Ui {
     /// true); the next message, question or key replaces it. Every other
     /// message is [`Ui::say`], and `door-messages-expire` refuses a write
     /// to [`Ui::message`] anywhere else.
-    pub fn hold(&mut self, text: String) {
+    pub fn hold(&mut self, text: impl Into<crate::chrome::Named>) {
+        let text = text.into();
         tracing::info!(echo = %text, "message line, held");
         // A TIMER STILL OWED for an earlier sentence is not hung for this one.
         self.said = self.said.wrapping_add(1);
@@ -496,10 +518,13 @@ impl Ui {
     /// a word that confirms a gesture goes sooner, a refusal that has to be
     /// read to the end stays longer — the footer's classes, from the same
     /// tokens, so the two doors keep a message for as long as each other.
-    pub fn say_for(&mut self, text: String, class: crate::echo::Echo) {
+    pub fn say_for(&mut self, text: impl Into<crate::chrome::Named>, class: crate::echo::Echo) {
+        let text = text.into();
         tracing::info!(echo = %text, ?class, "message line");
         self.said = self.said.wrapping_add(1);
-        self.echo_owed = Some((self.said, text.clone(), class));
+        // THE TIMER KNOWS ITS SENTENCE BY ITS WORDS: what it takes off is the
+        // text still on the line ([`Ui::expire`]), names or not.
+        self.echo_owed = Some((self.said, text.as_str().to_owned(), class));
         self.message = Some(text);
         self.ask_paint();
     }
@@ -715,7 +740,7 @@ impl Ui {
     #[must_use]
     pub fn deeds(&self) -> Deeds {
         Deeds {
-            message: self.message.clone(),
+            message: self.message.as_deref().map(str::to_owned),
             asking: self.asking.clone(),
             orders: self.orders.clone(),
             launches: self.launches.clone(),
@@ -796,6 +821,7 @@ impl Ui {
             wake: None,
             detached: true,
             follow_owed: false,
+            top_placed: false,
             unlock_owed: false,
             frame_wanted: false,
             frame_in_flight: false,
@@ -948,6 +974,37 @@ impl Ui {
         self.offset = self.offset.min(rows.saturating_sub(room));
     }
 
+    /// PUTS ROW `top` FIRST on the window, in a list of `rows` — a list's
+    /// title brought to the top once the page under it turned, so what the
+    /// person turned to is what they see — as far as the list's end lets it.
+    ///
+    /// # Why it outlives the follow, once
+    ///
+    /// Because a key (`typed_into`, an answer to the line) and a click on a
+    /// row of the standard list (`list::pointer`) both end with the list
+    /// following the cursor (`follow_into`), two rows of margin from the
+    /// edge: with the cursor on the row under the title, that follow would
+    /// scroll the title one row back off the top, on the very gesture that
+    /// put it there. So the place is kept from the follow that ends this
+    /// gesture, ONCE, and only while the cursor is still on screen — one put
+    /// out of sight is followed, as always: the cursor is never lost for a
+    /// title. The next gesture follows as every gesture does. A window that
+    /// follows by itself ([`Ui::follow`], from a pointer of its own) is not
+    /// kept from: it places after its own follow.
+    pub fn place_top(&mut self, top: usize, rows: usize) {
+        let room = self.room_for_rows();
+        self.offset = top.min(rows.saturating_sub(room));
+        self.top_placed = true;
+        self.ask_paint();
+    }
+
+    /// Whether row `row` of the list is drawn on the window, at the offset
+    /// it has now.
+    #[must_use]
+    pub fn shows(&self, row: usize) -> bool {
+        row >= self.offset && row < self.offset + self.room_for_rows()
+    }
+
     /// Which drawn row of the list is at `(x, y)`.
     ///
     /// `None` above the list — and ON THE BAR'S COLUMN while a bar is drawn:
@@ -1033,10 +1090,10 @@ impl crate::region::Doorway for Ui {
     fn photographing(&self) -> bool {
         self.detached
     }
-    fn say(&mut self, text: String, class: crate::echo::Echo) {
+    fn say_named(&mut self, text: crate::chrome::Named, class: crate::echo::Echo) {
         self.say_for(text, class);
     }
-    fn hold(&mut self, text: String) {
+    fn hold_named(&mut self, text: crate::chrome::Named) {
         Self::hold(self, text);
     }
     fn ask(&mut self, line: crate::line::Line) {
@@ -2529,6 +2586,7 @@ pub fn run<C: Content>(make: impl FnOnce(&Wiring<'_, C>) -> Result<C>) -> Result
             wake: Some(wiring.wake()),
             detached: false,
             follow_owed: false,
+            top_placed: false,
             unlock_owed: false,
             frame_wanted: false,
             frame_in_flight: false,
@@ -3008,6 +3066,10 @@ impl<C: Content> Door<C> {
         if std::mem::take(&mut self.ui.follow_owed) {
             follow_into(&self.content, &mut self.ui);
         }
+        // A FIRST ROW PLACED THIS TURN is spent with it: one placed with no
+        // gesture to follow — a reading that arrived — never keeps the next
+        // gesture's follow from following.
+        self.ui.top_placed = false;
         if let Some(to) = self.ui.paste_owed.take() {
             self.read_the_clipboard(to);
         }
@@ -3829,9 +3891,14 @@ fn line_key_into<C: Content>(content: &mut C, ui: &mut Ui, event: &KeyEvent, mod
     }
 }
 
-/// The list follows the keyboard's cursor.
+/// The list follows the keyboard's cursor — but for a first row a view
+/// placed this turn ([`Ui::place_top`]), kept while the cursor is on screen.
 fn follow_into<C: Content>(content: &C, ui: &mut Ui) {
+    let placed = std::mem::take(&mut ui.top_placed);
     if let Some(cursor) = content.cursor() {
+        if placed && ui.shows(cursor) {
+            return;
+        }
         let rows = content.rows(ui).len();
         ui.follow(cursor, rows);
     }
@@ -4169,10 +4236,12 @@ impl<C: Content> Detached<C> {
         if std::mem::take(&mut self.ui.size_owed) {
             self.lay_out();
         }
-        // AND THE FOLLOW A VIEW ASKED FOR, as `Door::settle` does it.
+        // AND THE FOLLOW A VIEW ASKED FOR, as `Door::settle` does it — and a
+        // first row placed this turn spent with it.
         if std::mem::take(&mut self.ui.follow_owed) {
             follow_into(&self.content, &mut self.ui);
         }
+        self.ui.top_placed = false;
     }
 
     /// A key pressed and let go FOR the window — the way a click on its header
@@ -4429,21 +4498,21 @@ mod tests {
     #[test]
     fn the_timer_clears_only_its_own_message() {
         let mut ui = ui();
-        ui.say("added".into());
+        ui.say("added");
         let (first, text, _) = ui.echo_owed.take().expect("a timer is owed");
         assert_eq!(ui.message.as_deref(), Some("added"));
         assert!(ui.expire(first, &text), "its own sentence goes");
         assert_eq!(ui.message, None);
 
-        ui.say("one".into());
+        ui.say("one");
         let (one, one_text, _) = ui.echo_owed.take().expect("owed");
-        ui.say("two".into());
+        ui.say("two");
         let (two, two_text, _) = ui.echo_owed.take().expect("owed");
         assert!(!ui.expire(one, &one_text), "a newer sentence stays");
         assert_eq!(ui.message.as_deref(), Some("two"));
         assert!(ui.expire(two, &two_text));
 
-        ui.say("three".into());
+        ui.say("three");
         let (three, three_text, _) = ui.echo_owed.take().expect("owed");
         ui.message = Some("the player is not running".into());
         assert!(
@@ -4463,7 +4532,7 @@ mod tests {
         let handle = event_loop.handle();
         let after = std::time::Duration::from_millis(5);
         let mut held = ui();
-        held.say("added".into());
+        held.say("added");
         hang_the_echo(&mut held, &handle, |_| after, |u| u);
         assert!(held.echo_owed.is_none(), "the owed timer is taken");
         hang_the_echo(&mut held, &handle, |_| after, |u| u);
@@ -4476,9 +4545,9 @@ mod tests {
         assert_eq!(held.message, None, "the sentence went");
 
         // A NEWER SENTENCE, said before the first timer fires, stays.
-        held.say("first".into());
+        held.say("first");
         hang_the_echo(&mut held, &handle, |_| after, |u| u);
-        held.say("second".into());
+        held.say("second");
         let (second, second_text, class) = held.echo_owed.take().expect("owed");
         assert_eq!(
             class,
@@ -4515,7 +4584,8 @@ mod tests {
 
     /// FAILS IF: a window starts a program on its loop, hands an installed
     /// program to the footer, or keeps quiet when a start fails — the footer
-    /// says `echo-no-opened` on its line, and so does every window on its own.
+    /// says `echo-no-opened` on its line, and so does every window on its own
+    /// — or says it without the program told as the name it quotes.
     #[test]
     fn a_window_launches_off_the_loop_and_says_what_failed() {
         let mut ui = ui();
@@ -4548,6 +4618,8 @@ mod tests {
         };
         let said = launch_said(&failed, &ui.texts).expect("a failure is said");
         assert!(said.contains("/bin/gimp"), "{said}");
+        let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(quoted, ["/bin/gimp"], "{said:?}");
         let opened = crate::foreign::Launch::WithScope {
             scope: "a-scope".to_owned(),
             program: "/bin/gimp".to_owned(),
@@ -4771,8 +4843,8 @@ mod tests {
         refused.last_orders_sent(false);
         assert!(!refused.quit, "the window closed and nothing opened");
         assert_eq!(
-            refused.message,
-            Some(refused.texts.t(crate::key::DOOR_NO_FOOTER))
+            refused.message.as_deref(),
+            Some(refused.texts.t(crate::key::DOOR_NO_FOOTER).as_str())
         );
 
         let mut taken = ui();
@@ -4865,6 +4937,169 @@ mod tests {
         ui.hinted.hide_header(false);
         assert!(list::the_question(&ui).is_some());
         assert_eq!(foot::wanted(&ui), 0);
+    }
+
+    /// FAILS IF: a name a message quotes is not drawn on line 0 in the
+    /// register a name in what the line says wears (`Register::quoting`) —
+    /// or the words around it are, or the line reads differently from the
+    /// sentence — or a sentence with no names is not the one said piece it
+    /// always was. `list::said_pieces` is the footer's echo's builder too.
+    #[test]
+    fn a_name_said_on_line_zero_wears_its_own_ink() {
+        use crate::chrome::Register;
+        let mut ui = ui();
+        ui.hinted.hide_header(false);
+        let name = "Ancient Recipes of the Sea";
+        let said = ui.texts.t_args_marked(
+            crate::key::DOOR_FOOT_NAMED,
+            &[
+                ("name", ronoctua_i18n::Arg::Name(name)),
+                ("rest", ronoctua_i18n::Arg::Text("it plays next")),
+            ],
+        );
+        let text = said.text.clone();
+        ui.say(said);
+        let (pieces, carries) = list::line_zero(&mut ui, None, |_| Vec::new());
+        assert!(carries.speaks(), "line 0 did not say it");
+        let read: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(read, text, "the line reads otherwise");
+        let quoted: Vec<&str> = pieces
+            .iter()
+            .filter(|p| p.register == Register::Said.quoting())
+            .map(|p| p.text.as_str())
+            .collect();
+        assert_eq!(quoted, [name], "{pieces:?}");
+        assert!(
+            pieces
+                .iter()
+                .filter(|p| p.text != name)
+                .all(|p| p.register == Register::Said),
+            "{pieces:?}"
+        );
+        // A SENTENCE WITH NO NAMES is the one said piece it always was — and
+        // an empty one still a piece.
+        let plain = crate::chrome::Named::from("it was saved");
+        let pieces = list::said_pieces(&plain);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(
+            (pieces[0].text.as_str(), pieces[0].register),
+            ("it was saved", Register::Said)
+        );
+        assert_eq!(list::said_pieces(&crate::chrome::Named::default()).len(), 1);
+    }
+
+    /// A list of `rows` blank rows and a cursor — `n` turns a page: the
+    /// cursor onto `landing` and the row `title` put first, as a paged list
+    /// asks its window to ([`Ui::place_top`]); `k` walks the cursor up. A
+    /// click on any row turns the page as `n` does — a page's arrow.
+    struct Paged {
+        rows: usize,
+        cursor: usize,
+        title: usize,
+        landing: usize,
+    }
+
+    impl Content for Paged {
+        type Hand = ();
+
+        fn app_id(&self) -> &'static str {
+            "test.paged"
+        }
+
+        fn title(&self, _: &ronoctua_i18n::Texts) -> String {
+            String::new()
+        }
+
+        fn typed(&mut self, ui: &mut Ui, event: &KeyEvent, _: Modifiers) {
+            match event.keysym {
+                Keysym::n => {
+                    self.cursor = self.landing;
+                    ui.place_top(self.title, self.rows);
+                }
+                Keysym::k => self.cursor = self.cursor.saturating_sub(1),
+                _ => {}
+            }
+        }
+
+        fn rows(&self, _: &Ui) -> Vec<Vec<crate::fields::Field>> {
+            vec![Vec::new(); self.rows]
+        }
+
+        fn takes(&self, _: &Ui) -> Vec<bool> {
+            vec![true; self.rows]
+        }
+
+        fn clicked(&mut self, ui: &mut Ui, _: usize) {
+            self.cursor = self.landing;
+            ui.place_top(self.title, self.rows);
+        }
+
+        fn cursor(&self) -> Option<usize> {
+            Some(self.cursor)
+        }
+    }
+
+    /// FAILS IF: the follow that ends a gesture — a key's, or a click's on a
+    /// row of the list — scrolls back a first row the gesture placed — a
+    /// list's title, put first when its page turned, moved off the top by
+    /// the two rows of margin — or the place outlives its gesture, keeping
+    /// the next key's follow from following, or a cursor the place left off
+    /// the window is not followed, or a place no gesture followed (a reading
+    /// that arrived) is not spent with its turn, or a place past the list's
+    /// end leaves rows of nothing.
+    #[test]
+    fn a_place_put_first_is_not_undone_by_the_follow() {
+        let paged = Paged {
+            rows: 100,
+            cursor: 0,
+            title: 40,
+            landing: 41,
+        };
+        let mut d = Detached::new(ui(), paged);
+        let room = d.ui.room_for_rows();
+        assert!(room > 6, "a window too short to tell: {room} rows");
+        d.press(key("n"));
+        assert_eq!(d.content.cursor, 41);
+        assert_eq!(d.ui.offset, 40, "the follow moved the title off the top");
+        // ONCE: the next gesture follows, two rows of margin.
+        d.press(key("k"));
+        assert_eq!(d.ui.offset, 38, "the place outlived its gesture");
+        // A CURSOR THE PLACE LEFT OUT OF SIGHT is followed.
+        d.content.landing = 90;
+        d.press(key("n"));
+        assert!(d.ui.shows(90), "the cursor was left off the window");
+        // A PLACE NO GESTURE FOLLOWED is spent with its turn.
+        d.ui.place_top(40, 100);
+        d.turn();
+        d.content.cursor = 41;
+        d.press(key("k"));
+        assert_eq!(d.ui.offset, 38, "a place from an earlier turn held");
+        // AND AS FAR AS THE LIST'S END LETS IT.
+        d.ui.place_top(99, 100);
+        assert_eq!(d.ui.offset, 100 - room);
+        // A CLICK, as a key: the follow that ends a click on a row
+        // (`list::pointer`) keeps the place too.
+        d.turn();
+        d.ui.offset = 0;
+        d.content.cursor = 0;
+        d.content.landing = 41;
+        let line = f64::from(tokens::metrics::line_height(tokens::text::size()));
+        let first = f64::from(d.ui.first_of_list());
+        let press = PointerEvent {
+            surface: d.ui.surface.clone(),
+            position: (10.0, line * (first + 0.5)),
+            kind: smithay_client_toolkit::seat::pointer::PointerEventKind::Press {
+                time: 0,
+                button: LEFT_BUTTON,
+                serial: 0,
+            },
+        };
+        d.pointer(&[press]);
+        assert_eq!(d.content.cursor, 41, "the click turned no page");
+        assert_eq!(
+            d.ui.offset, 40,
+            "the click's follow moved the title off the top"
+        );
     }
 
     /// A window that keeps a foot ([`Content::foot_lines`]), and the lines

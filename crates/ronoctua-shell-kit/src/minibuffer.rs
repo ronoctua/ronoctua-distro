@@ -234,6 +234,7 @@ impl Minibuffer {
         if let Some(asking) = self.asking.as_mut() {
             asking.asks = line.asks;
             asking.asks_with = line.asks_with;
+            asking.asks_names = line.asks_names;
             asking.unlogged = line.unlogged;
         }
     }

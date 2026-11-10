@@ -22,7 +22,9 @@ cmd-video-metrics-more = The value under the cursor up a step, or the video afte
 cmd-video-metrics-enter = Open or change what is under the cursor
 cmd-video-metrics-page-back = The page of videos before
 cmd-video-metrics-page-on = The page of videos after
-cmd-video-metrics-layout = The videos as a list, or as a grid of thumbnails
+cmd-video-metrics-page-first = The first page of videos
+cmd-video-metrics-page-last = The last page of videos
+cmd-video-metrics-layout = Lay the videos out the next way: a list, a list with thumbnails, thumbnails, thumbnails with their channel
 cmd-video-metrics-search = Search the videos' words — titles, descriptions, tags and yours
 cmd-video-metrics-player = Open it in the player
 cmd-video-metrics-kiosk = Open it in Chrome, as a kiosk
@@ -44,7 +46,9 @@ video-metrics-more = more
 video-metrics-enter = open
 video-metrics-page-back = page back
 video-metrics-page-on = page on
-video-metrics-layout = list or grid
+video-metrics-page-first = first page
+video-metrics-page-last = last page
+video-metrics-layout = next layout
 video-metrics-search = search
 video-metrics-player = player
 video-metrics-kiosk = Chrome
@@ -160,7 +164,7 @@ video-metrics-points-value = { $points ->
         [one] { $points } point
        *[other] { $points } points
     }
-# A SCORE AS A BARE NUMBER — a list's, before the faces of the rating — a
+# A SCORE AS A BARE NUMBER — a list's, before the arrows of the rating — a
 # NUMBER to Fluent all the same, as `points` is.
 video-metrics-score-number = { $score }
 video-metrics-days-value = { $days ->
@@ -233,7 +237,10 @@ video-metrics-since-year = the last year
 video-metrics-filter-layout = Layout
 video-metrics-layout-list = list
 video-metrics-layout-grid = thumbnails
+video-metrics-layout-list-thumbnails = list with thumbnails
+video-metrics-layout-grid-channel = thumbnails with channel
 video-metrics-page = Page
+video-metrics-per-page = Per page
 video-metrics-page-of = { $page } of { $pages } · { $videos ->
         [one] one video
        *[other] { $videos } videos
@@ -315,7 +322,7 @@ video-metrics-act-answers = gives this answer
 about-video-metrics-last-scan = When the last scan ended — or that one runs now, or stopped before its end.
 about-video-metrics-scan-added = How many new videos the last scan brought in.
 about-video-metrics-scan-failed = How many channels the last scan could not read; each channel's page says why.
-about-video-metrics-videos = Every catalogued video, by score, with filters, as a list or as thumbnails.
+about-video-metrics-videos = Every catalogued video, by score, with filters, as a list — with thumbnails or without — or as thumbnails, with their channel or without.
 about-video-metrics-channels = The channels you follow, and adding one.
 about-video-metrics-rules = How every video is scored, how long videos stay, and whether Shorts are blocked.
 about-video-metrics-weights = What each of your ratings adds to a video's score.
@@ -346,7 +353,10 @@ about-video-metrics-filter-shorts = Shorts and the rest, only Shorts, or no Shor
 about-video-metrics-filter-rating = Whatever your rating, or only one rating.
 about-video-metrics-filter-hidden = Hidden videos left out, shown too, or only them.
 about-video-metrics-filter-since = How far back, by when a video was published.
-about-video-metrics-page = Which page of the list is shown.
+about-video-metrics-layouts = How the videos are laid out: a list, a list with thumbnails, thumbnails, or thumbnails with their channel.
+# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
+about-video-metrics-page = { $earlier } { $prior } go back, { $later } { $next } on, { $first } { $last } to the first and the last page.
+about-video-metrics-per-page = How many videos a page shows: each turn gives the next size, and round again. It holds while the view is open.
 about-video-metrics-video-entry = The video's page: every field, your rating, tags and description, and what can be done with it.
 about-video-metrics-published = When YouTube says it was published.
 about-video-metrics-its-points = Its points without its channel's score and recency.
@@ -368,7 +378,7 @@ video-metrics-follows-rule-everywhere = This is the rule everywhere: its page ch
 # HOW LONG A VIDEO STAYS, WHAT IS SET ASIDE, AND THE GLYPHS of a video in
 # the lists (the owner, 2026-11-09): a video goes when its time is up — the
 # catalogue's, or its channel's own — unless it is set aside, or marked never
-# to be deleted; the four faces of its rating after its score, and its marks
+# to be deleted; the four arrows of its rating after its score, and its marks
 # at the line's end, each acting on the first click. The forms and the hint
 # words of the keys `s` and `f` are the view's (`OF_THE_VIEW`).
 cmd-video-metrics-set-aside = Set it aside for later, or take it out of the set-aside videos
@@ -383,7 +393,6 @@ video-metrics-set-aside-any = set aside or not
 video-metrics-set-aside-only = only those, newest first
 video-metrics-set-aside-without = not set aside
 video-metrics-by-set-aside = Newest set aside first
-video-metrics-grid-channel = Channel on thumbnails
 video-metrics-heading-keep = How long videos stay
 video-metrics-keep-after = Deleted after
 video-metrics-keep-never = never deleted
@@ -409,7 +418,6 @@ video-metrics-act-picks = gives it this rating
 video-metrics-act-unpicks = takes its rating away
 about-video-metrics-set-aside-videos = The videos you set aside, newest first; while set aside, a video is never deleted.
 about-video-metrics-filter-set-aside = Set-aside videos and the rest, only them (newest first), or none of them.
-about-video-metrics-grid-channel = Whether each thumbnail says its channel, under its title.
 about-video-metrics-keep-everywhere = How long a video stays, counted from when it was published, before it is deleted — or for ever. Set-aside videos, and the ones marked never to be deleted, stay.
 about-video-metrics-channel-keep = How long this channel's videos stay before they are deleted: as everywhere, days of its own, or for ever.
 about-video-metrics-set-aside-row = Whether it is among the set-aside videos; while it is, it is never deleted.
@@ -539,6 +547,9 @@ video-metrics-exported = { $count ->
     } in { $file }.
 video-metrics-export-failed = The list could not be written there.
 player-ranking-reading = Reading the video catalogue…
+# How many videos a page of the ranking holds — not the catalogue listing's
+# "Per page", which is another page of the same view.
+player-ranking-page-size = Page size
 player-ranking-none = Nothing is ranked yet: the video catalogue ({ $keys }) adds your channels, and its scans fill this list.
 player-ranking-empty = No video ranks yet: the scans found none, or every one is hidden.
 # A LIST WITH NOTHING ON IT, said for what it is: its Shorts turned away

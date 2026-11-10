@@ -4141,6 +4141,7 @@ name = "ronoctua-i18n"
 version = "0.1.0"
 dependencies = [
  "fluent-bundle",
+ "fluent-syntax",
  "tracing",
  "unic-langid",
 ]

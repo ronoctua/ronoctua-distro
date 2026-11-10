@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(
             way.owed.first(),
             Some(&region::Effect::Say(
-                said.clone(),
+                said.clone().into(),
                 crate::echo::Echo::Normal
             ))
         );
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(closed("syncthing-pause-all", None, &mut way), Closed::Taken);
         assert_eq!(
             way.owed,
-            vec![region::Effect::Say(said, crate::echo::Echo::Normal)]
+            vec![region::Effect::Say(said.into(), crate::echo::Echo::Normal)]
         );
         for gesture in GESTURES {
             assert!(press_of(gesture).is_some(), "{gesture} presses nothing");
@@ -572,7 +572,10 @@ mod tests {
         let stopped = texts().t(crate::key::ECHO_SYNCTHING_STOPPED);
         assert_eq!(
             way.owed,
-            vec![region::Effect::Say(stopped, crate::echo::Echo::Normal)]
+            vec![region::Effect::Say(
+                stopped.into(),
+                crate::echo::Echo::Normal
+            )]
         );
     }
 

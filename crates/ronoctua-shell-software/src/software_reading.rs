@@ -379,7 +379,7 @@ impl Reading {
     fn image_kept(&mut self, view: &mut View, kept: Kept, way: &dyn Doorway) -> Errand {
         match kept.file() {
             Ok(path) => self.dropped(view, &[path], way),
-            Err(said) => Errand::Say(way.texts().t(said)),
+            Err(said) => Errand::Say(way.texts().t(said).into()),
         }
     }
 
@@ -555,9 +555,11 @@ fn open_the_page(url: &str, way: &mut dyn Doorway) {
         }),
         None => {
             tracing::error!("RONOCTUA_XDG_OPEN was not set at build time");
-            let said = way
-                .texts()
-                .t_with(crate::key::ECHO_NO_OPENED, &[("program", url)]);
+            // WHAT WAS TO OPEN IS A NAME the sentence quotes (`Arg::Name`).
+            let said = way.texts().t_args_marked(
+                crate::key::ECHO_NO_OPENED,
+                &[("program", ronoctua_i18n::Arg::Name(url))],
+            );
             way.say(said, crate::echo::Echo::Normal);
         }
     }
@@ -618,7 +620,7 @@ mod tests {
     fn one_errand_is_the_same_call_in_both_doors() {
         let errands = || {
             vec![
-                Errand::Say("said".to_owned()),
+                Errand::Say("said".to_owned().into()),
                 Errand::Ask {
                     ask: crate::software::Ask::WebName,
                     initial: Some("Mail".to_owned()),
@@ -638,7 +640,7 @@ mod tests {
         assert_eq!(
             way.owed,
             vec![
-                Effect::Say("said".to_owned(), crate::echo::Echo::Normal),
+                Effect::Say("said".into(), crate::echo::Echo::Normal),
                 Effect::Ask(crate::line::Line::new(
                     "software-web-name",
                     false,

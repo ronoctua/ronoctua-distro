@@ -2119,11 +2119,14 @@ impl View {
         let Listing::File(path) = &self.listing else {
             return Vec::new();
         };
-        let title = self.texts.t_with(
+        // THE FILE IS A NAME the title quotes (`Arg::Name`): it wears what
+        // a name wears in a heading, the heading's own ink
+        // (`chrome::quoted_ink` answers itself there).
+        let title = self.texts.t_args_marked(
             crate::key::FILES_GIT_FILE_HISTORY_TITLE,
-            &[("path", &path.to_string_lossy())],
+            &[("path", Arg::Name(&path.to_string_lossy()))],
         );
-        note(&title, wide, tokens::color::TEXT_HEADING)
+        named_note(&title.into(), wide, tokens::color::TEXT_HEADING)
     }
 
     /// The items on screen, or what the column says instead of them.
@@ -2419,15 +2422,19 @@ impl View {
         let Some(file) = self.file_at() else {
             return (Vec::new(), 1, 0);
         };
-        let title = if self.blame {
-            t.t_with(
+        // THE FILE IS A NAME the blame's title quotes (`Arg::Name`), as the
+        // file history's: it wears what a name wears in a heading. Without
+        // the blame the title IS the name, a row of its own.
+        let title: crate::chrome::Named = if self.blame {
+            t.t_args_marked(
                 crate::key::FILES_GIT_BLAME_TITLE,
-                &[("path", &file.path.to_string_lossy())],
+                &[("path", Arg::Name(&file.path.to_string_lossy()))],
             )
+            .into()
         } else {
-            file.path.to_string_lossy().into_owned()
+            file.path.to_string_lossy().into_owned().into()
         };
-        let head = vec![Line::of(vec![plain(0, title, tokens::color::TEXT_HEADING)])];
+        let head = vec![named_line(&title, tokens::color::TEXT_HEADING)];
         if self.blame {
             let b = self.blames.get(&file.path);
             let (n, widest) = match b {
@@ -2708,6 +2715,31 @@ fn note(text: &str, wide: u16, color: tokens::Color) -> Vec<Line> {
         .into_iter()
         .map(|l| Line::of(vec![plain(0, l, color)]))
         .collect()
+}
+
+/// [`note`], for a sentence that quotes names: the same lines, each name
+/// in the ink a name takes in `color` (`chrome::note_fields`).
+fn named_note(said: &crate::chrome::Named, wide: u16, color: tokens::Color) -> Vec<Line> {
+    crate::chrome::note_fields(0, said, color, wide.max(1))
+        .into_iter()
+        .map(Line::of)
+        .collect()
+}
+
+/// One line of [`plain`] fields, for a sentence that quotes names and is
+/// never wrapped (the column cuts it): each name in the ink a name takes in
+/// `color` (`chrome::quoted_ink`), and neighbours of one ink one field.
+fn named_line(said: &crate::chrome::Named, color: tokens::Color) -> Line {
+    let mut fields: Vec<Field> = Vec::new();
+    let mut at = 0u16;
+    for (text, ink) in said.runs(color) {
+        match fields.last_mut() {
+            Some(last) if last.color == ink => last.text.push_str(text),
+            _ => fields.push(plain(at, text.to_owned(), ink)),
+        }
+        at = at.saturating_add(width(text));
+    }
+    Line::of(fields)
 }
 
 fn short_of(id: &str) -> String {

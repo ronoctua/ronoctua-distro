@@ -66,7 +66,7 @@ pub const fn rating_key(rating: Rating) -> &'static str {
     }
 }
 
-/// THE GLYPH OF A RATING beside a video's score — one of four faces of one
+/// THE GLYPH OF A RATING beside a video's score — one of four arrows of one
 /// family, from very negative to very positive (`icons.nix`, a video's quick
 /// marks): what its words are to a sentence, its glyph is to a list.
 #[must_use]
@@ -275,7 +275,7 @@ pub fn points(points: i64, texts: &ronoctua_i18n::Texts) -> String {
 }
 
 /// A SCORE AS A NUMBER, with no word after it — what a list puts before the
-/// four faces of a video's rating, where "points" said on every line was a
+/// four arrows of a video's rating, where "points" said on every line was a
 /// word read once and then only in the way. A NUMBER to Fluent all the same,
 /// as [`points`] is.
 #[must_use]

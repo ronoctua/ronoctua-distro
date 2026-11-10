@@ -43,6 +43,7 @@ use crate::key;
 use crate::player::{Errand, Target, track_name};
 use crate::player_page::TrackKind;
 use crate::player_rows::Builder;
+use ronoctua_i18n::Arg;
 use ronoctua_player::own::{Lane, LaneId, LaneKind};
 use ronoctua_player::wire::{Ask, LaneChange, State, Track};
 
@@ -217,7 +218,7 @@ pub fn also(kind: TrackKind, id: i64, s: &State, texts: &ronoctua_i18n::Texts) -
         return Errand::Nothing;
     };
     if lane_of(kind, s).is_some_and(|lane| plays(t, lane)) || played_too(t, kind, s) {
-        return Errand::Said(texts.t(key::PLAYER_TRACK_PLAYS_ALREADY));
+        return Errand::Said(texts.t(key::PLAYER_TRACK_PLAYS_ALREADY).into());
     }
     // A SUBTITLE goes over the film whose track it is.
     let over = (kind == TrackKind::Subtitles)
@@ -231,10 +232,12 @@ pub fn also(kind: TrackKind, id: i64, s: &State, texts: &ronoctua_i18n::Texts) -
             start_seconds: 0.0,
             over,
         },
-        texts.t_with(
-            key::PLAYER_ALSO_ADDED,
-            &[("name", track_name(t, &kin, texts).as_str())],
-        ),
+        texts
+            .t_args_marked(
+                key::PLAYER_ALSO_ADDED,
+                &[("name", Arg::Name(track_name(t, &kin, texts).as_str()))],
+            )
+            .into(),
     )
 }
 
@@ -532,7 +535,8 @@ mod tests {
                 start_seconds: 0.0,
                 over: None,
             },
-            t.t_with(key::PLAYER_ALSO_ADDED, &[("name", "Commentary")]),
+            t.t_args_marked(key::PLAYER_ALSO_ADDED, &[("name", Arg::Name("Commentary"))])
+                .into(),
         );
         assert!(
             v.clicked_at(commentary, cell.from, &rows),
@@ -554,7 +558,7 @@ mod tests {
         );
         assert_eq!(
             v.key(Press::Add, Some(&s), 80, &t),
-            Errand::Said(t.t(key::PLAYER_TRACK_PLAYS_ALREADY))
+            Errand::Said(t.t(key::PLAYER_TRACK_PLAYS_ALREADY).into())
         );
     }
 

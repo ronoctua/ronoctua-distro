@@ -78,9 +78,9 @@ pub fn line_zero(
     // A SENTENCE TAKES THIS LINE, and then there is no shortcut on it to
     // point at. Decided BEFORE the list is measured, because the
     // explanation's row comes out of that measurement.
-    if let Some(text) = said_on_line_zero(ui).map(str::to_owned) {
+    if let Some(said) = said_named_on_line_zero(ui).cloned() {
         ui.hinted.say(None);
-        return (vec![crate::chrome::Piece::said(text)], Carries::Said);
+        return (said_pieces(&said), Carries::Said);
     }
     match about {
         Some(text) => {
@@ -123,13 +123,37 @@ pub fn the_question(ui: &Ui) -> Option<Vec<crate::chrome::Piece>> {
 /// is said at the window's foot then (`door::foot`), and asking here is what
 /// tells the door this window says things through it. A window that builds
 /// its own line 0 asks this, never [`Ui::message`] itself.
+///
+/// The words alone — for a line that draws the sentence in one run of its
+/// own; one that draws it as the message line's pieces asks
+/// [`said_named_on_line_zero`], and draws its names in their ink.
 #[must_use]
 pub fn said_on_line_zero(ui: &Ui) -> Option<&str> {
+    said_named_on_line_zero(ui).map(crate::chrome::Named::as_str)
+}
+
+/// [`said_on_line_zero`], with the names the sentence quotes told
+/// ([`crate::chrome::Named`]) — drawn as [`said_pieces`] draws it.
+#[must_use]
+pub fn said_named_on_line_zero(ui: &Ui) -> Option<&crate::chrome::Named> {
     if ui.hinted.is_hidden() {
         ui.foot.routed.set(true);
         return None;
     }
-    ui.message.as_deref()
+    ui.message.as_ref()
+}
+
+/// A sentence as the PIECES of the message line: its words in the said
+/// register, each name it quotes in the one a name in it wears
+/// (`Register::quoting`) — and a sentence with no words still one piece,
+/// as the line always had.
+#[must_use]
+pub fn said_pieces(said: &crate::chrome::Named) -> Vec<crate::chrome::Piece> {
+    let pieces = said.pieces(crate::chrome::Register::Said);
+    if pieces.is_empty() {
+        return vec![crate::chrome::Piece::said(String::new())];
+    }
+    pieces
 }
 
 /// A question's line as pieces, `columns` wide: the ONE builder, which the
@@ -143,8 +167,11 @@ pub fn question_pieces(
 ) -> Vec<crate::chrome::Piece> {
     use ronoctua_render::layout::{elide_end, elide_start, width};
     let keys = crate::chrome::hint_of(crate::line::OF_THE_LINE, texts);
-    let question = line.question(texts);
-    let asked = format!("{question}: ");
+    // THE QUESTION WITH ITS NAMES TOLD (`Line::question_named`): a host or a
+    // name it quotes is drawn in the question's quoted ink, cut where the
+    // question is cut.
+    let question = line.question_named(texts);
+    let asked = question.clone().then(": ", "");
     let separator = crate::chrome::Piece::separator();
     let taken = width(&asked)
         + width(&separator.text)
@@ -163,17 +190,14 @@ pub fn question_pieces(
     let for_the_question = usable.saturating_sub(width(&typed).saturating_add(1));
     let asked = if width(&asked) > for_the_question {
         let colon = width(": ");
-        format!(
-            "{}: ",
-            elide_end(&question, for_the_question.saturating_sub(colon).max(1))
-        )
+        question
+            .elided_end(for_the_question.saturating_sub(colon).max(1))
+            .then(": ", "")
     } else {
         asked
     };
-    let mut pieces = vec![
-        crate::chrome::Piece::asked(asked.clone()),
-        crate::chrome::Piece::typed(typed.clone()),
-    ];
+    let mut pieces = asked.pieces(crate::chrome::Register::Asked);
+    pieces.push(crate::chrome::Piece::typed(typed.clone()));
     // WHAT THE QUESTION OFFERS for what is typed, after it — a zone's first
     // fits (`line::Line::offered`) — in the room the question, the typing
     // AND THE KEYS leave: the offer is the one piece that gives way, so the
@@ -496,6 +520,12 @@ fn pointer_here<C: Content>(
     // (`Content::takes`), the answer the hover was lit by: a click on a row
     // that did not light does nothing, as the footer hands a region no click
     // on a row that does not take one.
+    //
+    // THE FOLLOW IS THE ONE A KEY ENDS WITH (`follow_into`), and not a follow
+    // of its own: a first row the click placed (`Ui::place_top`, a page
+    // turned by its arrow) is kept from it as a key's is — a follow written
+    // out here scrolled the title back off the top on the very click that
+    // put it there.
     if let Some(row) = clicked.or(right) {
         if clicked.is_some() {
             if c.takes(ui).get(row).copied().unwrap_or(false) {
@@ -504,10 +534,7 @@ fn pointer_here<C: Content>(
         } else {
             c.right_clicked(ui, row);
         }
-        if let Some(cursor) = c.cursor() {
-            let rows = c.rows(ui).len();
-            ui.follow(cursor, rows);
-        }
+        super::follow_into(c, ui);
         ui.ask_paint();
         return;
     }
@@ -630,6 +657,46 @@ mod tests {
         let shown: String = pieces.iter().map(|p| p.text.as_str()).collect();
         assert!(shown.contains("a long name"), "{shown}");
         assert!(shown.contains('…'), "a long answer was not cut: {shown}");
+    }
+
+    /// FAILS IF: a name a question quotes (`Line::asks_names`) is not drawn
+    /// in the register a name in a question wears (`Register::quoting`) —
+    /// or the line reads otherwise than the same question in plain words,
+    /// wide or cut, in either language, or what is typed loses its place
+    /// after it. The footer's minibuffer draws its question with this same
+    /// builder.
+    #[test]
+    fn a_question_quotes_its_names_in_its_own_ink() {
+        use crate::chrome::{Piece, Register};
+        let host = "git.example.org";
+        let read = |p: &[Piece]| p.iter().map(|p| p.text.as_str()).collect::<String>();
+        for language in ["en-GB", "pt-BR"] {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect("a language");
+            let mut plain = Line::new("dev-clone", false, Some("~/src"));
+            plain.asks_with = vec![("host", host.to_owned())];
+            let mut named = plain.clone();
+            named.asks_names = vec!["host"];
+            for columns in [24_u16, 60, 140] {
+                let was = crate::door::list::question_pieces(&plain, &texts, columns);
+                let is = crate::door::list::question_pieces(&named, &texts, columns);
+                assert_eq!(read(&was), read(&is), "{language} at {columns}");
+                let quoted: String = is
+                    .iter()
+                    .filter(|p| p.register == Register::Asked.quoting())
+                    .map(|p| p.text.as_str())
+                    .collect();
+                if columns >= 60 {
+                    assert_eq!(quoted, host, "{language} at {columns}: {is:?}");
+                } else {
+                    assert!(host.starts_with(&quoted), "{language} at {columns}: {is:?}");
+                }
+                assert!(
+                    is.iter()
+                        .any(|p| p.register == Register::Typed && p.text.ends_with("~/src")),
+                    "{language} at {columns}: {is:?}"
+                );
+            }
+        }
     }
 
     /// FAILS IF: a question as wide as a narrow door pushes what is typed

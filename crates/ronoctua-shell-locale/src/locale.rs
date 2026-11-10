@@ -622,7 +622,7 @@ impl View {
         // A FILE READ ONLY IN PART says which places, in the section that
         // shows it: what is drawn there is the repair, not the file.
         if let Some(partly) = &self.unread.language {
-            b.sentence(partly.said(texts));
+            b.sentence(partly.said_named(texts));
         }
 
         // 2. THE CLOCK AND THE DATE — one row each, and the value is a LIVE
@@ -631,7 +631,7 @@ impl View {
         b.heading(key::LOCALE_HEADING_TIME);
         b.note(key::LOCALE_TIME_DOES);
         if let Some(partly) = &self.unread.choice {
-            b.sentence(partly.said(texts));
+            b.sentence(partly.said_named(texts));
         }
         b.pair(
             texts.t(key::LOCALE_CLOCK),
@@ -704,7 +704,7 @@ impl View {
             )],
         );
         if let Some(partly) = &self.unread.glance {
-            b.sentence(partly.said(texts));
+            b.sentence(partly.said_named(texts));
         }
         let places = self.glance.places();
         if places.is_empty() {
@@ -787,20 +787,34 @@ impl View {
                 }),
                 Target::Ask(source),
             );
+            // EACH HOST IS A NAME the sentences quote (`Arg::Name`), drawn in
+            // a name's ink — the list's commas are nobody's
+            // (`chrome::names_listed`).
             let hosts: Vec<&str> = source.from().iter().map(|p| p.host).collect();
-            b.note_with(key::LOCALE_SOURCE_HOSTS, &[("hosts", &hosts.join(", "))]);
+            b.sentence(crate::chrome::names_listed(
+                texts,
+                key::LOCALE_SOURCE_HOSTS,
+                "hosts",
+                &hosts,
+                ", ",
+            ));
             let said = self.world.about(source);
             if !said.trouble.is_empty() {
                 b.note_with(key::LOCALE_SOURCE_TROUBLE, &[("said", &said.trouble)]);
             }
             match said.at {
-                Some(at) => b.note_with(
+                Some(at) => b.sentence(texts.t_args_marked(
                     key::LOCALE_SOURCE_ANSWERED,
                     &[
-                        ("when", &crate::chrome::when_text(at, zone, false, texts)),
-                        ("host", &said.host),
+                        (
+                            "when",
+                            ronoctua_i18n::Arg::Text(&crate::chrome::when_text(
+                                at, zone, false, texts,
+                            )),
+                        ),
+                        ("host", ronoctua_i18n::Arg::Name(&said.host)),
                     ],
-                ),
+                )),
                 None => b.note(key::LOCALE_SOURCE_NEVER),
             }
         }
@@ -842,10 +856,11 @@ impl View {
         b.note(key::LOCALE_AUTOMATIC_DOES);
         if self.machine.can_be_automatic {
             if !self.machine.server.is_empty() {
-                b.note_with(
+                // THE SERVER IS A NAME the sentence quotes (`Arg::Name`).
+                b.sentence(texts.t_args_marked(
                     key::LOCALE_AUTOMATIC_SERVER,
-                    &[("server", &self.machine.server)],
-                );
+                    &[("server", ronoctua_i18n::Arg::Name(&self.machine.server))],
+                ));
             }
             if self.machine.automatic {
                 b.note(if self.machine.synchronised {
@@ -1904,12 +1919,16 @@ impl Builder<'_> {
     ///
     /// One `Row` per line, which is the shape the notification manager's body
     /// already has — so both doors draw it without knowing anything new.
-    fn sentence(&mut self, text: String) {
+    ///
+    /// A name it quotes is a field of its own in a name's ink
+    /// ([`crate::chrome::note_fields`], the breaks `note_lines` gives).
+    fn sentence(&mut self, text: impl Into<crate::chrome::Named>) {
+        let text = text.into();
         let at = self.left + self.nest;
         let room = self.room.saturating_sub(self.nest);
-        for line in crate::chrome::note_lines(&text, room) {
+        for fields in crate::chrome::note_fields(at, &text, tokens::color::TEXT_DIM, room) {
             self.out.push(Row {
-                fields: vec![Self::piece(at, line, tokens::color::TEXT_DIM, room)],
+                fields,
                 focused: false,
                 // A NOTE IS NOT A ROW ONE STANDS ON. It explains the rows
                 // around it; a cursor that stopped there would be a cursor on

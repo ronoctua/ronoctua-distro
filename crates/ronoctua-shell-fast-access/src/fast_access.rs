@@ -944,8 +944,9 @@ pub enum Errand {
         /// What was said yes to.
         consent: ronoctua_software::order::Consent,
     },
-    /// Say this on the door's line.
-    Say(String),
+    /// Say this on the door's line — a name it quotes told, so the line
+    /// draws it in a name's ink.
+    Say(crate::chrome::Named),
     /// Put this on the clipboard, and say so.
     Copy(String),
     /// Read the clipboard into what is typed.
@@ -1976,6 +1977,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<Errand> {
         use crate::key;
+        use ronoctua_i18n::Arg;
         use ronoctua_software::found::Badge;
         let read = self
             .detail
@@ -1986,7 +1988,7 @@ impl View {
         let details = read.as_ref().and_then(|p| p.details.as_ref().ok());
         if let Some(why) = details.and_then(|d| d.badges.iter().find_map(|b| b.refuses())) {
             return vec![Errand::Say(
-                texts.t(crate::software_words::refusal_key(why)),
+                texts.t(crate::software_words::refusal_key(why)).into(),
             )];
         }
         let ask = |title: String, yes: &str, then: ronoctua_software::order::Consent| {
@@ -2007,9 +2009,14 @@ impl View {
         let unfree = details.is_some_and(|d| d.badges.contains(&Badge::Unfree))
             && !read.as_ref().is_some_and(|p| p.unfree_let)
             && !consent.unfree;
+        // THE PROGRAM IS A NAME each question quotes (`Arg::Name`), told as
+        // every name is; the question is drawn in a title's ink, which a name
+        // shares (`chrome::quoted_ink`), so only the words go.
         let question = if unfree {
             Some(ask(
-                texts.t_with(key::SOFTWARE_SURE_UNFREE, &[("app", name)]),
+                texts
+                    .t_args_marked(key::SOFTWARE_SURE_UNFREE, &[("app", Arg::Name(name))])
+                    .text,
                 key::SOFTWARE_YES_UNFREE,
                 ronoctua_software::order::Consent {
                     unfree: true,
@@ -2022,16 +2029,21 @@ impl View {
             match bytes {
                 Some(b) if above > 0 && b > above.saturating_mul(1_000_000) && !consent.big => {
                     Some(ask(
-                        texts.t_with(
-                            key::SOFTWARE_SURE_DOWNLOAD,
-                            &[
-                                ("app", name),
-                                (
-                                    "size",
-                                    &crate::sizes::readable_bytes(b, texts.decimal_mark()),
-                                ),
-                            ],
-                        ),
+                        texts
+                            .t_args_marked(
+                                key::SOFTWARE_SURE_DOWNLOAD,
+                                &[
+                                    ("app", Arg::Name(name)),
+                                    (
+                                        "size",
+                                        Arg::Text(&crate::sizes::readable_bytes(
+                                            b,
+                                            texts.decimal_mark(),
+                                        )),
+                                    ),
+                                ],
+                            )
+                            .text,
                         key::SOFTWARE_YES_DOWNLOAD,
                         ronoctua_software::order::Consent {
                             big: true,

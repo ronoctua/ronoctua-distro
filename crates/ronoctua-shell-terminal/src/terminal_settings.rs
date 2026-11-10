@@ -424,18 +424,31 @@ pub enum Changed {
 }
 
 impl Changed {
-    /// The sentence a door says when the change did not land.
+    /// The sentence a door says when the change did not land — the file
+    /// told as the name it is (`Arg::Name`).
     #[must_use]
-    pub fn refusal(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    pub fn refusal(&self, texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
         match self {
             Self::Written(_) => None,
-            Self::Unparsed => {
-                Some(texts.t_with(crate::key::TERMINAL_SETTINGS_UNPARSED, &[("file", FILE)]))
-            }
-            Self::NotWritten(why) => Some(texts.t_with(
-                crate::key::TERMINAL_SETTINGS_NOT_WRITTEN,
-                &[("file", FILE), ("why", &why.to_string())],
-            )),
+            Self::Unparsed => Some(
+                texts
+                    .t_args_marked(
+                        crate::key::TERMINAL_SETTINGS_UNPARSED,
+                        &[("file", Arg::Name(FILE))],
+                    )
+                    .into(),
+            ),
+            Self::NotWritten(why) => Some(
+                texts
+                    .t_args_marked(
+                        crate::key::TERMINAL_SETTINGS_NOT_WRITTEN,
+                        &[
+                            ("file", Arg::Name(FILE)),
+                            ("why", Arg::Text(&why.to_string())),
+                        ],
+                    )
+                    .into(),
+            ),
         }
     }
 }
@@ -458,15 +471,21 @@ pub enum Unread {
 }
 
 impl Unread {
-    /// Its sentence, when it owes one.
+    /// Its sentence, when it owes one — the file told as the name it is
+    /// (`Arg::Name`).
     #[must_use]
-    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
         match self {
             Self::Nothing => None,
-            Self::Part(partly) => Some(partly.said(texts)),
-            Self::All => {
-                Some(texts.t_with(crate::key::TERMINAL_SETTINGS_UNREAD, &[("file", FILE)]))
-            }
+            Self::Part(partly) => Some(partly.said_named(texts)),
+            Self::All => Some(
+                texts
+                    .t_args_marked(
+                        crate::key::TERMINAL_SETTINGS_UNREAD,
+                        &[("file", Arg::Name(FILE))],
+                    )
+                    .into(),
+            ),
         }
     }
 }
@@ -673,8 +692,8 @@ impl View {
         // never moves the cursor's row.
         if let Some(said) = self.unread.said(texts) {
             out.push(inert(crate::chrome::AIR));
-            for line in crate::chrome::note_lines(&said, room) {
-                out.push(inert(vec![piece(left, line, tokens::color::TEXT_DIM)]));
+            for fields in crate::chrome::note_fields(left, &said, tokens::color::TEXT_DIM, room) {
+                out.push(inert(fields));
             }
         }
         // WHEN EACH APPLIES — the new terminals' values do not move a
@@ -901,11 +920,20 @@ mod tests {
         assert_eq!((s, &unread), (Settings::default(), &Unread::All));
         v.read_in_part(unread);
         let refused = t.t_with(crate::key::TERMINAL_SETTINGS_UNREAD, &[("file", FILE)]);
-        let lines: Vec<String> = v
-            .rows(&s, 100, &t)
+        // A LINE OF THE NOTE IS ITS FIELDS SIDE BY SIDE: the file is a field
+        // of its own, in a name's ink.
+        let rows = v.rows(&s, 100, &t);
+        let lines: Vec<String> = rows
             .iter()
-            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .map(|r| r.fields.iter().map(|f| f.text.as_str()).collect())
             .collect();
+        assert!(
+            rows.iter()
+                .flat_map(|r| &r.fields)
+                .any(|f| f.text == FILE
+                    && f.color == crate::chrome::quoted_ink(tokens::color::TEXT_DIM)),
+            "the file is not told as a name: {lines:?}"
+        );
         let (_, room) = crate::chrome::extent(100);
         assert!(
             crate::chrome::note_lines(&refused, room)

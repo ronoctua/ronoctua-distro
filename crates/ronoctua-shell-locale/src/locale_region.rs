@@ -549,7 +549,10 @@ mod tests {
         );
         assert_eq!(r.command("locale-open", None, &mut w), Taken::Yes);
         let busy = w.texts().t(crate::key::ECHO_VIEW_BUSY);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(busy, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(busy.into(), Echo::Normal))
+        );
     }
 
     /// FAILS IF: a question the view asks by name stops being asked — or
@@ -567,7 +570,10 @@ mod tests {
         let mut w = way();
         assert_eq!(closed("locale-where", Some("1,2"), &mut w), Closed::Taken);
         let none_here = w.texts().t(crate::key::LOCALE_NO_PLACE_HERE);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(none_here, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(none_here.into(), Echo::Normal))
+        );
         let mut w = way();
         assert_eq!(
             closed("locale-system-zone", Some("Nowhere/At_All"), &mut w),
@@ -633,7 +639,10 @@ mod tests {
             "the brain was asked"
         );
         let unknown = w.texts().t(crate::key::LOCALE_WATCHED_UNKNOWN);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(unknown, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(unknown.into(), Echo::Normal))
+        );
     }
 
     /// FAILS IF: what the brain said is not what the door says — or the
@@ -652,7 +661,10 @@ mod tests {
             &mut w,
         );
         let unknown = w.texts().t(crate::key::LOCALE_WATCHED_UNKNOWN);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(unknown, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(unknown.into(), Echo::Normal))
+        );
         assert!(
             !r.view.set_watched(None),
             "the watch did not follow the answer"

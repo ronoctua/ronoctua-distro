@@ -17,6 +17,12 @@
 # NAME SHAPE: without the `nf-` prefix. The keys of glyphnames.json are
 # `fa-folder`, `cod-terminal`, `md-wifi`. The `nf-` only appears in the CSS class
 # (`nf nf-fa-folder`), which the glyph browser offers for copying.
+#
+# TWO OTHER PREFIXES, each resolved against a face and checked as hard:
+# `ours-` is a mark this repository draws (`assets/icons/marks.nix`), and
+# `uni-` is a character of the TEXT face by its Unicode name, `_` for each
+# space — `uni-upwards_paired_arrows` is `⇈` (`gen-glyphdb.py`, `UNI`). The
+# second is for a sign the text itself has and the Nerd Fonts do not name.
 {
   # ===================================================================
   # System chrome — the two-line footer (section 4).
@@ -1051,17 +1057,26 @@
   # keeping it for ever. Each is a click that acts at once; deleting asks
   # first, with the "no" drawn first.
   #
-  # THE FOUR RATINGS, from very negative to very positive: one Material
-  # family of faces on one scale, so the four read as one ladder. Faces and
-  # not arrows, because the chevrons and arrows here open and close things
-  # (`expand`, `row-opens`), and an arrow on a video's line would read as
-  # "this opens". The lit one is the rating the video has, and clicking it
+  # THE FOUR RATINGS, from very negative to very positive: an arrow down
+  # twice, down, up, and up twice — `⇊ ↓ ↑ ⇈` (owner, 2026-11-10: single and
+  # double arrows, and not chevrons). They were four faces first, chosen
+  # because an arrow on a video's line might read as "this opens", and the
+  # owner asked for the arrows instead. Strength is the COUNT of
+  # arrows, which reads at a glance, and not a weight or a size.
+  #
+  # THE TEXT FACE'S OWN ARROWS, by their Unicode names (`uni-`): no Nerd
+  # Fonts family has a double arrow with a shaft — what it has double are
+  # chevrons, and the chevron belongs to the drawer (`expand`, `collapse`;
+  # the owner's rule). These are the single and double arrows the text
+  # itself draws, in the stroke of the score's digits beside them, and not
+  # the queue's `md-arrow_up`/`md-arrow_down`, which move a track in the
+  # same window. The lit one is the rating the video has, and clicking it
   # takes the rating away. They sit shoulder to shoulder with the score's
   # digits, so `chrome-icons-match-the-text` measures them.
-  video-rating-very-negative = "md-emoticon_angry_outline";
-  video-rating-negative = "md-emoticon_sad_outline";
-  video-rating-positive = "md-emoticon_happy_outline";
-  video-rating-very-positive = "md-emoticon_excited_outline";
+  video-rating-very-negative = "uni-downwards_paired_arrows";
+  video-rating-negative = "uni-downwards_arrow";
+  video-rating-positive = "uni-upwards_arrow";
+  video-rating-very-positive = "uni-upwards_paired_arrows";
   # SET ASIDE FOR LATER, and not: a matched pair that alternates in ONE cell
   # and shows the state the video is in — filled while it is set aside, the
   # outline while it is not — as `player-favourite`'s star does.
@@ -1081,12 +1096,16 @@
   video-delete = "md-trash_can_outline";
   # NEVER DELETED, the ∞: on a video that outlives the catalogue's time, by
   # its own mark or by its channel's — the sign everybody already reads as
-  # "for ever", lit while it holds. In its outlined box, and not the bare
-  # `md-infinity`: the bare sign is twice as wide as it is tall, and at
-  # the cell's width it stood at 44% of the age's digits beside it — below
-  # even the floor a wide drawing keeps. The box is Material's own ∞ at the
-  # digit's height, in the outline the marks beside it are drawn in.
-  video-forever = "md-all_inclusive_box_outline";
+  # "for ever", lit while it holds. THE BARE SIGN, at the owner's word
+  # (2026-11-10: the ∞ alone, without the box): it was Material's ∞ in an
+  # outlined box, chosen because the bare one is twice as wide as it is
+  # tall and at the cell's width stands at 44% of the age's digits beside it
+  # — under even the floor a wide drawing keeps. The owner chose the sign
+  # over the box, knowing that; `chrome-icons-match-the-text` names it WIDE
+  # with a floor of its own (0.40), the one drawing under the common one,
+  # and still holds it to filling the cell and to not touching its
+  # neighbour. Material's, as the bookmark, the eye and the bin beside it.
+  video-forever = "md-infinity";
 
   # WHERE A VIDEO, OR A CHANNEL'S VIDEOS, OPEN OUTSIDE: the Chrome kiosk and
   # Nyxt. A browser is the one thing here that IS a brand, so each is its
@@ -1134,6 +1153,14 @@
   # are hidden beyond it — the calculator's own arrows, so they draw alike.
   fast-access-earlier = "md-chevron_left";
   fast-access-later = "md-chevron_right";
+  # A LIST'S PAGES, turned back and on (owner, 2026-11-10): beside a paged
+  # list's title — "By score", the player's ranking — and again at the
+  # list's end, the two marks a click turns the page with. The calculator's
+  # and fast-access's arrows, so every "earlier/later" of the system draws
+  # alike; a HORIZONTAL chevron, which the drawer's rule leaves free — it
+  # reserves the vertical pair that opens and closes.
+  list-page-earlier = "md-chevron_left";
+  list-page-later = "md-chevron_right";
   # AND THE BOX OF "DO THE SAME FROM NOW ON" under a web video's question:
   # ticked or empty, the glyph a press turns — the player's suggestion boxes.
   fast-access-ticked = "md-checkbox_marked_outline";

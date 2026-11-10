@@ -422,8 +422,9 @@ pub enum Errand {
     Speak(&'static str),
     /// Open this question on the door's own line.
     Ask(Ask),
-    /// Say this; it is already a sentence.
-    Said(String),
+    /// Say this; it is already a sentence — a name it quotes told, so the
+    /// line draws it in a name's ink.
+    Said(crate::chrome::Named),
     /// Read the clipboard for the file picker ([`View::picker_pasted`]).
     Paste,
     /// Open the web interface at this address.
@@ -605,7 +606,8 @@ impl View {
                 self.picking = None;
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            // AN EXPLANATION CARRIED AS DATA, its names told (`said_of`).
+            Hosting::Say(e) => Errand::Said(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
                 self.picking = None;

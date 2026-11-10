@@ -102,25 +102,56 @@ pub fn lines(
 ///
 /// # Errors
 ///
-/// What could not be kept, in the reader's words ([`unkept`]).
-pub fn allow(hosts: &[&str], texts: &ronoctua_i18n::Texts) -> Result<(), String> {
+/// What could not be kept, in the reader's words ([`unkept`]) — its hosts
+/// told as names; a door says it as it is, and what only reads text takes
+/// `String::from` of it.
+pub fn allow(hosts: &[&str], texts: &ronoctua_i18n::Texts) -> Result<(), crate::chrome::Named> {
     ronoctua_consent::let_hosts(hosts, true).map_err(|why| {
         tracing::warn!(why = why.id(), ?hosts, "a consent could not be kept");
         unkept(why, hosts, texts)
     })
 }
 
-/// Why a consent could not be kept, as the reader reads it.
+/// Why a consent could not be kept, as the reader reads it — each host told
+/// as a NAME of its own, as a list of hosts is wherever a sentence says one
+/// (`chrome::names_listed`); the words between them are the sentence's.
 #[must_use]
 pub fn unkept(
     why: ronoctua_consent::Unkept,
     hosts: &[&str],
     texts: &ronoctua_i18n::Texts,
-) -> String {
-    texts.t_with(
-        &format!("consent-unkept-{}", why.id()),
-        &[("hosts", &hosts_text(hosts, texts))],
+) -> crate::chrome::Named {
+    let list = hosts_named(hosts, texts);
+    crate::chrome::Named::with_inner(
+        texts.t_args_marked(
+            &format!("consent-unkept-{}", why.id()),
+            &[("hosts", ronoctua_i18n::Arg::Text(list.as_str()))],
+        ),
+        &list,
     )
+}
+
+/// [`hosts_text`], with each host told as a name: the same words, byte for
+/// byte. The list is a sentence of its own (`consent-hosts-and`), so it is
+/// resolved here and said inside the other ([`crate::chrome::Named::with_inner`]).
+fn hosts_named(hosts: &[&str], texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    use ronoctua_i18n::Arg;
+    match hosts {
+        [] => crate::chrome::Named::default(),
+        [one] => crate::chrome::Named::alone(one),
+        [first @ .., last] => {
+            let joined = first.join(", ");
+            crate::chrome::listed(
+                texts.t_args_marked(
+                    crate::key::CONSENT_HOSTS_AND,
+                    &[("hosts", Arg::Name(&joined)), ("last", Arg::Name(last))],
+                ),
+                &joined,
+                first,
+                ", ",
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +216,34 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(!all.contains('…'), "a note is wrapped and not cut: {all}");
+    }
+
+    /// FAILS IF: a consent that could not be kept says its hosts in other
+    /// words than the plain list, or any host — the only one, one of a
+    /// list, the last — is not told as a name, or the list's own words
+    /// ("and", the commas) are.
+    #[test]
+    fn an_unkept_consent_tells_every_host_as_a_name() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for hosts in [
+                &["a.example"][..],
+                &["a.example", "b.example"][..],
+                &["a.example", "b.example", "c.example"][..],
+            ] {
+                let why = ronoctua_consent::Unkept::Unwritable;
+                let said = unkept(why, hosts, &t);
+                assert_eq!(
+                    said.as_str(),
+                    t.t_with(
+                        &format!("consent-unkept-{}", why.id()),
+                        &[("hosts", &hosts_text(hosts, &t))]
+                    ),
+                    "{language}"
+                );
+                let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+                assert_eq!(quoted, hosts, "{language}: {said:?}");
+            }
+        }
     }
 }

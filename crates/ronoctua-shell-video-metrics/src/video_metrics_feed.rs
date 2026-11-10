@@ -160,9 +160,10 @@ pub fn carry_out(
             way.say(text, crate::echo::Echo::Long);
             None
         }
-        // THE FILE PICKER'S SENTENCE, in the door's language.
+        // THE FILE PICKER'S SENTENCE, in the door's language — its names
+        // told (`chrome::said_of`).
         Errand::Explain(e) => {
-            let said = way.texts().t_with(e.key, &e.borrowed());
+            let said = crate::chrome::said_of(way.texts(), &e);
             way.say(said, crate::echo::Echo::Long);
             None
         }
@@ -564,7 +565,7 @@ impl Hand {
         if let Some(q) = &look.query {
             let page = ListPage {
                 number: q.page,
-                per_page: crate::video_metrics::PER_PAGE,
+                per_page: q.per_page,
             };
             match (c.ranked(&q.filter, page), c.count(&q.filter)) {
                 (Ok(rows), Ok(total)) => {
@@ -634,8 +635,10 @@ impl Hand {
         r
     }
 
-    /// The thumbnails the reading draws: the grid's, or the video's own —
-    /// decoded here, off the loop, and only the ones not decoded already.
+    /// The thumbnails the reading draws: the page's, in a layout that draws
+    /// them (`Layout::pictures` — the list with thumbnails, the grid), or
+    /// the video's own — decoded here, off the loop, and only the ones not
+    /// decoded already.
     fn pictures_of(&mut self, r: &Reading) -> HashMap<PathBuf, Picture> {
         let wanted: Vec<PathBuf> = r
             .listed
@@ -880,6 +883,30 @@ pub(crate) fn holding_one(catalogue: &Path, id: &ronoctua_video_metrics::VideoId
         })
         .expect("a channel");
     person.plant(id, &channel, title).expect("a video");
+}
+
+/// A SCRATCH CATALOGUE at `catalogue` holding `count` videos of one channel,
+/// `video000000` on — pages enough for a test of the list's pages to turn,
+/// read by a door that reads on the spot.
+#[cfg(test)]
+pub(crate) fn holding(catalogue: &Path, count: u32) {
+    let person = Person::open(catalogue).expect("a scratch catalogue");
+    let channel = ronoctua_video_metrics::ChannelId(format!("UC{}", "b".repeat(22)));
+    person
+        .add_channel(&ronoctua_video_metrics::person::NewChannel {
+            id: channel.clone(),
+            handle: None,
+            title: "A channel".to_owned(),
+            url: format!("https://www.youtube.com/channel/{}", channel.0),
+            avatar_url: None,
+        })
+        .expect("a channel");
+    for n in 0..count {
+        let id = ronoctua_video_metrics::VideoId(format!("video{n:06}"));
+        person
+            .plant(&id, &channel, &format!("A video, number {n}"))
+            .expect("a video");
+    }
 }
 
 /// A thumbnail file, decoded and made no larger than
@@ -1307,6 +1334,7 @@ mod tests {
             query: Some(Query {
                 filter: Filter::default(),
                 page: 0,
+                per_page: crate::paging::PerPage::default().get(),
                 pictures: false,
             }),
         }))]);

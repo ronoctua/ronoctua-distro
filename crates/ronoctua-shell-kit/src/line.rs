@@ -95,6 +95,12 @@ pub struct Line {
     /// given to the host the question NAMES, not to a word written in the
     /// key.
     pub asks_with: Vec<(&'static str, String)>,
+    /// Which of [`Line::asks_with`] the question QUOTES as a name — the host
+    /// a clone asks about, a cache's name — drawn in an ink of its own
+    /// ([`Line::question_named`]); the rest are plain words of the sentence.
+    /// Told by the argument's name where the line is built, never found back
+    /// by value in the question.
+    pub asks_names: Vec<&'static str>,
     /// Whether what is typed is hidden — a password, a PIN, a key.
     pub secret: bool,
     /// Whether what is typed stays out of every log though it is shown — an
@@ -149,6 +155,7 @@ impl Line {
             id,
             asks: None,
             asks_with: Vec::new(),
+            asks_names: Vec::new(),
             secret,
             unlogged: false,
             text: initial.map(one_line).unwrap_or_default(),
@@ -247,26 +254,41 @@ impl Line {
     /// construction.
     #[must_use]
     pub fn question(&self, texts: &ronoctua_i18n::Texts) -> String {
-        let args: Vec<(&str, &str)> = self
+        self.question_named(texts).into_text()
+    }
+
+    /// [`Line::question`], and where the names it quotes landed in it
+    /// ([`Line::asks_names`], `ronoctua_i18n::Arg::Name`) — what a door
+    /// draws the question with, each name in the question's quoted ink
+    /// (`chrome::Register::QuotedAsked`). The same words, byte for byte.
+    #[must_use]
+    pub fn question_named(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+        let args: Vec<(&str, ronoctua_i18n::Arg<'_>)> = self
             .asks_with
             .iter()
-            .map(|(name, value)| (*name, value.as_str()))
+            .map(|(name, value)| {
+                let value = value.as_str();
+                (
+                    *name,
+                    if self.asks_names.contains(name) {
+                        ronoctua_i18n::Arg::Name(value)
+                    } else {
+                        ronoctua_i18n::Arg::Text(value)
+                    },
+                )
+            })
             .collect();
         let said = |key: &str| {
-            let text = if args.is_empty() {
-                texts.t(key)
-            } else {
-                texts.t_with(key, &args)
-            };
+            let said = texts.t_args_marked(key, &args);
             // A KEY NOBODY WROTE resolves to `[key]` (`Texts::t_marked`), and
             // that is how this asks whether it exists at all.
-            (!text.starts_with('[')).then_some(text)
+            (!said.text.starts_with('[')).then(|| crate::chrome::Named::from(said))
         };
         self.asks
             .and_then(said)
             .or_else(|| said(&format!("ask-{}", self.id)))
             .or_else(|| said(&format!("cmd-{}", self.id)))
-            .unwrap_or_else(|| self.id.to_owned())
+            .unwrap_or_else(|| crate::chrome::Named::from(self.id))
     }
 
     /// The whole line as it is drawn: the question, and the text or its mask.
@@ -596,6 +618,27 @@ mod tests {
                 l.key(plain(Sym::Enter)),
                 Step::Answer("fixture-when", "at nine".into())
             );
+        }
+    }
+
+    /// FAILS IF: a question that quotes a name ([`Line::asks_names`]) reads
+    /// any differently from the same question in plain words, in either
+    /// language — or the name it quotes is not where the sentence says it is,
+    /// or a variable it does not quote as a name is told as one.
+    #[test]
+    fn a_question_tells_where_the_names_it_quotes_are() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            let mut l = Line::new("dev-clone", false, None);
+            l.asks_with = vec![("host", "git.example.org".to_owned())];
+            let plain = l.question_named(&texts);
+            assert!(plain.names().is_empty(), "{language}: {plain:?}");
+            l.asks_names = vec!["host"];
+            let named = l.question_named(&texts);
+            assert_eq!(named.as_str(), plain.as_str(), "{language}");
+            assert_eq!(l.question(&texts), plain.as_str(), "{language}");
+            let quoted: Vec<&str> = named.names().iter().map(|r| &named[r.clone()]).collect();
+            assert_eq!(quoted, ["git.example.org"], "{language}: {named:?}");
         }
     }
 }

@@ -1223,7 +1223,7 @@ impl View {
     /// or the day the rates are of.
     fn money_lines(&self, left: u16, room: u16, texts: &ronoctua_i18n::Texts) -> Vec<Line> {
         let host = ronoctua_calc::rates::HOST;
-        let (text, colour, target) = match &self.money {
+        let (text, colour, target): (crate::chrome::Named, _, _) = match &self.money {
             Money::Unlooked => return Vec::new(),
             // THE ROW EVERY APP DRAWS for a host nobody let yet
             // (`consent_rows`): the host to press, then what it is for — each
@@ -1248,28 +1248,41 @@ impl View {
                 })
                 .collect();
             }
+            // THE HOST IS A NAME the sentence quotes (`Arg::Name`), drawn in a
+            // name's ink.
             Money::Fetching => (
-                texts.t_with(crate::key::CALC_RATES_ASKING, &[("host", host)]),
+                texts
+                    .t_args_marked(
+                        crate::key::CALC_RATES_ASKING,
+                        &[("host", ronoctua_i18n::Arg::Name(host))],
+                    )
+                    .into(),
                 tokens::color::TEXT_SECONDARY,
                 None,
             ),
             Money::Failed(why) => (
-                texts.t(&format!("calc-rates-why-{}", why.id())),
+                texts.t(&format!("calc-rates-why-{}", why.id())).into(),
                 tokens::color::STATE_ERROR,
                 // A FAILURE IS PRESSED AGAIN to ask again.
                 Some(Target::Allow),
             ),
             Money::Have(r) => (
-                texts.t_with(crate::key::CALC_RATES_OF, &[("date", &rates_day(r, texts))]),
+                texts
+                    .t_with(crate::key::CALC_RATES_OF, &[("date", &rates_day(r, texts))])
+                    .into(),
                 crate::chrome::Kind::ListedFact.tones(false).1,
                 None,
             ),
         };
-        crate::chrome::note_lines(&text, room)
+        // ONE FIELD PER RUN, the same breaks `note_lines` gives: a name the
+        // sentence quotes is a field of its own in a name's ink.
+        crate::chrome::note_fields(left, &text, colour, room)
             .into_iter()
-            .map(|l| {
+            .map(|fields| {
                 let mut line = Line::default();
-                line.put(left, l, colour, target);
+                for f in fields {
+                    line.put(f.at, f.text, f.color, target);
+                }
                 match target {
                     Some(t) => line.whole(t, 0, left + room),
                     None => line,

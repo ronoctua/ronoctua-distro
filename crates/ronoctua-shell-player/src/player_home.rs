@@ -44,6 +44,7 @@ use crate::player::{
 };
 use crate::player_queue::{lane_glyph, lane_name};
 use crate::player_rows::{Builder, Slid, on_off, share, trim_float};
+use ronoctua_i18n::Arg;
 use ronoctua_player::queue::{NodeKind, Outline};
 use ronoctua_player::wire::{Ask, LaneStatus, Repeat, State, Trouble};
 use ronoctua_tokens as tokens;
@@ -139,10 +140,10 @@ impl View {
     /// that is said.
     pub fn translate(&self, state: Option<&State>, texts: &ronoctua_i18n::Texts) -> Errand {
         let Some(s) = state else {
-            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING));
+            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING).into());
         };
         if s.lyrics.is_empty() {
-            return Errand::Said(texts.t(key::PLAYER_LYRICS_NONE_TO_TRANSLATE));
+            return Errand::Said(texts.t(key::PLAYER_LYRICS_NONE_TO_TRANSLATE).into());
         }
         // THE LANGUAGE CHOSEN, kept both ways: the one in use while on, and
         // turned on again, the last one this door saw — never the
@@ -195,7 +196,12 @@ impl View {
                     hosts: vec![host.clone()],
                     on: true,
                     then: Box::new(Errand::Said(
-                        texts.t_with(key::PLAYER_HOST_LET, &[("host", host.as_str())]),
+                        texts
+                            .t_args_marked(
+                                key::PLAYER_HOST_LET,
+                                &[("host", Arg::Name(host.as_str()))],
+                            )
+                            .into(),
                     )),
                 })
             }
@@ -525,9 +531,16 @@ fn translation_rows(
             {
                 let named = crate::player_translator::to_let(chosen_hosts, host)
                     .join(&b.t(key::PLAYER_SET_JOINER));
+                // THE HOSTS ARE NAMES (`Arg::Name`), told as every name is;
+                // a row's label wears its `Kind`'s tones
+                // (`labels-say-what-they-are`), so only the words go.
                 b.pair(
                     b.texts
-                        .t_with(key::PLAYER_LYRICS_LET, &[("host", named.as_str())]),
+                        .t_args_marked(
+                            key::PLAYER_LYRICS_LET,
+                            &[("host", ronoctua_i18n::Arg::Name(&named))],
+                        )
+                        .text,
                     String::new(),
                     Target::LetTranslator(host.clone()),
                     "lyrics-let",
@@ -1306,7 +1319,7 @@ mod tests {
         assert!(now_title(&v).cells.is_empty(), "no picture, no glyph");
         assert_eq!(
             v.key(Press::FoldPicture, Some(&s), 80, &t),
-            Errand::Said(t.t(key::PLAYER_NO_PICTURE_TO_FOLD))
+            Errand::Said(t.t(key::PLAYER_NO_PICTURE_TO_FOLD).into())
         );
         for (folded, glyph) in [
             (false, tokens::icon::PLAYER_PICTURE_FOLD),

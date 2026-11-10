@@ -590,7 +590,10 @@ mod tests {
         let mut w = way();
         r.command("bluetooth-device", Some("/d/1"), &mut w);
         let busy = w.texts().t(crate::key::ECHO_VIEW_BUSY);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(busy, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(busy.into(), Echo::Normal))
+        );
     }
 
     /// FAILS IF: an order reaches no thread without a word.
@@ -600,7 +603,10 @@ mod tests {
         let mut r = region();
         r.carry(Errand::Order(ronoctua_bluetooth::Ask::Scan(true)), &mut w);
         let said = w.texts().t(crate::key::BLUETOOTH_NO_DAEMON);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(said, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(said.into(), Echo::Normal))
+        );
     }
 
     /// A radio with one paired keyboard that may wake the machine — a

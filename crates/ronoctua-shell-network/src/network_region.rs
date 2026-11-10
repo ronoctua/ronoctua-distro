@@ -41,6 +41,7 @@ use crate::network::{
     Errand, Facts, Heard, Lan, Password, Press, Question, Shelf, Switch, Target, View, Watch, Wire,
 };
 use crate::region::{Closed, Doorway, Entry, Seen, Taken};
+use ronoctua_i18n::Arg;
 use ronoctua_network::Snapshot;
 
 /// The id the footer ranks the view under (`surface::PRECEDENCE`).
@@ -160,6 +161,27 @@ fn removed_saying(net: &Snapshot, at: &str) -> &'static str {
     }
 }
 
+/// "Joining `network` failed", and why — its name told (`Arg::Name`), the
+/// reason the daemon's, in the line's words.
+fn failed(
+    texts: &ronoctua_i18n::Texts,
+    network: &str,
+    why: &anyhow::Error,
+) -> crate::chrome::Named {
+    texts
+        .t_args_marked(
+            crate::key::ECHO_NETWORK_FAILED,
+            &[
+                ("network", Arg::Name(network)),
+                (
+                    "reason",
+                    Arg::Text(&crate::network_refusal::reason(why, texts)),
+                ),
+            ],
+        )
+        .into()
+}
+
 /// Carries out what the view asked for, in whichever door it is drawn — the
 /// footer's region or the window ([`crate::network_window`]).
 ///
@@ -168,12 +190,26 @@ fn removed_saying(net: &Snapshot, at: &str) -> &'static str {
 /// just pressed rather than a quarter of a second afterwards.
 pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &mut dyn Doorway) {
     use crate::key;
-    let t = |way: &dyn Doorway, k: &'static str| way.texts().t(k);
-    let said: Option<(String, Echo)> = match errand {
+    let t =
+        |way: &dyn Doorway, k: &'static str| -> crate::chrome::Named { way.texts().t(k).into() };
+    // A SENTENCE ABOUT ONE NETWORK, a tunnel or a profile: its name told
+    // (`Arg::Name`), so the line draws it in a name's ink.
+    let about = |way: &dyn Doorway, k: &str, network: &str| -> crate::chrome::Named {
+        way.texts()
+            .t_args_marked(k, &[("network", Arg::Name(network))])
+            .into()
+    };
+    let refused = |e: &anyhow::Error, way: &dyn Doorway| -> crate::chrome::Named {
+        crate::network_words::refused(e, way.texts()).into()
+    };
+    let said: Option<(crate::chrome::Named, Echo)> = match errand {
         Errand::Nothing => None,
         // AN INFORMATIVE ROW COPIES ITSELF — see `chrome::information_of`,
         // and `chrome::copied` for the one place the six doors share.
-        Errand::Copy(text) => Some((crate::chrome::copied(&text, way.texts()), Echo::Brief)),
+        Errand::Copy(text) => Some((
+            crate::chrome::copied(&text, way.texts()).into(),
+            Echo::Brief,
+        )),
         // A PASSWORD WAITING FOR "KEEP IT?" goes with the view that asked it.
         Errand::Close => {
             *held.join = None;
@@ -212,7 +248,11 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
         // `network::read_tunnel`.
         Errand::NotATunnel(name) => Some((
             way.texts()
-                .t_with(key::ECHO_NETWORK_NOT_A_TUNNEL, &[("file", &name)]),
+                .t_args_marked(
+                    key::ECHO_NETWORK_NOT_A_TUNNEL,
+                    &[("file", Arg::Name(&name))],
+                )
+                .into(),
             Echo::Normal,
         )),
         Errand::Said(said) => Some((said, Echo::Normal)),
@@ -226,16 +266,20 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             let name = ronoctua_network::vpn::name_of(&path);
             let imported = held.wire.import(&path, kind);
             let said = match &imported {
-                Ok(()) => way
+                Ok(()) => about(way, key::ECHO_NETWORK_IMPORTED, &name),
+                Err(e) => way
                     .texts()
-                    .t_with(key::ECHO_NETWORK_IMPORTED, &[("network", &name)]),
-                Err(e) => way.texts().t_with(
-                    key::ECHO_NETWORK_IMPORT_FAILED,
-                    &[
-                        ("file", &name),
-                        ("reason", &crate::network_refusal::reason(e, way.texts())),
-                    ],
-                ),
+                    .t_args_marked(
+                        key::ECHO_NETWORK_IMPORT_FAILED,
+                        &[
+                            ("file", Arg::Name(&name)),
+                            (
+                                "reason",
+                                Arg::Text(&crate::network_refusal::reason(e, way.texts())),
+                            ),
+                        ],
+                    )
+                    .into(),
             };
             way.say(said, Echo::Normal);
             // A VPN THAT ASKS FOR A PASSWORD asks for it NOW, on the door's
@@ -254,13 +298,14 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             password,
         } => Some((
             match held.wire.store_vpn_secret(&tunnel, &user, &password) {
-                Ok(()) => way
+                Ok(()) => about(way, key::ECHO_NETWORK_VPN_STORED, &tunnel),
+                Err(e) => way
                     .texts()
-                    .t_with(key::ECHO_NETWORK_VPN_STORED, &[("network", &tunnel)]),
-                Err(e) => way.texts().t_with(
-                    key::ECHO_NETWORK_VPN_STORE_FAILED,
-                    &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
-                ),
+                    .t_with(
+                        key::ECHO_NETWORK_VPN_STORE_FAILED,
+                        &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
+                    )
+                    .into(),
             },
             Echo::Normal,
         )),
@@ -276,15 +321,20 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                 key.as_str(),
                 std::path::Path::new(ronoctua_network::vpn::STAGING_DIR),
             ) {
-                Err(why) => way.texts().t(match why {
-                    ronoctua_network::vpn::RegisterWhy::NotAKey => key::ECHO_NETWORK_VPN_NOT_A_KEY,
-                    ronoctua_network::vpn::RegisterWhy::NoServers => {
-                        key::ECHO_NETWORK_VPN_NO_SERVERS
-                    }
-                    ronoctua_network::vpn::RegisterWhy::Unreadable => {
-                        key::ECHO_NETWORK_VPN_UNREADABLE
-                    }
-                }),
+                Err(why) => t(
+                    way,
+                    match why {
+                        ronoctua_network::vpn::RegisterWhy::NotAKey => {
+                            key::ECHO_NETWORK_VPN_NOT_A_KEY
+                        }
+                        ronoctua_network::vpn::RegisterWhy::NoServers => {
+                            key::ECHO_NETWORK_VPN_NO_SERVERS
+                        }
+                        ronoctua_network::vpn::RegisterWhy::Unreadable => {
+                            key::ECHO_NETWORK_VPN_UNREADABLE
+                        }
+                    },
+                ),
                 Ok(reg) => {
                     // The `systemctl` by its baked path where there is one; a
                     // session's PATH has it either way.
@@ -311,8 +361,9 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                         let count = reg.count.to_string();
                         way.texts()
                             .t_with(key::ECHO_NETWORK_VPN_REGISTERED, &[("count", &count)])
+                            .into()
                     } else {
-                        way.texts().t(key::ECHO_NETWORK_VPN_INSTALL_FAILED)
+                        t(way, key::ECHO_NETWORK_VPN_INSTALL_FAILED)
                     }
                 }
             },
@@ -329,8 +380,8 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                 &settings,
                 std::path::Path::new(ronoctua_network::vpn::SETTINGS_STAGING),
             ) {
-                Ok(()) => way.texts().t(key::ECHO_NETWORK_VPN_SETTINGS),
-                Err(_) => way.texts().t(key::ECHO_NETWORK_VPN_SETTINGS_FAILED),
+                Ok(()) => t(way, key::ECHO_NETWORK_VPN_SETTINGS),
+                Err(_) => t(way, key::ECHO_NETWORK_VPN_SETTINGS_FAILED),
             },
             Echo::Normal,
         )),
@@ -342,11 +393,16 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
         Errand::VpnRaise(at) => {
             let place = vpn_place(held.net, &at);
             Some((
+                // THE LOCATION IS A NAME the sentence quotes, as a network's is.
                 match held.wire.raise_tunnel(&at) {
                     Ok(()) => way
                         .texts()
-                        .t_with(key::ECHO_NETWORK_VPN_CONNECTING, &[("place", &place)]),
-                    Err(e) => crate::network_words::refused(&e, way.texts()),
+                        .t_args_marked(
+                            key::ECHO_NETWORK_VPN_CONNECTING,
+                            &[("place", Arg::Name(&place))],
+                        )
+                        .into(),
+                    Err(e) => refused(&e, way),
                 },
                 Echo::Normal,
             ))
@@ -382,9 +438,13 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             Some((
                 if done {
                     way.texts()
-                        .t_with(key::ECHO_NETWORK_VPN_FORGOTTEN, &[("place", &place)])
+                        .t_args_marked(
+                            key::ECHO_NETWORK_VPN_FORGOTTEN,
+                            &[("place", Arg::Name(&place))],
+                        )
+                        .into()
                 } else {
-                    way.texts().t(key::ECHO_NETWORK_VPN_FORGET_FAILED)
+                    t(way, key::ECHO_NETWORK_VPN_FORGET_FAILED)
                 },
                 Echo::Normal,
             ))
@@ -420,15 +480,23 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                             tracing::warn!(error = %e, "the hotspot's password was not kept for the other door");
                         }
                         held.view.sharing(Some(word.clone()));
-                        way.texts().t_with(
-                            key::ECHO_NETWORK_HOTSPOT,
-                            &[("network", &name), ("password", &word)],
-                        )
+                        way.texts()
+                            .t_args_marked(
+                                key::ECHO_NETWORK_HOTSPOT,
+                                &[
+                                    ("network", Arg::Name(&name)),
+                                    ("password", Arg::Text(&word)),
+                                ],
+                            )
+                            .into()
                     }
-                    Err(e) => way.texts().t_with(
-                        key::ECHO_NETWORK_HOTSPOT_FAILED,
-                        &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
-                    ),
+                    Err(e) => way
+                        .texts()
+                        .t_with(
+                            key::ECHO_NETWORK_HOTSPOT_FAILED,
+                            &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
+                        )
+                        .into(),
                 },
                 Echo::Long,
             ))
@@ -475,7 +543,7 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                 tracing::info!(airplane = on, "aeroplane mode");
                 None
             }
-            Err(e) => Some((crate::network_words::refused(&e, way.texts()), Echo::Normal)),
+            Err(e) => Some((refused(&e, way), Echo::Normal)),
         },
         Errand::Disconnect(medium, interface) => Some((
             t(
@@ -493,30 +561,35 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
         Errand::Facts => Some((
             match crate::network::carrying(held.net) {
                 // A CABLE AND A PHONE have no band and no signal to say.
-                Some(l) if l.medium != ronoctua_network::Medium::Radio => way.texts().t_with(
-                    key::ECHO_NETWORK_LINK_WIRED,
-                    &[
-                        ("network", &l.interface),
-                        ("rate", &crate::network::rate_of(l, way.texts())),
-                    ],
-                ),
-                Some(l) => way.texts().t_with(
-                    key::ECHO_NETWORK_LINK,
-                    &[
-                        ("network", l.network.as_deref().unwrap_or(&l.interface)),
-                        ("band", &crate::network::band_text(l.band, way.texts())),
-                        ("rate", &crate::network::rate_of(l, way.texts())),
-                        ("signal", &format!("{}%", l.signal)),
-                    ],
-                ),
+                Some(l) if l.medium != ronoctua_network::Medium::Radio => way
+                    .texts()
+                    .t_with(
+                        key::ECHO_NETWORK_LINK_WIRED,
+                        &[
+                            ("network", &l.interface),
+                            ("rate", &crate::network::rate_of(l, way.texts())),
+                        ],
+                    )
+                    .into(),
+                Some(l) => way
+                    .texts()
+                    .t_with(
+                        key::ECHO_NETWORK_LINK,
+                        &[
+                            ("network", l.network.as_deref().unwrap_or(&l.interface)),
+                            ("band", &crate::network::band_text(l.band, way.texts())),
+                            ("rate", &crate::network::rate_of(l, way.texts())),
+                            ("signal", &format!("{}%", l.signal)),
+                        ],
+                    )
+                    .into(),
                 None => t(way, key::ECHO_NETWORK_NO_LINK),
             },
             Echo::Normal,
         )),
         Errand::Forget(ssid) => Some((
             if held.wire.forget(&ssid).is_ok() {
-                way.texts()
-                    .t_with(key::ECHO_NETWORK_FORGOTTEN, &[("network", &ssid)])
+                about(way, key::ECHO_NETWORK_FORGOTTEN, &ssid)
             } else {
                 t(way, key::ECHO_NETWORK_UNAVAILABLE)
             },
@@ -544,21 +617,11 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                         up: false,
                     });
                     (
-                        way.texts()
-                            .t_with(key::ECHO_NETWORK_JOINING, &[("network", &target.ssid)]),
+                        about(way, key::ECHO_NETWORK_JOINING, &target.ssid),
                         Echo::Normal,
                     )
                 }
-                Err(e) => (
-                    way.texts().t_with(
-                        key::ECHO_NETWORK_FAILED,
-                        &[
-                            ("network", &target.ssid),
-                            ("reason", &crate::network_refusal::reason(&e, way.texts())),
-                        ],
-                    ),
-                    Echo::Normal,
-                ),
+                Err(e) => (failed(way.texts(), &target.ssid, &e), Echo::Normal),
             })
         }
         // THE ANSWER TO "KEEP IT?". The join is TAKEN before anything can
@@ -575,13 +638,14 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
                             joining,
                             ..
                         }) => match held.wire.remember(&joining, &ssid, password.as_str()) {
-                            Ok(()) => way
+                            Ok(()) => about(way, key::ECHO_NETWORK_STORED, &ssid),
+                            Err(e) => way
                                 .texts()
-                                .t_with(key::ECHO_NETWORK_STORED, &[("network", &ssid)]),
-                            Err(e) => way.texts().t_with(
-                                key::ECHO_NETWORK_STORE_FAILED,
-                                &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
-                            ),
+                                .t_with(
+                                    key::ECHO_NETWORK_STORE_FAILED,
+                                    &[("reason", &crate::network_refusal::reason(&e, way.texts()))],
+                                )
+                                .into(),
                         },
                         _ => t(way, key::ECHO_NETWORK_UNAVAILABLE),
                     }
@@ -595,10 +659,8 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             let name = name_of_active(held.net, &at);
             Some((
                 match held.wire.drop_it(&at) {
-                    Ok(()) => way
-                        .texts()
-                        .t_with(key::ECHO_NETWORK_TUNNEL_DOWN, &[("network", &name)]),
-                    Err(e) => crate::network_words::refused(&e, way.texts()),
+                    Ok(()) => about(way, key::ECHO_NETWORK_TUNNEL_DOWN, &name),
+                    Err(e) => refused(&e, way),
                 },
                 Echo::Normal,
             ))
@@ -607,10 +669,8 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             let name = name_of_saved(held.net, &at);
             Some((
                 match held.wire.raise(&at) {
-                    Ok(()) => way
-                        .texts()
-                        .t_with(key::ECHO_NETWORK_TUNNEL_UP, &[("network", &name)]),
-                    Err(e) => crate::network_words::refused(&e, way.texts()),
+                    Ok(()) => about(way, key::ECHO_NETWORK_TUNNEL_UP, &name),
+                    Err(e) => refused(&e, way),
                 },
                 Echo::Normal,
             ))
@@ -619,10 +679,8 @@ pub fn carry_out(errand: Errand, held: &mut Held<'_>, lines: &Lines<'_>, way: &m
             let name = name_of_saved(held.net, &at);
             Some((
                 match held.wire.delete(&at) {
-                    Ok(()) => way
-                        .texts()
-                        .t_with(removed_saying(held.net, &at), &[("network", &name)]),
-                    Err(e) => crate::network_words::refused(&e, way.texts()),
+                    Ok(()) => about(way, removed_saying(held.net, &at), &name),
+                    Err(e) => refused(&e, way),
                 },
                 Echo::Normal,
             ))
@@ -715,8 +773,10 @@ pub fn follow_join(held: &mut Held<'_>, way: &mut dyn Doorway) {
         Joined::Coming => return,
         Joined::Up => {
             way.say(
-                way.texts()
-                    .t_with(key::ECHO_NETWORK_CONNECTED, &[("network", &ssid)]),
+                way.texts().t_args_marked(
+                    key::ECHO_NETWORK_CONNECTED,
+                    &[("network", Arg::Name(&ssid))],
+                ),
                 Echo::Normal,
             );
             if typed {
@@ -747,16 +807,7 @@ pub fn follow_join(held: &mut Held<'_>, way: &mut dyn Doorway) {
                 ronoctua_network::refusal::Refusal::Failed
             };
             let why = anyhow::Error::from(ronoctua_network::refusal::Named(refusal));
-            way.say(
-                way.texts().t_with(
-                    key::ECHO_NETWORK_FAILED,
-                    &[
-                        ("network", &ssid),
-                        ("reason", &crate::network_refusal::reason(&why, way.texts())),
-                    ],
-                ),
-                Echo::Normal,
-            );
+            way.say(failed(way.texts(), &ssid, &why), Echo::Normal);
             if let Some(j) = held.join.take() {
                 let _ = held.wire.abandon(&j.joining);
             }
@@ -1649,8 +1700,8 @@ mod tests {
         assert_eq!(
             says,
             vec![
-                &Effect::Say(unavailable.clone(), Echo::Normal),
-                &Effect::Say(unavailable, Echo::Normal)
+                &Effect::Say(unavailable.clone().into(), Echo::Normal),
+                &Effect::Say(unavailable.into(), Echo::Normal)
             ]
         );
         // A CLOSE LETS GO OF THE PASSWORD that waited for "keep it?".
@@ -1679,7 +1730,9 @@ mod tests {
     /// NetworkManager says the network came up — the question would seal a
     /// password the network may refuse — or a refusal keeps the password, or
     /// is not said; or a saved network brought up asks to keep a password it
-    /// never had typed; or "yes" before the network is up seals anything.
+    /// never had typed; or "yes" before the network is up seals anything; or
+    /// the network's name is said in the sentence's own ink, not told as the
+    /// name it is (`Arg::Name`) — or the reason is told as one.
     #[test]
     fn a_join_is_said_and_kept_only_once_it_is_up() {
         use ronoctua_network::Joined;
@@ -1709,7 +1762,7 @@ mod tests {
                 Some(e) => carry_out(e, &mut held, &lines, &mut w),
                 None => follow_join(&mut held, &mut w),
             }
-            let said: Vec<String> = w
+            let said: Vec<crate::chrome::Named> = w
                 .owed
                 .iter()
                 .filter_map(|e| match e {
@@ -1718,6 +1771,12 @@ mod tests {
                 })
                 .collect();
             (said, view.remembering(), join)
+        };
+        let names = |s: &crate::chrome::Named| -> Vec<String> {
+            s.names()
+                .iter()
+                .map(|r| s.as_str()[r.clone()].to_owned())
+                .collect()
         };
         // ON ITS WAY: nothing said, nothing asked, the password still held.
         let (said, asked, join) = run(Joined::Coming, Some("s3nh4"), None);
@@ -1730,6 +1789,7 @@ mod tests {
             said.len() == 1 && said[0].contains("a café") && !said[0].contains("s3nh4"),
             "{said:?}"
         );
+        assert_eq!(names(&said[0]), ["a café"], "{said:?}");
         assert!(asked, "the question did not come once the network was up");
         assert!(join.is_some_and(|j| j.up));
         // REFUSED: said, as the key's, and the password let go.
@@ -1745,6 +1805,7 @@ mod tests {
             said[0].contains(&wrong_key),
             "a refused key not said as one: {said:?}"
         );
+        assert_eq!(names(&said[0]), ["a café"], "{said:?}");
         assert!(!asked);
         assert!(join.is_none(), "a refused password was kept");
         // FAILED for another reason: said, never as a wrong password.
@@ -1823,7 +1884,10 @@ mod tests {
         let mut w = way();
         assert_eq!(r.command("network-open", None, &mut w), Taken::Yes);
         let busy = w.texts().t(crate::key::ECHO_VIEW_BUSY);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(busy, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(busy.into(), Echo::Normal))
+        );
     }
 
     /// FAILS IF: the shelves the footer draws a bar beside do not come back

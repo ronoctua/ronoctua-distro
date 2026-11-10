@@ -503,6 +503,17 @@ pub fn remove_locations(paths: &[PathBuf], copies: bool) -> Amended {
 /// both doors call it.
 #[must_use]
 pub fn sentence(amended: &Amended, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    sentence_named(amended, texts).map(crate::chrome::Named::into_text)
+}
+
+/// [`sentence`], with the names it quotes told — the file, the program
+/// (`ronoctua_i18n::Arg::Name`) — for a door's line, where a name is drawn
+/// in a name's ink. The same words, byte for byte.
+#[must_use]
+pub fn sentence_named(
+    amended: &Amended,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<crate::chrome::Named> {
     use crate::key;
     use ronoctua_i18n::Arg;
     Some(match amended {
@@ -514,40 +525,58 @@ pub fn sentence(amended: &Amended, texts: &ronoctua_i18n::Texts) -> Option<Strin
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            texts.t_args(
-                if *copies {
-                    key::FILES_LOCATION_COPIED
-                } else {
-                    key::FILES_LOCATION_REMOVED
-                },
-                &[("n", Arg::Number(n)), ("name", Arg::Text(&name))],
-            )
+            texts
+                .t_args_marked(
+                    if *copies {
+                        key::FILES_LOCATION_COPIED
+                    } else {
+                        key::FILES_LOCATION_REMOVED
+                    },
+                    &[("n", Arg::Number(n)), ("name", Arg::Name(&name))],
+                )
+                .into()
         }
-        Amended::Tags(why) => crate::tag_words::tags_refusal(why, texts),
-        Amended::TagsTrouble(Tags::Absent) => texts.t(key::FILES_TAGS_ABSENT),
-        Amended::TagsTrouble(_) => texts.t(key::FILES_TAGS_STOPPED),
-        Amended::Details(why) => refused_said(why, texts),
+        Amended::Tags(why) => crate::tag_words::tags_named(why, texts),
+        Amended::TagsTrouble(Tags::Absent) => texts.t(key::FILES_TAGS_ABSENT).into(),
+        Amended::TagsTrouble(_) => texts.t(key::FILES_TAGS_STOPPED).into(),
+        Amended::Details(why) => refused_named(why, texts),
     })
 }
 
 /// exiftool's refusal, in words.
 #[must_use]
 pub fn refused_said(why: &amend::Refused, texts: &ronoctua_i18n::Texts) -> String {
+    refused_named(why, texts).into_text()
+}
+
+/// [`refused_said`], with the program it names told — a refusal of the
+/// inspector carried as a key and its values, said through the one resolver
+/// that tells a carried sentence's names (`chrome::said_of`).
+#[must_use]
+pub fn refused_named(why: &amend::Refused, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
     use crate::key;
     match why {
-        amend::Refused::TooLong => texts.t_args(
-            key::FILES_AMEND_TOO_LONG,
-            &[(
-                "most",
-                ronoctua_i18n::Arg::Number(
-                    i64::try_from(amend::VALUE_MOST_BYTES).unwrap_or(i64::MAX),
-                ),
-            )],
+        amend::Refused::TooLong => texts
+            .t_args(
+                key::FILES_AMEND_TOO_LONG,
+                &[(
+                    "most",
+                    ronoctua_i18n::Arg::Number(
+                        i64::try_from(amend::VALUE_MOST_BYTES).unwrap_or(i64::MAX),
+                    ),
+                )],
+            )
+            .into(),
+        amend::Refused::BadDate => texts.t(key::FILES_AMEND_BAD_DATE).into(),
+        amend::Refused::NotWritten => texts.t(key::FILES_AMEND_NOT_WRITTEN).into(),
+        amend::Refused::Taken => texts.t(key::FILES_AMEND_TAKEN).into(),
+        amend::Refused::Program(r) => crate::chrome::said_of(
+            texts,
+            &Explanation {
+                key: r.key(),
+                args: r.args(),
+            },
         ),
-        amend::Refused::BadDate => texts.t(key::FILES_AMEND_BAD_DATE),
-        amend::Refused::NotWritten => texts.t(key::FILES_AMEND_NOT_WRITTEN),
-        amend::Refused::Taken => texts.t(key::FILES_AMEND_TAKEN),
-        amend::Refused::Program(r) => texts.t_with(r.key(), &borrowed(&r.args())),
     }
 }
 
@@ -694,6 +723,36 @@ mod tests {
             !refused.is_empty() && !refused.contains("player-"),
             "{refused}"
         );
+    }
+
+    /// FAILS IF: what the message line says once a writer is done reads
+    /// differently from its plain words, or does not quote the file or the
+    /// program as a name — in either language.
+    #[test]
+    fn a_writer_says_its_file_and_its_program_as_names() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("the language");
+            for (amended, name) in [
+                (
+                    Amended::Located {
+                        landed: vec![PathBuf::from("/music/song.flac")],
+                        copies: true,
+                    },
+                    "song.flac",
+                ),
+                (
+                    Amended::Tags(Why::ProgramFailed {
+                        program: ronoctua_tags::Program::Ffmpeg,
+                    }),
+                    ronoctua_tags::Program::Ffmpeg.name(),
+                ),
+            ] {
+                let named = sentence_named(&amended, &t).expect("a sentence");
+                assert_eq!(Some(named.as_str()), sentence(&amended, &t).as_deref());
+                let quoted: Vec<&str> = named.names().iter().map(|r| &named[r.clone()]).collect();
+                assert_eq!(quoted, [name], "{language}: {named:?}");
+            }
+        }
     }
 
     #[test]

@@ -836,53 +836,62 @@ impl Asking {
     /// QUESTION: a second `match` beside the one that builds the choices is a
     /// second place to forget a variant, and this one the compiler would not
     /// catch — it would just draw the wrong sentence.
+    ///
+    /// A `chrome::Named`: the file a question is about is a name it quotes,
+    /// drawn in a name's ink on the picker's first line.
     #[must_use]
-    pub fn title(&self, texts: &ronoctua_i18n::Texts) -> String {
+    pub fn title(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
         match self {
-            Self::Application(_) => texts.t(crate::key::FILES_ASK_APPLICATION),
-            Self::Owner(_) => texts.t(crate::key::FILES_ASK_OWNER),
-            Self::Group(_) => texts.t(crate::key::FILES_ASK_GROUP),
-            Self::Mode(_, _) => texts.t(crate::key::FILES_ASK_MODE),
-            Self::Sheet(sheet) => sheet.title(texts),
-            Self::Name(_) => texts.t(crate::key::FILES_ASK_NAME),
-            Self::Modified(_) => texts.t(crate::key::FILES_ASK_MODIFIED),
-            Self::Tag(_, _, field) => texts.t_with(
-                crate::key::FILES_ASK_TAG,
-                &[(
-                    "field",
-                    texts.t(crate::tag_words::field_key(*field)).as_str(),
-                )],
-            ),
-            Self::Meta(_, _, meta) => texts.t_with(
-                crate::key::FILES_ASK_META,
-                &[(
-                    "detail",
-                    texts.t(crate::inspection_edit::meta_key(*meta)).as_str(),
-                )],
-            ),
+            Self::Application(_) => texts.t(crate::key::FILES_ASK_APPLICATION).into(),
+            Self::Owner(_) => texts.t(crate::key::FILES_ASK_OWNER).into(),
+            Self::Group(_) => texts.t(crate::key::FILES_ASK_GROUP).into(),
+            Self::Mode(_, _) => texts.t(crate::key::FILES_ASK_MODE).into(),
+            Self::Sheet(sheet) => sheet.title(texts).into(),
+            Self::Name(_) => texts.t(crate::key::FILES_ASK_NAME).into(),
+            Self::Modified(_) => texts.t(crate::key::FILES_ASK_MODIFIED).into(),
+            Self::Tag(_, _, field) => texts
+                .t_with(
+                    crate::key::FILES_ASK_TAG,
+                    &[(
+                        "field",
+                        texts.t(crate::tag_words::field_key(*field)).as_str(),
+                    )],
+                )
+                .into(),
+            Self::Meta(_, _, meta) => texts
+                .t_with(
+                    crate::key::FILES_ASK_META,
+                    &[(
+                        "detail",
+                        texts.t(crate::inspection_edit::meta_key(*meta)).as_str(),
+                    )],
+                )
+                .into(),
             Self::Location(paths) => {
                 let name = paths
                     .first()
                     .and_then(|p| p.file_name())
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                texts.t_args(
-                    crate::key::FILES_ASK_LOCATION,
-                    &[
-                        (
-                            "n",
-                            ronoctua_i18n::Arg::Number(
-                                i64::try_from(paths.len()).unwrap_or(i64::MAX),
+                texts
+                    .t_args_marked(
+                        crate::key::FILES_ASK_LOCATION,
+                        &[
+                            (
+                                "n",
+                                ronoctua_i18n::Arg::Number(
+                                    i64::try_from(paths.len()).unwrap_or(i64::MAX),
+                                ),
                             ),
-                        ),
-                        ("name", ronoctua_i18n::Arg::Text(&name)),
-                    ],
-                )
+                            ("name", ronoctua_i18n::Arg::Name(&name)),
+                        ],
+                    )
+                    .into()
             }
-            Self::Sidebar => texts.t(crate::key::FILES_SIDEBAR_HIDDEN_ASK),
+            Self::Sidebar => texts.t(crate::key::FILES_SIDEBAR_HIDDEN_ASK).into(),
             // ALREADY A SENTENCE, built where the `Doing` was known.
-            Self::Confirm(_, sentence) => sentence.clone(),
-            Self::Seal(asked) => asked.title(texts),
+            Self::Confirm(_, sentence) => sentence.clone().into(),
+            Self::Seal(asked) => asked.title(texts).into(),
         }
     }
 }
@@ -3921,23 +3930,23 @@ impl View {
         // verbs sit there with nothing saying what they would act on. With
         // marks it is worse — the actions apply to all of them, and the entry
         // under the pointer is not the answer.
-        let target = if self.marks.is_empty() {
-            texts.t_with(crate::key::FILES_MENU_ON, &[("name", entry.shown())])
+        let target: crate::chrome::Named = if self.marks.is_empty() {
+            texts
+                .t_args_marked(
+                    crate::key::FILES_MENU_ON,
+                    &[("name", ronoctua_i18n::Arg::Name(entry.shown()))],
+                )
+                .into()
         } else {
-            texts.t_with(
-                crate::key::FILES_MENU_ON_MANY,
-                &[("n", &self.marks.len().to_string())],
-            )
+            texts
+                .t_with(
+                    crate::key::FILES_MENU_ON_MANY,
+                    &[("n", &self.marks.len().to_string())],
+                )
+                .into()
         };
         let title = Row {
-            fields: vec![Field {
-                at: 0,
-                text: ronoctua_render::layout::elide_end(&target, width),
-                color: ronoctua_tokens::color::TEXT_SECONDARY,
-                hit: Hit::Nothing,
-                explain: None,
-                ink: Ink::Grid,
-            }],
+            fields: said_fields(&target, width, ronoctua_tokens::color::TEXT_SECONDARY),
             marked: false,
             foot: false,
             focused: false,
@@ -4016,10 +4025,22 @@ impl View {
             focused: false,
         };
 
-        let mut rows = vec![plain(
-            texts.t_with(crate::key::SIDEBAR_MENU_ON, &[("name", name.as_str())]),
-            ronoctua_tokens::color::TEXT_SECONDARY,
-        )];
+        // WHAT THE ROW IS, by the name it quotes in a name's ink.
+        let mut rows = vec![Row {
+            fields: said_fields(
+                &texts
+                    .t_args_marked(
+                        crate::key::SIDEBAR_MENU_ON,
+                        &[("name", ronoctua_i18n::Arg::Name(&name))],
+                    )
+                    .into(),
+                width,
+                ronoctua_tokens::color::TEXT_SECONDARY,
+            ),
+            marked: false,
+            foot: false,
+            focused: false,
+        }];
 
         // THE FACTS, and only for a device — a folder's facts are the listing.
         if matches!(row.target, Target::Device(_)) {
@@ -4757,6 +4778,30 @@ fn raise(name: &str, work: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// A line that SAYS something — a question's title, the subject of a menu —
+/// as the fields of one row: the sentence cut to `width` cells, and each
+/// name it quotes in a name's ink (`chrome::Named::runs`). Read, never
+/// pressed: every field takes nothing.
+fn said_fields(said: &crate::chrome::Named, width: u16, color: Color) -> Vec<Field> {
+    let said = said.elided_end(width);
+    let mut at = 0u16;
+    said.runs(color)
+        .into_iter()
+        .map(|(text, color)| {
+            let field = Field {
+                at,
+                text: text.to_owned(),
+                color,
+                hit: Hit::Nothing,
+                explain: None,
+                ink: Ink::Grid,
+            };
+            at = at.saturating_add(ronoctua_render::layout::width(text));
+            field
+        })
+        .collect()
+}
+
 /// The picker, drawn in the manager's own region.
 ///
 /// The first line is the question and what has been typed; the rest are the
@@ -4773,14 +4818,11 @@ fn picker_rows(picker: &Picker, width: u16, texts: &ronoctua_i18n::Texts) -> Vec
     // it is long gone from the screen by then.
     let mut rows = vec![
         Row {
-            fields: vec![Field {
-                at: 0,
-                text: ronoctua_render::layout::elide_end(&picker.asking.title(texts), width),
-                color: ronoctua_tokens::color::TEXT_SECONDARY,
-                hit: Hit::Nothing,
-                explain: None,
-                ink: Ink::Grid,
-            }],
+            fields: said_fields(
+                &picker.asking.title(texts),
+                width,
+                ronoctua_tokens::color::TEXT_SECONDARY,
+            ),
             marked: false,
             foot: false,
             focused: false,
@@ -9700,18 +9742,20 @@ impl View {
             return Step::Nothing;
         }
         self.save_sidebar();
-        Step::Say(mode::Explanation {
-            key: crate::key::FILES_SIDEBAR_PINNED,
-            args: vec![(
-                "name",
-                if put == 1 {
-                    last
-                } else {
-                    // A COUNT and not a list: six names on the message line is
-                    // a sentence nobody finishes reading.
-                    put.to_string()
-                },
-            )],
+        Step::Say(if put == 1 {
+            mode::Explanation {
+                key: crate::key::FILES_SIDEBAR_PINNED,
+                args: vec![("name", last)],
+            }
+        } else {
+            // A COUNT and not a list: six names on the message line is a
+            // sentence nobody finishes reading. And a sentence of its own,
+            // because a count is not a name (`chrome::said_of` tells every
+            // `name` as one).
+            mode::Explanation {
+                key: crate::key::FILES_SIDEBAR_PINNED_MANY,
+                args: vec![("n", put.to_string())],
+            }
         })
     }
 
@@ -15983,7 +16027,7 @@ mod tests {
         let rows = v.drawn(120, &bundle());
         assert!(rows.len() > 1, "the menu came up with no rows: {rows:?}");
         // AND THE FIRST LINE SAYS WHO IT IS ABOUT — here, the folder itself.
-        let title = &rows[0].fields[0].text;
+        let title: String = rows[0].fields.iter().map(|f| f.text.as_str()).collect();
         assert!(
             title.contains("empty"),
             "the menu does not say the target: {title}"
@@ -16004,8 +16048,15 @@ mod tests {
         let t = key_that_runs("files-menu").expect("files-menu has a key");
 
         v.key(t);
-        let title = v.drawn(120, &bundle())[0].fields[0].text.clone();
+        let first = v.drawn(120, &bundle())[0].fields.clone();
+        let title: String = first.iter().map(|f| f.text.as_str()).collect();
         assert!(title.contains("chosen.txt"), "{title}");
+        // AND THE ENTRY IS THE NAME THE LINE QUOTES, in a name's ink.
+        assert!(
+            first.iter().any(|f| f.text == "chosen.txt"
+                && f.color == ronoctua_tokens::color::TEXT_QUOTED_DEFAULT),
+            "{first:?}"
+        );
 
         v.key(Key {
             mods: ronoctua_keymap::Mods::default(),
@@ -16013,7 +16064,11 @@ mod tests {
         });
         v.key(of_view("C-a")); // mark everything
         v.key(t);
-        let title = v.drawn(120, &bundle())[0].fields[0].text.clone();
+        let title: String = v.drawn(120, &bundle())[0]
+            .fields
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect();
         assert!(
             !title.contains("chosen.txt"),
             "with marks the target is not a single entry: {title}"
@@ -17500,6 +17555,8 @@ mod tests {
                 | crate::chrome::Register::Typed
                 | crate::chrome::Register::Named
                 | crate::chrome::Register::Figure
+                | crate::chrome::Register::Quoted
+                | crate::chrome::Register::QuotedAsked
                 | crate::chrome::Register::Pending
                 | crate::chrome::Register::Glyph
                 | crate::chrome::Register::Label
@@ -21215,7 +21272,8 @@ mod tests {
             "the sheet did not offer to mount"
         );
         // The facts are on the same surface: the top line names the device.
-        assert!(rows[0].fields[0].text.contains("MISO_EFI"));
+        let top: String = rows[0].fields.iter().map(|f| f.text.as_str()).collect();
+        assert!(top.contains("MISO_EFI"), "{top}");
 
         // And pressing that row is what mounts.
         match v.key(press('m')) {
@@ -25388,5 +25446,63 @@ mod tests {
             })
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// FAILS IF: pinning one file does not say its name as a name, or
+    /// pinning several says their COUNT as one — a number in a name's ink,
+    /// which is what a `name` carrying a count came to once the manager told
+    /// every `name` it says (`chrome::said_of`).
+    #[test]
+    fn pinning_says_one_name_as_a_name_and_several_as_a_count() {
+        let dir = scratch("pin-names");
+        let files: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|n| dir.join(n))
+            .collect();
+        for f in &files {
+            std::fs::write(f, b"x").expect("a file");
+        }
+        let t = bundle();
+        let mut v = view_at(&dir);
+        let Step::Say(one) = v.pin(&files[..1]) else {
+            panic!("pinning one file said nothing");
+        };
+        let said = crate::chrome::said_of(&t, &one);
+        let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(quoted, ["a.txt"], "{said:?}");
+        let Step::Say(several) = v.pin(&files[1..]) else {
+            panic!("pinning two files said nothing");
+        };
+        let said = crate::chrome::said_of(&t, &several);
+        assert!(said.names().is_empty(), "a count told as a name: {said:?}");
+        assert!(said.contains('2') && !said.starts_with('['), "{said}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a seal's sentence tells the file it reads as a name and
+    /// leaves the file it makes untold — two names, one sentence.
+    #[test]
+    fn a_seal_tells_both_its_files_as_names() {
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("the language");
+            for key in [crate::key::SEAL_QUEUED_SEAL, crate::key::SEAL_QUEUED_OPEN] {
+                let said = crate::chrome::said_of(
+                    &t,
+                    &mode::Explanation {
+                        key,
+                        args: vec![
+                            ("name", "notes.txt".to_owned()),
+                            ("into", "notes.txt.age".to_owned()),
+                        ],
+                    },
+                );
+                let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+                assert_eq!(
+                    quoted,
+                    ["notes.txt", "notes.txt.age"],
+                    "{language}: {said:?}"
+                );
+            }
+        }
     }
 }

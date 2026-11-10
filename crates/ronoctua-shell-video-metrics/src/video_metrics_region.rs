@@ -282,7 +282,9 @@ impl VideoMetrics {
     /// with its picture's key and size, once it is decoded — and what the
     /// pointer lights: a shelf of the grid the CELL under it, a line of
     /// glyphs the glyph under it (and a row's words beside its glyphs), a
-    /// line of a picture or a title nothing, any other row its band. A line
+    /// line beside a picture its words (`Row::words_at`) — and nothing under
+    /// a pointer over the picture ([`Region::lit`]) —, a line of a picture
+    /// alone or a title nothing, any other row its band. A line
     /// takes a click where the view says one does (`View::takes`, the
     /// window's answer too).
     ///
@@ -327,6 +329,13 @@ impl VideoMetrics {
                             crate::region::LineLights::UnderCell(
                                 o.cells.iter().map(|c| (c.from, c.width)).collect(),
                             )
+                        } else if let Some(at) = r.words_at {
+                            // A LINE BESIDE A PICTURE — a video of the list
+                            // with thumbnails: its words light, from where
+                            // they begin, and never the picture — over which
+                            // the pointer lights nothing at all, its click
+                            // taking nothing there (`Region::lit`).
+                            crate::region::LineLights::From(at)
                         } else if o.heading || !o.thumbs.is_empty() {
                             crate::region::LineLights::Nothing
                         } else {
@@ -354,6 +363,9 @@ impl VideoMetrics {
                     covers,
                     continues: r.continues,
                     lights: lit,
+                    // A QUESTION'S GROUND, as the window paints it: the
+                    // footer lays it under the line's light and the cursor's.
+                    ground: r.ground,
                     ..Told::default()
                 }
             })
@@ -407,9 +419,11 @@ impl VideoMetrics {
                     kept.want(want);
                     kept.here()
                 };
-                // ON THE SPOT, what it brought is taken now: no wake comes.
+                // ON THE SPOT, what it brought is taken now: no wake comes —
+                // and the gesture that asked puts a turned page's title first
+                // after its own follow ([`Self::place_the_title`]).
                 if here {
-                    self.woken(way);
+                    self.took_arrived(way);
                 }
             }
             Ok(None) => {}
@@ -457,7 +471,60 @@ impl VideoMetrics {
         let errand = self.view.press(press, &rows, &self.kept.borrow().readings);
         self.errand(errand, way);
         way.follow();
+        self.place_the_title(way);
         way.repaint();
+    }
+
+    /// WHAT THE FEED BROUGHT, taken: readings merged, what an errand came to
+    /// said — and a reading never moves the page: the cursor is kept on its
+    /// row. A question the view put there from an errand's answer is
+    /// followed, as the key it answers would have been. Whether anything
+    /// came.
+    fn took_arrived(&mut self, way: &mut dyn Doorway) -> bool {
+        let arrived = self.kept.borrow_mut().take();
+        if arrived.is_empty() {
+            return false;
+        }
+        let mut next = Vec::new();
+        for a in arrived {
+            match a {
+                Arrived::Reading(r) => self.kept.borrow_mut().readings.took(*r),
+                Arrived::Done(done) => {
+                    let (said, then) =
+                        self.view
+                            .took(done, &self.kept.borrow().readings, way.texts());
+                    say(said, way);
+                    next.push(then);
+                }
+            }
+        }
+        self.covers = self.kept.borrow().covers();
+        let rows = self.view_rows(way.columns(), way.texts());
+        self.view.settle(&rows);
+        let follow = self.view.follow_owed();
+        for e in next {
+            self.errand(e, way);
+        }
+        if follow {
+            way.follow();
+        }
+        way.repaint();
+        true
+    }
+
+    /// A TURNED PAGE'S TITLE PUT FIRST on the footer's page, once its reading
+    /// is in (`View::settle_on_list`): the cursor on its first video. Asked
+    /// AFTER the follow, which the footer carries out in the order asked and
+    /// which would put the title a line back by its margin: at the end of a
+    /// key and of a glyph's click, and when the thread brought the page.
+    fn place_the_title(&mut self, way: &mut dyn Doorway) {
+        let rows = self.view_rows(way.columns(), way.texts());
+        let top = self
+            .view
+            .settle_on_list(&rows, &self.kept.borrow().readings);
+        if let Some(top) = top {
+            way.page(crate::region::Paging::Top(top));
+        }
     }
 
     /// What was typed for one of the view's questions — or, with no argument
@@ -530,6 +597,28 @@ impl Region for VideoMetrics {
                     e.joined()
                 }
             })
+    }
+
+    /// NOTHING OVER A PICTURE BESIDE ITS WORDS — a video of the list with
+    /// thumbnails, before the cell its words begin at (`Row::words_at`), on
+    /// any line of it: a click there takes nothing (`View::on_the_words`),
+    /// so nothing lights — not the band (a line of the title lights from
+    /// where its words begin, `LineLights::From`, under a pointer anywhere
+    /// on the row) and not the field under the pointer, the glyph of a video
+    /// waiting for its picture. Every other cell, the row: what its line
+    /// lights is said in [`VideoMetrics::told_whole`].
+    fn lit(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> crate::region::Lit {
+        let rows = self.view_rows(seen.columns, seen.texts);
+        let over_the_picture = rows
+            .get(row)
+            .and_then(|r| r.words_at)
+            .zip(cell)
+            .is_some_and(|(at, c)| c < at);
+        if over_the_picture {
+            crate::region::Lit::Nothing
+        } else {
+            crate::region::Lit::Row
+        }
     }
 
     /// WHAT THE CURSOR IS ON, said on the explanation line — while the
@@ -676,6 +765,7 @@ impl Region for VideoMetrics {
         if let Some(errand) = glyph {
             self.errand(errand, way);
             way.follow();
+            self.place_the_title(way);
             way.repaint();
             return;
         }
@@ -716,45 +806,19 @@ impl Region for VideoMetrics {
         self.view.page_is(lines);
     }
 
-    /// What the feed brought: readings merged, what an errand came to said —
-    /// and a reading never moves the page: the cursor is kept on its row. A
-    /// question the view put there from an errand's answer is followed, as
-    /// the key it answers would have been.
+    /// What the feed brought ([`VideoMetrics::took_arrived`]) — and a turned
+    /// page's title put first, once its reading is in.
     fn woken(&mut self, way: &mut dyn Doorway) {
         // THE FILE PICKER'S FOLDER MOVED, or its devices were read — the same
         // wake as the feed's.
         let picker = self.view.picker_woke();
-        let arrived = self.kept.borrow_mut().take();
-        if arrived.is_empty() {
+        if !self.took_arrived(way) {
             if picker {
                 way.repaint();
             }
             return;
         }
-        let mut next = Vec::new();
-        for a in arrived {
-            match a {
-                Arrived::Reading(r) => self.kept.borrow_mut().readings.took(*r),
-                Arrived::Done(done) => {
-                    let (said, then) =
-                        self.view
-                            .took(done, &self.kept.borrow().readings, way.texts());
-                    say(said, way);
-                    next.push(then);
-                }
-            }
-        }
-        self.covers = self.kept.borrow().covers();
-        let rows = self.view_rows(way.columns(), way.texts());
-        self.view.settle(&rows);
-        let follow = self.view.follow_owed();
-        for e in next {
-            self.errand(e, way);
-        }
-        if follow {
-            way.follow();
-        }
-        way.repaint();
+        self.place_the_title(way);
     }
 
     /// CAPS LOCK MEANS CAPITALS while the second description is edited.
@@ -780,6 +844,7 @@ impl Region for VideoMetrics {
 mod tests {
     use super::*;
     use crate::region::{Effect, Recorder};
+    use crate::video_metrics::Layout;
 
     /// The width the region is drawn at — the doorway's ([`way`]).
     const COLUMNS: u16 = 120;
@@ -795,10 +860,10 @@ mod tests {
         )
     }
 
-    /// The region over the fixture's readings, on `page` — on the grid when
-    /// `grid` — with NO FEED: what a click asks of the catalogue, the brain
-    /// or the player reaches nothing of this machine.
-    fn over(page: &Page, grid: bool) -> VideoMetrics {
+    /// The region over the fixture's readings, on `page` — its videos laid
+    /// out as `layout` says — with NO FEED: what a click asks of the
+    /// catalogue, the brain or the player reaches nothing of this machine.
+    fn over(page: &Page, layout: Layout) -> VideoMetrics {
         let mut kept = fresh();
         kept.feed = None;
         kept.readings = crate::video_metrics::tests::readings();
@@ -810,14 +875,7 @@ mod tests {
             covers: HashMap::new(),
             pointed: None,
         };
-        if grid {
-            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
-            let rows = region.view_rows(COLUMNS, &texts);
-            let kept = Rc::clone(&region.kept);
-            let _ = region
-                .view
-                .press(Press::Layout, &rows, &kept.borrow().readings);
-        }
+        region.view.laid_out(layout);
         region
     }
 
@@ -998,7 +1056,7 @@ mod tests {
                 ),
             ),
         ] {
-            let mut region = over(&Page::Home, false);
+            let mut region = over(&Page::Home, Layout::List);
             let mut w = way();
             let rows = region.view_rows(COLUMNS, &texts);
             let n = rows.iter().position(|r| r.spot == spot).expect(spot);
@@ -1007,7 +1065,7 @@ mod tests {
             region.clicked(n, &mut w);
             gone(&w, effect);
         }
-        let mut region = over(&Page::Channels, false);
+        let mut region = over(&Page::Channels, Layout::List);
         let mut w = way();
         let rows = region.view_rows(COLUMNS, &texts);
         let (n, nyxt) = rows
@@ -1049,7 +1107,7 @@ mod tests {
     /// continues a row included; or a shelf of the grid takes nothing where
     /// a click on one of its cells lands. THE LIGHT IS THE CLICK: every row
     /// clicked once, on a view of its own, and lit exactly where something
-    /// happened — on every page the fixture fills, the list and the grid.
+    /// happened — on every page the fixture fills, in every layout.
     #[test]
     fn the_pointer_lights_what_the_click_takes() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
@@ -1066,18 +1124,22 @@ mod tests {
         let video = Page::Video(ronoctua_video_metrics::VideoId("video000000".to_owned()));
         let witness = |r: &VideoMetrics, w: &Recorder| crate::region::seen(r, &w.owed, &seen);
         let mut shelves = 0;
-        for (page, grid) in [
-            (Page::Home, false),
-            (Page::Channels, false),
-            (Page::Import, false),
-            (Page::Rules, false),
-            (Page::Weights, false),
-            (Page::Videos, false),
-            (Page::Videos, true),
-            (video, false),
-        ] {
-            let fresh = || (over(&page, grid), way());
-            let first = over(&page, grid);
+        // EVERY LAYOUT OF THE VIDEOS: the list, with its thumbnails or
+        // without, and the grid, with the channel or without.
+        let pages = [
+            Page::Home,
+            Page::Channels,
+            Page::Import,
+            Page::Rules,
+            Page::Weights,
+        ]
+        .map(|p| (p, Layout::List))
+        .into_iter()
+        .chain(Layout::ALL.map(|l| (Page::Videos, l)))
+        .chain([(video, Layout::List)]);
+        for (page, layout) in pages {
+            let fresh = || (over(&page, layout), way());
+            let first = over(&page, layout);
             let rows = first.view_rows(COLUMNS, &texts);
             let cursor = first.cursor_in(&seen);
             let owner = |n: usize| crate::video_metrics::Row::owner(&rows, n);
@@ -1118,6 +1180,14 @@ mod tests {
                             h.did = controls.iter().all(|c| click_at(c.from));
                             return h;
                         }
+                        // A LINE BESIDE A PICTURE IS CLICKED ON ITS WORDS,
+                        // where the pointer lights it: over the picture the
+                        // generic click's cell takes nothing, and lights
+                        // nothing (`Region::lit`).
+                        if let Some(at) = rows.get(h.row).and_then(|r| r.words_at) {
+                            h.did = click_at(at);
+                            return h;
+                        }
                         let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
                         if let Some(cells) = cells.filter(|c| !c.is_empty()) {
                             shelves += 1;
@@ -1142,7 +1212,7 @@ mod tests {
                         h
                     })
                     .collect();
-            let what = format!("{page:?}, grid {grid}");
+            let what = format!("{page:?}, {layout:?}");
             assert!(
                 held.iter().any(|h| h.lit) && held.iter().any(|h| !h.lit),
                 "{what}: no row lit, or every row lit: {held:?}"
@@ -1184,7 +1254,7 @@ mod tests {
             frame: None,
         };
         let mut w = way();
-        let mut region = over(&Page::Home, false);
+        let mut region = over(&Page::Home, Layout::List);
         let rows = region.view_rows(COLUMNS, &texts);
         let told = region.told_whole(&seen);
         let channels = rows
@@ -1227,7 +1297,7 @@ mod tests {
         let moved = region.note(&seen).expect("the cursor's thing after a key");
         assert_ne!(moved, cursor, "the key's cursor is not what is said");
         // AND A SHELF: nothing for the line, each video at its cell.
-        let mut region = over(&Page::Videos, true);
+        let mut region = over(&Page::Videos, Layout::Grid);
         let rows = region.view_rows(COLUMNS, &texts);
         let told = region.told_whole(&seen);
         let shelf = rows
@@ -1282,7 +1352,7 @@ mod tests {
     /// glyphs says something; the line lights other boxes than
     /// its words' and its glyphs' (`Row::lit_cells`), or lights a glyph over
     /// the row's other lines (`LineLights::Glyphs`); or the cursor's thing
-    /// is said while the pointer rests on a glyph. On the list and the grid.
+    /// is said while the pointer rests on a glyph. In every layout.
     #[test]
     fn a_glyph_says_its_own_sentence() {
         use ronoctua_video_metrics::read::Forever;
@@ -1298,8 +1368,8 @@ mod tests {
         };
         let (left, _) = crate::video_metrics::extent(COLUMNS);
         let mut followed = 0;
-        for grid in [false, true] {
-            let mut region = over(&Page::Videos, grid);
+        for layout in Layout::ALL {
+            let mut region = over(&Page::Videos, layout);
             // A VIDEO SET ASIDE AND ONE KEPT BY ITS OWN MARK: their bookmark
             // and their ∞ say what holds once they are off.
             if let Some(l) = region.kept.borrow_mut().readings.listed.as_mut() {
@@ -1311,13 +1381,13 @@ mod tests {
             let lines: Vec<usize> = (0..rows.len())
                 .filter(|&n| !rows[n].controls.is_empty())
                 .collect();
-            assert!(!lines.is_empty(), "grid {grid}: no line of glyphs");
+            assert!(!lines.is_empty(), "{layout:?}: no line of glyphs");
             for &n in &lines {
                 let row = &rows[n];
                 let owner = &rows[crate::video_metrics::Row::owner(&rows, n)];
                 assert_eq!(
                     told[n].about, None,
-                    "grid {grid}: line {n} says one thing for its glyphs"
+                    "{layout:?}: line {n} says one thing for its glyphs"
                 );
                 assert_eq!(
                     told[n].lights,
@@ -1325,32 +1395,32 @@ mod tests {
                         cells: row.lit_cells(left, owner.has_words()),
                         alone: row.controls.iter().map(|c| (c.from, c.width)).collect(),
                     },
-                    "grid {grid}: line {n} lights other boxes"
+                    "{layout:?}: line {n} lights other boxes"
                 );
                 for (i, c) in row.controls.iter().enumerate() {
                     let said = region.about_at(n, Some(c.from), &seen).unwrap_or_else(|| {
-                        panic!("grid {grid}: glyph {i} of line {n} says nothing")
+                        panic!("{layout:?}: glyph {i} of line {n} says nothing")
                     });
                     assert!(
                         said.contains(&texts.t(c.about)),
-                        "grid {grid}: glyph {i} of line {n} says `{said}`"
+                        "{layout:?}: glyph {i} of line {n} says `{said}`"
                     );
                     assert!(
                         said.starts_with(&c.name),
-                        "grid {grid}: glyph {i} of line {n} does not say which: `{said}`"
+                        "{layout:?}: glyph {i} of line {n} does not say which: `{said}`"
                     );
                     if let Some(f) = &c.follows {
                         followed += 1;
                         assert!(
                             said.contains(f.as_str()),
-                            "grid {grid}: `{said}` lacks `{f}`"
+                            "{layout:?}: `{said}` lacks `{f}`"
                         );
                     }
                     if row.controls.get(i + 1).is_some() {
                         assert_eq!(
                             region.about_at(n, Some(c.from + c.width), &seen),
                             None,
-                            "grid {grid}: the air after glyph {i} of line {n} says something"
+                            "{layout:?}: the air after glyph {i} of line {n} says something"
                         );
                     }
                 }
@@ -1374,7 +1444,7 @@ mod tests {
             assert_eq!(
                 region.note(&seen),
                 None,
-                "grid {grid}: the cursor hides the pointer's glyph"
+                "{layout:?}: the cursor hides the pointer's glyph"
             );
         }
         assert!(
@@ -1420,6 +1490,132 @@ mod tests {
         assert_eq!(
             region.cursor_in(&seen),
             Some(region.view.drawn_cursor(&drawn))
+        );
+    }
+
+    /// FAILS IF: a video of the list with thumbnails lights its picture —
+    /// a line beside it lighting from anywhere but where its words begin
+    /// (`LineLights::From`), the line of glyphs a words' box that starts on
+    /// the picture, the region's answer at a cell of the picture anything
+    /// but nothing (`Region::lit`: the band and the field under the pointer)
+    /// — or lights nothing, as a line of a picture alone did; or
+    /// its picture, once decoded, is not a cover over the entry's first
+    /// lines, the box the view placed.
+    #[test]
+    fn a_line_beside_a_picture_lights_its_words() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let region = over(&Page::Videos, Layout::Strip);
+        let file = std::path::PathBuf::from("/nowhere/video000000.jpg");
+        {
+            let mut kept = region.kept.borrow_mut();
+            if let Some(l) = kept.readings.listed.as_mut() {
+                l.rows[0].thumb_file = Some(file.clone());
+            }
+            let rgba = ronoctua_render::image::Rgba::new(2, 1, vec![0; 8]).expect("pixels");
+            kept.readings.pictures.insert(
+                file.clone(),
+                crate::video_metrics::Picture {
+                    rgba: std::sync::Arc::new(rgba),
+                    size: (2, 1),
+                },
+            );
+        }
+        let rows = region.view_rows(COLUMNS, &texts);
+        let told = region.told_whole(&seen);
+        let beside: Vec<usize> = (0..rows.len())
+            .filter(|&n| rows[n].words_at.is_some())
+            .collect();
+        assert!(!beside.is_empty(), "no line beside a picture");
+        let (left, _) = crate::video_metrics::extent(COLUMNS);
+        for &n in &beside {
+            let at = rows[n].words_at.unwrap_or_default();
+            // OVER THE PICTURE, NOTHING — the band and the field under the
+            // pointer, by the region's answer at the cell — and from the
+            // words on, the line's own light.
+            for c in [left, left + 1, at - 1] {
+                assert_eq!(
+                    region.lit(n, Some(c), &seen),
+                    crate::region::Lit::Nothing,
+                    "line {n} lights at {c}, over the picture"
+                );
+            }
+            assert_eq!(region.lit(n, Some(at), &seen), crate::region::Lit::Row);
+            if rows[n].controls.is_empty() {
+                assert_eq!(
+                    told[n].lights,
+                    crate::region::LineLights::From(at),
+                    "line {n}"
+                );
+            } else {
+                let crate::region::LineLights::Glyphs { cells, .. } = &told[n].lights else {
+                    panic!("line {n} of glyphs lights {:?}", told[n].lights);
+                };
+                assert_eq!(cells.first().map(|c| c.0), Some(at), "line {n}");
+            }
+        }
+        // THE PICTURE, a cover over the first video's first lines.
+        let first = rows
+            .iter()
+            .position(|r| r.thumbs.iter().any(|t| t.file == file))
+            .expect("the picture's lines");
+        assert!(
+            told[first].covers.first().is_some_and(
+                |c| c.line == 0 && c.lines == ronoctua_tokens::space::VIDEOMETRICS_THUMBLINES
+            ),
+            "{:?}",
+            told[first].covers
+        );
+    }
+
+    /// FAILS IF: the region stops telling the footer the ground a line of
+    /// the view stands on — a question's block, which the window paints
+    /// under its rows (`chrome::row_grounds`) — line for line, or tells one
+    /// where the view has none.
+    #[test]
+    fn the_region_tells_the_question_s_ground() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let id = ronoctua_video_metrics::VideoId("video000000".to_owned());
+        let mut region = over(&Page::Video(id), Layout::List);
+        let rows = region.view_rows(COLUMNS, &texts);
+        let delete = rows
+            .iter()
+            .position(|r| r.spot == "delete")
+            .expect("delete");
+        region.view.clicked(delete, 0, &rows);
+        let rows = region.view_rows(COLUMNS, &texts);
+        let kept = Rc::clone(&region.kept);
+        let asked = region
+            .view
+            .press(Press::Delete, &rows, &kept.borrow().readings);
+        assert_eq!(asked, crate::video_metrics::Errand::Nothing);
+        let told = region.told_whole(&seen);
+        let drawn = region.view_rows(COLUMNS, &texts);
+        assert_eq!(told.len(), drawn.len());
+        for (n, (t, r)) in told.iter().zip(&drawn).enumerate() {
+            assert_eq!(t.ground, r.ground, "line {n} ({})", r.spot);
+        }
+        assert!(
+            told.iter()
+                .any(|t| t.ground == Some(crate::chrome::QUESTION_GROUND)),
+            "the question's ground was not told"
         );
     }
 
@@ -1509,6 +1705,66 @@ mod tests {
             .filter(|r| r.spot.starts_with("staged:"))
             .count();
         assert_eq!(staged, 2, "the channels to decide are not drawn");
+        drop(region);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: `]` and `[` stop turning the list's pages in the footer's
+    /// region — the bare keys, which the footer gives the region as typed —
+    /// or a page turned there does not put the list's title first on the
+    /// footer's page AFTER the follow that ends the key (the footer carries
+    /// its asks out in order, and the follow's margin would put the title a
+    /// line back), with the cursor on its first video.
+    #[test]
+    fn brackets_turn_the_page_in_the_region() {
+        use ronoctua_keymap::{Key, Sym};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-region-pages-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let catalogue = dir.join(ronoctua_video_metrics::FILE);
+        crate::video_metrics_feed::holding(&catalogue, 60);
+        let mut w = way();
+        w.has_a_loop = false;
+        let residence = Residence::of(Kept {
+            catalogue: Some(catalogue),
+            ..fresh()
+        });
+        w.residence = Some(residence);
+        let opens = crate::video_metrics::OPEN_COMMAND;
+        let mut region = opening(opens, Some("videos"), &mut w);
+        assert_eq!(region.command(opens, Some("videos"), &mut w), Taken::Yes);
+        for (key, page) in [(']', 1), ('[', 0), (']', 1)] {
+            w.owed.clear();
+            assert_eq!(region.key(Key::simple(Sym::Char(key)), &mut w), Taken::Yes);
+            assert_eq!(
+                region.view.look().query.map(|q| q.page),
+                Some(page),
+                "`{key}`"
+            );
+            let rows = region.view_rows(COLUMNS, &texts);
+            let title = rows
+                .iter()
+                .position(|r| r.spot == crate::paging::LIST_TITLE)
+                .expect("the list's title");
+            let follow = w.owed.iter().rposition(|e| matches!(e, Effect::Follow));
+            let top = w
+                .owed
+                .iter()
+                .rposition(|e| *e == Effect::Page(crate::region::Paging::Top(title)));
+            assert!(
+                top.is_some() && follow < top,
+                "`{key}`: the title is not put first after the follow: {:?}",
+                w.owed
+            );
+            assert_eq!(
+                region.view.cursor(&rows),
+                title + 1,
+                "`{key}`: the cursor is not on the first video"
+            );
+        }
         drop(region);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1617,7 +1873,7 @@ mod tests {
         drop(region);
         let _ = std::fs::remove_dir_all(&dir);
         // GOOGLE TAKEOUT, in Chrome — the region closed first.
-        let mut region = over(&Page::Import, false);
+        let mut region = over(&Page::Import, Layout::List);
         let mut w = way();
         let rows = region.view_rows(COLUMNS, &texts);
         let n = rows

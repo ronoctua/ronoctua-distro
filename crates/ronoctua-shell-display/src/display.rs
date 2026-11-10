@@ -414,8 +414,9 @@ pub enum Errand {
 /// So this says WHAT, and the door does it.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Doing {
-    /// A sentence for the door's message line, if the errand carries one.
-    pub said: Option<String>,
+    /// A sentence for the door's message line, if the errand carries one —
+    /// with the names it quotes told, for the line to draw in a name's ink.
+    pub said: Option<crate::chrome::Named>,
     /// An order for the screens thread, if the errand carries one.
     pub order: Option<ronoctua_display::Order>,
     /// Whether the view is over.
@@ -438,7 +439,7 @@ pub fn doing(errand: Errand, texts: &ronoctua_i18n::Texts) -> Doing {
         // AN INFORMATIVE ROW COPIES ITSELF — `chrome::information_of` picks
         // the text and `chrome::copied` is the one sentence both doors say.
         Errand::Copy(what) => Doing {
-            said: Some(crate::chrome::copied(&what, texts)),
+            said: Some(crate::chrome::copied(&what, texts).into()),
             ..Doing::default()
         },
         Errand::Close => Doing {
@@ -520,7 +521,7 @@ pub fn refusal(
         view.place_never_landed(at, wanted);
     }
     Doing {
-        said: Some(crate::screens_words::refused(why, texts)),
+        said: Some(crate::screens_words::refused(why, texts).into()),
         follow,
         ..Doing::default()
     }
@@ -808,10 +809,16 @@ impl Builder<'_> {
     /// [`crate::chrome::note_lines`]. The sentence this view exists to draw on
     /// the worst day is *"The compositor could not read its configuration…"*,
     /// and an ellipsis took the half that says what to do about it.
-    fn told(&mut self, text: String) {
-        for line in crate::chrome::note_lines(&text, self.room) {
+    ///
+    /// A name the sentence quotes is a field of its own in a name's ink
+    /// ([`crate::chrome::note_fields`], the breaks `note_lines` gives).
+    fn told(&mut self, text: impl Into<crate::chrome::Named>) {
+        let text = text.into();
+        for fields in
+            crate::chrome::note_fields(self.left, &text, tokens::color::TEXT_DIM, self.room)
+        {
             self.out.push(Row {
-                fields: vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)],
+                fields,
                 focused: false,
                 heading: true,
                 target: Target::Nothing,
@@ -2028,10 +2035,14 @@ impl View {
         // `Builder::told`, which is now the only way this view draws prose.
         let (back, keep) = match &asking.deciding {
             Deciding::Preview(_) => {
+                // THE SCREEN IS A NAME both questions quote (`Arg::Name`).
                 let what = b.texts.t(asking.what);
-                b.told(b.texts.t_with(
+                b.told(b.texts.t_args_marked(
                     crate::key::DISPLAY_ASK,
-                    &[("what", &what), ("screen", &asking.at)],
+                    &[
+                        ("what", ronoctua_i18n::Arg::Text(&what)),
+                        ("screen", ronoctua_i18n::Arg::Name(&asking.at)),
+                    ],
                 ));
                 b.told(b.texts.t_with(
                     crate::key::DISPLAY_ASK_SECONDS,
@@ -2051,7 +2062,10 @@ impl View {
                 // directly while the field carried the same one, so the two
                 // could drift — and for a round the field carried a key
                 // nothing in the system could render.
-                b.told(b.texts.t_with(asking.what, &[("screen", &asking.at)]));
+                b.told(b.texts.t_args_marked(
+                    asking.what,
+                    &[("screen", ronoctua_i18n::Arg::Name(&asking.at))],
+                ));
                 b.told(b.texts.t(crate::key::DISPLAY_ASK_NOTHING_YET));
                 (crate::key::DISPLAY_LEAVE_IT, crate::key::DISPLAY_FORGET_IT)
             }
@@ -2102,14 +2116,21 @@ impl View {
             ronoctua_display::prefs::FILE,
             &now.settings_repairs,
         ) {
-            b.told(partly.said(b.texts));
+            b.told(partly.said_named(b.texts));
         }
         for s in &now.screens {
             let focused = now.focused.as_deref() == Some(s.at.as_str());
             b.pair(
+                // THE SCREEN IS A NAME (`Arg::Name`), told as every name is;
+                // a row's label wears its `Kind`'s tones
+                // (`labels-say-what-they-are`), so only the words go.
                 if focused {
                     b.texts
-                        .t_with(crate::key::DISPLAY_THIS_ONE, &[("name", &s.at)])
+                        .t_args_marked(
+                            crate::key::DISPLAY_THIS_ONE,
+                            &[("name", ronoctua_i18n::Arg::Name(&s.at))],
+                        )
+                        .text
                 } else {
                     s.at.clone()
                 },

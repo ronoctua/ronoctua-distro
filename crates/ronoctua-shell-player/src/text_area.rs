@@ -35,7 +35,6 @@
 use crate::player::Target;
 use crate::player_rows::{Builder, Row};
 use ronoctua_keymap::{Key, Sym};
-use ronoctua_tokens as tokens;
 
 /// The keys a text being edited teaches on the hint line, clickable
 /// (invariant 19): `Esc` leaves (asking first when something changed), `C-s`
@@ -138,9 +137,11 @@ pub struct TextArea {
     /// The text as it was opened, or as it was last kept: what "changed"
     /// is measured against.
     kept: String,
-    /// The question after `Esc`, while it is up: `true` when its cursor is
-    /// on "yes".
-    asking: Option<bool>,
+    /// The question after `Esc`, while it is up: which answer its cursor is
+    /// on (`true` is yes), and whether a PERSON put it there — born on the
+    /// "no", the screen's cursor, so the first click on it only picks it
+    /// (invariant 19, `aim::Aim`).
+    asking: Option<crate::aim::Aim<bool>>,
     /// What it is about, in words — drawn as its title — when the opener
     /// gives one ([`TextArea::titled`]).
     title: Option<String>,
@@ -216,8 +217,10 @@ impl TextArea {
     /// The question after `Esc`, while it is up: `Some(true)` with its
     /// cursor on "yes".
     #[must_use]
-    pub const fn asking(&self) -> Option<bool> {
+    pub fn asking(&self) -> Option<bool> {
         self.asking
+            .as_ref()
+            .map(|aim| aim.on().copied().unwrap_or(false))
     }
 
     /// The DRAWN lines at `width` cells: each written line soft-wrapped —
@@ -283,7 +286,7 @@ impl TextArea {
     /// One key, at `width` cells — the width the text is drawn at, which is
     /// what `↑` and `↓` walk.
     pub fn key(&mut self, key: Key, width: u16) -> Step {
-        if let Some(yes) = self.asking {
+        if let Some(yes) = self.asking() {
             return self.answer_key(key, yes);
         }
         let keeps_goal = matches!(key.sym, Sym::Up | Sym::Down) && !key.mods.ctrl;
@@ -349,18 +352,18 @@ impl TextArea {
     /// cell is on (past a line's end, at its end) — or, on an answer of the
     /// question, the FIRST CLICK CHOOSES it and the second, on the answer
     /// already chosen, gives it (invariant 19): one click on "yes" never
-    /// throws a text away.
+    /// throws a text away, and one on the "no" the question was born on —
+    /// the screen's cursor, not the person's — only picks it.
     pub fn clicked(&mut self, hit: Hit) -> Step {
-        match (hit, self.asking) {
-            (Hit::Answer(answer), Some(on)) if answer != on => {
-                self.asking = Some(answer);
-                Step::Moved
-            }
-            (Hit::Answer(true), Some(_)) => Step::Discard,
-            (Hit::Answer(false), Some(_)) => {
-                self.asking = None;
-                Step::Moved
-            }
+        match (hit, self.asking.as_mut()) {
+            (Hit::Answer(answer), Some(aim)) => match (aim.clicked(answer), answer) {
+                (false, _) => Step::Moved,
+                (true, true) => Step::Discard,
+                (true, false) => {
+                    self.asking = None;
+                    Step::Moved
+                }
+            },
             (Hit::Text { at, cell }, None) => {
                 // A PIECE THAT IS NO LONGER THERE — the text changed between
                 // the frame and the click — places nothing.
@@ -387,7 +390,7 @@ impl TextArea {
     /// `Esc`: leave at once when nothing changed; else ask, "no" first.
     fn leave(&mut self) -> Step {
         if self.changed() {
-            self.asking = Some(false);
+            self.asking = Some(crate::aim::Aim::born(false));
             Step::Asking
         } else {
             Step::Discard
@@ -406,8 +409,12 @@ impl TextArea {
             };
         }
         match key.sym {
+            // A KEY THAT MOVED THE CURSOR is a person's gesture: a click on
+            // where it now is answers.
             Sym::Left | Sym::Right | Sym::Up | Sym::Down | Sym::Tab => {
-                self.asking = Some(!yes);
+                if let Some(aim) = self.asking.as_mut() {
+                    aim.moved(!yes);
+                }
                 Step::Moved
             }
             Sym::Enter if yes => Step::Discard,
@@ -671,51 +678,31 @@ impl Builder<'_> {
                 globe: None,
                 caret: (n == caret_at && area.asking.is_none()).then_some(self.left + caret_cell),
                 lit: crate::player_rows::Lit::Row,
+                ground: None,
             });
         }
-        let Some(yes) = area.asking else {
+        let Some(yes) = area.asking() else {
             area.placed.set(Placed {
                 width: self.room,
                 row: cursor_row,
             });
             return;
         };
-        self.inert(crate::chrome::AIR);
+        // THE QUESTION IS A QUESTION'S BLOCK, the page's own drawing — on its
+        // ground, with its air, "no" first and the cursor born on it
+        // (`TextArea::leave`) — and its yes LOSES the text.
         let asked = self.t(crate::key::ASK_TEXT_AREA_DISCARD);
-        for line in crate::chrome::note_lines(&asked, self.room) {
-            self.inert(vec![Self::piece(
-                self.left,
-                line,
-                tokens::color::TEXT_SECONDARY,
-            )]);
-        }
-        // "NO" FIRST, and the cursor born on it (`TextArea::leave`).
-        for (answer, key, spot) in [
-            (false, crate::key::TEXT_AREA_NO, NO_SPOT),
-            (true, crate::key::TEXT_AREA_YES, YES_SPOT),
-        ] {
-            let label = crate::chrome::Kind::Setting.tones(answer == yes).0;
-            if answer == yes {
-                cursor_row = self.out.len();
-            }
-            self.out.push(Row {
-                fields: vec![Self::piece(self.left, self.t(key), label)],
-                focused: answer == yes,
-                heading: false,
-                target: Target::Nothing,
-                spot: spot.to_owned(),
-                cells: Vec::new(),
-                slider: None,
-                continues: false,
-                chips: Vec::new(),
-                deck: None,
-                schematic: None,
-                covers: Vec::new(),
-                globe: None,
-                caret: None,
-                lit: crate::player_rows::Lit::Row,
-            });
-        }
+        let answers = [
+            (self.t(crate::key::TEXT_AREA_NO), Target::Nothing, NO_SPOT),
+            (self.t(crate::key::TEXT_AREA_YES), Target::Nothing, YES_SPOT),
+        ];
+        let firsts = self.question(
+            &asked.into(),
+            answers,
+            crate::chrome::Stakes::Lost,
+            Some(yes),
+        );
+        cursor_row = firsts[usize::from(yes)];
         area.placed.set(Placed {
             width: self.room,
             row: cursor_row,
@@ -1049,6 +1036,78 @@ mod tests {
             b.clicked(on_yes),
             Step::Discard,
             "the second click gives it"
+        );
+    }
+
+    /// FAILS IF: the first click on the "no" the question was born on gives
+    /// it — that cursor is the screen's, not the person's (invariant 19,
+    /// `aim::Aim`) — or a click on the answer a key moved the cursor to
+    /// waits for a second; or the question stops being a block of its own
+    /// — air off the ground around it, the sentence and the answers on the
+    /// question's ground, the answers set in, the yes in an error's colour
+    /// (it loses the text), the cursor in the cursor's — or a click on the
+    /// second line of a wrapped answer is not a click on it.
+    #[test]
+    fn a_born_no_is_picked_before_it_answers() {
+        use crate::chrome::QUESTION_GROUND;
+        use ronoctua_tokens as tokens;
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut a = TextArea::new("x", "as it was");
+        typed(&mut a, "!");
+        a.key(key("ESC"), 40);
+        let rows = Builder::build(0, 40, 0, 0, &t, |b| b.text_area(&a));
+        let no = rows.iter().position(|r| r.spot == NO_SPOT).expect("no");
+        let yes = rows.iter().position(|r| r.spot == YES_SPOT).expect("yes");
+        let on_no = hit(&rows, no, 0).expect("no");
+        assert_eq!(a.clicked(on_no), Step::Moved);
+        assert_eq!(a.asking(), Some(false), "one click on the born no answered");
+        assert_eq!(a.clicked(on_no), Step::Moved);
+        assert_eq!(a.asking(), None, "the picked no did not answer");
+        // A KEY THAT MOVED THE CURSOR is the person's: one click answers.
+        a.key(key("ESC"), 40);
+        a.key(key("<right>"), 40);
+        a.key(key("<left>"), 40);
+        assert_eq!(a.clicked(on_no), Step::Moved);
+        assert_eq!(a.asking(), None, "a keyed no waited for a second click");
+        // THE BLOCK: air, the sentence, the answers, air.
+        a.key(key("ESC"), 40);
+        let rows = Builder::build(0, 40, 0, 0, &t, |b| b.text_area(&a));
+        let sentence = rows
+            .iter()
+            .position(|r| r.ground.is_some())
+            .expect("a ground");
+        assert!(rows[sentence - 1].fields.is_empty(), "no air before");
+        assert!(
+            rows[sentence - 1].ground.is_none(),
+            "the air is on the ground"
+        );
+        assert!(
+            rows[sentence..=yes]
+                .iter()
+                .all(|r| r.ground == Some(QUESTION_GROUND))
+        );
+        assert!(rows[yes + 1].fields.is_empty() && rows[yes + 1].ground.is_none());
+        assert_eq!(
+            rows[sentence].fields[0].color,
+            tokens::color::QUESTION_ASKED
+        );
+        assert_eq!(
+            rows[no].fields[0].at,
+            rows[sentence].fields[0].at + tokens::space::VIEW_NESTCELLS
+        );
+        assert_eq!(rows[no].fields[0].color, tokens::color::TEXT_HERE_ACTS);
+        assert_eq!(rows[yes].fields[0].color, tokens::color::STATE_ERROR);
+        // A WRAPPED ANSWER is one answer on every line of it.
+        let narrow = Builder::build(0, 12, 0, 0, &t, |b| b.text_area(&a));
+        let first = narrow.iter().position(|r| r.spot == NO_SPOT).expect("no");
+        assert!(
+            narrow[first + 1].continues,
+            "the no did not wrap at 12 cells"
+        );
+        assert_eq!(hit(&narrow, first + 1, 0), Some(Hit::Answer(false)));
+        assert!(
+            narrow[first + 1].fields[0].text != "…" && !narrow[first].fields[0].text.ends_with('…'),
+            "an answer was cut"
         );
     }
 }

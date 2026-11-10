@@ -1316,6 +1316,38 @@ QUESTION_INKS = ("text.", "state.", "notification.", "modeline.", "brain.", "mar
 QUESTION_NOT_INKS = ("player.lane", "text.inverse")
 QUESTION_APART = (0.06, 0.07)
 
+#: A NAME QUOTED IN A SENTENCE (owner, 2026-11-10: a discreet colour of its
+#: own, near the text's and told from it): each quoted ink and the sentence
+#: ink it is drawn in (`chrome::quoted_ink`). Told from it by the distance
+#: gates below, and held CLOSE to it by this ceiling, measured the way
+#: `FAINT_EDGE_CEILING` is — a name that drifts further than this has stopped
+#: being discreet and reads as a word of another register, a key or a link.
+#: Retuned 2026-11-10 after the photographs: at a little over half of the
+#: way (0.031 at the nearest) the title in a window's message could not be
+#: told from its sentence at 1×, and a name that cannot be seen is no answer
+#: to "distinct". Now, at the nearest and the furthest: 0.043 / 0.093 for the
+#: message's (cyber, moss), 0.044 / 0.097 for a note's (midnight), 0.044 /
+#: 0.100 for a quiet note's (papyrus), 0.064 / 0.099 for the question's
+#: (forest, flashbang) and 0.029 / 0.061 for the discreet one, which is a
+#: cool grey beside a warm one and reads at its nearest. So the warn line sits
+#: at 0.10, past every one of them, and the floors of the distance gates
+#: below hold the nearest ones from sliding back under what can be seen.
+QUOTED_PAIRS = (
+    ("text.quoted.strong", "text.primary"),
+    ("text.quoted.default", "text.secondary"),
+    ("text.quoted.faint", "text.dim"),
+    ("text.subtle.quoted", "text.subtle.strong"),
+    ("question.quoted", "question.asked"),
+)
+QUOTED_NEAR = (0.11, 0.10)
+#: AND THE QUESTION'S NAME IS STILL A QUESTION'S COLOUR: it is neither one of
+#: the two `QUESTION_ROLES` (it is meant to sit beside the question, so the
+#: question is not held away from it) nor an ink they are held from, so it is
+#: held from the nearest ink of the palette here — at the floor every pair of
+#: "these two must be told apart" inks keeps, lower than the question's own,
+#: because a name in it is read inside the question and not on its own.
+QUOTED_APART = (0.03, 0.04)
+
 #: (text key, ground keys, Fail below, Warn below). Lc = |APCA|.
 CONTRAST_GATES = (
     ("text.primary", (*SIX_GROUNDS, "surface.selection", *RAISED_GROUNDS), 75, 82),
@@ -1359,6 +1391,23 @@ CONTRAST_GATES = (
     # colour that calls — and what is typed is read letter by letter.
     ("question.asked", QUESTION_GROUNDS, 45, 47),
     ("question.typed", QUESTION_GROUNDS, 60, 62),
+    # A NAME QUOTED IN A SENTENCE (owner, 2026-11-10), on every ground its
+    # sentence is drawn on: the window foot's message (`surface.header`) for
+    # the strong one, a page and the footer's region for the middle one, a
+    # quiet note for the faint one, the minibuffer and a window's first line
+    # for the discreet one, and a question wherever one is asked. Each holds
+    # the sentence's own lightness, so each is read like it; the floors are
+    # the sentence ink's or a step under them, because a name is read inside
+    # a line that already says what it is about. Measured 2026-11-10 over the 44
+    # palettes, at the lowest: 82.2 (industrial's header) in a dark theme
+    # and 69.1 in a light one (`LIGHT_CONTRAST_FLOORS`), 43.5 (frost's
+    # header), 18.9 (frost's header, where `text.dim` itself is 19.4) and
+    # 45.0 and 47.9 (industrial's chrome).
+    ("text.quoted.strong", (*SIX_GROUNDS, *RAISED_GROUNDS), 70, 75),
+    ("text.quoted.default", (*SIX_GROUNDS, *RAISED_GROUNDS), 40, 43),
+    ("text.quoted.faint", (*SIX_GROUNDS[:5], *RAISED_GROUNDS), 15, 18),
+    ("text.subtle.quoted", ("surface.chrome", "surface.buffer"), 40, 44),
+    ("question.quoted", QUESTION_GROUNDS, 45, 47),
     ("text.subtle.strong", ("surface.chrome",), 40, 45),
     ("text.subtle.default", ("surface.chrome",), 18, 20),
     ("text.subtle.faint", ("surface.chrome",), 7, 8),
@@ -1504,6 +1553,16 @@ CONTRAST_GATES = (
     # click picked at the end of what the line says — an event's, or a
     # notification's said there instead of on the band.
     ("text.here.acts", ("surface.chrome",), 45, 50),
+    # AND ON A QUESTION'S OWN GROUND (owner, 2026-11-10): a question in the
+    # middle of a page stands on `surface.header`, edge to edge, with its
+    # answers on it — the one the cursor is on in the cursor's ink, and a
+    # "no" (and a "yes" that costs nothing) at rest in an action's label.
+    # The cursor keeps the floor every cursor holds, and the warn line is
+    # the rung's cost, said out loud: measured 2026-11-10, 49.2 at the
+    # lowest (owl's chrome, flashbang's backdrop) against the chrome's 52;
+    # the label 46.8 (papyrus's backdrop).
+    ("text.here.acts", ("surface.header",), 45, 48),
+    ("text.label.acts", ("surface.header",), 43, 45),
     ("modeline.state.normal", ("modeline.background",), 15, 20),
     ("modeline.state.alternate", ("modeline.background",), 45, 60),
     # A BLUETOOTH DEVICE'S MARK, at the rung every other mark reads at.
@@ -1663,6 +1722,14 @@ LIGHT_CONTRAST_FLOORS = {
     ("text.primary", "surface.header"): (65, 70),
     ("text.primary", "surface.hover"): (65, 70),
     ("text.primary", "notification.background"): (65, 70),
+    # AND THE NAME QUOTED IN IT (owner, 2026-11-10), which is `text.primary`'s
+    # own rung turned: on the same three grounds it is as far as the body
+    # text can be, and no further. Measured 69.1 (the header), 73.6 and 73.8;
+    # `text.primary` beside it is 69.0 on the header, where its own exception
+    # already warns.
+    ("text.quoted.strong", "surface.header"): (65, 68),
+    ("text.quoted.strong", "surface.hover"): (65, 70),
+    ("text.quoted.strong", "notification.background"): (65, 70),
     # Measured 87.8 against a floor of 90. `brain.text` is the ladder's
     # brightest rung and `brain.background` is a paint step below the chrome;
     # the pair cannot be further apart than the interface's whole range.
@@ -1865,6 +1932,63 @@ DISTANCE_GATES = (
     ),
     ("text.subtle.named", "text.subtle.figure", 0.03, 0.04),
     ("text.subtle.figure", "state.warning", 0.06, 0.07),
+    # A NAME QUOTED IN A SENTENCE (owner, 2026-11-10: near the text's colour
+    # and told from it): told from the sentence's own ink — and held near it by
+    # `QUOTED_NEAR` — and, the question's, from what is typed beside it.
+    ("text.quoted.strong", "text.primary", 0.035, 0.04),
+    ("text.quoted.default", "text.secondary", 0.035, 0.04),
+    ("text.quoted.faint", "text.dim", 0.035, 0.04),
+    ("text.subtle.quoted", "text.subtle.strong", 0.025, 0.03),
+    ("question.quoted", "question.asked", 0.05, 0.06),
+    ("question.quoted", "question.typed", 0.06, 0.07),
+    # AND NEVER WHAT A PAGE SAYS "PRESS HERE" OR "THIS IS A SECTION" IN: the
+    # cursor, the accent, an action's label and a heading. A name in a note
+    # that reads as one of those is a note that seems to take a click.
+    *(
+        (ink, other, 0.04, 0.05)
+        for ink in ("text.quoted.strong", "text.quoted.default", "text.quoted.faint")
+        for other in ("state.accent", "text.here.acts", "text.label.acts", "text.heading")
+    ),
+    # AND THE TURNED INKS IT SHARES A PAGE WITH: a watch on the brain's list,
+    # a task waiting its turn and a folded record.
+    ("text.quoted.default", "text.listening", 0.02, 0.025),
+    ("text.quoted.faint", "text.status.idle", 0.03, 0.04),
+    ("text.quoted.faint", "text.folded", 0.03, 0.04),
+    # AND THE DISCREET ONE AMONG EVERY INK OF THE MINIBUFFER'S LINE. Measured
+    # 2026-11-10 at the nearest: 0.030 from the mark's name (cyber), 0.037
+    # from the key whose meaning moves (papyrus's backdrop), 0.069 from the
+    # accent (flashbang's backdrop). Its own sentence is 0.029 from it in
+    # papyrus's backdrop — under the warn line above, the one palette that
+    # is, and on the side `QUOTED_NEAR` asks for.
+    #
+    # AND THE DEVICE ON THE MODELINE RIGHT ABOVE IT, whose faded blue the
+    # name turns toward (`colors.nix` says why): a hue at the same lightness
+    # is a KIND of thing there, and a name must not read as one more device.
+    # Seven tenths of the way it came 0.021 from it (owl); at 0.55, 0.030.
+    # The two ends of the turn bound it — less of the blue is nearer the
+    # sentence, more is nearer the device — so these two gates are what
+    # place `mix`.
+    ("text.subtle.quoted", "modeline.device", 0.025, 0.03),
+    #
+    # The sentence under a hint line keeps a lower floor, and it is the one
+    # neighbour that may: the two share the cool hue and differ by lightness
+    # — 0.029 at the nearest (papyrus), and no turn of the azure's or the
+    # device's tried, from half to eight tenths of the way, took it to the
+    # others' 0.03 in every theme; and the sentence under a hint is a line
+    # of its own, never the echo's.
+    ("text.subtle.quoted", "text.subtle.explain", 0.02, 0.025),
+    *(
+        ("text.subtle.quoted", other, 0.025, 0.03)
+        for other in (
+            "text.subtle.named",
+            "text.subtle.alternate",
+            "text.subtle.contextual",
+            "text.subtle.default",
+            "text.subtle.figure",
+            "text.subtle.leader-alt",
+            "state.accent",
+        )
+    ),
     ("text.subtle.inert", "text.subtle.contextual", 0.03, 0.04),
     # A LIT SHORTCUT IS ITS OWN TONE, a little lit: told apart from the resting
     # one (the pointer is on it) by a small step, which is what the owner asked
@@ -2310,6 +2434,12 @@ def run_gates(theme: Theme, tokens: dict[str, Resolved], primitives: dict[str, S
         inks = [k for k in tokens if k.startswith(QUESTION_INKS) and not k.startswith(QUESTION_NOT_INKS) and k not in QUESTION_ROLES]
         v, nearest = min((de(role, k), k) for k in inks)
         findings.append(Finding(_level(v, *QUESTION_APART), "distance", f"{role} vs its nearest ink ({nearest})", v, f"ΔE ≥ {QUESTION_APART[0]} (warn < {QUESTION_APART[1]})"))
+    for quoted, sentence in QUOTED_PAIRS:
+        v = de(quoted, sentence)
+        findings.append(Finding(_level(v, *QUOTED_NEAR, higher_is_better=False), "distance", f"{quoted} near {sentence}", v, f"ΔE ≤ {QUOTED_NEAR[0]} (warn > {QUOTED_NEAR[1]}) — a name stays close to its sentence"))
+    inks = [k for k in tokens if k.startswith(QUESTION_INKS) and not k.startswith(QUESTION_NOT_INKS)]
+    v, nearest = min((de("question.quoted", k), k) for k in inks)
+    findings.append(Finding(_level(v, *QUOTED_APART), "distance", f"question.quoted vs its nearest ink ({nearest})", v, f"ΔE ≥ {QUOTED_APART[0]} (warn < {QUOTED_APART[1]})"))
     for a, b, fail, warn in NEAR_GATES if light and base else ():
         v = de(a, b)
         findings.append(Finding(_level(v, fail, warn), "desk", f"{a} vs {b}", v, f"ΔE ≥ {fail} (warn < {warn})"))

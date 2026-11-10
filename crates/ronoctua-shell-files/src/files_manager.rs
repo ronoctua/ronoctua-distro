@@ -232,7 +232,7 @@ impl Manager {
             // does not fit answers with the whole name, and that is a cursor
             // that moved — so the page follows it too.
             Step::Say(e) => {
-                let said = way.texts().t_with(e.key, &e.borrowed());
+                let said = crate::chrome::said_of(way.texts(), &e);
                 way.say(said, Echo::Normal);
                 way.page(Paging::Follow);
             }
@@ -309,9 +309,10 @@ impl Manager {
                     });
                 }
                 None => {
-                    let said = way
-                        .texts()
-                        .t_with(crate::key::FILES_SIDEBAR_GONE, &[("name", which.as_str())]);
+                    let said = way.texts().t_args_marked(
+                        crate::key::FILES_SIDEBAR_GONE,
+                        &[("name", ronoctua_i18n::Arg::Name(&which))],
+                    );
                     way.say(said, Echo::Normal);
                 }
             },
@@ -435,7 +436,7 @@ impl Manager {
                     // arrives instead.
                     crate::files::Errand::Done => self.view.reread(),
                     crate::files::Errand::Say(e) => {
-                        let said = way.texts().t_with(e.key, &e.borrowed());
+                        let said = crate::chrome::said_of(way.texts(), &e);
                         way.say(said, Echo::Normal);
                     }
                 }
@@ -581,7 +582,7 @@ impl Manager {
                     self.view.reread();
                 } else {
                     let e = self.view.refusal_said(which, &why);
-                    let said = way.texts().t_with(e.key, &e.borrowed());
+                    let said = crate::chrome::said_of(way.texts(), &e);
                     way.say(said, Echo::Normal);
                 }
             }
@@ -663,7 +664,7 @@ impl Manager {
         match report {
             Report::Failed(why) => way.say(why, Echo::Normal),
             Report::Said(e) => {
-                let said = way.texts().t_with(e.key, &e.borrowed());
+                let said = crate::chrome::said_of(way.texts(), &e);
                 way.say(said, Echo::Normal);
             }
             Report::Door(why) => {
@@ -671,7 +672,7 @@ impl Manager {
                 way.say(said, Echo::Normal);
             }
             Report::Amended(amended) => {
-                if let Some(said) = crate::inspection_edit::sentence(&amended, way.texts()) {
+                if let Some(said) = crate::inspection_edit::sentence_named(&amended, way.texts()) {
                     way.say(said, Echo::Normal);
                 }
             }

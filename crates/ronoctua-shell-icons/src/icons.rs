@@ -1733,17 +1733,21 @@ impl View {
         if let Some(said) = about.and_then(|id| crate::chrome::hint_sentence(id, texts)) {
             return vec![Piece::key_in(said, crate::chrome::Register::Explain)];
         }
+        // WHY THERE IS NO SET, the table's file a name the sentence quotes
+        // (`Arg::Name`), drawn in a name's ink.
         let Some(set) = self.set.as_ref() else {
-            let said = self.refused.map_or_else(
-                || texts.t(crate::key::ICONS_LOADING),
+            let said: crate::chrome::Named = self.refused.map_or_else(
+                || texts.t(crate::key::ICONS_LOADING).into(),
                 |r| {
-                    texts.t_with(
-                        &format!("icons-why-{}", r.why.id()),
-                        &[("file", r.file.unwrap_or_default())],
-                    )
+                    texts
+                        .t_args_marked(
+                            &format!("icons-why-{}", r.why.id()),
+                            &[("file", ronoctua_i18n::Arg::Name(r.file.unwrap_or_default()))],
+                        )
+                        .into()
                 },
             );
-            return vec![Piece::said(said)];
+            return said.pieces(crate::chrome::Register::Said);
         };
         if self.hits().is_empty() {
             return vec![Piece::said(

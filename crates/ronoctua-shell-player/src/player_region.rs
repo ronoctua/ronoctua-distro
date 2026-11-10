@@ -619,7 +619,7 @@ impl Door<'_> {
             "player-ambience-silence" => {
                 let said = way.texts().t(crate::key::PLAYER_AMBIENCE_SILENCED);
                 self.errand(
-                    Errand::TellSaying(ronoctua_player::wire::Ask::AmbientSilence, said),
+                    Errand::TellSaying(ronoctua_player::wire::Ask::AmbientSilence, said.into()),
                     way,
                 );
             }
@@ -951,7 +951,12 @@ impl Door<'_> {
 /// test), what a photograph's window keeps of it, said as that window says
 /// it (`player_window::Outbox`). What stays in the door is handed back
 /// either way.
-fn carried(kept: &Kept, errand: Errand, way: &dyn Doorway) -> Result<Option<String>, Errand> {
+#[allow(clippy::result_large_err)] // handed back whole: see `player::Errand`
+fn carried(
+    kept: &Kept,
+    errand: Errand,
+    way: &dyn Doorway,
+) -> Result<Option<crate::chrome::Named>, Errand> {
     if way.photographing() {
         return crate::player_window::Outbox::default().carry_out(errand, way.texts());
     }
@@ -1314,6 +1319,12 @@ impl Player {
         let errand = self.view.key(press, state.as_ref(), columns, way.texts());
         way.resized();
         way.follow();
+        // A ROW THE VIEW BROUGHT TO THE TOP — a list's title, its page turned
+        // — goes first AFTER the follow, which would put it a line back
+        // (`View::bring_to_top`).
+        if let Some(top) = self.view.take_top() {
+            way.page(crate::region::Paging::Top(top));
+        }
         self.carry(errand, way);
     }
 
@@ -1655,7 +1666,7 @@ impl Player {
     fn control_sentence(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
         match id {
             "player-swap" => Some(texts.t(crate::key::PLAYER_SWAP_FOOTER)),
-            id => crate::chrome::hint_sentence(id, texts),
+            id => crate::player::sentence_of(id, texts, false),
         }
     }
 
@@ -1751,13 +1762,17 @@ impl Player {
                     about: r
                         .target
                         .about()
-                        .and_then(|id| crate::chrome::hint_sentence(id, seen.texts)),
+                        .and_then(|id| crate::player::sentence_of(id, seen.texts, false)),
                     chips: r.chips.iter().map(|c| c.at).collect(),
                     caret: r.caret,
                     covers: r.covers.clone(),
                     continues: r.continues,
                     lights: lit,
                     chosen,
+                    // A QUESTION'S GROUND, as the window paints it: the
+                    // footer lays it under the line's light, as wide as the
+                    // rows' band beside the picture.
+                    ground: r.ground,
                     ..crate::region::Told::default()
                 }
             })
@@ -2901,6 +2916,57 @@ mod tests {
         assert_eq!(laid.view.page(), crate::player::PageId::Radio);
         assert_eq!(by_command.view.page(), crate::player::PageId::Radio);
         assert_eq!(by_command.view.cursor(), laid.view.cursor());
+    }
+
+    /// FAILS IF: the region stops telling the footer the ground a row of the
+    /// view stands on — a question's block, which the window paints under
+    /// its rows (`chrome::row_grounds`) — line for line, beside the panel as
+    /// well as without it.
+    #[test]
+    fn the_region_tells_the_question_s_ground() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let mut way = crate::region::Recorder::new(
+            Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB")),
+            160,
+            true,
+            crate::sudo::Gate::window(),
+            crate::wake::Wake::new(|| {}),
+        );
+        way.has_a_loop = false;
+        let resident = make();
+        resident
+            .as_a::<Kept>()
+            .expect("the player's resident")
+            .borrow_mut()
+            .state = Some(crate::player::fixture::playing());
+        way.residence = Some(resident);
+        let mut region = opened(&mut way);
+        let seen = Seen {
+            texts: &texts,
+            columns: 160,
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let _ = region.before_measuring(&seen);
+        region
+            .view
+            .ask_about("Forget it?", crate::player::Errand::Nothing);
+        let state: Option<State> = region.state().clone();
+        let width = region.columns_for(seen.columns);
+        region.view.settle_in(state.as_ref(), width, &texts);
+        let told = region.told_whole(&seen);
+        let rows = region.view.rows(state.as_ref(), width, &texts);
+        for (n, row) in rows.iter().enumerate() {
+            assert_eq!(told[n].ground, row.ground, "line {n} ({})", row.spot);
+        }
+        assert!(
+            told.iter()
+                .any(|t| t.ground == Some(crate::chrome::QUESTION_GROUND)),
+            "the question's ground was not told"
+        );
     }
 
     /// FAILS IF: `Esc` under the picture alone gives the rows back without

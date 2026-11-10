@@ -368,6 +368,11 @@ async-io = "2"
 # live in the `.ftl`, where the translator works; in gettext they would become `ngettext` with
 # a numeric rule inside the Rust.
 fluent-bundle = "0.16"
+# The parsed message, which the bundle does not re-export: a name argument
+# that a message SELECTS on is handed over bare (`ronoctua_i18n::Arg::Name`),
+# and only the message's own tree says which arguments those are. Already in
+# the lock under fluent-bundle, so nothing new is fetched.
+fluent-syntax = "0.12"
 unic-langid = "0.9"
 
 # --- utilities ---------------------------------------------------------

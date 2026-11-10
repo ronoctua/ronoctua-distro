@@ -1058,14 +1058,25 @@ impl View {
         if let Some(Armed { release, target }) = self.asking.as_ref() {
             // THE QUESTION OPENS ON `no`, and the cursor is born there: the
             // whole drive is erased, and nothing brings it back.
-            b.heading_of(texts.t_with(
-                key::STICK_SURE,
-                &[
-                    ("version", &release.label),
-                    ("drive", &target.label),
-                    ("size", &size_text(target.size_bytes, texts)),
-                ],
-            ));
+            //
+            // THE DRIVE IS A NAME the question quotes (`Arg::Name`), told as
+            // every name is; the question is drawn in a title's ink, which a
+            // name shares (`chrome::quoted_ink`), so only the words go.
+            b.heading_of(
+                texts
+                    .t_args_marked(
+                        key::STICK_SURE,
+                        &[
+                            ("version", ronoctua_i18n::Arg::Text(&release.label)),
+                            ("drive", ronoctua_i18n::Arg::Name(&target.label)),
+                            (
+                                "size",
+                                ronoctua_i18n::Arg::Text(&size_text(target.size_bytes, texts)),
+                            ),
+                        ],
+                    )
+                    .text,
+            );
             b.note(key::STICK_SURE_NOTE);
             b.pair(
                 texts.t(key::STICK_NO),
@@ -1441,39 +1452,55 @@ pub fn published_s(text: &str) -> Option<i64> {
 /// download asks not let, no writer on this machine (the nested loop on a
 /// machine of another distro), no sudo door — or `None`. Asked BEFORE the
 /// password: a password typed for a write that cannot happen is a password
-/// asked for nothing.
+/// asked for nothing. The host is a name the sentence quotes (`Arg::Name`),
+/// drawn in a name's ink.
 #[must_use]
-pub fn cannot_arm(texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn cannot_arm(texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
     use crate::key;
     if let Some(host) = unlet_download_host() {
-        return Some(texts.t_with(key::STICK_NOT_LET_HOST, &[("host", host)]));
+        return Some(not_let(host, texts));
     }
     if !Path::new(ronoctua_stick::STAGING).is_dir() {
-        return Some(texts.t(key::STICK_NO_WRITER));
+        return Some(texts.t(key::STICK_NO_WRITER).into());
     }
     if !ronoctua_security::has_helper() {
-        return Some(texts.t(crate::security_words::refusal(
-            ronoctua_security::Why::NoHelper,
-        )));
+        return Some(
+            texts
+                .t(crate::security_words::refusal(
+                    ronoctua_security::Why::NoHelper,
+                ))
+                .into(),
+        );
     }
     if ronoctua_xdg::cache_dir().is_none() {
-        return Some(texts.t(key::STICK_NO_CACHE));
+        return Some(texts.t(key::STICK_NO_CACHE).into());
     }
     None
 }
 
+/// "The download asks `host`, which is not let" — the host told as the name
+/// it is (`ronoctua_i18n::Arg::Name`).
+fn not_let(host: &str, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    texts
+        .t_args_marked(
+            crate::key::STICK_NOT_LET_HOST,
+            &[("host", ronoctua_i18n::Arg::Name(host))],
+        )
+        .into()
+}
+
 /// Queues the image alone, and the sentence that says how that went.
 #[must_use]
-pub fn fetch_said(release: &Release, texts: &ronoctua_i18n::Texts) -> String {
+pub fn fetch_said(release: &Release, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
     use crate::key;
     if let Some(host) = unlet_download_host() {
-        return texts.t_with(key::STICK_NOT_LET_HOST, &[("host", host)]);
+        return not_let(host, texts);
     }
     match queue(release, None) {
-        Ok(()) => texts.t(key::STICK_QUEUED_FETCH),
+        Ok(()) => texts.t(key::STICK_QUEUED_FETCH).into(),
         Err(e) => {
             tracing::warn!(error = %e, "the queue did not take the stick's image");
-            texts.t(key::TRANSFERS_OFFLINE)
+            texts.t(key::TRANSFERS_OFFLINE).into()
         }
     }
 }

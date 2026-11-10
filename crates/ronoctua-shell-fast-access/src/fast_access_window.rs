@@ -81,8 +81,9 @@ pub enum Out {
     Footer(&'static str, Option<String>),
     /// The programs' centre on a search, by its attribute.
     Software(String),
-    /// Say this on the door's line.
-    Say(String),
+    /// Say this on the door's line — a name it quotes told, so the line
+    /// draws it in a name's ink.
+    Say(crate::chrome::Named),
     /// The door's question line.
     Ask(crate::line::Line),
     /// Read the clipboard into what is typed.
@@ -181,7 +182,9 @@ impl Search {
             }
             Back::Amended(amended) => {
                 // THE PANEL READS THE FILE AGAIN: its key carries the mtime.
-                let said = crate::inspection_edit::sentence(&amended, texts);
+                // The sentence keeps the names it quotes — the file, the
+                // program — as the files manager's line does.
+                let said = crate::inspection_edit::sentence_named(&amended, texts);
                 self.repoint(texts);
                 return Some(said.map(Out::Say).into_iter().collect());
             }
@@ -294,7 +297,7 @@ impl Search {
                     self.view.settings_are(settings.clone(), texts);
                     self.errands(vec![crate::fast_access::Errand::Keep(settings)], texts)
                 }
-                Err(said) => vec![Out::Say(said)],
+                Err(said) => vec![Out::Say(said.into())],
             };
         }
         // THE BRAVE KEY: a `0600` file of its own, never `fast-access.json`;
@@ -313,7 +316,7 @@ impl Search {
             };
             let settings = self.view.settings.clone();
             self.view.settings_are(settings, texts);
-            return vec![Out::Say(said)];
+            return vec![Out::Say(said.into())];
         }
         if id == crate::fast_access_detail::ASK_COLOUR {
             text.trim()
@@ -337,10 +340,11 @@ impl Search {
     ) -> Vec<Out> {
         use crate::fast_access_detail::Amend;
         let refused = |e: &dyn std::fmt::Display| {
-            vec![Out::Say(texts.t_with(
-                crate::key::FILES_REFUSED,
-                &[("why", &e.to_string())],
-            ))]
+            vec![Out::Say(
+                texts
+                    .t_with(crate::key::FILES_REFUSED, &[("why", &e.to_string())])
+                    .into(),
+            )]
         };
         let typed = typed.unwrap_or_default();
         match amend {
@@ -360,7 +364,7 @@ impl Search {
             }
             Amend::Modified(path) => {
                 let Some(secs) = ronoctua_files::when::instant_of(typed, &self.zone) else {
-                    return vec![Out::Say(texts.t(crate::key::FILES_MODIFIED_BAD))];
+                    return vec![Out::Say(texts.t(crate::key::FILES_MODIFIED_BAD).into())];
                 };
                 match ronoctua_files::act::set_modified(&path, secs) {
                     Ok(()) => {
@@ -391,7 +395,7 @@ impl Search {
                         }
                         Vec::new()
                     }
-                    Err(said) => vec![Out::Say(said)],
+                    Err(said) => vec![Out::Say(said.into())],
                 }
             }
             Amend::Meta(path, meta) => {
@@ -493,7 +497,9 @@ impl Search {
                     texts,
                 ))),
                 Errand::Say(text) => out.push(Out::Say(text)),
-                Errand::Copy(text) => out.push(Out::Say(crate::chrome::copied(&text, texts))),
+                Errand::Copy(text) => {
+                    out.push(Out::Say(crate::chrome::copied(&text, texts).into()))
+                }
                 Errand::Paste => out.push(Out::Paste),
                 Errand::Allow(hosts) => {
                     let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
@@ -510,7 +516,9 @@ impl Search {
                 Errand::Keep(settings) => {
                     if let Err(why) = keep(&self.store, settings) {
                         out.push(Out::Say(
-                            texts.t_with(crate::key::FAST_ACCESS_UNKEPT, &[("why", &why)]),
+                            texts
+                                .t_with(crate::key::FAST_ACCESS_UNKEPT, &[("why", &why)])
+                                .into(),
                         ));
                     }
                 }
@@ -628,7 +636,7 @@ fn queue_install(
     consent: ronoctua_software::order::Consent,
     queue_keys: &str,
     texts: &ronoctua_i18n::Texts,
-) -> String {
+) -> crate::chrome::Named {
     let work = ronoctua_transfers::Work::Software {
         order: Box::new(ronoctua_software::Order::Install {
             key: ronoctua_software::AppKey::Nix { attr },
@@ -637,13 +645,19 @@ fn queue_install(
         label: name.to_owned(),
     };
     match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
-        Ok(_) => texts.t_with(
-            crate::key::SOFTWARE_ECHO_QUEUED,
-            &[("app", name), ("keys", queue_keys)],
-        ),
+        // THE PROGRAM IS A NAME the sentence quotes (`Arg::Name`).
+        Ok(_) => texts
+            .t_args_marked(
+                crate::key::SOFTWARE_ECHO_QUEUED,
+                &[
+                    ("app", ronoctua_i18n::Arg::Name(name)),
+                    ("keys", ronoctua_i18n::Arg::Text(queue_keys)),
+                ],
+            )
+            .into(),
         Err(e) => {
             tracing::warn!(error = %e, "the transfer queue did not take the install");
-            texts.t(crate::key::TRANSFERS_OFFLINE)
+            texts.t(crate::key::TRANSFERS_OFFLINE).into()
         }
     }
 }

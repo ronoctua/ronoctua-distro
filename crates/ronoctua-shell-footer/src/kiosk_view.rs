@@ -547,8 +547,16 @@ impl View {
                 };
                 for t in &k.tabs {
                     let host = host_of(&t.url);
+                    // THE HOST IS A NAME (`Arg::Name`), told as every name
+                    // is; a row's value wears its `Kind`'s tones
+                    // (`labels-say-what-they-are`), so only the words go.
                     let value = if t.active {
-                        texts.t_with(key::KIOSK_TAB_FRONT, &[("host", host)])
+                        texts
+                            .t_args_marked(
+                                key::KIOSK_TAB_FRONT,
+                                &[("host", ronoctua_i18n::Arg::Name(host))],
+                            )
+                            .text
                     } else {
                         host.to_owned()
                     };

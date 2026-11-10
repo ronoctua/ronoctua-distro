@@ -39,6 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ronoctua_i18n::Arg;
 use ronoctua_render::layout;
 use ronoctua_software::declaration::{
     Declarations, DeclaredRow, DeclineState, DeclinedRow, DistroRow, Standing,
@@ -1342,8 +1343,9 @@ pub enum Errand {
     Copy(String),
     /// Open this address in the browser.
     Browse(String),
-    /// Say this on the message line; it is already a sentence.
-    Say(String),
+    /// Say this on the message line; it is already a sentence — a name it
+    /// quotes told, so the line draws it in a name's ink.
+    Say(crate::chrome::Named),
     /// Change one preference (`ronoctua_software::prefs::change`).
     Tweak(Tweak),
     /// Run this command of the registry.
@@ -1527,8 +1529,12 @@ impl View {
                         });
                         Errand::Nothing
                     }
-                    Some(d) => Errand::Say(essential_said(d, texts)),
-                    None => Errand::Say(texts.t(words::refusal_key(Refusal::DeclaredInTheFlake))),
+                    Some(d) => Errand::Say(essential_said(d, texts).into()),
+                    None => Errand::Say(
+                        texts
+                            .t(words::refusal_key(Refusal::DeclaredInTheFlake))
+                            .into(),
+                    ),
                 }
             }
             Opening::Remove { key, name } => {
@@ -1800,7 +1806,10 @@ impl View {
                     return Errand::Nothing;
                 };
                 if row.disabled {
-                    return row.said.clone().map_or(Errand::Nothing, Errand::Say);
+                    return row
+                        .said
+                        .clone()
+                        .map_or(Errand::Nothing, |said| Errand::Say(said.into()));
                 }
                 match (press, &row.target) {
                     (Press::Enter, _) => self.enter(&row, r, texts),
@@ -1863,7 +1872,8 @@ impl View {
                 self.picking = None;
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            // AN EXPLANATION CARRIED AS DATA, its names told (`said_of`).
+            Hosting::Say(e) => Errand::Say(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
                 let Some(path) = paths.into_iter().next() else {
@@ -1878,7 +1888,9 @@ impl View {
                     // stays for another.
                     Picking::Package => {
                         if ronoctua_software::order::file_source(&path).is_none() {
-                            return Errand::Say(texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE));
+                            return Errand::Say(
+                                texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE).into(),
+                            );
                         }
                         self.picking = None;
                         self.ask_it(Question::Foreign(path));
@@ -1945,10 +1957,14 @@ impl View {
         if !self.takes_letters() {
             // A FIELD OF THE DRAFT is typed on its own row: `RET` there opens
             // the door's line on it — in either door.
-            return Errand::Say(texts.t_with(
-                crate::key::SOFTWARE_TYPE_ON_A_ROW,
-                &[("keys", notation_of("software-enter").unwrap_or_default())],
-            ));
+            return Errand::Say(
+                texts
+                    .t_with(
+                        crate::key::SOFTWARE_TYPE_ON_A_ROW,
+                        &[("keys", notation_of("software-enter").unwrap_or_default())],
+                    )
+                    .into(),
+            );
         }
         if let Level::Icons(shelf) = self.level {
             self.icon_query.push(c);
@@ -2054,7 +2070,7 @@ impl View {
         if matches!(self.level, Level::WebEditor | Level::Icons(_)) {
             return self.took_icon(IconChoice::File { path: path.clone() }, r);
         }
-        Errand::Say(texts.t(words::refusal_key(Refusal::UnknownItem)))
+        Errand::Say(texts.t(words::refusal_key(Refusal::UnknownItem)).into())
     }
 
     /// What the door's line answered, for the command that asked — the
@@ -2087,7 +2103,7 @@ impl View {
                     draft.changed = true;
                     Errand::Feed(Want::Site(url))
                 }
-                Err(why) => Errand::Say(texts.t(words::refusal_key(why))),
+                Err(why) => Errand::Say(texts.t(words::refusal_key(why)).into()),
             },
             Ask::WebName => {
                 let draft = self.draft_mut(r);
@@ -2102,7 +2118,7 @@ impl View {
             Ask::FilePath => {
                 let path = expanded(said, r.home.as_deref());
                 if ronoctua_software::order::file_source(&path).is_none() {
-                    return Errand::Say(texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE));
+                    return Errand::Say(texts.t(crate::key::SOFTWARE_NOT_A_PACKAGE_FILE).into());
                 }
                 self.ask_it(Question::Foreign(path));
                 Errand::Nothing
@@ -2128,7 +2144,7 @@ impl View {
         };
         match crate::keep::write_passphrase_to_sign(places, typed) {
             Ok(()) => Errand::Queue(vec![waiting]),
-            Err(said) => Errand::Say(texts.t(said)),
+            Err(said) => Errand::Say(texts.t(said).into()),
         }
     }
 
@@ -2495,13 +2511,13 @@ impl View {
             // the search again.
             Target::Search => {
                 if matches!(self.level, Level::Icons(_)) {
-                    return Errand::Say(texts.t(crate::key::SOFTWARE_TYPE_TO_SEARCH));
+                    return Errand::Say(texts.t(crate::key::SOFTWARE_TYPE_TO_SEARCH).into());
                 }
                 if self.level == Level::Trials {
                     self.intent = Intent::Try;
                 }
                 if self.query.is_empty() {
-                    return Errand::Say(texts.t(crate::key::SOFTWARE_TYPE_TO_SEARCH));
+                    return Errand::Say(texts.t(crate::key::SOFTWARE_TYPE_TO_SEARCH).into());
                 }
                 self.show_results(r)
             }
@@ -2757,7 +2773,7 @@ impl View {
     ) -> Errand {
         let badges = badges_for(r, &key);
         if let Some(why) = badges.iter().find_map(|b| b.refuses()) {
-            return Errand::Say(texts.t(words::refusal_key(why)));
+            return Errand::Say(texts.t(words::refusal_key(why)).into());
         }
         let consent = match &key {
             AppKey::Nix { attr } => remembered(consent, attr, &r.prefs),
@@ -2986,7 +3002,7 @@ impl View {
                 self.go(Level::WebEditor, r);
                 Errand::Feed(Want::Site(url))
             }
-            Err(why) => Errand::Say(texts.t(words::refusal_key(why))),
+            Err(why) => Errand::Say(texts.t(words::refusal_key(why)).into()),
         }
     }
 
@@ -3117,10 +3133,10 @@ impl View {
         let d = self.effective_draft(r);
         let url = match ronoctua_software::web::canonical_url(&d.url) {
             Ok(u) => u,
-            Err(why) => return Errand::Say(texts.t(words::refusal_key(why))),
+            Err(why) => return Errand::Say(texts.t(words::refusal_key(why)).into()),
         };
         let Some(icon) = self.web_icon(r) else {
-            return Errand::Say(texts.t(crate::key::SOFTWARE_WEB_NO_ICON));
+            return Errand::Say(texts.t(crate::key::SOFTWARE_WEB_NO_ICON).into());
         };
         let name = self.web_name(r);
         let spec = WebSpec {
@@ -3640,11 +3656,16 @@ impl View {
         match app {
             AppKey::Nix { attr } => {
                 let program = program_for(r, app);
+                // THE PROGRAM IS A NAME (`Arg::Name`), told as every name is;
+                // a row's value wears its `Kind`'s tones
+                // (`labels-say-what-they-are`), so only the words go.
                 let value = if badges.contains(&Badge::CommandLine) {
-                    b.texts.t_with(
-                        key::SOFTWARE_TRY_TERMINAL,
-                        &[("program", program.as_deref().unwrap_or(attr))],
-                    )
+                    b.texts
+                        .t_args_marked(
+                            key::SOFTWARE_TRY_TERMINAL,
+                            &[("program", Arg::Name(program.as_deref().unwrap_or(attr)))],
+                        )
+                        .text
                 } else {
                     b.texts.t(key::SOFTWARE_TRY_WINDOW)
                 };
@@ -4773,7 +4794,6 @@ fn machines_said(machines: Option<&[String]>, texts: &ronoctua_i18n::Texts) -> S
 /// left out.
 fn declared_said(d: &Declarations, texts: &ronoctua_i18n::Texts) -> String {
     use crate::key;
-    use ronoctua_i18n::Arg;
     if d.declared.is_empty() {
         return texts.t(key::SOFTWARE_DECLARED_NONE_YET);
     }
@@ -4802,7 +4822,6 @@ fn declared_said(d: &Declarations, texts: &ronoctua_i18n::Texts) -> String {
 /// The door's value for the declined.
 fn declined_said(d: &Declarations, texts: &ronoctua_i18n::Texts) -> String {
     use crate::key;
-    use ronoctua_i18n::Arg;
     if d.declined.is_empty() {
         return texts.t(key::SOFTWARE_DECLARED_NONE_DECLINED_YET);
     }
@@ -4957,7 +4976,8 @@ fn unreadable_rows(b: &mut Builder<'_>, d: &Declarations) {
         } else {
             key::SOFTWARE_DECLARED_UNREADABLE_BROKEN
         };
-        let said = b.texts.t_with(why, &[("file", b.texts.t(file).as_str())]);
+        // `what` IS WORDS OF OURS ("your declared programs"), not a name.
+        let said = b.texts.t_with(why, &[("what", b.texts.t(file).as_str())]);
         b.said(said, tokens::color::STATE_ERROR);
     }
 }
@@ -5383,7 +5403,6 @@ fn bring_back_said(
     texts: &ronoctua_i18n::Texts,
 ) -> String {
     use crate::key;
-    use ronoctua_i18n::Arg;
     match declining.machines.as_deref() {
         None => texts.t(key::SOFTWARE_DECLARED_BRING_BACK_VALUE),
         Some(hosts) => texts.t_args(
@@ -5748,9 +5767,16 @@ fn flatpak_name(r: &Readings, id: &str) -> String {
 fn permissions(b: &mut Builder<'_>, r: &Readings, id: &str) {
     use crate::key;
     let name = flatpak_name(r, id);
+    // THE PROGRAM IS A NAME the title quotes (`Arg::Name`), told as every
+    // name is; a title wears no quoted ink (`chrome::quoted_ink`), so only
+    // the words go.
     b.title(
         b.texts
-            .t_with(key::SOFTWARE_HEADING_PERMISSIONS, &[("app", name.as_str())]),
+            .t_args_marked(
+                key::SOFTWARE_HEADING_PERMISSIONS,
+                &[("app", Arg::Name(&name))],
+            )
+            .text,
     );
     let found = match &r.permissions {
         Some((asked, Some(Some(found)))) if asked == id => found,
@@ -5945,47 +5971,52 @@ fn explanation_of(q: &Question) -> Vec<&'static str> {
 fn question(b: &mut Builder<'_>, q: &Question) {
     use crate::key;
     let t = b.texts;
+    // THE PROGRAM, OR THE FILE, IS A NAME each question quotes (`Arg::Name`),
+    // told as every name is; the question is drawn in a title's ink, which a
+    // name shares (`chrome::quoted_ink`), so only the words go.
+    let sure = |k: &str, app: &str| t.t_args_marked(k, &[("app", Arg::Name(app))]).text;
     let (sentence, yes, more): (String, &str, Option<&str>) = match q {
         Question::Consent {
             kind, name, bytes, ..
         } => match kind {
             ConsentKind::Unfree => (
-                t.t_with(key::SOFTWARE_SURE_UNFREE, &[("app", name.as_str())]),
+                sure(key::SOFTWARE_SURE_UNFREE, name),
                 key::SOFTWARE_YES_UNFREE,
                 None,
             ),
             ConsentKind::Unverified => (
-                t.t_with(key::SOFTWARE_SURE_UNVERIFIED, &[("app", name.as_str())]),
+                sure(key::SOFTWARE_SURE_UNVERIFIED, name),
                 key::SOFTWARE_YES_TRUST,
                 None,
             ),
             ConsentKind::Big => (
-                t.t_with(
+                t.t_args_marked(
                     key::SOFTWARE_SURE_DOWNLOAD,
                     &[
-                        ("app", name.as_str()),
+                        ("app", Arg::Name(name)),
                         (
                             "size",
-                            bytes.map(|x| readable(x, t)).unwrap_or_default().as_str(),
+                            Arg::Text(&bytes.map(|x| readable(x, t)).unwrap_or_default()),
                         ),
                     ],
-                ),
+                )
+                .text,
                 key::SOFTWARE_YES_DOWNLOAD,
                 None,
             ),
             ConsentKind::ArmOnly => (
-                t.t_with(key::SOFTWARE_SURE_ARM, &[("app", name.as_str())]),
+                sure(key::SOFTWARE_SURE_ARM, name),
                 key::SOFTWARE_YES_ARM,
                 None,
             ),
         },
         Question::Remove { name, .. } => (
-            t.t_with(key::SOFTWARE_SURE_REMOVE, &[("app", name.as_str())]),
+            sure(key::SOFTWARE_SURE_REMOVE, name),
             key::SOFTWARE_YES_REMOVE,
             Some(key::SOFTWARE_YES_REMOVE_DATA),
         ),
         Question::RemoveWeb { name, .. } => (
-            t.t_with(key::SOFTWARE_SURE_WEB_REMOVE, &[("app", name.as_str())]),
+            sure(key::SOFTWARE_SURE_WEB_REMOVE, name),
             key::SOFTWARE_YES_REMOVE_WEB,
             None,
         ),
@@ -6012,22 +6043,25 @@ fn question(b: &mut Builder<'_>, q: &Question) {
             None,
         ),
         Question::Foreign(path) => (
-            t.t_with(
+            t.t_args_marked(
                 key::SOFTWARE_SURE_FOREIGN,
                 &[(
                     "file",
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                        .as_str(),
+                    Arg::Name(
+                        &path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    ),
                 )],
-            ),
+            )
+            .text,
             key::SOFTWARE_YES_TRUST,
             None,
         ),
         Question::LeaveDraft => (t.t(key::SOFTWARE_SURE_LEAVE), key::SOFTWARE_YES_LEAVE, None),
         Question::Permission { name, grant, .. } => {
-            let (sure, yes) = if *grant == Grant::UnsetGtkTheme {
+            let (sure_key, yes) = if *grant == Grant::UnsetGtkTheme {
                 (
                     key::SOFTWARE_SURE_UNSET_GTK_THEME,
                     key::SOFTWARE_YES_UNSET_GTK_THEME,
@@ -6035,35 +6069,29 @@ fn question(b: &mut Builder<'_>, q: &Question) {
             } else {
                 (key::SOFTWARE_SURE_RESET, key::SOFTWARE_YES_RESET)
             };
-            (t.t_with(sure, &[("app", name.as_str())]), yes, None)
+            (sure(sure_key, name), yes, None)
         }
         Question::Forget { name, .. } => (
-            t.t_with(
-                key::SOFTWARE_DECLARED_SURE_FORGET,
-                &[("app", name.as_str())],
-            ),
+            sure(key::SOFTWARE_DECLARED_SURE_FORGET, name),
             key::SOFTWARE_DECLARED_YES_FORGET,
             Some(key::SOFTWARE_YES_REMOVE_DATA),
         ),
         Question::Decline {
             name, everywhere, ..
         } => (
-            t.t_with(
+            sure(
                 if *everywhere {
                     key::SOFTWARE_DECLARED_SURE_DECLINE_EVERYWHERE
                 } else {
                     key::SOFTWARE_DECLARED_SURE_DECLINE_HERE
                 },
-                &[("app", name.as_str())],
+                name,
             ),
             key::SOFTWARE_DECLARED_YES_DECLINE,
             None,
         ),
         Question::BringBackEverywhere { name, .. } => (
-            t.t_with(
-                key::SOFTWARE_DECLARED_SURE_BRING_BACK_EVERYWHERE,
-                &[("app", name.as_str())],
-            ),
+            sure(key::SOFTWARE_DECLARED_SURE_BRING_BACK_EVERYWHERE, name),
             key::SOFTWARE_DECLARED_YES_BRING_BACK_EVERYWHERE,
             None,
         ),
@@ -6088,12 +6116,20 @@ fn question(b: &mut Builder<'_>, q: &Question) {
 
 // ─── what the rows say ──────────────────────────────────────────────────────
 
-/// The sentence a door says once an order went to the queue.
+/// The sentence a door says once an order went to the queue — the program
+/// a name it quotes (`Arg::Name`), drawn in a name's ink.
 #[must_use]
-pub fn queued_said(label: &str, r: &Readings, texts: &ronoctua_i18n::Texts) -> String {
-    texts.t_with(
+pub fn queued_said(
+    label: &str,
+    r: &Readings,
+    texts: &ronoctua_i18n::Texts,
+) -> ronoctua_i18n::Marked {
+    texts.t_args_marked(
         crate::key::SOFTWARE_ECHO_QUEUED,
-        &[("app", label), ("keys", r.taught.queue.as_str())],
+        &[
+            ("app", Arg::Name(label)),
+            ("keys", Arg::Text(r.taught.queue.as_str())),
+        ],
     )
 }
 

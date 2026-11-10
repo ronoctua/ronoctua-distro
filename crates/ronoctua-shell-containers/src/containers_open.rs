@@ -118,9 +118,14 @@ impl Open {
         match (self.login.take(), text) {
             (Some(login), Some(text)) if !text.is_empty() => match self.feed.as_ref() {
                 Some(feed) => {
-                    let said = way.texts().t_with(
+                    // THE REGISTRY AND THE USER ARE NAMES the sentence quotes
+                    // (`Arg::Name`), as the login's answer tells them.
+                    let said = way.texts().t_args_marked(
                         crate::key::CONTAINERS_ECHO_LOGGING_IN,
-                        &[("registry", &login.registry), ("user", &login.user)],
+                        &[
+                            ("registry", ronoctua_i18n::Arg::Name(&login.registry)),
+                            ("user", ronoctua_i18n::Arg::Name(&login.user)),
+                        ],
                     );
                     way.say(said, Echo::Normal);
                     feed.login(login, Secret::new(text));
@@ -211,10 +216,14 @@ pub fn carry_out(
             way.say(said, Echo::Normal);
         }
         Errand::Act(action, name) => {
+            // WHAT IS ACTED ON IS A NAME the sentence quotes (`Arg::Name`).
             let what = way.texts().t(crate::containers_feed::action_key(&action));
-            let said = way.texts().t_with(
+            let said = way.texts().t_args_marked(
                 crate::key::CONTAINERS_ECHO_ASKED,
-                &[("what", &what), ("name", &name)],
+                &[
+                    ("what", ronoctua_i18n::Arg::Text(&what)),
+                    ("name", ronoctua_i18n::Arg::Name(&name)),
+                ],
             );
             way.say(said, Echo::Normal);
             if let Some(feed) = open.as_deref().and_then(|o| o.feed.as_ref()) {

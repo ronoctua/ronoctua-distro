@@ -684,13 +684,19 @@ impl Lifeline {
                     self.ask_paint();
                     return;
                 };
-                let prompt = self.texts.t_with(
-                    crate::key::LIFELINE_AI_PROMPT,
-                    &[
-                        ("unit", self.unit.as_str()),
-                        ("path", &path.to_string_lossy()),
-                    ],
-                );
+                // THE REPORT'S FILE IS A NAME the prompt quotes (`Arg::Name`),
+                // told as every name is; the prompt is a program's argument,
+                // so only the words go.
+                let prompt = self
+                    .texts
+                    .t_args_marked(
+                        crate::key::LIFELINE_AI_PROMPT,
+                        &[
+                            ("unit", ronoctua_i18n::Arg::Text(self.unit.as_str())),
+                            ("path", ronoctua_i18n::Arg::Name(&path.to_string_lossy())),
+                        ],
+                    )
+                    .text;
                 let me = std::env::current_exe().unwrap_or_else(|_| "ronoctua-shell".into());
                 let started = std::process::Command::new(me)
                     .arg("rescue")

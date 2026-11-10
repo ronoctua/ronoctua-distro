@@ -573,8 +573,9 @@ pub trait Page: Sync {
         None
     }
 
-    /// What a door says of an answer that is its own.
-    fn said(&self, answer: &Told, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    /// What a door says of an answer that is its own — with the names it
+    /// quotes told (`chrome::Named`), drawn in a name's ink.
+    fn said(&self, answer: &Told, texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
         None
     }
 
@@ -583,6 +584,7 @@ pub trait Page: Sync {
     /// # Errors
     ///
     /// The errand is not its own.
+    #[allow(clippy::result_large_err)] // handed back whole: see `Errand`
     fn off_the_loop(&self, errand: Errand) -> Result<OffTheLoop, Errand> {
         Err(errand)
     }
@@ -709,7 +711,7 @@ pub fn asks(id: &str) -> bool {
 
 /// What a door says of `answer`, when it is a page's.
 #[must_use]
-pub fn said(answer: &Told, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn said(answer: &Told, texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
     installed().iter().find_map(|p| p.said(answer, texts))
 }
 
@@ -719,6 +721,7 @@ pub fn said(answer: &Told, texts: &ronoctua_i18n::Texts) -> Option<String> {
 /// # Errors
 ///
 /// No installed page carries it.
+#[allow(clippy::result_large_err)] // handed back whole: see `Errand`
 pub fn off_the_loop(errand: Errand) -> Result<OffTheLoop, Errand> {
     let mut errand = errand;
     for page in installed() {
@@ -948,7 +951,7 @@ mod tests {
                 return None;
             }
             view.plugged_mut::<FakeState>()?.turned += 1;
-            Some(Errand::Said("turned".to_owned()))
+            Some(Errand::Said("turned".to_owned().into()))
         }
         fn asks(&self, id: &str) -> bool {
             id == "fake-question"
@@ -980,7 +983,7 @@ mod tests {
         with_pages(PAGES, || {
             let mut v = View::blank(None);
             let turned = v.pages_turned(&Target::CatalogSource, Press::Enter, None, 80, &texts);
-            assert_eq!(turned, Some(Errand::Said("turned".to_owned())));
+            assert_eq!(turned, Some(Errand::Said("turned".to_owned().into())));
             assert_eq!(v.plugged::<FakeState>().map(|s| s.turned), Some(1));
             assert_eq!(
                 v.pages_turned(&Target::Nothing, Press::Enter, None, 80, &texts),

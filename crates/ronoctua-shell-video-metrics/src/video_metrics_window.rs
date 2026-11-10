@@ -92,6 +92,8 @@ pub fn host_it(opening: Page) -> Result<()> {
         // THE FILE PICKER'S FOLDER, watched through the door's wake
         // (`Content::woken`).
         view.watch_with(w.wake());
+        // A WINDOW'S VIEW: its sentences teach a shortcut as `LEADER Alt`.
+        view.in_a_window();
         let mut me = VideoMetricsWindow {
             view,
             readings,
@@ -188,7 +190,8 @@ impl VideoMetricsWindow {
     /// spot — what the photograph draws, over a copy of a fixture.
     #[must_use]
     pub fn detached(catalogue: std::path::PathBuf, opening: Page, transfers_keys: String) -> Self {
-        let (view, errand) = View::fresh(opening);
+        let (mut view, errand) = View::fresh(opening);
+        view.in_a_window();
         let mut me = Self {
             view,
             readings: readings_for(transfers_keys),
@@ -234,13 +237,33 @@ impl VideoMetricsWindow {
         }
     }
 
-    /// The thread brought something: take all of it.
+    /// The thread brought something: take all of it — and a turned page's
+    /// title put first, once its reading is in ([`Self::place_the_title`]).
     fn woke(&mut self, ui: &mut Ui) {
         let arrived = match &self.reach {
             Reach::Feed(f) => f.take(),
             Reach::Direct(_) => Vec::new(),
         };
         self.took(ui, arrived);
+        self.place_the_title(ui);
+    }
+
+    /// A TURNED PAGE'S TITLE PUT FIRST in the window, once its reading is in
+    /// (`View::settle_on_list`): the cursor on its first video, and the door
+    /// keeps the place from the follow that ends this gesture
+    /// (`Ui::place_top`). Called AFTER this window's own follow, which would
+    /// put the title a line back by its margin: at the end of a key and of a
+    /// glyph's click, and when the thread brought the page — never inside
+    /// [`Self::took`], which a photograph's reading reaches in the middle of
+    /// the key that asked for it.
+    fn place_the_title(&mut self, ui: &mut Ui) {
+        let rows = self.view_rows(ui);
+        let Some(top) = self.view.settle_on_list(&rows, &self.readings) else {
+            return;
+        };
+        let rows = self.view_rows(ui);
+        self.cursor_row.set(Some(self.cursor_of(&rows)));
+        ui.place_top(top, rows.len());
     }
 
     /// What arrived, taken: readings merged — the cursor kept on its row, the
@@ -308,6 +331,7 @@ impl VideoMetricsWindow {
         let errand = self.view.press(press, &rows, &self.readings);
         self.apply(ui, errand);
         self.follow(ui);
+        self.place_the_title(ui);
         ui.ask_paint();
     }
 
@@ -662,6 +686,7 @@ impl Content for VideoMetricsWindow {
             ui.message = None;
             self.apply(ui, errand);
             self.follow(ui);
+            self.place_the_title(ui);
             ui.ask_paint();
             return;
         }
@@ -847,7 +872,7 @@ fn body(
     pointer_x: Option<f64>,
 ) {
     let size = ronoctua_tokens::text::size();
-    ui.settle_offset(rows.len());
+    let (under, track) = rows_laid(ui, rows, takes, canvas.lit, pointer_x);
     let first = ui.first_of_list();
     let room = ui.room_for_rows();
     for (i, line) in fields.iter().skip(ui.offset).take(room).enumerate() {
@@ -864,10 +889,42 @@ fn body(
             });
         }
     }
+    canvas.under.extend(under);
+    canvas.bar(track);
+}
+
+/// WHAT THE ROWS LAY UNDER THEIR WORDS, in the order it is painted — later
+/// on top — with the offset kept inside the list and the room measured
+/// (`Ui::room`): a row's own ground, every pointer's light (`lit`, a
+/// pointer's colour and row, as `Canvas::lit`), and the list's bar, with
+/// its track. Apart from the painter so a test reads what a frame lays
+/// with no GPU behind it.
+fn rows_laid(
+    ui: &mut Ui,
+    rows: &[Row],
+    takes: &[bool],
+    lit: &[(ronoctua_tokens::Color, Option<usize>)],
+    pointer_x: Option<f64>,
+) -> (Vec<ronoctua_render::quad::Quad>, Option<crate::bars::Track>) {
+    ui.settle_offset(rows.len());
+    let first = ui.first_of_list();
+    let room = ui.room_for_rows();
     let scroll = crate::chrome::list_scroll(rows.len(), room, ui.offset);
     #[allow(clippy::cast_precision_loss)]
     let (w, h) = (ui.width as f32, ui.height as f32);
     ui.room = crate::chrome::Room::of(scroll, w, h);
+    let mut under = Vec::new();
+    // A ROW'S OWN GROUND — a question's block — FIRST, edge to edge: the
+    // hover, a cell's light and a glyph's are painted over it, so the hand
+    // still reads on the block it rests on.
+    let grounds: Vec<Option<ronoctua_tokens::Color>> = rows.iter().map(|r| r.ground).collect();
+    under.extend(crate::chrome::row_grounds(
+        &grounds,
+        ui.offset,
+        room,
+        first,
+        ui.room.band_width(),
+    ));
     let px = ronoctua_tokens::text::size();
     let (cell, tall) = (
         ronoctua_tokens::metrics::cell_width(px),
@@ -890,7 +947,7 @@ fn body(
     // THE BOXES LIT ON ONE LINE, `(colour, line, from, width)`: a glyph, or
     // a row's words beside its glyphs.
     let mut boxes: Vec<(ronoctua_tokens::Color, usize, u16, u16)> = Vec::new();
-    for &(colour, at) in canvas.lit {
+    for &(colour, at) in lit {
         let Some(n) = at.filter(|n| takes.get(*n).copied().unwrap_or(false)) else {
             continue;
         };
@@ -909,7 +966,7 @@ fn body(
                 let y = f32::from(first) * tall + (top - ui.offset) as f32 * tall;
                 let x = f32::from(ui.margin + from) * cell;
                 let wide = (f32::from(wide) * cell).min(ui.room.band_width() - x);
-                canvas.under.push(ronoctua_render::quad::Quad {
+                under.push(ronoctua_render::quad::Quad {
                     x,
                     y,
                     width: wide.max(0.0),
@@ -926,7 +983,7 @@ fn body(
         let y = f32::from(first) * tall + (n - ui.offset) as f32 * tall;
         let x = f32::from(ui.margin + from) * cell;
         let wide = (f32::from(wide) * cell).min(ui.room.band_width() - x);
-        canvas.under.push(ronoctua_render::quad::Quad {
+        under.push(ronoctua_render::quad::Quad {
             x,
             y,
             width: wide.max(0.0),
@@ -934,7 +991,7 @@ fn body(
             color: colour,
         });
     }
-    canvas.under.extend(crate::chrome::hover_bands(
+    under.extend(crate::chrome::hover_bands(
         plain.into_iter(),
         ui.offset,
         room,
@@ -942,10 +999,8 @@ fn body(
         first,
         ui.room.band_width(),
     ));
-    canvas
-        .under
-        .extend(crate::chrome::list_bar(scroll, first, w, h));
-    canvas.bar(crate::chrome::list_track(scroll, first, w, h));
+    under.extend(crate::chrome::list_bar(scroll, first, w, h));
+    (under, crate::chrome::list_track(scroll, first, w, h))
 }
 
 /// WHAT ONE POINTER LIGHTS, over the rows of the window ([`lights_at`]).
@@ -975,7 +1030,11 @@ struct Lights {
 /// whole (`Row::owner`), from whichever of its lines the pointer is on: a
 /// line of words its band, a line with glyphs only its words' box
 /// (`Row::words_box`) — the glyphs beside them act on their own, and a band
-/// over them would say the click takes them.
+/// over them would say the click takes them. A LINE BESIDE A PICTURE — a
+/// video of the list with thumbnails — lights a box from where its words
+/// begin (`Row::words_at`) to the band's end, and only under a pointer
+/// from there on: the picture takes no click (`View::on_the_words`), so it
+/// lights nothing — the footer's `LineLights::UnderX`.
 fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
     let mut lights = Lights::default();
     let owner = Row::owner(rows, n);
@@ -985,10 +1044,16 @@ fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
     let whole = |lights: &mut Lights| {
         let lines = Row::lines_of(rows, owner);
         for (k, l) in rows.iter().enumerate().skip(owner).take(lines) {
-            if l.controls.is_empty() {
+            if !l.controls.is_empty() {
+                if let Some((from, wide)) = l.words_box(left, row.has_words()) {
+                    lights.boxes.push((k, from, wide));
+                }
+            } else if let Some(at) = l.words_at {
+                // TO THE BAND'S END: the painter cuts a box at the room's
+                // edge (`Room::band_width`), as it cuts every other.
+                lights.boxes.push((k, at, u16::MAX - at));
+            } else {
                 lights.bands.push(k);
-            } else if let Some((from, wide)) = l.words_box(left, row.has_words()) {
-                lights.boxes.push((k, from, wide));
             }
         }
     };
@@ -1009,6 +1074,11 @@ fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
             .iter()
             .find(|c| crate::chrome::in_cell(column, c.from, c.width))
             .map(|c| (owner, Row::lines_of(rows, owner), c.from, c.width));
+    } else if let Some(at) = line.words_at {
+        // OVER THE PICTURE, nothing: its click takes nothing either.
+        if column >= at {
+            whole(&mut lights);
+        }
     } else if line.thumbs.is_empty() {
         whole(&mut lights);
     }
@@ -1018,29 +1088,29 @@ fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video_metrics::Layout;
 
     /// The width the window is drawn at: ten videos make two shelves of the
     /// grid, of several cells each.
     const COLUMNS: u16 = 100;
 
-    /// A window over the fixture's readings, on `page` — on the grid when
-    /// `grid` — as a paint leaves it (its cursor's row measured). Its feed
+    /// A window over the fixture's readings, on `page` — its videos laid out
+    /// as `layout` says — as a paint leaves it (its cursor's row measured). Its feed
     /// answers on the spot (`Direct`), over a catalogue under `blocked`, a
     /// FILE where its folder would be: what a click writes is refused and
     /// said, nothing is made, and what it would ask of another process is
     /// printed, never done.
-    fn a_window(blocked: &std::path::Path, page: &Page, grid: bool) -> (VideoMetricsWindow, Ui) {
+    fn a_window(
+        blocked: &std::path::Path,
+        page: &Page,
+        layout: Layout,
+    ) -> (VideoMetricsWindow, Ui) {
         let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
         ui.columns = COLUMNS;
         let catalogue = blocked.join(ronoctua_video_metrics::FILE);
         let mut w = VideoMetricsWindow::detached(catalogue, page.clone(), String::new());
         w.readings = crate::video_metrics::tests::readings();
-        if grid {
-            let rows = w.view_rows(&ui);
-            let _ = w
-                .view
-                .press(crate::video_metrics::Press::Layout, &rows, &w.readings);
-        }
+        w.view.laid_out(layout);
         let rows = w.view_rows(&ui);
         w.cursor_row.set(Some(w.cursor_of(&rows)));
         (w, ui)
@@ -1052,7 +1122,7 @@ mod tests {
     /// included; or a shelf of the grid takes nothing where a click on one
     /// of its cells lands. THE LIGHT IS THE CLICK: every row clicked once,
     /// on a window of its own, and lit exactly where something happened —
-    /// on every page the fixture fills, the list and the grid. The footer's
+    /// on every page the fixture fills, in every layout. The footer's
     /// region has its own.
     #[test]
     fn the_windows_pointer_lights_what_the_click_takes() {
@@ -1071,17 +1141,21 @@ mod tests {
         let mut shelves = 0;
         let mut glyphs = 0;
         let mut every = Vec::new();
-        for (page, grid) in [
-            (Page::Home, false),
-            (Page::Channels, false),
-            (Page::Import, false),
-            (Page::Rules, false),
-            (Page::Weights, false),
-            (Page::Videos, false),
-            (Page::Videos, true),
-            (video, false),
-        ] {
-            let fresh = || a_window(&blocked, &page, grid);
+        // EVERY LAYOUT OF THE VIDEOS: the list, with its thumbnails or
+        // without, and the grid, with the channel or without.
+        let pages = [
+            Page::Home,
+            Page::Channels,
+            Page::Import,
+            Page::Rules,
+            Page::Weights,
+        ]
+        .map(|p| (p, Layout::List))
+        .into_iter()
+        .chain(Layout::ALL.map(|l| (Page::Videos, l)))
+        .chain([(video, Layout::List)]);
+        for (page, layout) in pages {
+            let fresh = || a_window(&blocked, &page, layout);
             let (first, ui) = fresh();
             let rows = first.view_rows(&ui);
             let cursor = first.cursor();
@@ -1112,6 +1186,18 @@ mod tests {
                         });
                         return h;
                     }
+                    // A LINE BESIDE A PICTURE IS CLICKED ON ITS WORDS, where
+                    // the pointer lights it: over the picture the generic
+                    // click's cell takes nothing, and lights nothing.
+                    if let Some(at) = rows.get(h.row).and_then(|r| r.words_at) {
+                        let (mut w, mut ui) = fresh();
+                        let cell = f64::from(crate::chrome::cell_width());
+                        w.pointer_x = Some(cell * (f64::from(ui.margin + at) + 0.5));
+                        let before = witness(&w, &ui);
+                        w.clicked(&mut ui, h.row);
+                        h.did = witness(&w, &ui) != before;
+                        return h;
+                    }
                     let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
                     if let Some(cells) = cells.filter(|c| !c.is_empty()) {
                         shelves += 1;
@@ -1128,7 +1214,7 @@ mod tests {
                     h
                 })
                 .collect();
-            every.push((format!("{page:?}, grid {grid}"), held));
+            every.push((format!("{page:?}, {layout:?}"), held));
         }
         let _ = std::fs::remove_file(&blocked);
         for (what, held) in every {
@@ -1141,6 +1227,84 @@ mod tests {
         }
         assert!(shelves > 0, "the grid drew no shelf");
         assert!(glyphs > 0, "no line of glyphs was clicked");
+    }
+
+    /// FAILS IF: the window lays a question's ground anywhere but under the
+    /// light the hand gives its answers — no ground at all, a block cut in
+    /// several quads, one narrower or wider than a band (the room's, up to
+    /// the bar), one off the block's lines (from its sentence to the end of
+    /// its "yes"), or one laid AFTER the hover band of its "yes", which it
+    /// would then hide. The ground goes in both doors: the footer's region
+    /// tells its own (`the_region_tells_the_question_s_ground`).
+    #[test]
+    fn the_window_lays_the_question_s_ground_under_its_band() {
+        use crate::chrome::QUESTION_GROUND;
+        use ronoctua_tokens::color::SURFACE_HOVER;
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-window-ground-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+        let video = Page::Video(ronoctua_video_metrics::VideoId("video000000".to_owned()));
+        let (mut w, mut ui) = a_window(&blocked, &video, Layout::List);
+        // THE DELETE QUESTION, asked from its row.
+        let rows = w.view_rows(&ui);
+        let delete = rows
+            .iter()
+            .position(|r| r.spot == "delete")
+            .expect("the delete row");
+        w.view.clicked(delete, 0, &rows);
+        let rows = w.view_rows(&ui);
+        let _ = w
+            .view
+            .press(crate::video_metrics::Press::Delete, &rows, &w.readings);
+        let _ = std::fs::remove_file(&blocked);
+        let rows = w.view_rows(&ui);
+        let at = |spot: &str| {
+            rows.iter()
+                .position(|r| r.spot == spot)
+                .unwrap_or_else(|| panic!("no row `{spot}`"))
+        };
+        let (no, yes) = (at("answer-no"), at("answer-yes"));
+        // THE BLOCK: from the first line on the ground to the yes's last.
+        let mut start = no;
+        while start > 0 && rows[start - 1].ground.is_some() {
+            start -= 1;
+        }
+        let end = yes + Row::lines_of(&rows, yes);
+        assert!(start < no, "no sentence on the ground");
+        ui.offset = start - 1;
+        let takes = w.view.takes(&rows);
+        let (under, _) = rows_laid(&mut ui, &rows, &takes, &[(SURFACE_HOVER, Some(yes))], None);
+        let tall = ronoctua_tokens::metrics::line_height(ronoctua_tokens::text::size());
+        #[allow(clippy::cast_precision_loss)]
+        let y_of = |n: usize| (f32::from(ui.first_of_list()) + (n - ui.offset) as f32) * tall;
+        let grounds: Vec<usize> = (0..under.len())
+            .filter(|&k| under[k].color == QUESTION_GROUND)
+            .collect();
+        assert_eq!(grounds.len(), 1, "the block is not one ground: {under:?}");
+        let g = &under[grounds[0]];
+        assert!(
+            g.x.abs() < f32::EPSILON && (g.width - ui.room.band_width()).abs() < f32::EPSILON,
+            "the ground is not as wide as a band: {g:?}"
+        );
+        assert!(
+            (g.y - y_of(start)).abs() < 0.5 && (g.y + g.height - y_of(end)).abs() < 0.5,
+            "the ground is off the block's lines: {g:?}, lines {start}..{end}"
+        );
+        let band = (0..under.len())
+            .find(|&k| under[k].color == SURFACE_HOVER && (under[k].y - y_of(yes)).abs() < 0.5)
+            .expect("no band under the hand on the yes");
+        assert!(
+            grounds[0] < band,
+            "the ground is laid over the yes's band, and hides it"
+        );
+        let b = &under[band];
+        assert!(
+            b.x >= g.x && b.x + b.width <= g.x + g.width + 0.5,
+            "the band leaves the ground: {b:?} over {g:?}"
+        );
     }
 
     /// A pointer's event at `at`, on the window's surface.
@@ -1200,7 +1364,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&blocked);
         std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
-        let (mut w, mut ui) = a_window(&blocked, &Page::Home, false);
+        let (mut w, mut ui) = a_window(&blocked, &Page::Home, Layout::List);
         let _ = std::fs::remove_file(&blocked);
         let mut hand = Hand::<()>::default();
         let t = ui.texts.clone();
@@ -1268,7 +1432,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&blocked);
         std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
-        let (mut w, mut ui) = a_window(&blocked, &Page::Videos, true);
+        let (mut w, mut ui) = a_window(&blocked, &Page::Videos, Layout::Grid);
         let _ = std::fs::remove_file(&blocked);
         let mut hand = Hand::<()>::default();
         let rows = w.view_rows(&ui);
@@ -1366,7 +1530,7 @@ mod tests {
         }
         // THE GRID: a tile's glyph, and its cell.
         let (mut v, _) = View::fresh(Page::Videos);
-        let _ = v.press(crate::video_metrics::Press::Layout, &rows, &r);
+        v.laid_out(Layout::Grid);
         let rows = v.rows(&r, COLUMNS, &texts);
         let shelf = rows
             .iter()
@@ -1387,6 +1551,49 @@ mod tests {
         assert_eq!(
             lights_at(&rows, shelf, tile.from + 1, left).cell,
             Some((shelf, Row::lines_of(&rows, shelf), tile.from, tile.width))
+        );
+        // THE LIST WITH THUMBNAILS: from its title's words the video lights
+        // from where its words begin on every line, a box and never a band
+        // over the picture; the line of glyphs, its words' box from there;
+        // and the pointer over the picture, on any line of it, lights nothing
+        // — its click takes nothing there.
+        let (mut v, _) = View::fresh(Page::Videos);
+        v.laid_out(Layout::Strip);
+        let rows = v.rows(&r, COLUMNS, &texts);
+        let title = rows
+            .iter()
+            .position(|row| row.words_at.is_some())
+            .expect("a video beside its picture");
+        let at = rows[title].words_at.unwrap_or_default();
+        let lines = Row::lines_of(&rows, title);
+        assert!(lines > 1, "a video of one line");
+        let over_the_words = lights_at(&rows, title, at + 1, left);
+        for line in title..title + lines {
+            for column in [left, left + 1, at - 1] {
+                assert_eq!(
+                    lights_at(&rows, line, column, left),
+                    Lights::default(),
+                    "line {line} lights at {column}, over the picture"
+                );
+            }
+        }
+        assert!(
+            over_the_words.bands.is_empty(),
+            "a band over the picture: {over_the_words:?}"
+        );
+        assert_eq!(over_the_words.boxes.len(), lines, "{over_the_words:?}");
+        assert!(
+            over_the_words.boxes.iter().all(|&(_, from, _)| from == at),
+            "a box off the words: {over_the_words:?}"
+        );
+        let meta = (title..title + lines)
+            .find(|&k| !rows[k].controls.is_empty())
+            .expect("the line of glyphs");
+        assert_eq!(
+            rows[meta]
+                .words_box(left, rows[title].has_words())
+                .map(|b| b.0),
+            Some(at)
         );
     }
 
@@ -1446,12 +1653,93 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&blocked);
         std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
-        let (mut w, mut ui) = a_window(&blocked, &Page::Home, false);
+        let (mut w, mut ui) = a_window(&blocked, &Page::Home, Layout::List);
         for errand in leaving() {
             w.apply(&mut ui, errand);
         }
         let _ = std::fs::remove_file(&blocked);
         assert!(ui.launches().is_empty() && ui.orders().is_empty());
+    }
+
+    /// FAILS IF: the Videos page's hint stops offering its page keys after
+    /// `LEADER Alt` as `[` and `]` — the quick keys taught before `PgUp` and
+    /// `PgDn`, which stay direct and are offered nothing.
+    #[test]
+    fn the_page_keys_are_brackets_after_leader_alt() {
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-brackets-{}",
+            std::process::id()
+        ));
+        let (w, ui) = a_window(&blocked, &Page::Videos, Layout::List);
+        let offered = crate::chrome::bindings_of_hint(&w.hint(&ui), w.leader_alt_keys());
+        let key_of = |id: &str| {
+            offered
+                .iter()
+                .find(|b| b.command == id)
+                .map(|b| b.keys.clone())
+        };
+        assert_eq!(key_of("video-metrics-page-back").as_deref(), Some("["));
+        assert_eq!(key_of("video-metrics-page-on").as_deref(), Some("]"));
+        assert_eq!(key_of("video-metrics-page-first"), None, "Home is direct");
+        assert_eq!(key_of("video-metrics-page-last"), None, "End is direct");
+    }
+
+    /// FAILS IF: a page turned in the window — by `]`, by `PgDn`, by the
+    /// arrow at the list's end — does not put the list's title first on the
+    /// window, its first video under it and the cursor there: the follow
+    /// that ends the gesture undid it, or the window stayed where it was.
+    #[test]
+    fn a_turned_page_shows_its_title_first_in_the_window() {
+        use ronoctua_keymap::{Key, Sym};
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-turned-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let catalogue = dir.join(ronoctua_video_metrics::FILE);
+        crate::video_metrics_feed::holding(&catalogue, 80);
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        ui.columns = COLUMNS;
+        let window = VideoMetricsWindow::detached(catalogue, Page::Videos, String::new());
+        let mut d = crate::door::Detached::new(ui, window);
+        assert!(d.ui.room_for_rows() > 6, "a window too short to tell");
+        for (key, page) in [
+            (Key::simple(Sym::Char(']')), 1),
+            (Key::simple(Sym::PageDown), 2),
+            (Key::simple(Sym::Char('[')), 1),
+        ] {
+            d.press(key);
+            assert_eq!(d.content.view.look().query.map(|q| q.page), Some(page));
+            let rows = d.content.view_rows(&d.ui);
+            let title = rows
+                .iter()
+                .position(|r| r.spot == crate::paging::LIST_TITLE)
+                .expect("the list's title");
+            assert_eq!(d.ui.offset, title, "{key:?}: the title is not first");
+            assert_eq!(d.content.cursor(), Some(title + 1), "{key:?}");
+        }
+        // THE ARROW AT THE LIST'S END, clicked.
+        let rows = d.content.view_rows(&d.ui);
+        let end = rows
+            .iter()
+            .position(|r| r.spot == crate::paging::LIST_PAGER)
+            .expect("the arrows at the list's end");
+        let later = rows[end].controls.last().expect("its `›`").from;
+        d.content.pointer_x =
+            Some(f64::from(later + d.ui.margin) * f64::from(crate::chrome::cell_width()) + 1.0);
+        d.content.clicked(&mut d.ui, end);
+        assert_eq!(d.content.view.look().query.map(|q| q.page), Some(2));
+        let rows = d.content.view_rows(&d.ui);
+        let title = rows
+            .iter()
+            .position(|r| r.spot == crate::paging::LIST_TITLE)
+            .expect("the list's title");
+        assert_eq!(
+            d.ui.offset, title,
+            "the end's arrow did not bring the title"
+        );
+        drop(d);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FAILS IF: a key the window teaches has no one key after `LEADER Alt`,

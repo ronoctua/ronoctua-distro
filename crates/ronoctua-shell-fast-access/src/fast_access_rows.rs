@@ -1153,9 +1153,18 @@ fn draw_line(
         Kind::Grid { hits, part } => draw_grid_line(view, lay, hits, *part, at, cursor, texts, out),
         Kind::Question(None) => {
             if let Some(q) = &view.play_in {
+                // THE TITLE IS A NAME the question quotes (`Arg::Name`), told
+                // as every name is; the question is drawn in a title's ink,
+                // which a name shares (`chrome::quoted_ink`), so only the
+                // words go.
                 out.spans.push(run(
                     ronoctua_render::layout::elide_end(
-                        &texts.t_with(crate::key::FAST_ACCESS_PLAY_IN, &[("title", &q.title)]),
+                        &texts
+                            .t_args_marked(
+                                crate::key::FAST_ACCESS_PLAY_IN,
+                                &[("title", ronoctua_i18n::Arg::Name(&q.title))],
+                            )
+                            .text,
                         room,
                     ),
                     left,

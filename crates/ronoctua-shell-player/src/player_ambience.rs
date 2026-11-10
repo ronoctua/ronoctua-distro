@@ -28,7 +28,7 @@
 //! — the recordings come with the player once they are published.
 
 use crate::key;
-use crate::player::{Errand, PageId, Target, VOLUME_MOST, trouble_sentence};
+use crate::player::{Errand, PageId, Target, VOLUME_MOST, trouble_named, trouble_sentence};
 use crate::player_rows::{Builder, Slid, share};
 use ronoctua_player::limit::{Limit, TooMany};
 use ronoctua_player::wire::{Licence, Sounding, State, Trouble};
@@ -75,7 +75,7 @@ pub fn turned(id: &str, s: &State, texts: &ronoctua_i18n::Texts) -> Errand {
     };
     let on = s.ambience.sounds.iter().filter(|x| x.on).count();
     if !sound.on && s.ambience.at_once > 0 && on >= usize::from(s.ambience.at_once) {
-        return Errand::Said(trouble_sentence(
+        return Errand::Said(trouble_named(
             &Trouble::TooMany(TooMany {
                 what: Limit::Ambience,
                 most: usize::from(s.ambience.at_once),
@@ -457,7 +457,10 @@ pub(crate) mod tests {
         v.clicked(silence, &rows);
         assert_eq!(
             v.key(Press::Enter, Some(&s), 80, &t),
-            Errand::TellSaying(Ask::AmbientSilence, t.t(key::PLAYER_AMBIENCE_SILENCED))
+            Errand::TellSaying(
+                Ask::AmbientSilence,
+                t.t(key::PLAYER_AMBIENCE_SILENCED).into()
+            )
         );
         row_of(&rows, &Target::Go(PageId::AmbienceCredits));
         let mut off = rain();

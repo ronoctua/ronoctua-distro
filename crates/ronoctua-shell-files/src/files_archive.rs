@@ -399,15 +399,20 @@ impl Sheet {
             out.push(row("split", key::FILES_SHEET_SPLIT, value));
         }
         let target = self.target().as_deref().map(name_of).unwrap_or_default();
+        // THE ARCHIVE IS A NAME the row quotes (`Arg::Name`), told as every
+        // name is; a row's label wears its `Kind`'s tones
+        // (`labels-say-what-they-are`), so only the words go.
         out.push(SheetRow {
             id: "go",
-            label: texts.t_with(
-                match self.purpose {
-                    Purpose::Compress(_) => key::FILES_SHEET_GO,
-                    Purpose::Convert(_) => key::FILES_SHEET_CONVERT_GO,
-                },
-                &[("name", &target)],
-            ),
+            label: texts
+                .t_args_marked(
+                    match self.purpose {
+                        Purpose::Compress(_) => key::FILES_SHEET_GO,
+                        Purpose::Convert(_) => key::FILES_SHEET_CONVERT_GO,
+                    },
+                    &[("name", ronoctua_i18n::Arg::Name(&target))],
+                )
+                .text,
             value: None,
         });
         out

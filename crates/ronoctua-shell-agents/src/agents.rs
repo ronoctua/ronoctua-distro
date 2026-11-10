@@ -571,7 +571,7 @@ impl Open {
                 self.view.show(&account.id);
                 Errand::Choose(account.id, login)
             }
-            None => Errand::Say(way.texts().t(key::AGENTS_NONE)),
+            None => Errand::Say(way.texts().t(key::AGENTS_NONE).into()),
         };
         carry_out(errand, self, way);
     }
@@ -869,11 +869,18 @@ fn log_out(open: &mut Open, id: &str, way: &mut dyn Doorway) {
     }
 }
 
-/// What a logout came to, as the door's line says it.
-fn logged_out_said(name: &str, done: Result<(), Why>, texts: &ronoctua_i18n::Texts) -> String {
+/// What a logout came to, as the door's line says it — the account's name
+/// told (`Arg::Name`).
+fn logged_out_said(
+    name: &str,
+    done: Result<(), Why>,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     match done {
-        Ok(()) => texts.t_with(key::AGENTS_LOGGED_OUT, &[("name", name)]),
-        Err(why) => words::refused(why, texts),
+        Ok(()) => texts
+            .t_args_marked(key::AGENTS_LOGGED_OUT, &[("name", Arg::Name(name))])
+            .into(),
+        Err(why) => words::refused(why, texts).into(),
     }
 }
 
@@ -1698,8 +1705,9 @@ enum Entry {
         target: Target,
         tint: Option<tokens::Color>,
     },
-    /// A sentence under the row before it, wrapped.
-    Note(String),
+    /// A sentence under the row before it, wrapped — the names it quotes in
+    /// a name's ink.
+    Note(crate::chrome::Named),
     /// A QUIET LINE OF THE ROW BEFORE IT, `indent` cells in — an agent's
     /// task under its folder: part of that row's control, lit and clicked
     /// with it.
@@ -1736,8 +1744,8 @@ fn tinted(label: String, value: String, target: Target, tint: Option<tokens::Col
 }
 
 /// A dim sentence.
-const fn note(text: String) -> Entry {
-    Entry::Note(text)
+fn note(text: impl Into<crate::chrome::Named>) -> Entry {
+    Entry::Note(text.into())
 }
 
 /// The rows, as they are built — a column at a time.
@@ -1826,8 +1834,12 @@ impl Builder<'_> {
                     }
                 }
                 Entry::Note(text) => {
-                    for line in crate::chrome::note_lines(&text, self.room) {
-                        let note = vec![piece(self.left, line, tokens::color::TEXT_DIM, self.room)];
+                    for note in crate::chrome::note_fields(
+                        self.left,
+                        &text,
+                        tokens::color::TEXT_DIM,
+                        self.room,
+                    ) {
                         self.push(note, None, false);
                     }
                 }
@@ -2123,8 +2135,8 @@ pub enum Errand {
     Close,
     /// Open this question on the door's own line.
     Ask(crate::line::Line),
-    /// Say this sentence on the door's line.
-    Say(String),
+    /// Say this sentence on the door's line — with the names it quotes told.
+    Say(crate::chrome::Named),
     /// Put this on the clipboard.
     Copy(String),
     /// Change the list.
@@ -2167,8 +2179,8 @@ impl Errand {
 /// chooses first.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Applied {
-    /// The sentence.
-    pub said: Option<String>,
+    /// The sentence, with the account's name told.
+    pub said: Option<crate::chrome::Named>,
     /// The new account, whose login the folder is chosen for.
     pub login: Option<Account>,
 }
@@ -2184,9 +2196,12 @@ pub fn apply(edit: &Edit, texts: &ronoctua_i18n::Texts) -> Applied {
 /// own.
 #[must_use]
 pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n::Texts) -> Applied {
-    let said = |k: &str, name: &str| Some(texts.t_with(k, &[("name", name)]));
+    // THE ACCOUNT'S NAME IS A NAME the sentence quotes (`Arg::Name`).
+    let said = |k: &str, name: &str| -> crate::chrome::Named {
+        texts.t_args_marked(k, &[("name", Arg::Name(name))]).into()
+    };
     let refused = |r: Refusal| Applied {
-        said: Some(words::refused(r.why, texts)),
+        said: Some(words::refused(r.why, texts).into()),
         login: None,
     };
     let store = Accounts::store_in(roots.config.clone());
@@ -2199,10 +2214,9 @@ pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n:
     match edit {
         Edit::Add(agent, name) => match add_in(roots, *agent, name) {
             Ok((account, wrapped)) => {
-                let mut sentence = texts.t_with(key::AGENTS_ADDED, &[("name", &account.name)]);
+                let mut sentence = said(key::AGENTS_ADDED, &account.name);
                 if let Err(why) = wrapped {
-                    sentence.push(' ');
-                    sentence.push_str(&words::refused(why, texts));
+                    sentence = sentence.then(" ", words::refused(why, texts));
                 }
                 Applied {
                     said: Some(sentence),
@@ -2213,7 +2227,7 @@ pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n:
         },
         Edit::Rename(id, name) => match Accounts::keep_in(roots, |l| l.rename(id, name)) {
             Ok(_) => Applied {
-                said: said(key::AGENTS_RENAMED, name.trim()),
+                said: Some(said(key::AGENTS_RENAMED, name.trim())),
                 login: None,
             },
             Err(r) => refused(r),
@@ -2222,7 +2236,7 @@ pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n:
             let name = name_of(id);
             match Accounts::keep_in(roots, |l| l.remove(id)) {
                 Ok(_) => Applied {
-                    said: said(key::AGENTS_REMOVED, &name),
+                    said: Some(said(key::AGENTS_REMOVED, &name)),
                     login: None,
                 },
                 Err(r) => refused(r),
@@ -2230,7 +2244,7 @@ pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n:
         }
         Edit::Default(id) => match Accounts::keep_in(roots, |l| l.set_default(id)) {
             Ok(_) => Applied {
-                said: said(key::AGENTS_MADE_DEFAULT, &name_of(id)),
+                said: Some(said(key::AGENTS_MADE_DEFAULT, &name_of(id))),
                 login: None,
             },
             Err(r) => refused(r),
@@ -2248,14 +2262,14 @@ pub fn apply_in(roots: &ronoctua_llm::Roots, edit: &Edit, texts: &ronoctua_i18n:
             };
             match done {
                 Ok(()) => Applied {
-                    said: said(
+                    said: Some(said(
                         if wrap {
                             key::AGENTS_WRAPPED
                         } else {
                             key::AGENTS_UNWRAPPED
                         },
                         &account.name,
-                    ),
+                    )),
                     login: None,
                 },
                 Err(r) => refused(r),
@@ -2386,21 +2400,21 @@ pub fn with_accounts_marks(
     Ok(())
 }
 
-/// The line of the door's question, for a door that asks it.
+/// The line of the door's question, for a door that asks it — the
+/// account's name told (`Arg::Name`), so the page draws it in a name's ink.
 #[must_use]
-pub fn question_text(q: &Question, texts: &ronoctua_i18n::Texts) -> String {
-    match q {
+pub fn question_text(q: &Question, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    let (k, name) = match q {
         // A CLAUDE CODE SUBSCRIPTION gives its own status line back as it
         // goes; Codex and an API key have none of ours, and are not told
         // they do.
-        Question::Remove(_, name, Agent::Claude) => {
-            texts.t_with(key::AGENTS_ASK_REMOVE_CLAUDE, &[("name", name)])
-        }
+        Question::Remove(_, name, Agent::Claude) => (key::AGENTS_ASK_REMOVE_CLAUDE, name),
         Question::Remove(_, name, Agent::ClaudeApi | Agent::Codex) => {
-            texts.t_with(key::AGENTS_ASK_REMOVE, &[("name", name)])
+            (key::AGENTS_ASK_REMOVE, name)
         }
-        Question::Logout(_, name) => texts.t_with(key::AGENTS_ASK_LOGOUT, &[("name", name)]),
-    }
+        Question::Logout(_, name) => (key::AGENTS_ASK_LOGOUT, name),
+    };
+    texts.t_args_marked(k, &[("name", Arg::Name(name))]).into()
 }
 
 /// What a folder is being chosen for: a session or the login of an account.
@@ -2709,7 +2723,10 @@ impl View {
         // A PART OF THE LIST NOT READ: an account it could not take has no
         // tab, and the file keeps it.
         if let Some(partly) = &r.accounts_unread {
-            b.section(&b.t(key::AGENTS_HEADING), vec![note(partly.said(texts))]);
+            b.section(
+                &b.t(key::AGENTS_HEADING),
+                vec![note(partly.said_named(texts))],
+            );
         }
         if r.refused {
             b.section(
@@ -2831,7 +2848,7 @@ impl View {
                     };
                     self.enter(target, r, zone, columns, texts)
                 }
-                None => Errand::Say(texts.t(key::AGENTS_NONE)),
+                None => Errand::Say(texts.t(key::AGENTS_NONE).into()),
             },
             Press::Rename | Press::Default | Press::Remove => {
                 let made = match p {
@@ -2841,7 +2858,7 @@ impl View {
                 };
                 match made {
                     Some(t) => self.enter(t, r, zone, columns, texts),
-                    None => Errand::Say(texts.t(key::AGENTS_NOT_ON_AN_ACCOUNT)),
+                    None => Errand::Say(texts.t(key::AGENTS_NOT_ON_AN_ACCOUNT).into()),
                 }
             }
         }
@@ -2871,7 +2888,7 @@ impl View {
                 let rows = self.rows(r, zone, columns, texts);
                 match rows.get(self.cursor).and_then(|row| row.target.clone()) {
                     Some(target @ Target::Agent(..)) => target,
-                    _ => return Errand::Say(texts.t(key::AGENTS_NOT_ON_AN_AGENT)),
+                    _ => return Errand::Say(texts.t(key::AGENTS_NOT_ON_AN_AGENT).into()),
                 }
             }
             "agents-status-line" => {
@@ -2880,7 +2897,7 @@ impl View {
                     .filter(|s| s.account.kind == Agent::Claude);
                 match claude {
                     Some(s) => Target::StatusLine(s.account.id.clone()),
-                    None => return Errand::Say(words::refused(Why::Invalid, texts)),
+                    None => return Errand::Say(words::refused(Why::Invalid, texts).into()),
                 }
             }
             _ => return Errand::Nothing,
@@ -2915,14 +2932,14 @@ impl View {
             Target::StatusLine(id) => match r.seen(&id).and_then(|s| s.wrapping) {
                 Some(Ok(Wrapping::Ours)) => Errand::Edit(Edit::Unwrap(id)),
                 Some(Ok(_)) => Errand::Edit(Edit::Wrap(id)),
-                Some(Err(why)) => Errand::Say(words::refused(why, texts)),
-                None => Errand::Say(words::refused(Why::Invalid, texts)),
+                Some(Err(why)) => Errand::Say(words::refused(why, texts).into()),
+                None => Errand::Say(words::refused(Why::Invalid, texts).into()),
             },
             Target::Session(id) => Errand::Choose(id, false),
             // A LOGIN ONLY WHILE THERE IS NONE, a logout only while there is
             // one — said, by a key or a name, where the row is not drawn.
             Target::Login(id) => match r.seen(&id).and_then(logged_in) {
-                Some(true) => Errand::Say(texts.t(key::AGENTS_ALREADY_LOGGED_IN)),
+                Some(true) => Errand::Say(texts.t(key::AGENTS_ALREADY_LOGGED_IN).into()),
                 _ => Errand::Choose(id, true),
             },
             Target::Logout(id) => match r.seen(&id) {
@@ -2934,12 +2951,12 @@ impl View {
                     self.settle_in(r, zone, columns, texts);
                     Errand::Nothing
                 }
-                _ => Errand::Say(texts.t(key::AGENTS_NOTHING_TO_LOG_OUT)),
+                _ => Errand::Say(texts.t(key::AGENTS_NOTHING_TO_LOG_OUT).into()),
             },
             Target::Rename(id) => self.ask(Ask::Name(id), r),
             Target::Default(id) => {
                 if r.seen(&id).is_some_and(|s| s.account.default) {
-                    Errand::Say(texts.t(key::AGENTS_ALREADY_DEFAULT))
+                    Errand::Say(texts.t(key::AGENTS_ALREADY_DEFAULT).into())
                 } else {
                     Errand::Edit(Edit::Default(id))
                 }
@@ -3025,7 +3042,7 @@ impl View {
             Ask::Name(id) => Errand::Edit(Edit::Rename(id, typed.to_owned())),
             Ask::New(agent) => {
                 if typed.is_empty() {
-                    return Errand::Say(words::refused(Why::Invalid, texts));
+                    return Errand::Say(words::refused(Why::Invalid, texts).into());
                 }
                 Errand::Edit(Edit::Add(agent, typed.to_owned()))
             }
@@ -3037,7 +3054,7 @@ impl View {
                     .ok()
                     .filter(|p| (1..=100).contains(p))
                 else {
-                    return Errand::Say(texts.t(key::AGENTS_NOT_A_PERCENT));
+                    return Errand::Say(texts.t(key::AGENTS_NOT_A_PERCENT).into());
                 };
                 let which = if ask == Ask::Warn {
                     agent_accounts::Which::Warn
@@ -3049,13 +3066,13 @@ impl View {
                 match agent_accounts::keep_line(which, p) {
                     Ok(_) => Errand::Wrote,
                     Err(agent_accounts::Unkept::NotInOrder) => {
-                        Errand::Say(texts.t(key::AGENTS_LINES_CROSS))
+                        Errand::Say(texts.t(key::AGENTS_LINES_CROSS).into())
                     }
                     Err(agent_accounts::Unkept::Unreadable) => {
-                        Errand::Say(texts.t(key::AGENTS_LINES_UNREADABLE))
+                        Errand::Say(texts.t(key::AGENTS_LINES_UNREADABLE).into())
                     }
                     Err(agent_accounts::Unkept::Unwritten) => {
-                        Errand::Say(texts.t(key::AGENTS_LINES_UNKEPT))
+                        Errand::Say(texts.t(key::AGENTS_LINES_UNKEPT).into())
                     }
                 }
             }
@@ -3235,7 +3252,7 @@ impl View {
                 self.picking = None;
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Say(e) => Errand::Say(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked(asked, crate::file_picker::Picked::Paths { paths, .. }) => {
                 self.picking = None;
@@ -3276,20 +3293,29 @@ fn retarget(t: Target, id: &str) -> Target {
 /// or the login — then the picker's own rows, the whole width.
 fn picker_rows(h: &Hosted<Picking>, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
     let (left, room) = crate::chrome::extent(columns);
-    let title = texts.t_with(
-        if h.asked.login {
-            key::AGENTS_PICK_LOGIN
-        } else {
-            key::AGENTS_PICK_SESSION
-        },
-        &[("name", &h.asked.name)],
-    );
-    let mut out = vec![Row::of(
-        vec![piece(left, title, tokens::color::TEXT_HEADING, room)],
-        None,
-        false,
-        Pane::Whole,
-    )];
+    // THE ACCOUNT IS A NAME the title quotes (`Arg::Name`): it wears what a
+    // name wears in a heading, the heading's own ink (`chrome::quoted_ink`
+    // answers itself there) — cut at the room, as the title always was.
+    let title: crate::chrome::Named = texts
+        .t_args_marked(
+            if h.asked.login {
+                key::AGENTS_PICK_LOGIN
+            } else {
+                key::AGENTS_PICK_SESSION
+            },
+            &[("name", Arg::Name(&h.asked.name))],
+        )
+        .into();
+    let mut fields: Vec<Field> = Vec::new();
+    let mut at = left;
+    for (text, ink) in title.elided_end(room).runs(tokens::color::TEXT_HEADING) {
+        match fields.last_mut() {
+            Some(last) if last.color == ink => last.text.push_str(text),
+            _ => fields.push(piece(at, text.to_owned(), ink, room)),
+        }
+        at = at.saturating_add(layout::width(text));
+    }
+    let mut out = vec![Row::of(fields, None, false, Pane::Whole)];
     out.extend(h.picker.rows(columns, texts).into_iter().map(|p| {
         Row::of(
             p.fields,
@@ -3714,7 +3740,7 @@ fn lines_section(b: &mut Builder<'_>, r: &Readings) {
     let e = r
         .lines_unread
         .iter()
-        .map(|partly| note(partly.said(t)))
+        .map(|partly| note(partly.said_named(t)))
         .chain(e)
         .collect();
     b.section(&t.t(key::AGENTS_HEADING_LINES), e);
@@ -4320,12 +4346,12 @@ pub(crate) mod tests {
         v.show("claude-1");
         assert_eq!(
             v.press(Press::Login, &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::AGENTS_ALREADY_LOGGED_IN))
+            Errand::Say(t.t(key::AGENTS_ALREADY_LOGGED_IN).into())
         );
         v.show("codex-1");
         assert_eq!(
             v.press(Press::Logout, &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::AGENTS_NOTHING_TO_LOG_OUT))
+            Errand::Say(t.t(key::AGENTS_NOTHING_TO_LOG_OUT).into())
         );
         // THE LOGOUT: asked, "no" first, and "yes" is THAT account's.
         v.show("claude-1");
@@ -4720,8 +4746,17 @@ pub(crate) mod tests {
             &t,
         );
         assert_eq!(
-            done.said,
-            Some(t.t_with(key::AGENTS_ADDED, &[("name", "Console")]))
+            done.said.as_deref(),
+            Some(t.t_with(key::AGENTS_ADDED, &[("name", "Console")]).as_str())
+        );
+        // THE ACCOUNT'S NAME IS TOLD as the name it is, and only it.
+        let said = done.said.as_ref().expect("said");
+        assert_eq!(
+            said.names()
+                .iter()
+                .map(|r| &said.as_str()[r.clone()])
+                .collect::<Vec<_>>(),
+            ["Console"]
         );
         let list = Accounts::store_in(roots.config).parsed().expect("the list");
         let api = list.find("claude-api-1").expect("listed").clone();
@@ -4737,13 +4772,23 @@ pub(crate) mod tests {
         assert!(!api.default, "the subscription's default moved");
         assert!(list.find("claude-1").is_some_and(|a| a.default));
         assert_eq!(done.login.as_ref(), Some(&api), "not its login next");
-        // REMOVED, it is asked as an account with no status line of ours.
+        // REMOVED, it is asked as an account with no status line of ours —
+        // its name told as one, so the page draws it in a name's ink.
+        let asked = question_text(
+            &Question::Remove(api.id.clone(), api.name.clone(), api.kind),
+            &t,
+        );
         assert_eq!(
-            question_text(
-                &Question::Remove(api.id.clone(), api.name.clone(), api.kind),
-                &t
-            ),
+            asked,
             t.t_with(key::AGENTS_ASK_REMOVE, &[("name", "Console")])
+        );
+        assert_eq!(
+            asked
+                .names()
+                .iter()
+                .map(|r| &asked.as_str()[r.clone()])
+                .collect::<Vec<_>>(),
+            ["Console"]
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -4906,7 +4951,7 @@ pub(crate) mod tests {
         assert!(Errand::Wrote.writes());
         assert!(Errand::Edit(Edit::Remove("codex-1".to_owned())).writes());
         assert!(!Errand::Copy("x".to_owned()).writes());
-        assert!(!Errand::Say("x".to_owned()).writes());
+        assert!(!Errand::Say("x".into()).writes());
     }
 
     /// FAILS IF: a file whose folder is not there is not watched from the
@@ -4979,8 +5024,8 @@ pub(crate) mod tests {
         assert_eq!(wrapped(&work), Ok(Wrapping::Ours), "no status line of ours");
         assert_eq!(done.login.as_ref(), Some(&work), "not its login next");
         assert_eq!(
-            done.said,
-            Some(t.t_with(key::AGENTS_ADDED, &[("name", "Work")]))
+            done.said.as_deref(),
+            Some(t.t_with(key::AGENTS_ADDED, &[("name", "Work")]).as_str())
         );
 
         // CODEX: a folder, the list, and no status line.
@@ -5025,8 +5070,11 @@ pub(crate) mod tests {
         assert!(work.dir.is_dir(), "the folder holds its sessions and login");
         assert_ne!(wrapped(&work), Ok(Wrapping::Ours));
         assert_eq!(
-            done.said,
-            Some(t.t_with(key::AGENTS_REMOVED, &[("name", "Office")]))
+            done.said.as_deref(),
+            Some(
+                t.t_with(key::AGENTS_REMOVED, &[("name", "Office")])
+                    .as_str()
+            )
         );
 
         // A FOLDER THAT CANNOT BE MADE: refused, said, nothing listed or opened.
@@ -5037,7 +5085,10 @@ pub(crate) mod tests {
             &Edit::Add(Agent::Codex, "Nowhere".to_owned()),
             &t,
         );
-        assert_eq!(done.said, Some(words::refused(Why::Failed, &t)));
+        assert_eq!(
+            done.said.as_deref(),
+            Some(words::refused(Why::Failed, &t).as_str())
+        );
         assert_eq!(done.login, None, "a login for no account");
         assert!(
             Accounts::store_in(roots_in(&blocked).config)
@@ -5326,7 +5377,7 @@ pub(crate) mod tests {
             stand_on(&mut v, &r, &Target::Refresh, &t);
             assert_eq!(
                 v.command(SHOW_COMMAND, &r, &zone(), 100, &t),
-                Errand::Say(t.t(key::AGENTS_NOT_ON_AN_AGENT))
+                Errand::Say(t.t(key::AGENTS_NOT_ON_AN_AGENT).into())
             );
         }
     }
@@ -5379,7 +5430,7 @@ pub(crate) mod tests {
             assert_eq!(
                 w.owed,
                 [crate::region::Effect::Say(
-                    texts(language).t(key::AGENTS_AGENT_ENDED),
+                    texts(language).t(key::AGENTS_AGENT_ENDED).into(),
                     Echo::Long
                 )]
             );

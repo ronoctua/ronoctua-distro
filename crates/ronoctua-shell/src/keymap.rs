@@ -1386,6 +1386,8 @@ mod tests {
             "video-metrics-enter",
             "video-metrics-page-back",
             "video-metrics-page-on",
+            "video-metrics-page-first",
+            "video-metrics-page-last",
             "video-metrics-layout",
             "video-metrics-search",
             "video-metrics-player",

@@ -123,6 +123,7 @@
     "crates/ronoctua-shell-video-metrics/src/video_metrics_window.rs" = "*";
     "crates/ronoctua-shell-video-metrics/src/video_metrics_words.rs" = "*";
     "crates/ronoctua-shell-video-metrics/src/player_ranking.rs" = "*";
+    "crates/ronoctua-shell-video-metrics/src/paging.rs" = "*";
     "crates/ronoctua-shell/src/keymap.rs" = "*";
     "crates/ronoctua-shell-footer/src/surface/mod.rs" = "*";
     "crates/ronoctua-shell/src/photograph.rs" = "*";

@@ -26,7 +26,9 @@
 
 use crate::key;
 use crate::player::{Errand, PageId, Target, View, lookup_refusal, service_key};
-use crate::player_find::{ImportOf, ask_row, consented, default_tongues, film, hosts_of, status};
+use crate::player_find::{
+    ImportOf, ask_row, consented, default_tongues, film, host_names, hosts_said, status,
+};
 use crate::player_rows::Builder;
 use ronoctua_i18n::Arg;
 use ronoctua_lookup::keys::Key;
@@ -95,10 +97,9 @@ impl View {
     /// `query` asked, after the press that asks it let its services.
     pub fn asking(&mut self, query: Query, texts: &ronoctua_i18n::Texts) -> Errand {
         let services = self.services_of(&query);
-        let hosts = hosts_of(&services, texts);
         let ask = Errand::TellSaying(
             Ask::Find { query },
-            texts.t_with(key::PLAYER_DESK_ASKING, &[("hosts", &hosts)]),
+            hosts_said(key::PLAYER_DESK_ASKING, &host_names(&services), texts),
         );
         consented(&mut self.prefs, &services, ask)
     }
@@ -254,7 +255,7 @@ pub fn page(v: &View, s: &State, b: &mut Builder<'_>) {
         s,
         DeskKind::Suggestions,
         desk,
-        &hosts_of(source.services(), b.texts),
+        &host_names(source.services()),
         b,
     );
     let Some(Page::Suggestions { candidates, .. }) = desk.map(|d| &d.page) else {
@@ -266,11 +267,14 @@ pub fn page(v: &View, s: &State, b: &mut Builder<'_>) {
         && *by != source
         && !candidates.is_empty()
     {
-        let said = b.texts.t_with(
-            key::PLAYER_SUGGEST_CAME_FROM,
-            &[("service", &b.t(suggester_key(*by)))],
-        );
-        crate::player_find::note_said(&said, b);
+        let said = b
+            .texts
+            .t_args_marked(
+                key::PLAYER_SUGGEST_CAME_FROM,
+                &[("service", Arg::Name(&b.t(suggester_key(*by))))],
+            )
+            .into();
+        b.told_named(&said);
     }
     let busy = crate::player_find::summary(s, DeskKind::Suggestions).is_some_and(|d| d.busy);
     if candidates.is_empty() && desk.is_some_and(|d| d.trouble.is_none()) && !busy {
@@ -523,7 +527,9 @@ pub fn turn(
                     to: ronoctua_player::find::LyricsTo::Beside,
                     replace: false,
                 },
-                texts.t_with(key::PLAYER_SUGGEST_WRITING, &[("name", &name)]),
+                texts
+                    .t_args_marked(key::PLAYER_SUGGEST_WRITING, &[("name", Arg::Name(&name))])
+                    .into(),
             ))
         }
         _ => None,

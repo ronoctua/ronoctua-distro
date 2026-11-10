@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use fluent_bundle::{FluentBundle, FluentResource};
+use fluent_syntax::ast;
 use unic_langid::LanguageIdentifier;
 
 pub mod key;
@@ -375,7 +376,43 @@ pub enum Arg<'a> {
     /// to make a plural pick its branch, and `1.0` is not the same question as
     /// `1` when a selector asks.
     Fraction(f64),
+    /// A NAME the sentence quotes — a video's title, a file, a host, a
+    /// channel. Formatted exactly as [`Arg::Text`]: the sentence's text is
+    /// the same byte for byte, and [`Texts::t_args_marked`] also says where
+    /// each name landed ([`Marked::names`]), so the name can be drawn in an
+    /// ink of its own (owner, 2026-11-10: a name in a sentence takes a
+    /// discreet colour of its own, near the text's and told from it, in the
+    /// whole distro).
+    ///
+    /// # Why the CALLER says which argument is a name
+    ///
+    /// Because finding a name back in the finished sentence by its value is
+    /// the guess [`Texts::t_marked`] was written to avoid, and it is wrong
+    /// in exactly the sentences this is for: a title that equals another
+    /// argument's value takes the wrong ink, a name used twice is found once,
+    /// and a name inside a selector's branch has no boundary a search could
+    /// trust. The call site knows what it hands in; a check can read it there.
+    ///
+    /// # How it travels through Fluent
+    ///
+    /// Fenced by two NONCHARACTERS, U+FDD0 and U+FDD1 ([`NAME_OPENS`],
+    /// [`NAME_CLOSES`]) — code points Unicode reserves for a program's own
+    /// use, which no text a person writes carries — and [`Texts::t_args`]
+    /// takes them off where it takes off the isolation marks. Two cases are
+    /// handed over bare, so the fence never changes what a sentence SAYS:
+    /// an argument the message SELECTS on (`{ $program -> [mkvextract] … }`
+    /// would never match a fenced value, and would quietly take its default
+    /// branch), and a call where some value already holds one of the two
+    /// characters (a file named with them is still a file, and its sentence
+    /// is still right — it just tells no names).
+    Name(&'a str),
 }
+
+/// What [`Arg::Name`] opens a name with on its way through Fluent: U+FDD0, a
+/// noncharacter — Unicode's own promise that no interchanged text holds it.
+pub const NAME_OPENS: char = '\u{FDD0}';
+/// And what it closes one with: U+FDD1, the next noncharacter.
+pub const NAME_CLOSES: char = '\u{FDD1}';
 
 impl Texts {
     /// Loads a language by name (`pt-BR`, `en-GB`).
@@ -543,7 +580,7 @@ impl Texts {
         for (k, v) in args {
             fluent.set(*k, *v);
         }
-        self.format(key, fluent, args.is_empty())
+        self.format(key, fluent, args.is_empty(), false)
     }
 
     /// The same, with arguments that may be NUMBERS.
@@ -562,22 +599,50 @@ impl Texts {
     /// existing call sites, which have no numbers, keep their shape.
     #[must_use]
     pub fn t_args(&self, key: &str, args: &[(&str, Arg<'_>)]) -> String {
-        self.format(key, self.fluent_of(args), args.is_empty())
+        let (fluent, armed) = self.fluent_of(key, args);
+        self.format(key, fluent, args.is_empty(), armed)
     }
 
     /// [`Texts::t_args`], and WHERE each argument landed ([`Texts::t_marked`])
-    /// — a count still a number, so a plural picks its branch.
+    /// — a count still a number, so a plural picks its branch — and where
+    /// each [`Arg::Name`] did ([`Marked::names`]).
     #[must_use]
     pub fn t_args_marked(&self, key: &str, args: &[(&str, Arg<'_>)]) -> Marked {
-        self.marked(key, self.fluent_of(args), args.is_empty())
+        let (fluent, armed) = self.fluent_of(key, args);
+        self.marked(key, fluent, args.is_empty(), armed)
     }
 
-    /// The arguments as Fluent takes them.
-    fn fluent_of<'a>(&self, args: &[(&str, Arg<'a>)]) -> fluent_bundle::FluentArgs<'a> {
+    /// The arguments as Fluent takes them, and whether a name was FENCED
+    /// ([`Arg::Name`]) — the one case [`Texts::marked`] looks for the fence.
+    fn fluent_of<'a>(
+        &self,
+        key: &str,
+        args: &[(&str, Arg<'a>)],
+    ) -> (fluent_bundle::FluentArgs<'a>, bool) {
+        // FENCED ONLY WHERE THE FENCE CANNOT LIE: a value that already holds
+        // one of the two characters would open or close a name that is not
+        // there, so a call with one tells no names at all — and its sentence
+        // is the same either way.
+        let named = args.iter().any(|(_, a)| matches!(a, Arg::Name(_)));
+        let armed = named
+            && !args.iter().any(|(_, a)| match a {
+                Arg::Text(s) | Arg::Name(s) => s.contains([NAME_OPENS, NAME_CLOSES]),
+                Arg::Number(_) | Arg::Fraction(_) => false,
+            });
+        // And a name the message SELECTS on goes bare: fenced, it would match
+        // no branch and every language would quietly say its default one.
+        let selected = if armed {
+            self.selected_in(key)
+        } else {
+            Vec::new()
+        };
         let mut fluent = fluent_bundle::FluentArgs::new();
         for (k, v) in args {
             match v {
-                Arg::Text(s) => fluent.set(k.to_string(), *s),
+                Arg::Name(s) if armed && !selected.contains(k) => {
+                    fluent.set(k.to_string(), format!("{NAME_OPENS}{s}{NAME_CLOSES}"));
+                }
+                Arg::Text(s) | Arg::Name(s) => fluent.set(k.to_string(), *s),
                 Arg::Number(n) => fluent.set(k.to_string(), *n),
                 // FORMATTED HERE, WHERE THE LANGUAGE IS. `fluent-bundle` is
                 // built without a number formatter — measured, not assumed:
@@ -590,7 +655,42 @@ impl Texts {
                 Arg::Fraction(n) => fluent.set(k.to_string(), self.decimal(*n)),
             }
         }
-        fluent
+        (fluent, armed)
+    }
+
+    /// The arguments message `key` SELECTS on — its own selectors, its
+    /// branches' and those of every message it refers to — and every one it
+    /// hands to a function or a term, which reads the value instead of
+    /// printing it. The ones a fenced value would change the meaning of.
+    fn selected_in(&self, key: &str) -> Vec<&str> {
+        self.read_in(key)
+            .into_iter()
+            .filter_map(|(name, selected)| selected.then_some(name))
+            .collect()
+    }
+
+    /// Every argument message `key` takes — its own, its branches' and those
+    /// of every message it refers to, which Fluent hands the same arguments —
+    /// each with whether it is READ (selected on, or handed to a function or
+    /// a term) rather than printed; once per place it appears.
+    fn read_in(&self, key: &str) -> Vec<(&str, bool)> {
+        let mut read = Vec::new();
+        let mut seen = vec![key];
+        let mut queue = vec![key];
+        while let Some(id) = queue.pop() {
+            let Some(pattern) = self.bundle.get_message(id).and_then(|m| m.value()) else {
+                continue;
+            };
+            let mut refers = Vec::new();
+            variables_of(pattern, false, &mut read, &mut refers);
+            for r in refers {
+                if !seen.contains(&r) {
+                    seen.push(r);
+                    queue.push(r);
+                }
+            }
+        }
+        read
     }
 
     /// One number with the separator this language writes.
@@ -662,16 +762,29 @@ impl Texts {
         for (k, v) in args {
             fluent.set(*k, *v);
         }
-        self.marked(key, fluent, args.is_empty())
+        self.marked(key, fluent, args.is_empty(), false)
     }
 
     /// The half both public forms share.
-    fn format(&self, key: &str, fluent: fluent_bundle::FluentArgs<'_>, bare: bool) -> String {
-        self.marked(key, fluent, bare).text
+    fn format(
+        &self,
+        key: &str,
+        fluent: fluent_bundle::FluentArgs<'_>,
+        bare: bool,
+        armed: bool,
+    ) -> String {
+        self.marked(key, fluent, bare, armed).text
     }
 
-    /// The one that resolves, and the one that takes the marks off.
-    fn marked(&self, key: &str, fluent: fluent_bundle::FluentArgs<'_>, bare: bool) -> Marked {
+    /// The one that resolves, and the one that takes the marks off — the
+    /// fence of a name too, when one was put up (`armed`, [`Arg::Name`]).
+    fn marked(
+        &self,
+        key: &str,
+        fluent: fluent_bundle::FluentArgs<'_>,
+        bare: bool,
+        armed: bool,
+    ) -> Marked {
         let Some(msg) = self.bundle.get_message(key) else {
             return Marked::plain(format!("[{key}]"));
         };
@@ -698,12 +811,24 @@ impl Texts {
         // boundary anybody asked about. A closing mark with nothing open is
         // dropped rather than trusted — a range built from it would start
         // wherever the last one did.
+        //
+        // AND A NAME'S FENCE, only when this call put one up: otherwise the
+        // two characters are a value's own, and they stay in the text as
+        // they always did. A name that opens and never closes tells nothing.
         let mut text = String::with_capacity(s.len());
         let mut at = Vec::new();
+        let mut names = Vec::new();
         let mut depth = 0_usize;
         let mut from = 0_usize;
+        let mut name_from = None;
         for c in s.chars() {
             match c {
+                NAME_OPENS if armed => name_from = Some(text.len()),
+                NAME_CLOSES if armed => {
+                    if let Some(start) = name_from.take() {
+                        names.push(start..text.len());
+                    }
+                }
                 '\u{2068}' => {
                     if depth == 0 {
                         from = text.len();
@@ -720,7 +845,77 @@ impl Texts {
                 _ => text.push(c),
             }
         }
-        Marked { text, at }
+        Marked { text, at, names }
+    }
+}
+
+/// Every variable `pattern` uses, each with whether its value is READ — a
+/// selector's, or handed to a function or a term — rather than printed; and
+/// every message it refers to, which is resolved with the same arguments.
+/// `selected` says the pattern itself is in a reading position.
+fn variables_of<'m>(
+    pattern: &'m ast::Pattern<&'m str>,
+    selected: bool,
+    into: &mut Vec<(&'m str, bool)>,
+    refers: &mut Vec<&'m str>,
+) {
+    for element in &pattern.elements {
+        if let ast::PatternElement::Placeable { expression } = element {
+            expression_variables(expression, selected, into, refers);
+        }
+    }
+}
+
+/// [`variables_of`], over one placeable.
+fn expression_variables<'m>(
+    expression: &'m ast::Expression<&'m str>,
+    selected: bool,
+    into: &mut Vec<(&'m str, bool)>,
+    refers: &mut Vec<&'m str>,
+) {
+    match expression {
+        ast::Expression::Select { selector, variants } => {
+            inline_variables(selector, true, into, refers);
+            for variant in variants {
+                variables_of(&variant.value, selected, into, refers);
+            }
+        }
+        ast::Expression::Inline(inline) => inline_variables(inline, selected, into, refers),
+    }
+}
+
+/// [`variables_of`], over one inline expression.
+fn inline_variables<'m>(
+    inline: &'m ast::InlineExpression<&'m str>,
+    selected: bool,
+    into: &mut Vec<(&'m str, bool)>,
+    refers: &mut Vec<&'m str>,
+) {
+    match inline {
+        ast::InlineExpression::VariableReference { id } => into.push((id.name, selected)),
+        ast::InlineExpression::FunctionReference { arguments, .. }
+        | ast::InlineExpression::TermReference {
+            arguments: Some(arguments),
+            ..
+        } => {
+            // WHAT A FUNCTION OR A TERM IS HANDED, it reads: a fenced value
+            // would be a number that does not parse, a term's own selector.
+            for a in &arguments.positional {
+                inline_variables(a, true, into, refers);
+            }
+            for a in &arguments.named {
+                inline_variables(&a.value, true, into, refers);
+            }
+        }
+        ast::InlineExpression::TermReference {
+            arguments: None, ..
+        } => {}
+        ast::InlineExpression::MessageReference { id, .. } => refers.push(id.name),
+        ast::InlineExpression::Placeable { expression } => {
+            expression_variables(expression, selected, into, refers);
+        }
+        ast::InlineExpression::StringLiteral { .. }
+        | ast::InlineExpression::NumberLiteral { .. } => {}
     }
 }
 
@@ -736,6 +931,11 @@ pub struct Marked {
     /// One range per interpolated argument, in the order they READ, which is
     /// not the order they were passed: the language decides.
     pub at: Vec<core::ops::Range<usize>>,
+    /// One range per NAME the sentence quotes ([`Arg::Name`]), in the order
+    /// they read — twice for a name the language says twice, and one inside a
+    /// selector's branch too. Empty for a name the message selects on, and
+    /// for every call that handed in none.
+    pub names: Vec<core::ops::Range<usize>>,
 }
 
 impl Marked {
@@ -744,6 +944,7 @@ impl Marked {
         Self {
             text,
             at: Vec::new(),
+            names: Vec::new(),
         }
     }
 
@@ -1098,6 +1299,182 @@ mod tests {
             );
         }
     }
+    /// A value no sentence of either language holds, so every place it is
+    /// found in a resolved sentence is a place it was put.
+    const PROBE: &str = "\u{E000}probe\u{E001}";
+    /// The same, for the arguments a message SELECTS on: those go bare, so
+    /// they wear a probe of their own, and a sentence that prints one is
+    /// never counted as printing a name.
+    const SELECTOR_PROBE: &str = "\u{E002}selector\u{E003}";
+
+    /// FAILS IF: a name changes a single byte of any sentence of either
+    /// language, a fence character survives into a sentence, a name's range
+    /// is anything but the name, a name printed anywhere — inside a branch,
+    /// or by a message the key refers to — is not told, or one the message
+    /// selects on is — over every key the texts hold, with every variable it
+    /// takes handed in as a name.
+    #[test]
+    fn a_name_says_what_text_says_in_every_sentence_of_both_languages() {
+        let mut named = 0_usize;
+        for language in LANGUAGES {
+            let t = Texts::fresh(language).unwrap_or_else(|| panic!("{language} did not load"));
+            for key in ids(language) {
+                let mut vars: Vec<&str> = t.read_in(&key).into_iter().map(|(v, _)| v).collect();
+                vars.sort_unstable();
+                vars.dedup();
+                if vars.is_empty() {
+                    continue;
+                }
+                let selected = t.selected_in(&key);
+                let probe = |v: &str| {
+                    if selected.contains(&v) {
+                        SELECTOR_PROBE
+                    } else {
+                        PROBE
+                    }
+                };
+                let texts: Vec<(&str, Arg<'_>)> =
+                    vars.iter().map(|v| (*v, Arg::Text(probe(v)))).collect();
+                let names: Vec<(&str, Arg<'_>)> =
+                    vars.iter().map(|v| (*v, Arg::Name(probe(v)))).collect();
+                let plain = t.t_args(&key, &texts);
+                assert_eq!(
+                    t.t_args(&key, &names),
+                    plain,
+                    "{language}: `{key}` said another thing with a name"
+                );
+                let m = t.t_args_marked(&key, &names);
+                assert_eq!(
+                    m.text, plain,
+                    "{language}: `{key}` marked says another thing"
+                );
+                assert!(
+                    !m.text.contains([NAME_OPENS, NAME_CLOSES]),
+                    "{language}: `{key}` kept a name's fence"
+                );
+                for r in &m.names {
+                    assert_eq!(
+                        &m.text[r.clone()],
+                        PROBE,
+                        "{language}: `{key}` marked a range that is not the name"
+                    );
+                }
+                // EVERY PRINTED NAME IS TOLD, in every key. Only the one the
+                // message selects on goes bare — the others in the same
+                // message are still fenced — and it wears `SELECTOR_PROBE`,
+                // so it is neither counted here nor a range above.
+                assert_eq!(
+                    m.names.len(),
+                    m.text.matches(PROBE).count(),
+                    "{language}: `{key}` printed a name it did not tell"
+                );
+                named += m.names.len();
+            }
+        }
+        assert!(
+            named > 300,
+            "only {named} names were told over both languages"
+        );
+    }
+
+    /// FAILS IF: a name inside a selector's branch is not told, or the count
+    /// beside it stops choosing the branch.
+    #[test]
+    fn a_name_inside_a_branch_is_told() {
+        let t = planted_texts(
+            "branch",
+            "en-GB",
+            "moved = { $count ->\n    [one] Moved { $file } once\n   *[other] Moved { $file } { $count } times\n}\n",
+        );
+        let m = t.t_args_marked(
+            "moved",
+            &[("count", Arg::Number(1)), ("file", Arg::Name("a.mkv"))],
+        );
+        assert_eq!(m.text, "Moved a.mkv once");
+        assert_eq!(
+            m.names
+                .iter()
+                .map(|r| &m.text[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["a.mkv"]
+        );
+        let m = t.t_args_marked(
+            "moved",
+            &[("count", Arg::Number(3)), ("file", Arg::Name("a.mkv"))],
+        );
+        assert_eq!(m.text, "Moved a.mkv 3 times");
+        assert_eq!(m.names, vec![6..11]);
+    }
+
+    /// FAILS IF: a name the language says twice is told once.
+    #[test]
+    fn a_name_said_twice_is_told_twice() {
+        let t = planted_texts(
+            "twice-name",
+            "en-GB",
+            "again = { $title }, and { $title } again\n",
+        );
+        let m = t.t_args_marked("again", &[("title", Arg::Name("Dune"))]);
+        assert_eq!(m.text, "Dune, and Dune again");
+        assert_eq!(m.names, vec![0..4, 10..14]);
+        assert_eq!(m.at, m.names, "the isolation marks and the fence agree");
+    }
+
+    /// FAILS IF: a name the message selects on stops choosing its branch —
+    /// the fence would match no variant and every language would quietly
+    /// say its default one (`player-trouble-tag-missing`'s `$program`).
+    #[test]
+    fn a_name_that_is_a_selector_still_selects() {
+        let t = planted_texts(
+            "selector",
+            "en-GB",
+            "missing = { $program ->\n    [mkvextract] Install MKVToolNix\n   *[other] Install { $program }\n} to read { $file }\n",
+        );
+        let m = t.t_args_marked(
+            "missing",
+            &[
+                ("program", Arg::Name("mkvextract")),
+                ("file", Arg::Name("a.mkv")),
+            ],
+        );
+        assert_eq!(m.text, "Install MKVToolNix to read a.mkv");
+        assert_eq!(
+            m.names
+                .iter()
+                .map(|r| &m.text[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["a.mkv"]
+        );
+        let m = t.t_args_marked(
+            "missing",
+            &[
+                ("program", Arg::Name("ffmpeg")),
+                ("file", Arg::Name("a.mkv")),
+            ],
+        );
+        assert_eq!(m.text, "Install ffmpeg to read a.mkv");
+        assert_eq!(m.names.len(), 1, "the selector's own name goes bare: {m:?}");
+    }
+
+    /// FAILS IF: a value that holds a fence character opens or closes a name
+    /// that is not there, or loses the character — or a call with no name
+    /// stops giving the bytes it always gave.
+    #[test]
+    fn a_fence_in_a_value_tells_nothing_and_changes_nothing() {
+        let t = planted_texts("fence", "en-GB", "renamed = Renamed { $from } to { $to }\n");
+        let odd = "x\u{FDD0}y";
+        let m = t.t_args_marked(
+            "renamed",
+            &[("from", Arg::Name(odd)), ("to", Arg::Name("b"))],
+        );
+        assert_eq!(m.text, format!("Renamed {odd} to b"));
+        assert!(m.names.is_empty(), "{m:?}");
+        let plain = t.t_marked("renamed", &[("from", odd), ("to", "b")]);
+        assert_eq!(plain.text, m.text);
+        assert!(plain.names.is_empty());
+        assert_eq!(t.t_with("renamed", &[("from", odd), ("to", "b")]), m.text);
+    }
+
     #[test]
     // THE DEFECT THIS CATCHES: believing `fluent-bundle` localises a number.
     // It does not — measured here, in both languages — so a measurement handed

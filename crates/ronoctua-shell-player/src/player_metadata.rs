@@ -500,9 +500,9 @@ fn edit_here(
 ) -> Option<Turned> {
     let sheet = meta.sheet(s)?;
     if let Some(Can::No(why)) = sheet.field(field).map(|r| &r.can) {
-        return Some(Turned::Errand(Errand::Said(
-            crate::tag_words::tags_refusal(why, texts),
-        )));
+        return Some(Turned::Errand(Errand::Said(crate::tag_words::tags_named(
+            why, texts,
+        ))));
     }
     let text = sheet.value(field).unwrap_or_default().to_owned();
     let location = sheet.location.to_string_lossy().into_owned();
@@ -529,21 +529,26 @@ pub fn edit_kept(
     texts: &ronoctua_i18n::Texts,
 ) -> Errand {
     let Some(editing) = meta.editing.clone() else {
-        return Errand::Said(texts.t(key::TEXT_AREA_NOT_KEPT));
+        return Errand::Said(texts.t(key::TEXT_AREA_NOT_KEPT).into());
     };
     let Some(sheet) = s.and_then(|s| meta.sheet(s)) else {
-        return Errand::Said(texts.t(key::PLAYER_META_READING));
+        return Errand::Said(texts.t(key::PLAYER_META_READING).into());
     };
     if sheet.location.to_string_lossy() != editing.location {
-        return Errand::Said(texts.t(key::PLAYER_PAGE_GONE));
+        return Errand::Said(texts.t(key::PLAYER_PAGE_GONE).into());
     }
     let stamp = sheet.stamp;
     let name = named(&editing.location, texts);
     let field_word = texts.t(field_key(editing.field));
-    let said = texts.t_with(
-        key::PLAYER_TAG_WRITING,
-        &[("field", &field_word), ("name", &name)],
-    );
+    let said = texts
+        .t_args_marked(
+            key::PLAYER_TAG_WRITING,
+            &[
+                ("field", Arg::Text(&field_word)),
+                ("name", Arg::Name(&name)),
+            ],
+        )
+        .into();
     meta.editing = Some(Editing {
         sent: Some(text.clone()),
         ..editing.clone()
@@ -774,8 +779,12 @@ pub fn retag_lines(s: &State, sheet: &Sheet, shown: &str, b: &mut Builder<'_>) {
         RetagStatus::Saved { path } => {
             let said = b
                 .texts
-                .t_with(key::PLAYER_COVER_SAVED, &[("name", &named(path, b.texts))]);
-            note_said(&said, b);
+                .t_args_marked(
+                    key::PLAYER_COVER_SAVED,
+                    &[("name", Arg::Name(&named(path, b.texts)))],
+                )
+                .into();
+            b.told_named(&said);
         }
         RetagStatus::Refused(t) => b.warning(&crate::player::trouble_sentence(t, b.texts)),
     }
@@ -1471,10 +1480,12 @@ fn stream_or_chapter(
                 stamp: sheet.stamp,
                 edits: vec![edit],
             },
-            texts.t_with(
-                key::PLAYER_TAG_NAMED_WRITING,
-                &[("tag", what), ("name", &name)],
-            ),
+            texts
+                .t_args_marked(
+                    key::PLAYER_TAG_NAMED_WRITING,
+                    &[("tag", Arg::Text(what)), ("name", Arg::Name(&name))],
+                )
+                .into(),
         ))
     };
     let asked = |typed: Typed, id: &'static str, was: &str| {
@@ -1515,7 +1526,9 @@ fn stream_or_chapter(
             let what = stream_what(*i, false, texts);
             if st.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
                 return Some(Turned::Errand(Errand::Said(
-                    texts.t_with(key::PLAYER_TAG_ALREADY_EMPTY, &[("field", &what)]),
+                    texts
+                        .t_with(key::PLAYER_TAG_ALREADY_EMPTY, &[("field", &what)])
+                        .into(),
                 )));
             }
             let Turned::Errand(yes) = retag(
@@ -1528,10 +1541,15 @@ fn stream_or_chapter(
                 return None;
             };
             Some(Turned::Question(
-                texts.t_with(
-                    key::PLAYER_ASK_CLEAR_TAG,
-                    &[("field", &what), ("name", &named(&location, texts))],
-                ),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_ASK_CLEAR_TAG,
+                        &[
+                            ("field", Arg::Text(&what)),
+                            ("name", Arg::Name(&named(&location, texts))),
+                        ],
+                    )
+                    .into(),
                 yes,
             ))
         }
@@ -1620,7 +1638,7 @@ pub fn turn(
             let location = meta.location(s)?;
             Some(Turned::Errand(Errand::TellSaying(
                 Ask::Refresh { location },
-                texts.t(key::PLAYER_META_REFRESHING),
+                texts.t(key::PLAYER_META_REFRESHING).into(),
             )))
         }
         // A SEVERAL-LINE FIELD is read whole on a page of its own, which
@@ -1634,9 +1652,9 @@ pub fn turn(
         (Target::Draft(field), Press::Enter) => {
             let sheet = meta.sheet(s)?;
             if let Some(Can::No(why)) = sheet.field(*field).map(|r| &r.can) {
-                return Some(Turned::Errand(Errand::Said(
-                    crate::tag_words::tags_refusal(why, texts),
-                )));
+                return Some(Turned::Errand(Errand::Said(crate::tag_words::tags_named(
+                    why, texts,
+                ))));
             }
             Some(Turned::Errand(Errand::Tell(Ask::Draft {
                 location: sheet.location.to_string_lossy().into_owned(),
@@ -1651,9 +1669,9 @@ pub fn turn(
                     Can::No(why) => Some(why.clone()),
                     Can::Yes(_) => None,
                 })?;
-            Some(Turned::Errand(Errand::Said(
-                crate::tag_words::tags_refusal(&why, texts),
-            )))
+            Some(Turned::Errand(Errand::Said(crate::tag_words::tags_named(
+                &why, texts,
+            ))))
         }
         (Target::Tag(field), Press::Enter) => {
             let sheet = meta.sheet(s)?;
@@ -1685,10 +1703,14 @@ pub fn turn(
         {
             let field_word = texts.t(field_key(*field));
             Some(Turned::Question(
-                texts.t_with(key::PLAYER_ASK_DROP_DRAFT, &[("field", &field_word)]),
+                texts
+                    .t_with(key::PLAYER_ASK_DROP_DRAFT, &[("field", &field_word)])
+                    .into(),
                 Errand::TellSaying(
                     Ask::DropDraft { id: d.id },
-                    texts.t_with(key::PLAYER_DRAFT_DROPPED, &[("field", &field_word)]),
+                    texts
+                        .t_with(key::PLAYER_DRAFT_DROPPED, &[("field", &field_word)])
+                        .into(),
                 ),
             ))
         }
@@ -1697,29 +1719,43 @@ pub fn turn(
         (Target::Tag(field), Press::Remove) => {
             let sheet = meta.sheet(s)?;
             if sheet.value(*field).is_none_or(|v| v.trim().is_empty()) {
-                return Some(Turned::Errand(Errand::Said(texts.t_with(
-                    key::PLAYER_TAG_ALREADY_EMPTY,
-                    &[("field", &texts.t(field_key(*field)))],
-                ))));
+                return Some(Turned::Errand(Errand::Said(
+                    texts
+                        .t_with(
+                            key::PLAYER_TAG_ALREADY_EMPTY,
+                            &[("field", &texts.t(field_key(*field)))],
+                        )
+                        .into(),
+                )));
             }
             let location = sheet.location.to_string_lossy().into_owned();
             let name = named(&location, texts);
             let field_word = texts.t(field_key(*field));
             Some(Turned::Question(
-                texts.t_with(
-                    key::PLAYER_ASK_CLEAR_TAG,
-                    &[("field", &field_word), ("name", &name)],
-                ),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_ASK_CLEAR_TAG,
+                        &[
+                            ("field", Arg::Text(&field_word)),
+                            ("name", Arg::Name(&name)),
+                        ],
+                    )
+                    .into(),
                 Errand::TellSaying(
                     Ask::Retag {
                         location,
                         stamp: sheet.stamp,
                         edits: vec![Edit::Clear { field: *field }],
                     },
-                    texts.t_with(
-                        key::PLAYER_TAG_CLEARING,
-                        &[("field", &field_word), ("name", &name)],
-                    ),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_TAG_CLEARING,
+                            &[
+                                ("field", Arg::Text(&field_word)),
+                                ("name", Arg::Name(&name)),
+                            ],
+                        )
+                        .into(),
                 ),
             ))
         }
@@ -1732,9 +1768,9 @@ pub fn turn(
                     Can::No(why) => Some(why.clone()),
                     Can::Yes(_) => None,
                 })?;
-            Some(Turned::Errand(Errand::Said(
-                crate::tag_words::tags_refusal(&why, texts),
-            )))
+            Some(Turned::Errand(Errand::Said(crate::tag_words::tags_named(
+                &why, texts,
+            ))))
         }
         // ONE IT CAN: its value asked on the door's line.
         (Target::OtherTag(origin, name), Press::Enter) => {
@@ -1760,17 +1796,19 @@ pub fn turn(
             let location = sheet.location.to_string_lossy().into_owned();
             let file = named(&location, texts);
             Some(Turned::Question(
-                texts.t_args(
-                    key::PLAYER_ASK_REMOVE_TAG,
-                    &[
-                        ("tag", Arg::Text(name)),
-                        ("name", Arg::Text(&file)),
-                        (
-                            "values",
-                            Arg::Number(i64::try_from(values).unwrap_or(i64::MAX)),
-                        ),
-                    ],
-                ),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_ASK_REMOVE_TAG,
+                        &[
+                            ("tag", Arg::Text(name)),
+                            ("name", Arg::Name(&file)),
+                            (
+                                "values",
+                                Arg::Number(i64::try_from(values).unwrap_or(i64::MAX)),
+                            ),
+                        ],
+                    )
+                    .into(),
                 Errand::TellSaying(
                     Ask::Retag {
                         location,
@@ -1780,10 +1818,15 @@ pub fn turn(
                             name: name.clone(),
                         }],
                     },
-                    texts.t_with(
-                        key::PLAYER_TAG_NAMED_REMOVING,
-                        &[("tag", name.as_str()), ("name", &file)],
-                    ),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_TAG_NAMED_REMOVING,
+                            &[
+                                ("tag", Arg::Text(name.as_str())),
+                                ("name", Arg::Name(&file)),
+                            ],
+                        )
+                        .into(),
                 ),
             ))
         }
@@ -1794,7 +1837,7 @@ pub fn turn(
             let adding = sheet.adding.as_ref()?;
             match (&adding.origin, &adding.can) {
                 (_, Can::No(why)) => Some(Turned::Errand(Errand::Said(
-                    crate::tag_words::tags_refusal(why, texts),
+                    crate::tag_words::tags_named(why, texts),
                 ))),
                 (Some(origin), Can::Yes(_)) => Some(Turned::Asked(
                     crate::player::Typing::Meta(Typed::NewTagName {
@@ -1819,7 +1862,9 @@ pub fn turn(
             let name = named(&location, texts);
             Some(Turned::Errand(Errand::TellSaying(
                 Ask::SaveCover { location, at: None },
-                texts.t_with(key::PLAYER_COVER_SAVING, &[("name", &name)]),
+                texts
+                    .t_args_marked(key::PLAYER_COVER_SAVING, &[("name", Arg::Name(&name))])
+                    .into(),
             )))
         }
         (Target::CoverRemove, Press::Enter) => {
@@ -1827,14 +1872,18 @@ pub fn turn(
             let location = sheet.location.to_string_lossy().into_owned();
             let name = named(&location, texts);
             Some(Turned::Question(
-                texts.t_with(key::PLAYER_ASK_REMOVE_COVER, &[("name", &name)]),
+                texts
+                    .t_args_marked(key::PLAYER_ASK_REMOVE_COVER, &[("name", Arg::Name(&name))])
+                    .into(),
                 Errand::TellSaying(
                     Ask::Retag {
                         location,
                         stamp: sheet.stamp,
                         edits: vec![Edit::Cover(CoverEdit::Remove)],
                     },
-                    texts.t_with(key::PLAYER_COVER_REMOVING, &[("name", &name)]),
+                    texts
+                        .t_args_marked(key::PLAYER_COVER_REMOVING, &[("name", Arg::Name(&name))])
+                        .into(),
                 ),
             ))
         }
@@ -1849,9 +1898,9 @@ pub enum Turned {
     Errand(Errand),
     /// A question on the door's line, and what its answer is about.
     Asked(crate::player::Typing, Question),
-    /// A yes-or-no question on the page — its sentence and what yes does;
-    /// no does nothing.
-    Question(String, Errand),
+    /// A yes-or-no question on the page — its sentence, with the names it
+    /// quotes, and what yes does; no does nothing.
+    Question(crate::chrome::Named, Errand),
     /// A page, over this one.
     Page(PageId),
     /// A several-line field's words, opened over the page to be changed in
@@ -1957,13 +2006,18 @@ pub fn typed(asked: Typed, said: &str, texts: &ronoctua_i18n::Texts) -> Turned {
     let writing = |location: String, stamp, edit: Edit, what: &str| {
         let name = named(&location, texts);
         let sentence = match &edit {
-            Edit::Set { .. } => {
-                texts.t_with(key::PLAYER_TAG_WRITING, &[("field", what), ("name", &name)])
-            }
-            _ => texts.t_with(
-                key::PLAYER_TAG_NAMED_WRITING,
-                &[("tag", what), ("name", &name)],
-            ),
+            Edit::Set { .. } => texts
+                .t_args_marked(
+                    key::PLAYER_TAG_WRITING,
+                    &[("field", Arg::Text(what)), ("name", Arg::Name(&name))],
+                )
+                .into(),
+            _ => texts
+                .t_args_marked(
+                    key::PLAYER_TAG_NAMED_WRITING,
+                    &[("tag", Arg::Text(what)), ("name", Arg::Name(&name))],
+                )
+                .into(),
         };
         Turned::Errand(Errand::TellSaying(
             Ask::Retag {
@@ -1975,7 +2029,7 @@ pub fn typed(asked: Typed, said: &str, texts: &ronoctua_i18n::Texts) -> Turned {
         ))
     };
     let refused =
-        |why: Why| Turned::Errand(Errand::Said(crate::tag_words::tags_refusal(&why, texts)));
+        |why: Why| Turned::Errand(Errand::Said(crate::tag_words::tags_named(&why, texts)));
     match asked {
         Typed::Tag {
             location,
@@ -2093,7 +2147,9 @@ pub fn typed(asked: Typed, said: &str, texts: &ronoctua_i18n::Texts) -> Turned {
                         Question::plain(id, false),
                     )
                 }
-                Err(Why::BadName) => Turned::Errand(Errand::Said(bad_name(said, &origin, texts))),
+                Err(Why::BadName) => {
+                    Turned::Errand(Errand::Said(bad_name(said, &origin, texts).into()))
+                }
                 Err(why) => refused(why),
             }
         }
@@ -2137,7 +2193,7 @@ pub fn cover_picked(
 ) -> Option<Errand> {
     let sheet = meta.sheet(s)?;
     if let Can::No(why) = &sheet.cover_can {
-        return Some(Errand::Said(crate::tag_words::tags_refusal(why, texts)));
+        return Some(Errand::Said(crate::tag_words::tags_named(why, texts)));
     }
     let location = sheet.location.to_string_lossy().into_owned();
     Some(Errand::TellSaying(
@@ -2148,13 +2204,18 @@ pub fn cover_picked(
                 from: PathBuf::from(picture),
             })],
         },
-        texts.t_with(
-            key::PLAYER_COVER_PUTTING,
-            &[
-                ("picture", &named(&picture.to_string_lossy(), texts)),
-                ("name", &named(&location, texts)),
-            ],
-        ),
+        texts
+            .t_args_marked(
+                key::PLAYER_COVER_PUTTING,
+                &[
+                    (
+                        "picture",
+                        Arg::Name(&named(&picture.to_string_lossy(), texts)),
+                    ),
+                    ("name", Arg::Name(&named(&location, texts))),
+                ],
+            )
+            .into(),
     ))
 }
 
@@ -2164,8 +2225,8 @@ pub fn cover_picked(
 pub struct DraftQuestion {
     /// The draft.
     pub id: DraftId,
-    /// What is asked.
-    pub sentence: String,
+    /// What is asked — with the names it quotes.
+    pub sentence: crate::chrome::Named,
     /// Written into the file.
     pub yes: Errand,
     /// NOT NOW — and `Esc`: the draft stays open, and is asked about again
@@ -2192,20 +2253,26 @@ pub fn draft_question(
     let name = named(&d.location, texts);
     DraftQuestion {
         id: d.id,
-        sentence: texts.t_with(
-            key::PLAYER_ASK_WRITE_DRAFT,
-            &[("field", &field), ("name", &name)],
-        ),
+        sentence: texts
+            .t_args_marked(
+                key::PLAYER_ASK_WRITE_DRAFT,
+                &[("field", Arg::Text(&field)), ("name", Arg::Name(&name))],
+            )
+            .into(),
         yes: Errand::TellSaying(
             Ask::WriteDraft { id: d.id },
-            texts.t_with(
-                key::PLAYER_TAG_WRITING,
-                &[("field", &field), ("name", &name)],
-            ),
+            texts
+                .t_args_marked(
+                    key::PLAYER_TAG_WRITING,
+                    &[("field", Arg::Text(&field)), ("name", Arg::Name(&name))],
+                )
+                .into(),
         ),
         no: Errand::TellSaying(
             Ask::KeepDraft { id: d.id },
-            texts.t_with(key::PLAYER_DRAFT_KEPT, &[("field", &field)]),
+            texts
+                .t_with(key::PLAYER_DRAFT_KEPT, &[("field", &field)])
+                .into(),
         ),
         quoted: draft_lines(Path::new(&d.path)),
     }
@@ -2645,11 +2712,11 @@ pub(crate) mod tests {
         };
         assert_eq!(
             answer(&mut v, Field::Date, "31 May"),
-            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_BAD_DATE))
+            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_BAD_DATE).into())
         );
         assert_eq!(
             answer(&mut v, Field::Track, "three"),
-            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_BAD_NUMBER))
+            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_BAD_NUMBER).into())
         );
         assert_eq!(
             answer(&mut v, Field::Title, "  "),
@@ -2710,10 +2777,13 @@ pub(crate) mod tests {
         v.grabbed(at);
         assert_eq!(
             v.key(Press::Remove, Some(&s), 80, &t),
-            crate::player::Errand::Said(t.t_with(
-                key::PLAYER_TAG_ALREADY_EMPTY,
-                &[("field", &t.t(key::PLAYER_TAG_GENRE))]
-            ))
+            crate::player::Errand::Said(
+                t.t_with(
+                    key::PLAYER_TAG_ALREADY_EMPTY,
+                    &[("field", &t.t(key::PLAYER_TAG_GENRE))]
+                )
+                .into()
+            )
         );
         let rows = v.rows(Some(&s), 80, &t);
         assert_ne!(rows[v.cursor()].target, Target::Answer(false));
@@ -2866,7 +2936,7 @@ pub(crate) mod tests {
                     80,
                     &t
                 ),
-                Errand::Said(crate::tag_words::tags_refusal(&Why::BadLanguage, &t))
+                Errand::Said(crate::tag_words::tags_refusal(&Why::BadLanguage, &t).into())
             );
             v.grabbed(at);
             let Errand::Ask(q) = v.key(Press::Enter, Some(&s), 80, &t) else {
@@ -3003,7 +3073,7 @@ pub(crate) mod tests {
         v.grabbed(at);
         assert_eq!(
             v.key(Press::Enter, Some(&s), 80, &t),
-            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_NOT_A_FILE))
+            crate::player::Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_NOT_A_FILE).into())
         );
     }
 
@@ -3413,11 +3483,11 @@ pub(crate) mod tests {
             };
             assert_eq!(
                 press(&mut v, &fixed, Press::Enter),
-                Errand::Said(reason.clone())
+                Errand::Said(reason.clone().into())
             );
             assert_eq!(
                 press(&mut v, &binary, Press::Remove),
-                Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_NOT_TEXT))
+                Errand::Said(t.t(key::PLAYER_TROUBLE_TAG_NOT_TEXT).into())
             );
             // ONE LINE, ITS ONLY VALUE: asked holding it.
             assert_eq!(

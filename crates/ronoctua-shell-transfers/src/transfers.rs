@@ -699,13 +699,20 @@ fn sentence(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
     let subject = job.work.subjects();
     let name = subject.first();
     let more = job.work.how_many().saturating_sub(1);
+    // THE FIRST IS A NAME (`Arg::Name`), told as every name is; a job's
+    // row wears its list's tones, never a sentence's, so only the words go.
     let who = if more == 0 {
         name
     } else {
-        texts.t_with(
-            crate::key::TRANSFERS_AND_MORE,
-            &[("name", name.as_str()), ("rest", &more.to_string())],
-        )
+        texts
+            .t_args_marked(
+                crate::key::TRANSFERS_AND_MORE,
+                &[
+                    ("name", ronoctua_i18n::Arg::Name(&name)),
+                    ("rest", ronoctua_i18n::Arg::Text(&more.to_string())),
+                ],
+            )
+            .text
     };
     // The name the operation is ON RIGHT NOW beats the set's first name: while
     // twelve files are copying, "which one is it on" is the question, and the

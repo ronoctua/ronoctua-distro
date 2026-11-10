@@ -3,7 +3,7 @@
 //! pairing — a name, then the code the other screen shows, sent off the
 //! door's loop.
 
-use crate::player::{Target, trouble_sentence};
+use crate::player::{Target, trouble_named};
 use crate::player_rows::Builder;
 use ronoctua_player::{
     remote::Role,
@@ -108,18 +108,17 @@ fn timed_out(e: &anyhow::Error) -> bool {
 }
 
 /// What a door says of a pairing that ended: nothing when it paired, the
-/// player's reason when it refused, and which of the other three it was.
+/// player's reason when it refused — the names it quotes told — and which
+/// of the other three it was.
 #[must_use]
-pub fn paired_said(paired: &Paired, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn paired_said(paired: &Paired, texts: &ronoctua_i18n::Texts) -> Option<crate::chrome::Named> {
     use crate::key;
     match paired {
-        Paired::Answered(ronoctua_player::wire::Say::Refused(t)) => {
-            Some(trouble_sentence(t, texts))
-        }
+        Paired::Answered(ronoctua_player::wire::Say::Refused(t)) => Some(trouble_named(t, texts)),
         Paired::Answered(_) => None,
-        Paired::NotInstalled => Some(texts.t(key::PLAYER_NOT_INSTALLED)),
-        Paired::NotRunning => Some(texts.t(key::PLAYER_NOT_RUNNING)),
-        Paired::NoAnswer => Some(texts.t(key::PLAYER_PAIR_NO_ANSWER)),
+        Paired::NotInstalled => Some(texts.t(key::PLAYER_NOT_INSTALLED).into()),
+        Paired::NotRunning => Some(texts.t(key::PLAYER_NOT_RUNNING).into()),
+        Paired::NoAnswer => Some(texts.t(key::PLAYER_PAIR_NO_ANSWER).into()),
     }
 }
 
@@ -277,7 +276,7 @@ mod tests {
         let gone = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
         assert!(!timed_out(&gone));
         assert!(!timed_out(&anyhow::anyhow!("the player did not answer")));
-        let said = |p: Paired| paired_said(&p, &t);
+        let said = |p: Paired| paired_said(&p, &t).map(String::from);
         assert_eq!(
             said(Paired::NoAnswer),
             Some(t.t(crate::key::PLAYER_PAIR_NO_ANSWER))

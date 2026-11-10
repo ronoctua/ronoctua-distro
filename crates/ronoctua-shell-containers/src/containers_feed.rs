@@ -539,7 +539,15 @@ impl Feed {
 impl Readings {
     /// Takes one arrival. Answers what the message line should say, for an
     /// action's end: done, or refused with its reason.
-    pub fn took(&mut self, a: Arrival, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    /// The names each sentence quotes are told (`Arg::Name`) — what was
+    /// acted on, the registry and the user — so the line draws them in a
+    /// name's ink.
+    pub fn took(
+        &mut self,
+        a: Arrival,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<crate::chrome::Named> {
+        use ronoctua_i18n::Arg;
         match a {
             Arrival::Listed(l) => self.listing = Some(l),
             Arrival::Firewall(f) => self.firewall = f,
@@ -565,35 +573,51 @@ impl Readings {
                 name,
                 result,
             } => {
-                return Some(match result {
-                    Ok(()) => texts.t_with(
-                        crate::key::CONTAINERS_ECHO_DONE,
-                        &[("what", &texts.t(action_key(&action))), ("name", &name)],
-                    ),
-                    Err(refusal) => texts.t_with(
-                        crate::key::CONTAINERS_ECHO_REFUSED,
-                        &[
-                            ("what", &texts.t(action_key(&action))),
-                            ("name", &name),
-                            ("why", &crate::containers_words::refused(refusal, texts)),
-                        ],
-                    ),
-                });
+                let what = texts.t(action_key(&action));
+                return Some(
+                    match result {
+                        Ok(()) => texts.t_args_marked(
+                            crate::key::CONTAINERS_ECHO_DONE,
+                            &[("what", Arg::Text(&what)), ("name", Arg::Name(&name))],
+                        ),
+                        Err(refusal) => texts.t_args_marked(
+                            crate::key::CONTAINERS_ECHO_REFUSED,
+                            &[
+                                ("what", Arg::Text(&what)),
+                                ("name", Arg::Name(&name)),
+                                (
+                                    "why",
+                                    Arg::Text(&crate::containers_words::refused(refusal, texts)),
+                                ),
+                            ],
+                        ),
+                    }
+                    .into(),
+                );
             }
             Arrival::LoggedIn { login, result } => {
-                return Some(match result {
-                    Ok(()) => texts.t_with(
-                        crate::key::CONTAINERS_ECHO_LOGGED_IN,
-                        &[("registry", &login.registry), ("user", &login.user)],
-                    ),
-                    Err(refusal) => texts.t_with(
-                        crate::key::CONTAINERS_ECHO_LOGIN_REFUSED,
-                        &[
-                            ("registry", &login.registry),
-                            ("why", &crate::containers_words::refused(refusal, texts)),
-                        ],
-                    ),
-                });
+                return Some(
+                    match result {
+                        Ok(()) => texts.t_args_marked(
+                            crate::key::CONTAINERS_ECHO_LOGGED_IN,
+                            &[
+                                ("registry", Arg::Name(&login.registry)),
+                                ("user", Arg::Name(&login.user)),
+                            ],
+                        ),
+                        Err(refusal) => texts.t_args_marked(
+                            crate::key::CONTAINERS_ECHO_LOGIN_REFUSED,
+                            &[
+                                ("registry", Arg::Name(&login.registry)),
+                                (
+                                    "why",
+                                    Arg::Text(&crate::containers_words::refused(refusal, texts)),
+                                ),
+                            ],
+                        ),
+                    }
+                    .into(),
+                );
             }
         }
         None
@@ -735,7 +759,7 @@ mod tests {
             },
             "web".to_owned(),
         );
-        let said: Vec<String> = feed
+        let said: Vec<crate::chrome::Named> = feed
             .take()
             .into_iter()
             .filter_map(|a| r.took(a, &t))

@@ -546,6 +546,16 @@ struct BlockDrawn {
     bar: Option<crate::chrome::Rect>,
 }
 
+/// What the rows lay for the hand, as a frame lays it ([`Player::rows_laid`]).
+struct RowsLaid {
+    /// The room they are laid in, and the bar's column while it is drawn.
+    room: crate::chrome::Room,
+    /// Their own grounds — a question's block — under every quad they draw.
+    grounds: Vec<ronoctua_render::quad::Quad>,
+    /// Every pointer's light, over the pictures and so over the grounds.
+    bands: Vec<ronoctua_render::quad::Quad>,
+}
+
 /// The deck before anything was laid out: the bar of nothing, no room.
 fn blank_deck() -> crate::player_timeline::Deck {
     crate::player_timeline::of_state(&[], None, crate::player_timeline::Room::wide(0), 0)
@@ -725,11 +735,12 @@ impl Outbox {
     /// daemon took it; what stays in the door is handed back, as
     /// `player::carry_out` hands it — the footer's door on a photograph's
     /// doorway keeps its errands the same way (`player_region`).
+    #[allow(clippy::result_large_err)] // handed back whole: see `player::Errand`
     pub(crate) fn carry_out(
         &mut self,
         errand: crate::player::Errand,
         texts: &ronoctua_i18n::Texts,
-    ) -> Result<Option<String>, crate::player::Errand> {
+    ) -> Result<Option<crate::chrome::Named>, crate::player::Errand> {
         use crate::player::Errand;
         match errand {
             Errand::Nothing => Ok(None),
@@ -739,7 +750,7 @@ impl Outbox {
             }
             Errand::Restart => {
                 self.restarted = true;
-                Ok(Some(texts.t(crate::key::PLAYER_RESTARTING)))
+                Ok(Some(texts.t(crate::key::PLAYER_RESTARTING).into()))
             }
             Errand::Said(sentence) => Ok(Some(sentence)),
             Errand::Tell(ask) => {
@@ -769,13 +780,7 @@ impl Outbox {
                 self.asked.push(Ask::KeyCheck {
                     service: key.service(),
                 });
-                Ok(Some(texts.t_with(
-                    crate::key::PLAYER_KEY_CHECKING,
-                    &[(
-                        "service",
-                        &texts.t(crate::player::service_key(key.service())),
-                    )],
-                )))
+                Ok(Some(crate::player::key_checking(key.service(), texts)))
             }
             Errand::KeepAccount { .. } => {
                 let key = ronoctua_lookup::keys::Key::OpenSubtitlesAccount;
@@ -783,24 +788,18 @@ impl Outbox {
                 self.asked.push(Ask::KeyCheck {
                     service: key.service(),
                 });
-                Ok(Some(texts.t_with(
-                    crate::key::PLAYER_KEY_CHECKING,
-                    &[(
-                        "service",
-                        &texts.t(crate::player::service_key(key.service())),
-                    )],
-                )))
+                Ok(Some(crate::player::key_checking(key.service(), texts)))
             }
             Errand::ForgetKey(key) => {
                 self.keys_forgotten.push(key);
-                Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN)))
+                Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN).into()))
             }
             // A TRANSLATION KEY is the machine's: a photograph keeps none,
             // and says what the door would.
             Errand::KeepWordsKey { key, .. } => {
-                Ok(Some(crate::player_translator::kept_said(key, texts)))
+                Ok(Some(crate::player_translator::kept_said(key, texts).into()))
             }
-            Errand::ForgetWordsKey(_) => Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN))),
+            Errand::ForgetWordsKey(_) => Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN).into())),
             Errand::Websites(change) => {
                 self.websites.push(change);
                 Ok(None)
@@ -898,12 +897,13 @@ impl Reach {
 
     /// Carries an errand out as far as the door's edge — see
     /// `player::carry_out` — and hands back what is the door's.
+    #[allow(clippy::result_large_err)] // handed back whole: see `player::Errand`
     fn carry_out(
         &mut self,
         errand: crate::player::Errand,
         texts: &ronoctua_i18n::Texts,
         told: &crate::player::ToldSender,
-    ) -> Result<Option<String>, crate::player::Errand> {
+    ) -> Result<Option<crate::chrome::Named>, crate::player::Errand> {
         match self {
             Self::Machine { .. } => crate::player::carry_out(errand, texts, Some(told)),
             Self::Kept(out) => out.carry_out(errand, texts),
@@ -2160,6 +2160,107 @@ impl Player {
         ))
     }
 
+    /// WHAT THE ROWS LAY FOR THE HAND, and the room they are laid in — the
+    /// bar's column, while it is drawn; none on stage, where there is no
+    /// list: a row's OWN GROUND, edge to edge as a band is, and every
+    /// pointer's light (`lit`, a pointer's colour and row, and `lit_x`, where
+    /// across it is — as `Canvas::lit` and `Canvas::lit_x`). The painter
+    /// lays the grounds under every quad the rows draw and the bands over
+    /// the pictures, so the hand still reads on a question's block; apart
+    /// from it so a test reads what a frame lays with no GPU behind it.
+    fn rows_laid(
+        &self,
+        ui: &Ui,
+        rows: &[crate::player_rows::Row],
+        lit: &[(tokens::Color, Option<usize>)],
+        lit_x: &[Option<f32>],
+    ) -> RowsLaid {
+        let stage = self.on_stage();
+        let first = self.layout.list;
+        let room = self.room(ui);
+        #[allow(clippy::cast_precision_loss)]
+        let (w, h) = (ui.width as f32, ui.height as f32);
+        let laid = if stage {
+            crate::chrome::Room::default()
+        } else {
+            crate::chrome::Room::of(
+                crate::chrome::list_scroll(rows.len(), room, ui.offset),
+                w,
+                h,
+            )
+        };
+        let grounds = if stage {
+            Vec::new()
+        } else {
+            let grounds: Vec<Option<tokens::Color>> = rows.iter().map(|r| r.ground).collect();
+            crate::chrome::row_grounds(&grounds, ui.offset, room, first, laid.band_width())
+        };
+        // A ROW OF SEVERAL LINES — a label or a value wrapped, what is said
+        // under a result — lights WHOLE under the pointer, as a click takes
+        // it whole: one lit line of three said the click takes one.
+        //
+        // AND A FIGURE LIGHTS NONE, here too and not only where the pointer
+        // moved: a pointer that stayed still while a key changed the page
+        // under it may rest on a shelf of posters now, and a band drawn over
+        // the pictures hid them.
+        let figure = |n: usize| {
+            rows.get(n).is_some_and(|r| {
+                r.deck.is_some()
+                    || r.schematic.is_some()
+                    || (!r.covers.is_empty() && !matches!(r.lit, crate::player_rows::Lit::From(_)))
+                    || r.globe.is_some()
+            })
+        };
+        let lit = lit
+            .iter()
+            .zip(lit_x.iter().copied().chain(std::iter::repeat(None)))
+            .flat_map(|(&(colour, row), x)| {
+                let lines = crate::player_rows::whole_row(rows, row);
+                let figured = lines.clone().any(figure);
+                lines
+                    .filter(move |_| !figured)
+                    .map(move |line| (colour, Some(line), x))
+            })
+            // WHAT EACH LINE LIGHTS (`player_rows::lighting`): a line beside
+            // a figure from its words on, wherever on the row the pointer
+            // rests — so its band stands at its words' first column — and a
+            // line of controls with none lights nothing.
+            .filter_map(|(colour, line, x)| {
+                match line.map(|n| crate::player_rows::lighting(rows, n)) {
+                    Some(crate::player_rows::Lighting::From(column)) => {
+                        let (at, _) = across().band_of(column, 1);
+                        Some((colour, line, Some(at + cell_px() / 2.0)))
+                    }
+                    Some(crate::player_rows::Lighting::Cell(cells)) if cells.is_empty() => None,
+                    _ => Some((colour, line, x)),
+                }
+            });
+        // A GRID'S ROW LIGHTS THE ONE CELL under the pointer — the picker's
+        // files — by the answer the click takes it with (`across`); a line
+        // beside a figure, from its words on; every other row, whole.
+        let bands = crate::chrome::hover_cells(
+            lit,
+            |n| match crate::player_rows::lighting(rows, n) {
+                crate::player_rows::Lighting::Whole => Vec::new(),
+                crate::player_rows::Lighting::Cell(cells) => cells,
+                crate::player_rows::Lighting::From(column) => {
+                    vec![(column, u16::MAX - column)]
+                }
+            },
+            ui.offset,
+            room,
+            rows.len(),
+            first,
+            laid.band_width(),
+            across(),
+        );
+        RowsLaid {
+            room: laid,
+            grounds,
+            bands,
+        }
+    }
+
     /// THE BLOCK'S DECK AS IT IS DRAWN: its shapes — a dragged band's ghost
     /// among them — its words, each glyph lit under the pointer as a button
     /// is, and its bar's track. The painter draws this, and nothing else of
@@ -2452,6 +2553,12 @@ impl Player {
             .key(press, self.player.as_ref(), ui.columns, &ui.texts);
         let rows = self.rows(ui).len();
         self.follow(ui, rows);
+        // A ROW THE VIEW BROUGHT TO THE TOP — a list's title, its page turned
+        // — goes first AFTER the follow, whose margin would put it a line
+        // back (`View::bring_to_top`), as far as the list's end lets it.
+        if let Some(top) = self.view.take_top() {
+            ui.offset = top.min(rows.saturating_sub(self.room(ui)));
+        }
         self.apply(ui, errand);
     }
 
@@ -3572,6 +3679,17 @@ impl crate::column::Tenant for Player {
 }
 
 impl Player {
+    /// WHAT A ROW OR A CONTROL WHOSE SENTENCE IS `id` SAYS UNDER THE POINTER
+    /// in this door, its keys as THIS door reaches them
+    /// (`player::sentence_of`): after `LEADER Alt` in a WINDOW, which keeps
+    /// the keyboard's keys from the view (`Content::gates_keys`) — and BARE
+    /// in the COLUMN, which keeps none (`Column::gates_keys`): there a bare
+    /// `[` reaches the player, and `⌥[` taught a key that does nothing while
+    /// the one that turns the page went unsaid.
+    fn sentence_here(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        crate::player::sentence_of(id, texts, self.door == Door::Window)
+    }
+
     /// One frame of the view — the window's whole surface, or a column's
     /// area at its three widths: the header on `area.top`, the picture under
     /// it, the transport, and the rows.
@@ -3648,22 +3766,25 @@ impl Player {
                 crate::player_timeline::hover_sentence(hit, self.player.as_ref(), &ui.texts)
             }),
         }
-        .or_else(|| under_control.and_then(|id| crate::chrome::hint_sentence(id, &ui.texts)))
+        .or_else(|| under_control.and_then(|id| self.sentence_here(id, &ui.texts)))
         // AND A ROW THAT IS ONE THING AND SAYS WHAT IT DOES — a row of a
         // video's own page (`Target::about`) — read off the same row a click
-        // there takes.
+        // there takes; the ranking's page row with its keys as this door
+        // reaches them (`Player::sentence_here`).
         .or_else(|| {
             let (x, y) = self.pointer_at?;
             let row = rows.get(self.row_at(ui, x, y)?)?;
-            crate::chrome::hint_sentence(row.target.about()?, &ui.texts)
+            self.sentence_here(row.target.about()?, &ui.texts)
         });
         let question = crate::door::list::the_question(ui);
-        let (pieces, carries) = match (question, crate::door::list::said_on_line_zero(ui), pointed)
-        {
+        let message = crate::door::list::said_named_on_line_zero(ui).cloned();
+        let (pieces, carries) = match (question, message.as_ref(), pointed) {
             // A QUESTION BEING TYPED OUTRANKS THE REST: the keyboard is its.
             (Some(q), _, _) => (q, crate::chrome::Carries::Question),
-            (None, Some(t), _) => (
-                vec![crate::chrome::Piece::said(t.to_owned())],
+            // WHAT THE DOOR SAYS, its names in a name's ink
+            // (`door::list::said_pieces`, the footer's echo's builder too).
+            (None, Some(message), _) => (
+                crate::door::list::said_pieces(message),
                 crate::chrome::Carries::Said,
             ),
             (None, None, Some(said)) => (
@@ -3860,6 +3981,15 @@ impl Player {
         // chip under its glyph (`chrome::chip`, the footer's drawing too),
         // painted over the bands below.
         let first = self.layout.list;
+        // THE ROOM THE ROWS ARE LAID IN, and what they lay for the hand
+        // (`rows_laid`): the bar's column is its own while it is drawn, and
+        // only then — written down here, for the pointer to read; on stage
+        // there is no list and no bar.
+        let laid = self.rows_laid(ui, &rows, canvas.lit, canvas.lit_x);
+        ui.room = laid.room;
+        // THE ROWS' OWN GROUNDS — a question's block — under every quad the
+        // rows draw from here on, and over what was drawn before them.
+        canvas.under.extend(laid.grounds);
         let mut chips = Vec::new();
         // THE GLOBE'S BOX among the rows on screen, once for its run of lines
         // (`player_globe::box_of`): what is painted in it and what the
@@ -4015,75 +4145,7 @@ impl Player {
                 self.globe_drawn = Some((drawn, (rgba.width, rgba.height)));
             }
         }
-        // THE BAR'S COLUMN IS ITS OWN WHILE IT IS DRAWN, and only then —
-        // written down here, where it is drawn, for the pointer to read. On
-        // stage there is no list and no bar.
         let scroll = crate::chrome::list_scroll(rows.len(), room, ui.offset);
-        ui.room = if stage {
-            crate::chrome::Room::default()
-        } else {
-            crate::chrome::Room::of(scroll, w, h)
-        };
-        // A ROW OF SEVERAL LINES — a label or a value wrapped, what is said
-        // under a result — lights WHOLE under the pointer, as a click takes
-        // it whole: one lit line of three said the click takes one.
-        //
-        // AND A FIGURE LIGHTS NONE, here too and not only where the pointer
-        // moved: a pointer that stayed still while a key changed the page
-        // under it may rest on a shelf of posters now, and a band drawn over
-        // the pictures hid them.
-        let figure = |n: usize| {
-            rows.get(n).is_some_and(|r| {
-                r.deck.is_some()
-                    || r.schematic.is_some()
-                    || (!r.covers.is_empty() && !matches!(r.lit, crate::player_rows::Lit::From(_)))
-                    || r.globe.is_some()
-            })
-        };
-        let lit = canvas
-            .lit
-            .iter()
-            .zip(canvas.lit_x.iter().copied().chain(std::iter::repeat(None)))
-            .flat_map(|(&(colour, row), x)| {
-                let lines = crate::player_rows::whole_row(&rows, row);
-                let figured = lines.clone().any(figure);
-                lines
-                    .filter(move |_| !figured)
-                    .map(move |line| (colour, Some(line), x))
-            })
-            // WHAT EACH LINE LIGHTS (`player_rows::lighting`): a line beside
-            // a figure from its words on, wherever on the row the pointer
-            // rests — so its band stands at its words' first column — and a
-            // line of controls with none lights nothing.
-            .filter_map(|(colour, line, x)| {
-                match line.map(|n| crate::player_rows::lighting(&rows, n)) {
-                    Some(crate::player_rows::Lighting::From(column)) => {
-                        let (at, _) = across().band_of(column, 1);
-                        Some((colour, line, Some(at + cell_px() / 2.0)))
-                    }
-                    Some(crate::player_rows::Lighting::Cell(cells)) if cells.is_empty() => None,
-                    _ => Some((colour, line, x)),
-                }
-            });
-        // A GRID'S ROW LIGHTS THE ONE CELL under the pointer — the picker's
-        // files — by the answer the click takes it with (`across`); a line
-        // beside a figure, from its words on; every other row, whole.
-        let bands = crate::chrome::hover_cells(
-            lit,
-            |n| match crate::player_rows::lighting(&rows, n) {
-                crate::player_rows::Lighting::Whole => Vec::new(),
-                crate::player_rows::Lighting::Cell(cells) => cells,
-                crate::player_rows::Lighting::From(column) => {
-                    vec![(column, u16::MAX - column)]
-                }
-            },
-            ui.offset,
-            room,
-            rows.len(),
-            first,
-            ui.room.band_width(),
-            across(),
-        );
         // A GRID'S CURSOR CELL WEARS THE SELECTION, the file manager's cursor,
         // on its own cell — under the hover, which says where the pointer is.
         let selection = crate::chrome::cell_selection(
@@ -4099,7 +4161,7 @@ impl Player {
             canvas.over.extend(top);
         }
         canvas.over.extend(selection);
-        canvas.over.extend(bands);
+        canvas.over.extend(laid.bands);
         canvas.over.extend(chips);
         if !stage {
             canvas
@@ -4198,7 +4260,7 @@ mod tests {
             &t,
         );
         assert_eq!(
-            said,
+            said.map(|s| s.map(String::from)),
             Ok(Some(t.t_with(
                 crate::key::PLAYER_KEY_CHECKING,
                 &[("service", "TMDB")]
@@ -4217,7 +4279,8 @@ mod tests {
             "a key is kept where it is printed"
         );
         assert_eq!(
-            out.carry_out(Errand::ForgetKey(Key::SubDl), &t),
+            out.carry_out(Errand::ForgetKey(Key::SubDl), &t)
+                .map(|s| s.map(String::from)),
             Ok(Some(t.t(crate::key::PLAYER_KEY_FORGOTTEN)))
         );
         assert_eq!(out.keys_forgotten, vec![Key::SubDl]);
@@ -4582,6 +4645,25 @@ mod tests {
         assert!(ui.quit, "the column stayed");
     }
 
+    /// FAILS IF: the ranking's page row, under the pointer in the COLUMN,
+    /// teaches its keys after `LEADER Alt` — `⌥[`, which never reaches a
+    /// column (it gates no key), while the bare `[` that turns the page there
+    /// goes unsaid — or a WINDOW stops teaching them after `LEADER Alt`, the
+    /// only way its keys reach it.
+    #[test]
+    fn each_door_teaches_the_page_keys_as_it_reaches_them() {
+        let page = "player-ranking-page";
+        let glyph = crate::chrome::leader_alt_text("", false);
+        let (c, ui) = a_photographs(Door::Column, State::default());
+        let said = c.sentence_here(page, &ui.texts).expect("a sentence");
+        assert!(said.starts_with('['), "the column's `[` unsaid: {said}");
+        assert!(!said.contains(&glyph), "`LEADER Alt` in a column: {said}");
+        let (w, ui) = a_photographs(Door::Window, State::default());
+        let said = w.sentence_here(page, &ui.texts).expect("a sentence");
+        let reached = crate::chrome::leader_alt_text("[", false);
+        assert!(said.contains(&reached), "`{reached}` untaught: {said}");
+    }
+
     /// A window onto a player that answered, with no daemon, no compositor,
     /// no loop and no thread behind it — its timers arm nothing.
     fn a_window(state: State) -> (Player, Ui) {
@@ -4794,7 +4876,7 @@ mod tests {
         for id in ["player-louder", "player-quieter"] {
             assert_eq!(
                 button_errand(id, None, &texts),
-                Errand::Said(not_running.clone()),
+                Errand::Said(not_running.clone().into()),
                 "{id}"
             );
         }
@@ -4802,7 +4884,7 @@ mod tests {
         for press in [Press::Louder, Press::Quieter] {
             assert_eq!(
                 view.key(press, None, 40, &texts),
-                Errand::Said(not_running.clone()),
+                Errand::Said(not_running.clone().into()),
                 "{press:?}"
             );
         }
@@ -4810,7 +4892,7 @@ mod tests {
         c.player = None;
         c.turn_the_volume(&mut ui, 1);
         assert!(c.asked().is_empty(), "the wheel asked {:?}", c.asked());
-        assert_eq!(ui.message, Some(not_running));
+        assert_eq!(ui.message.as_deref(), Some(not_running.as_str()));
     }
 
     /// FAILS IF: `TAB` in the window stops taking the keyboard to its
@@ -5314,6 +5396,72 @@ mod tests {
         w.outline_arrived(&mut ui, Some(outline));
         w.relayout(&ui, &Area::whole());
         (w, ui)
+    }
+
+    /// FAILS IF: the window lays a question's ground anywhere but under the
+    /// light the hand gives its answers — no ground at all, a block cut in
+    /// several quads, one narrower or wider than a band (the room's, up to
+    /// the bar), one off the block's lines (from its sentence to the end of
+    /// its "yes"), or one among the quads laid OVER the pictures, with the
+    /// bands, where it would hide the band of its "yes"; or that band is not
+    /// laid, or leaves the ground. The ground goes in both doors: the
+    /// footer's region tells its own (`the_region_tells_the_question_s_ground`).
+    #[test]
+    fn the_window_lays_the_question_s_ground_under_its_band() {
+        use crate::chrome::QUESTION_GROUND;
+        use crate::player::{Press, Target};
+        let (mut w, mut ui) = a_laid_window(Door::Window, a_set_of_three());
+        w.pressed(&mut ui, Press::Clear);
+        let rows = w.rows(&ui);
+        let at = |yes: bool| {
+            rows.iter()
+                .position(|r| r.target == Target::Answer(yes))
+                .unwrap_or_else(|| panic!("no answer {yes}: {rows:?}"))
+        };
+        let (no, yes) = (at(false), at(true));
+        // THE BLOCK: from the first line on the ground to the yes's last.
+        let mut start = no;
+        while start > 0 && rows[start - 1].ground.is_some() {
+            start -= 1;
+        }
+        let end = crate::player_rows::whole_row(&rows, Some(yes)).end;
+        assert!(start < no, "no sentence on the ground");
+        // ON SCREEN, as the painter keeps the offset.
+        let room = w.room(&ui);
+        ui.offset = start.saturating_sub(1).min(rows.len().saturating_sub(room));
+        let laid = w.rows_laid(
+            &ui,
+            &rows,
+            &[(tokens::color::SURFACE_HOVER, Some(yes))],
+            &[None],
+        );
+        #[allow(clippy::cast_precision_loss)]
+        let y_of = |n: usize| (f32::from(w.layout.list) + (n - ui.offset) as f32) * line_px();
+        assert!(
+            !laid.bands.iter().any(|q| q.color == QUESTION_GROUND),
+            "a ground is laid over the pictures, with the bands"
+        );
+        let [g] = laid.grounds.as_slice() else {
+            panic!("the block is not one ground: {:?}", laid.grounds);
+        };
+        assert_eq!(g.color, QUESTION_GROUND);
+        assert!(
+            g.x.abs() < f32::EPSILON && (g.width - laid.room.band_width()).abs() < f32::EPSILON,
+            "the ground is not as wide as a band: {g:?}"
+        );
+        assert!(
+            (g.y - y_of(start)).abs() < 0.5 && (g.y + g.height - y_of(end)).abs() < 0.5,
+            "the ground is off the block's lines: {g:?}, lines {start}..{end}"
+        );
+        let b = laid
+            .bands
+            .iter()
+            .find(|q| q.color == tokens::color::SURFACE_HOVER && (q.y - y_of(yes)).abs() < 0.5)
+            .expect("no band under the hand on the yes");
+        assert!(
+            b.x >= g.x && b.x + b.width <= g.x + g.width + 0.5,
+            "the band leaves the ground: {b:?} over {g:?}"
+        );
     }
 
     /// One pointer event at `(x, y)`.

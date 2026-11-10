@@ -54,6 +54,10 @@ critério de pronto, em poucas linhas.
   um terminal cujo programa já terminou mostra a janela e a fecha na hora, em vez de guardar a
   última tela até uma tecla. A marca dos terminais sem janela pisca por um instante quando um
   terminal novo abre, antes de a janela dele se ligar.
+- **A pergunta em bloco só nos dois apps de vídeo**: as perguntas da atualização (que guarda o
+  próprio `Aim` em `approval::Question` e `machine_gesture::Question`), dos agentes, dos pertences,
+  dos containers e do Incus escrevem a cor do "sim" à mão e não ficam sobre o chão da pergunta.
+  Pronto quando usam `chrome::question_lines`, `Stakes` e `answer_tone`.
 - **O IME além do terminal**: as perguntas das portas, o acesso rápido e a busca do terminal ainda
   não recebem texto do fcitx5; a janela de candidatos veste o tema do fcitx5, não os nossos tokens; o
   Chrome só usa o IME com `--enable-wayland-ime --wayland-text-input-version=3`. Os apps GTK (o
@@ -191,7 +195,9 @@ Nada disso muda o que a pessoa vê; faça quando mexer na área.
   `ronoctua-design` lê o WIT de fora do crate; um teste de tempo de parede ao lado de um `rustc`.
 - **O shell em crates**: a lista à mão `WITH_ACTION` e o `run-command-handles-every-key` podem sair;
   o `CONCRETE` do rodapé está vazio; o conjunto da base está escrito em quatro checks; a câmera do
-  rodapé não alcança o menu da janela, não espera a tabela de ícones e não tem ponteiro (`--hover`).
+  rodapé não alcança o menu da janela, não espera a tabela de ícones, não tem ponteiro (`--hover`)
+  e não desenha as figuras de uma região (as miniaturas do catálogo de vídeos e do ranking saem
+  como lugar vazio).
 - **Os valores como dado**: a biblioteca do brain compila o manifesto de todo módulo; a gramática dos
   lembretes ainda é texto compilado; o `mimeDb` lê o `icons.json` inteiro; um glifo desenhado por
   vários tokens mostra um só no navegador de ícones; um glifo de módulo da pessoa que a fonte não tem
@@ -217,4 +223,9 @@ Nada disso muda o que a pessoa vê; faça quando mexer na área.
     `video_metrics_feed::mark`, `hide` e `delete` (outro caminho de escrita no ranking);
   - um PARSED que `channels_to_scan` e `query::channels` filtrem `staged IS NULL` (um canal em
     espera varrido, ou listado entre os do catálogo);
-  - a ida e volta de `import`/`export` no `video-metrics-vm` (a CLI que fixture, foto e VM usam).
+  - a ida e volta de `import`/`export` no `video-metrics-vm` (a CLI que fixture, foto e VM usam);
+  - `names-in-a-sentence-are-named`, um PARSED dos `.ftl` e das chamadas de produção (~1 min): a
+    chave cuja frase interpola um argumento de nome (os de `chrome::QUOTED_ARGUMENTS`) chamada sem
+    `Arg::Name` — um nome novo que volta à tinta da frase sem ninguém ver;
+  - `a-question-ground-is-under-its-band`: o chão de uma pergunta pintado antes das faixas do
+    ponteiro e do cursor, nas duas portas (na ordem trocada o chão esconde a faixa).

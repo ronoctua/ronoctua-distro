@@ -1460,47 +1460,68 @@ impl ModelineAdapter for Adapter<'_> {
         }
     }
 
-    fn hint(&self, t: &Target, texts: &Texts) -> Option<String> {
+    fn hint(&self, t: &Target, texts: &Texts) -> Option<crate::chrome::Named> {
         let count = |n: usize| Arg::Number(i64::try_from(n).unwrap_or(i64::MAX));
+        // A TAB'S TITLE AND AN EXTENSION'S NAME are told as names
+        // (`Arg::Name`): the line draws them in their own ink.
         Some(match t {
-            Target::Back => texts.t(key::HINT_KIOSK_BACK),
-            Target::Forward => texts.t(key::HINT_KIOSK_FORWARD),
-            Target::Reload => texts.t(key::HINT_KIOSK_RELOAD),
-            Target::Before(n) => texts.t_args(key::HINT_KIOSK_TABS_BEFORE, &[("count", count(*n))]),
-            Target::After(n) => texts.t_args(key::HINT_KIOSK_TABS_AFTER, &[("count", count(*n))]),
+            Target::Back => texts.t(key::HINT_KIOSK_BACK).into(),
+            Target::Forward => texts.t(key::HINT_KIOSK_FORWARD).into(),
+            Target::Reload => texts.t(key::HINT_KIOSK_RELOAD).into(),
+            Target::Before(n) => texts
+                .t_args(key::HINT_KIOSK_TABS_BEFORE, &[("count", count(*n))])
+                .into(),
+            Target::After(n) => texts
+                .t_args(key::HINT_KIOSK_TABS_AFTER, &[("count", count(*n))])
+                .into(),
             Target::Tab {
                 active: true,
                 title,
                 ..
-            } => texts.t_with(key::HINT_KIOSK_TAB_CURRENT, &[("title", title)]),
-            Target::Tab { title, .. } => texts.t_with(key::HINT_KIOSK_TAB, &[("title", title)]),
-            Target::NewTab => texts.t(key::HINT_KIOSK_NEW_TAB),
-            Target::Extension { name, .. } => texts.t_with(key::HINT_KIOSK_EXT, &[("name", name)]),
+            } => texts
+                .t_args_marked(key::HINT_KIOSK_TAB_CURRENT, &[("title", Arg::Name(title))])
+                .into(),
+            Target::Tab { title, .. } => texts
+                .t_args_marked(key::HINT_KIOSK_TAB, &[("title", Arg::Name(title))])
+                .into(),
+            Target::NewTab => texts.t(key::HINT_KIOSK_NEW_TAB).into(),
+            Target::Extension { name, .. } => texts
+                .t_args_marked(key::HINT_KIOSK_EXT, &[("name", Arg::Name(name))])
+                .into(),
             Target::Extensions { window } => {
-                let names: Vec<String> = self
+                let names: Vec<&str> = self
                     .kiosks
                     .state_of(*window)
                     .map_or(&[][..], |(_, e)| e)
                     .iter()
                     .filter(|e| e.enabled && Some(e.id.as_str()) != self.kiosks.ours())
-                    .map(|e| e.name.clone())
+                    .map(|e| e.name.as_str())
                     .collect();
                 if names.is_empty() {
-                    texts.t(key::HINT_KIOSK_EXTENSIONS_NONE)
+                    texts.t(key::HINT_KIOSK_EXTENSIONS_NONE).into()
                 } else {
-                    texts.t_with(key::HINT_KIOSK_EXTENSIONS, &[("names", &names.join(", "))])
+                    // EACH EXTENSION A NAME of its own; the commas are nobody's.
+                    crate::chrome::names_listed(
+                        texts,
+                        key::HINT_KIOSK_EXTENSIONS,
+                        "names",
+                        &names,
+                        ", ",
+                    )
                 }
             }
-            Target::Zoom(p) => texts.t_args(
-                key::HINT_KIOSK_ZOOM,
-                &[("percent", Arg::Number(i64::from(*p)))],
-            ),
-            Target::ChromeUi(Ui::Hidden) => texts.t(key::HINT_KIOSK_CHROME_HIDDEN),
-            Target::ChromeUi(Ui::Shown) => texts.t(key::HINT_KIOSK_CHROME_SHOWN),
-            Target::More => texts.t(key::HINT_KIOSK_MORE),
-            Target::Offline(Offline::Bridge) => texts.t(key::HINT_KIOSK_OFFLINE_BRIDGE),
-            Target::Offline(Offline::Chrome) => texts.t(key::HINT_KIOSK_OFFLINE_CHROME),
-            Target::Offline(Offline::Version) => texts.t(key::HINT_KIOSK_OFFLINE_VERSION),
+            Target::Zoom(p) => texts
+                .t_args(
+                    key::HINT_KIOSK_ZOOM,
+                    &[("percent", Arg::Number(i64::from(*p)))],
+                )
+                .into(),
+            Target::ChromeUi(Ui::Hidden) => texts.t(key::HINT_KIOSK_CHROME_HIDDEN).into(),
+            Target::ChromeUi(Ui::Shown) => texts.t(key::HINT_KIOSK_CHROME_SHOWN).into(),
+            Target::More => texts.t(key::HINT_KIOSK_MORE).into(),
+            Target::Offline(Offline::Bridge) => texts.t(key::HINT_KIOSK_OFFLINE_BRIDGE).into(),
+            Target::Offline(Offline::Chrome) => texts.t(key::HINT_KIOSK_OFFLINE_CHROME).into(),
+            Target::Offline(Offline::Version) => texts.t(key::HINT_KIOSK_OFFLINE_VERSION).into(),
         })
     }
 
@@ -2067,6 +2088,58 @@ mod tests {
         let other_one = hover(8);
         assert!(other_one.contains("other profile"), "{other_one}");
         assert!(!other_one.contains("password"), "{other_one}");
+    }
+
+    /// FAILS IF: a hover says a tab's title or an extension's name in the
+    /// line's own ink — not told as a name (`Arg::Name`) — or tells the
+    /// words around it as one, or the extensions as ONE name, commas and
+    /// all (a name with a comma of its own included).
+    #[test]
+    fn a_hover_tells_its_names() {
+        let t = texts();
+        let mut k = launched();
+        let title = format!("ronoctua {NONCE}");
+        k.compositor(
+            &Event::WindowChanged(window(7, APP_ID, &title, false)),
+            &[window(7, APP_ID, &title, false)],
+        );
+        k.heard(Heard::Connected(1));
+        let mut st = state(NONCE, true, "fullscreen", vec![tab(1, 0, true, "A")]);
+        st.extensions.push(wire::Extension {
+            id: "cccccccccccccccccccccccccccccccc".into(),
+            name: "A reader, of pages".into(),
+            enabled: true,
+            ..wire::Extension::default()
+        });
+        k.heard(Heard::Said(1, Said::State(st)));
+        let a = k.adapter();
+        let names = |target: &Target| -> Vec<String> {
+            let said = a.hint(target, &t).expect("a sentence");
+            said.names()
+                .iter()
+                .map(|r| said.as_str()[r.clone()].to_owned())
+                .collect()
+        };
+        for active in [true, false] {
+            let tab = Target::Tab {
+                id: 1,
+                index: 0,
+                active,
+                title: "The front page".to_owned(),
+            };
+            assert_eq!(names(&tab), ["The front page"], "active: {active}");
+        }
+        let one = Target::Extension {
+            id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            name: "A password keeper".into(),
+        };
+        assert_eq!(names(&one), ["A password keeper"]);
+        assert_eq!(
+            names(&Target::Extensions { window: 7 }),
+            ["A password keeper", "A reader, of pages"]
+        );
+        // A SENTENCE WITH NO NAME tells none.
+        assert!(names(&Target::Reload).is_empty());
     }
 
     /// FAILS IF: opening refuses nothing it should, or opens a second

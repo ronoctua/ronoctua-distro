@@ -92,7 +92,7 @@ pub struct Foot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Shown {
     Question,
-    Said(String),
+    Said(crate::chrome::Named),
     Explained(String),
 }
 
@@ -272,9 +272,25 @@ pub(crate) fn says_it(ui: &Ui) -> bool {
 /// with a cell of air before them.
 const CLUSTER: u16 = 4;
 
-/// A message, wrapped to the room the area's text has.
+/// The cells a message has on each of its lines: the window's columns, less
+/// the clock's and the dismissal's at the right of the first.
+fn message_room(columns: u16) -> u16 {
+    columns.saturating_sub(CLUSTER).max(1)
+}
+
+/// A message, wrapped to the room the area's text has — what the area counts
+/// its rows by ([`wanted`]).
 fn lines_of(text: &str, columns: u16) -> Vec<String> {
-    crate::chrome::note_lines(text, columns.saturating_sub(CLUSTER).max(1))
+    crate::chrome::note_lines(text, message_room(columns))
+}
+
+/// The same message as it is DRAWN: the very lines [`lines_of`] counts, each
+/// cut into the runs of its words and the names it quotes, in the message's
+/// ink and theirs (`chrome::wrap_runs`) — a sentence with a name in it takes
+/// the rows it takes in one ink, so the area is as tall either way.
+fn runs_of(said: &crate::chrome::Named, columns: u16) -> Vec<Vec<(String, tokens::Color)>> {
+    let ink = tokens::color::TEXT_PRIMARY;
+    crate::chrome::wrap_runs(&said.runs(ink), ink, message_room(columns))
 }
 
 /// The cells an explanation's text has: the window's columns, less the
@@ -421,20 +437,20 @@ pub fn paint(
         foot.marks = crate::chrome::hint_marks(&pieces, margin, first, columns);
         return;
     }
-    let Some(text) = ui.message.as_deref() else {
+    let Some(said) = ui.message.as_ref() else {
         return;
     };
-    let wrapped = lines_of(text, columns);
+    let wrapped = runs_of(said, columns);
     let rows = usize::from(foot.rows);
     foot.scroll = foot.scroll.min(wrapped.len().saturating_sub(rows));
-    for (i, l) in wrapped.iter().skip(foot.scroll).take(rows).enumerate() {
-        spans.push(span(
-            px,
-            l.clone(),
-            margin,
-            first + to_u16(i),
-            tokens::color::TEXT_PRIMARY,
-        ));
+    for (i, runs) in wrapped.iter().skip(foot.scroll).take(rows).enumerate() {
+        // EACH RUN WHERE THE ONES BEFORE IT END: a name is drawn in its own
+        // ink, glued to the words around it as the sentence glues it.
+        let mut at = margin;
+        for (text, color) in runs {
+            spans.push(span(px, text.clone(), at, first + to_u16(i), *color));
+            at = at.saturating_add(ronoctua_render::layout::width(text));
+        }
     }
     // THE CLUSTER, at the right of the first line: the pie of the time left —
     // a pause while the pointer holds it — and the control that takes the
@@ -882,6 +898,66 @@ mod tests {
         ui.foot.routed.set(true);
         ui.hinted.hide_header(false);
         assert_eq!(wanted(&ui), 0, "with a header, line 0 says it");
+    }
+
+    /// FAILS IF: a name a message quotes is not drawn at the foot in the ink
+    /// a name in the message's wears (`chrome::quoted_ink`) on every line it
+    /// wraps over — or a word around it is — or the message is drawn on any
+    /// lines but the very ones the same words take in one ink ([`wanted`]
+    /// counts those), or a run is not glued to the one before it.
+    #[test]
+    fn a_name_said_at_the_foot_wears_its_ink_on_the_lines_of_its_words() {
+        use ronoctua_render::layout::width;
+        let mut ui = hidden_ui();
+        (ui.width, ui.height) = (260, 600);
+        ui.recount();
+        let name = "Ancient Recipes of the Sea";
+        let said = ui.texts.t_args_marked(
+            crate::key::DOOR_FOOT_NAMED,
+            &[
+                ("name", ronoctua_i18n::Arg::Name(name)),
+                (
+                    "rest",
+                    ronoctua_i18n::Arg::Text("a click selects it, a second opens it"),
+                ),
+            ],
+        );
+        let text = said.text.clone();
+        ui.say(said);
+        ui.foot.rows = wanted(&ui);
+        ui.recount();
+        let lines = lines_of(&text, ui.columns);
+        assert!(lines.len() > 2, "too wide to wrap: {lines:?}");
+        assert_eq!(usize::from(ui.foot.rows), lines.len(), "the area's rows");
+        let ink = tokens::color::TEXT_PRIMARY;
+        let quoted = crate::chrome::quoted_ink(ink);
+        assert_ne!(quoted, ink, "a name in the message wears the message's ink");
+        let first = ui.lines;
+        let drawn = painted(&mut ui, None);
+        let mut names_read = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let mut runs: Vec<&ronoctua_render::Span> = drawn
+                .spans
+                .iter()
+                .filter(|s| s.line == first + to_u16(i) && (s.color == ink || s.color == quoted))
+                .collect();
+            runs.sort_by_key(|s| s.column);
+            let read: String = runs.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(&read, line, "line {i} is not the plain message's");
+            let mut at = ui.margin;
+            for r in &runs {
+                assert_eq!(r.column, at, "a run is not where the one before it ends");
+                at += width(&r.text);
+                if r.color == quoted {
+                    names_read.push(r.text.as_str());
+                }
+            }
+        }
+        assert!(
+            names_read.len() > 1,
+            "the name does not wrap: {names_read:?}"
+        );
+        assert_eq!(names_read.join(" "), name, "the name, in its ink");
     }
 
     /// FAILS IF: a message longer than the area is cut with no way to read

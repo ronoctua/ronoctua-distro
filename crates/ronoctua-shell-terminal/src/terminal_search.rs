@@ -221,7 +221,7 @@ impl Finding {
         let mut runs = vec![
             Run::of(&Piece::prose(texts.t(key::TERMINAL_SEARCH))),
             Run {
-                text: format!(" {}", self.needle),
+                text: format!(" {}", self.needle).into(),
                 ink: Register::Said.color(),
                 does: None,
             },
@@ -614,14 +614,14 @@ mod tests {
         let said: String = f
             .runs(&texts, None)
             .iter()
-            .map(|r| r.text.clone())
+            .map(|r| r.text.as_str())
             .collect();
         assert!(said.contains("12") && said.contains('3'), "{said}");
         f.found.total = 0;
         let none: String = f
             .runs(&texts, None)
             .iter()
-            .map(|r| r.text.clone())
+            .map(|r| r.text.as_str())
             .collect();
         assert!(none.contains(&texts.t(crate::key::TERMINAL_SEARCH_NONE)));
     }

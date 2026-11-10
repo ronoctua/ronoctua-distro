@@ -1555,14 +1555,14 @@ impl View {
             out.extend(rows(f.page.lines(&f.readings, left, room, here, texts)));
         } else if let Some(p) = &self.parts {
             if let Some(h) = &p.picking {
-                for line in crate::parts::picking_said(&h.asked, texts)
-                    .into_iter()
-                    .flat_map(|said| crate::chrome::note_lines(&said, room))
+                // THE DOWNLOAD IT ASKS FOR is a name, in a name's ink.
+                for fields in crate::parts::picking_said(&h.asked, texts)
+                    .iter()
+                    .flat_map(|said| {
+                        crate::chrome::note_fields(left, said, tokens::color::TEXT_SECONDARY, room)
+                    })
                 {
-                    out.push(ListRow::plain(
-                        vec![field(left, line, tokens::color::TEXT_SECONDARY)],
-                        None,
-                    ));
+                    out.push(ListRow::plain(fields, None));
                 }
             }
             out.extend(rows(self.parts_lines(left, room, here, texts)));

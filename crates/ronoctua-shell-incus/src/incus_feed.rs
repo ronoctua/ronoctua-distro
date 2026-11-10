@@ -1106,7 +1106,14 @@ pub fn fewer_running(now: &[ronoctua_transfers::Job], before: &[ronoctua_transfe
 impl Readings {
     /// Takes one arrival. Answers what the message line should say, for a
     /// deed's end: done, or refused with its reason.
-    pub fn took(&mut self, a: Arrival, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    ///
+    /// What was acted on is a name each sentence quotes (`Arg::Name`), so
+    /// the line draws it in a name's ink.
+    pub fn took(
+        &mut self,
+        a: Arrival,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<crate::chrome::Named> {
         match a {
             Arrival::Listed(l) => self.listing = Some(l),
             Arrival::Remotes(r) => self.remotes = Some(r),
@@ -1133,21 +1140,28 @@ impl Readings {
                 };
             }
             Arrival::Done { deed, name, result } => {
+                use ronoctua_i18n::Arg;
                 let what = texts.t(deed.key());
-                return Some(match result {
-                    Ok(()) => texts.t_with(
-                        crate::key::INCUS_ECHO_DONE,
-                        &[("what", &what), ("name", &name)],
-                    ),
-                    Err(refusal) => texts.t_with(
-                        crate::key::INCUS_ECHO_REFUSED,
-                        &[
-                            ("what", &what),
-                            ("name", &name),
-                            ("why", &crate::incus_words::refused(refusal, texts)),
-                        ],
-                    ),
-                });
+                return Some(
+                    match result {
+                        Ok(()) => texts.t_args_marked(
+                            crate::key::INCUS_ECHO_DONE,
+                            &[("what", Arg::Text(&what)), ("name", Arg::Name(&name))],
+                        ),
+                        Err(refusal) => texts.t_args_marked(
+                            crate::key::INCUS_ECHO_REFUSED,
+                            &[
+                                ("what", Arg::Text(&what)),
+                                ("name", Arg::Name(&name)),
+                                (
+                                    "why",
+                                    Arg::Text(&crate::incus_words::refused(refusal, texts)),
+                                ),
+                            ],
+                        ),
+                    }
+                    .into(),
+                );
             }
         }
         None
@@ -1495,6 +1509,7 @@ mod tests {
         feed.take()
             .into_iter()
             .filter_map(|a| r.took(a, &t))
+            .map(crate::chrome::Named::into_text)
             .collect()
     }
 

@@ -109,15 +109,22 @@ pub fn job_said(job: &Job, texts: &ronoctua_i18n::Texts) -> String {
 }
 
 /// What the message line says once a job went to the queue; `keys` are
-/// [`queue_keys`].
+/// [`queue_keys`]. What the job is about is a name the sentence quotes
+/// (`Arg::Name`), drawn in a name's ink.
 #[must_use]
-pub fn queued_said(job: &Job, label: &str, keys: &str, texts: &ronoctua_i18n::Texts) -> String {
-    texts.t_with(
+pub fn queued_said(
+    job: &Job,
+    label: &str,
+    keys: &str,
+    texts: &ronoctua_i18n::Texts,
+) -> ronoctua_i18n::Marked {
+    use ronoctua_i18n::Arg;
+    texts.t_args_marked(
         key::CONTAINERS_ECHO_QUEUED,
         &[
-            ("what", &job_said(job, texts)),
-            ("name", label),
-            ("keys", keys),
+            ("what", Arg::Text(&job_said(job, texts))),
+            ("name", Arg::Name(label)),
+            ("keys", Arg::Text(keys)),
         ],
     )
 }

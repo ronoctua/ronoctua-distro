@@ -193,17 +193,21 @@ impl Calc {
         match crate::calc::keep_in(&self.store, entry) {
             Ok(history) => self.view.history_is(history),
             Err(crate::calc::Unkept::Unparsed) => {
-                let said = way.texts().t_with(
+                // THE FILE IS A NAME both sentences quote (`Arg::Name`).
+                let said = way.texts().t_args_marked(
                     crate::key::CALC_UNKEPT_UNPARSED,
-                    &[("file", crate::calc::FILE)],
+                    &[("file", ronoctua_i18n::Arg::Name(crate::calc::FILE))],
                 );
                 way.say(said, crate::echo::Echo::Long);
             }
             Err(crate::calc::Unkept::NotWritten(why)) => {
                 tracing::warn!(error = %why, "an answer could not be kept");
-                let said = way.texts().t_with(
+                let said = way.texts().t_args_marked(
                     crate::key::CALC_UNKEPT,
-                    &[("file", crate::calc::FILE), ("why", &why.to_string())],
+                    &[
+                        ("file", ronoctua_i18n::Arg::Name(crate::calc::FILE)),
+                        ("why", ronoctua_i18n::Arg::Text(&why.to_string())),
+                    ],
                 );
                 way.say(said, crate::echo::Echo::Long);
             }

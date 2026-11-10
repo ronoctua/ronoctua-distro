@@ -13811,7 +13811,10 @@ let
             bad.append("the refusal's sentence is no longer built where it was")
         else:
             after = drawing[said : said + 2400]
-            if "layout::wrap(&said" not in after:
+            # WRAPPED WHOLE, by the layout itself or by `chrome::wrap_runs`,
+            # which projects `note_lines`' very breaks onto the sentence's
+            # runs so a file's name in it keeps its quoted ink (2026-11-10).
+            if "layout::wrap(&said" not in after and "wrap_runs(&said" not in after:
                 bad.append(
                     "the refusal is not wrapped — a sentence wider than the panel "
                     "is cut with an ellipsis and the rows under it stay empty"
@@ -13896,9 +13899,13 @@ let
     # a shortcut, and a pattern that knew one of the two would silently walk
     # half of them.
     STR = r"&(?:'static )?str"
+    # A TABLE ENDS AT ITS OWN `];` — on its line, for a table of one row
+    # (`OF_THE_WAY_BACK`): read to the next `\n];` instead, a one-line table
+    # ran on into the module's next multi-line one and took every row
+    # between them for its own — `OF_A_BUFFER`'s `g`, `v` and `y` among them.
     TABLE = re.compile(
         r"pub const (OF_THE_[A-Z_]+):\s*&\[\(" + STR + r",\s*" + STR
-        + r"(?:,\s*\w+)?\)\]\s*=\s*&\[(.*?)\n\];",
+        + r"(?:,\s*\w+)?\)\]\s*=\s*&\[(.*?)\];",
         re.S,
     )
     ROW = re.compile(r'\(\s*"[^"]*"\s*,\s*"([a-z0-9-]+)"')
@@ -19083,10 +19090,26 @@ let
 
     # THE ONE FUNCTION THE SEVEN VIEWS SHARE. A ceiling and a wrap, and the
     # answer is never empty — see `chrome::note_lines`.
-    chrome = code_of(body_of(without_tests(shell_file("chrome.rs").read_text()), "note_lines") or "")
+    source = without_tests(shell_file("chrome.rs").read_text())
+    chrome = code_of(body_of(source, "note_lines") or "")
     floor(len(chrome), 60, "characters of the note wrapper")
     if "layout::wrap(" not in chrome:
         wrong.append("chrome::note_lines does not wrap")
+
+    # AND A NOTE IN SEVERAL INKS IS THE SAME WRAP — a sentence with a name it
+    # quotes in an ink of its own (owner, 2026-11-10). `wrap_runs` breaks the
+    # text with `note_lines` and only colours the lines it came to, and
+    # `note_fields` places what `wrap_runs` gave: a sentence with a name in it
+    # takes exactly the rows it takes in one ink, and neither of them cuts.
+    for name, needle in (("wrap_runs", "note_lines("), ("note_fields", "wrap_runs(")):
+        body = code_of(body_of(source, name) or "")
+        floor(len(body), 60, f"characters of chrome::{name}")
+        if needle not in body:
+            wrong.append(f"chrome::{name} does not go through `{needle[:-1]}`")
+        if "elide_end" in body:
+            wrong.append(f"chrome::{name} cuts with an ellipsis")
+    # A BUILDER MAY WRAP ITS NOTE BY ANY OF THE THREE: they are one wrap.
+    WRAPPERS = ("note_lines(", "note_fields(", "wrap_runs(")
 
     # EVERY LABEL-AND-VALUE VIEW, and the door or doors onto its note builder.
     # The file, the builder, and the names that must reach it. `display.rs` was
@@ -19111,8 +19134,11 @@ let
         text = without_tests(shell_source(name))
         body = code_of(body_of(text, builder) or "")
         floor(len(body), 60, f"characters of {name}'s note builder")
-        if "note_lines(" not in body:
-            wrong.append(f"{name}: `{builder}` does not go through chrome::note_lines")
+        if not any(w in body for w in WRAPPERS):
+            wrong.append(
+                f"{name}: `{builder}` does not go through chrome::note_lines "
+                "(or its several-ink twins, note_fields and wrap_runs)"
+            )
         if "elide_end" in body:
             wrong.append(f"{name}: `{builder}` still cuts with an ellipsis")
         # AND EVERY NOTE GOES THROUGH IT. A row pushed beside the builder is a
@@ -23815,23 +23841,30 @@ let
       bearing = x0 * BASE / 1000.0
       print(f"digit `0` at {BASE} px: {digit:.2f} px of ink, bearing {bearing:.2f} px")
 
-      # THE ONE SHAPE THE BAND CANNOT MEASURE, by name and with its reason.
+      # THE SHAPES THE BAND CANNOT MEASURE, each by name and with its reason.
       #
       # The band asks whether a drawing is as tall as the digit, because the
       # defect it was born from was a bell with room to grow that was not
       # using it. A WIDE drawing has no such room: its ink already spans the
       # cell, and a size that made it as tall as the digit would push it into
-      # the character beside it. There is no square keyboard in the font, and
-      # a keyboard is what the row is about — so this one is measured by the
-      # other rule: it must FILL the cell and it must not be a sliver. The
-      # `deviations` of `owl.reference.nix`, in another file.
+      # the character beside it. The first was the keyboard: there is no
+      # square keyboard in the font, and a keyboard is what the row is about.
+      # Every later one carries its reason beside its name. Each is measured
+      # by the other rule: it must FILL the cell and it must not be a sliver.
+      # The `deviations` of `owl.reference.nix`, in another file.
       WIDE = {
           "bluetooth-device-keyboard": "a keyboard is drawn wide and flat; nothing square in the font means keyboard",
           "tailscale": "four dots, three across and one under the middle: three cells wide by two tall, and a dot has to stay round",
           "video-hide": "an eye is drawn wide and flat; no family in the font has an open eye and a struck one at the digit's height",
           "video-show": "the open eye of the same pair, and as wide",
+          "video-forever": "the bare ∞ the owner chose over the boxed one (2026-11-10): a sign twice as wide as it is tall, filling the cell at 44% of the digit",
       }
       FLOOR = 0.60
+      # ONE SIGN UNDER THE COMMON FLOOR, by the owner's choice (2026-11-10)
+      # and with a floor of its own: the ∞ is as tall as Material draws it
+      # across a cell, 44% of the digit, and 0.40 still refuses a sliver. A
+      # floor of its own is for a wide drawing: it must name a key of `WIDE`.
+      FLOORS = {"video-forever": 0.40}
 
       failed = False
       for token in INLINE:
@@ -23862,7 +23895,7 @@ let
           ink_wide = (gx1 - gx0) * size / 1000.0
           if token in WIDE:
               # As large as the cell allows, and not a sliver.
-              tall = ink_wide >= cell and h >= FLOOR * digit
+              tall = ink_wide >= cell and h >= FLOORS.get(token, FLOOR) * digit
               why = "  (wide: " + WIDE[token] + ")"
           else:
               tall = 100.0 - TOLERANCE <= pct <= 100.0 + TOLERANCE
@@ -23889,9 +23922,13 @@ let
       print("")
       # AND NOBODY WIDENS THE EXCEPTION QUIETLY: the list is named here, and
       # a token that stops being drawn inline has to leave both lists.
-      unused = sorted(t for t in WIDE if t not in INLINE)
+      unused = sorted(t for t in {*WIDE, *FLOORS} if t not in INLINE)
       if unused:
           print(f"ERROR: the wide exception names a glyph the chrome does not draw inline: {unused}")
+          sys.exit(1)
+      narrow = sorted(t for t in FLOORS if t not in WIDE)
+      if narrow:
+          print(f"ERROR: a floor of its own is for a WIDE drawing, and these are not: {narrow}")
           sys.exit(1)
       print(
           f"OK: {len(INLINE)} chrome icons at the digit's height "
@@ -24161,7 +24198,10 @@ let
     echo "icon tokens: $n"
     [ "$n" -ge 40 ] || { echo "ERROR: the icon table is suspiciously small" >&2; exit 1; }
 
-    # Every token has a glyph, a codepoint and a char — and the codepoint is in the PUA.
+    # Every token has a glyph, a codepoint and a char. The codepoint is in the
+    # Nerd Fonts' private-use area, but for a `uni-` token, which is a
+    # character of the text face by its Unicode name (`gen-glyphdb.py`, `UNI`;
+    # the four ratings, owner 2026-11-10) — so the area is not asked here.
     jq -e 'to_entries | all(.value | has("glyph") and has("codepoint") and has("char"))' \
       "$db/icons.json" >/dev/null \
       || { echo "ERROR: an incomplete icon entry" >&2; exit 1; }

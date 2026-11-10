@@ -306,6 +306,7 @@ fn line(
         globe: None,
         caret: None,
         lit: Lit::Row,
+        ground: None,
     }
 }
 

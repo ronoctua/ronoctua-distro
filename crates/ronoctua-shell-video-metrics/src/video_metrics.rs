@@ -73,6 +73,13 @@ use crate::video_metrics_words as words;
 ///
 /// `+` and `-` are the design's keys for a score; they are the arrows' twins
 /// on every value, and the hint teaches the arrows (a line shows an id once).
+///
+/// THE PAGE'S QUICK KEYS ARE `[` AND `]` (the owner, 2026-11-10), BEFORE
+/// `PgUp`/`PgDn`: a line shows an id under its FIRST key, and only that key
+/// is offered after `LEADER Alt` in a window (`chrome::published`) — the
+/// page keys stay direct there, and are offered nothing. The page row's
+/// sentence teaches all of them, as each door reaches them
+/// ([`View::page_keys`]).
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "video-metrics-down", Where::Anywhere),
     ("<up>", "video-metrics-up", Where::Anywhere),
@@ -81,8 +88,12 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<right>", "video-metrics-more", Where::OnAValue),
     ("-", "video-metrics-less", Where::OnAValue),
     ("+", "video-metrics-more", Where::OnAValue),
+    ("[", "video-metrics-page-back", Where::OnTheVideos),
+    ("]", "video-metrics-page-on", Where::OnTheVideos),
     ("<prior>", "video-metrics-page-back", Where::OnTheVideos),
     ("<next>", "video-metrics-page-on", Where::OnTheVideos),
+    ("<home>", "video-metrics-page-first", Where::OnTheVideos),
+    ("<end>", "video-metrics-page-last", Where::OnTheVideos),
     ("L", "video-metrics-layout", Where::OnTheVideos),
     ("/", "video-metrics-search", Where::OnTheVideos),
     ("a", "video-metrics-player", Where::OnAVideo),
@@ -178,6 +189,10 @@ pub enum Press {
     PageBack,
     /// The page of videos after.
     PageOn,
+    /// The first page of videos.
+    PageFirst,
+    /// The last page of videos.
+    PageLast,
     /// A list, or a grid of thumbnails.
     Layout,
     /// Search the videos' words.
@@ -216,6 +231,8 @@ pub fn press_of(id: &str) -> Option<Press> {
         "video-metrics-enter" => Press::Enter,
         "video-metrics-page-back" => Press::PageBack,
         "video-metrics-page-on" => Press::PageOn,
+        "video-metrics-page-first" => Press::PageFirst,
+        "video-metrics-page-last" => Press::PageLast,
         "video-metrics-layout" => Press::Layout,
         "video-metrics-search" => Press::Search,
         "video-metrics-player" => Press::Player,
@@ -304,6 +321,14 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         ronoctua_cmd::Command {
             id: "video-metrics-page-on",
             label: crate::key::CMD_VIDEO_METRICS_PAGE_ON,
+        },
+        ronoctua_cmd::Command {
+            id: "video-metrics-page-first",
+            label: crate::key::CMD_VIDEO_METRICS_PAGE_FIRST,
+        },
+        ronoctua_cmd::Command {
+            id: "video-metrics-page-last",
+            label: crate::key::CMD_VIDEO_METRICS_PAGE_LAST,
         },
         ronoctua_cmd::Command {
             id: "video-metrics-layout",
@@ -569,14 +594,58 @@ pub enum Page {
     Video(VideoId),
 }
 
-/// How the videos are laid out.
+/// HOW THE VIDEOS ARE LAID OUT — a ring of four (the owner, 2026-11-10),
+/// turned by the "Layout" row's `←`/`→`, its click and `L`: the channel under
+/// a thumbnail is a layout of the ring and not a switch beside it, so one
+/// choice has one way to it. Kept for the session, as the filters are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layout {
-    /// One row a video.
+    /// One row a video: its title on the whole width, what it scores under.
     #[default]
     List,
+    /// THE LIST WITH THUMBNAILS — the player's list: each video's picture at
+    /// its head, its title wrapped whole beside it and what it scores under
+    /// the title, a line of air after it ([`strip_entry`]).
+    Strip,
     /// A grid of thumbnails.
     Grid,
+    /// The grid, each thumbnail saying its channel under its title.
+    GridWithChannel,
+}
+
+impl Layout {
+    /// The four, in the ring's order.
+    pub const ALL: [Self; 4] = [Self::List, Self::Strip, Self::Grid, Self::GridWithChannel];
+
+    /// Its words, the "Layout" row's value.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::List => key::VIDEO_METRICS_LAYOUT_LIST,
+            Self::Strip => key::VIDEO_METRICS_LAYOUT_LIST_THUMBNAILS,
+            Self::Grid => key::VIDEO_METRICS_LAYOUT_GRID,
+            Self::GridWithChannel => key::VIDEO_METRICS_LAYOUT_GRID_CHANNEL,
+        }
+    }
+
+    /// Whether it draws the videos' thumbnails — what the feed decodes with
+    /// the page ([`Query::pictures`]).
+    #[must_use]
+    pub const fn pictures(self) -> bool {
+        !matches!(self, Self::List)
+    }
+
+    /// Whether the videos stand in a grid's shelves, where `←`/`→` walk
+    /// cell by cell.
+    #[must_use]
+    pub const fn grid(self) -> bool {
+        matches!(self, Self::Grid | Self::GridWithChannel)
+    }
+
+    /// Whether a grid's thumbnail says its channel under its title.
+    #[must_use]
+    pub const fn channel(self) -> bool {
+        matches!(self, Self::GridWithChannel)
+    }
 }
 
 /// How far back the videos' list reaches, by when each was published.
@@ -639,20 +708,20 @@ pub fn transfers_keys() -> String {
     crate::bindings::taught("transfers-open", None).unwrap_or_default()
 }
 
-/// How many videos a page of the list shows.
-pub const PER_PAGE: u32 = 24;
-
 /// How much a step of `←`/`→` moves a score, a weight or a rule's points.
 pub const POINTS_STEP: i32 = 100;
 
 /// Which page of which list the door is asked to read: its filter, its page
-/// and whether the thumbnails are decoded with it (the grid's).
+/// and how many it holds, and whether the thumbnails are decoded with it
+/// (a layout that draws them, [`Layout::pictures`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Query {
     /// What the list shows.
     pub filter: Filter,
     /// Which page, from 0.
     pub page: u32,
+    /// How many videos a page holds (`paging::PER_PAGES`).
+    pub per_page: u32,
     /// Whether the thumbnails come too.
     pub pictures: bool,
 }
@@ -1122,11 +1191,21 @@ pub enum Pending {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Confirm {
     what: Pending,
-    /// The cursor is on "yes".
-    yes: bool,
+    /// Which answer the cursor is on (`true` is yes), and whether a PERSON
+    /// put it there: born on the "no" — the screen's cursor, so the first
+    /// click on it only picks it (invariant 19, `aim::Aim`), and one press
+    /// of a double click meant for the row above never answers.
+    aim: crate::aim::Aim<bool>,
     /// The spot of the row it was asked from: the question is drawn under
     /// it, and the cursor goes back to it once answered.
     under: String,
+}
+
+impl Confirm {
+    /// The answer the cursor is on — `true` is yes.
+    fn yes(&self) -> bool {
+        self.aim.on().copied().unwrap_or(false)
+    }
 }
 
 /// What `RET` — or a turn — does on a row.
@@ -1194,19 +1273,22 @@ pub enum Target {
     FilterText,
     /// How far back the list reaches.
     FilterSince,
-    /// A list or a grid.
+    /// How the videos are laid out — a ring of four ([`Layout`]).
     Layout,
-    /// Whether the grid's thumbnails say their channel.
-    GridChannel,
     /// The page of the list.
     PageOf,
+    /// How many videos a page of it holds — a ring.
+    PerPage,
+    /// AN ARROW OF THE LIST'S PAGES, beside its title and at its end: the
+    /// page after (`true`) or before — at once, as a glyph acts.
+    PageTurn(bool),
     /// The set-aside videos: the list, only them, the last set aside first.
     SetAsideVideos,
     /// A video: its page.
     Video(VideoId),
     /// A video's rating.
     Rating(VideoId, Option<Rating>),
-    /// A face of a video's rating beside its score: the rating it gives,
+    /// An arrow of a video's rating beside its score: the rating it gives,
     /// and whether it is the one the video has (a click takes that away).
     Rate(VideoId, Rating, bool),
     /// A video set aside, or not — as it is now.
@@ -1416,6 +1498,20 @@ pub struct Row {
     pub name: String,
     /// What the row follows, set "as everywhere" ([`Follows`]).
     pub default: Option<Follows>,
+    /// A GROUND OF ITS OWN under the line — a question's block
+    /// (`chrome::QUESTION_GROUND`), edge to edge and with no outline: each
+    /// door paints it under the line's light and the cursor's
+    /// (`chrome::row_grounds` in the window, `region::Told::ground` in the
+    /// footer). `None`: the page's ground, as every row.
+    pub ground: Option<tokens::Color>,
+    /// WHERE THE WORDS BEGIN on a line beside a picture — every line of a
+    /// video of the list with thumbnails ([`Layout::Strip`]), as a field's
+    /// `at`: the light and the click start there and never go over the
+    /// picture ([`View::on_the_words`]; `region::LineLights::UnderX` in the
+    /// footer, a box in the window), and a line with glyphs has its words'
+    /// box from there ([`Row::words_box`]).
+    /// `None`: the words begin at the row's `left`, as every other line's.
+    pub words_at: Option<u16>,
 }
 
 impl Row {
@@ -1445,20 +1541,23 @@ impl Row {
     }
 
     /// THE ROW'S WORDS on a line with controls, `(from, width)` as a field's
-    /// `at`: from `left` up to, and not over, the cell of air before the
-    /// first control — on a line whose ROW the cursor stops on
-    /// (`owner_stops`: the row's, [`Row::owner`], so a line that continues
-    /// one, a list entry's meta line, has words too). `None` on a line of
-    /// controls alone, and on one with no room before its first control.
+    /// `at`: from `left` — or from where the words begin beside a picture
+    /// ([`Row::words_at`]) — up to, and not over, the cell of air before the
+    /// first control, on a line whose ROW the cursor stops on (`owner_stops`:
+    /// the row's, [`Row::owner`], so a line that continues one, a list
+    /// entry's meta line, has words too). `None` on a line of controls
+    /// alone, and on one with no room before its first control.
     ///
     /// ONE BOX FOR THE LIGHT, THE FOOT AND THE CLICK: [`Row::lit_cells`]
     /// lights it, and [`View::on_the_words`] reads it for what the foot
     /// explains and what a click takes — the air before the first glyph,
-    /// and the margin before `left`, are nobody's in all three.
+    /// the margin before `left` and a picture beside the words are nobody's
+    /// in all three.
     #[must_use]
     pub fn words_box(&self, left: u16, owner_stops: bool) -> Option<(u16, u16)> {
         let first = self.controls.iter().map(|c| c.from).min()?;
-        (owner_stops && first > left + 1).then(|| (left, first - 1 - left))
+        let from = self.words_at.unwrap_or(left);
+        (owner_stops && first > from + 1).then(|| (from, first - 1 - from))
     }
 
     /// THE BOXES THE POINTER LIGHTS on a line with controls, `(from, width)`
@@ -1519,8 +1618,8 @@ pub fn grid_of(room: u16, channel: bool) -> ronoctua_design::grid::Grid {
 }
 
 /// How many lines a grid's shelf takes: the picture's, two for the title,
-/// one for its channel when the grid says it ([`View::grid_channel`]), one
-/// for what it scores and the faces of its rating, one for when it was
+/// one for its channel when the grid says it ([`Layout::channel`]), one
+/// for what it scores and the arrows of its rating, one for when it was
 /// published and its marks, one of air. The score and the age are a line
 /// EACH: each carries its glyphs, and a tile never cuts a score for them.
 #[must_use]
@@ -1536,7 +1635,8 @@ pub const fn shelf_lines(channel: bool) -> u16 {
 /// a Nerd glyph has no side bearing, and two side by side touch.
 pub const GLYPH_AIR: u16 = ronoctua_design::GAP;
 
-/// How many pictures a page of the grid may put on screen — never more than
+/// How many pictures a page of thumbnails — the grid's, the list's with
+/// thumbnails ([`Layout::pictures`]) — may put on screen: never more than
 /// the renderer's frame keeps for the file manager's grid, which is the room
 /// this view's pictures take while it is up.
 pub const PICTURES_MOST: u32 = tokens::space::VIDEOMETRICS_THUMBSMOST as u32;
@@ -1546,8 +1646,8 @@ const _: () = assert!(
     "a page of thumbnails beyond what the renderer's frame keeps would lose pictures"
 );
 const _: () = assert!(
-    PER_PAGE <= PICTURES_MOST,
-    "a page of the grid is a page of the list: all of it must be drawable"
+    crate::paging::PER_PAGES[crate::paging::PER_PAGES.len() - 1] <= PICTURES_MOST,
+    "a page of thumbnails is a page of the list: all of it must be drawable, at its largest"
 );
 
 /// The texture a thumbnail goes up under: its file, the size it was decoded
@@ -1588,12 +1688,21 @@ pub struct View {
     since: Since,
     /// Which page of the list.
     page: u32,
-    /// A list or a grid.
+    /// HOW MANY VIDEOS A PAGE OF IT HOLDS — a ring, the session's
+    /// (`paging::PerPage`).
+    per_page: crate::paging::PerPage,
+    /// A TURNED PAGE OWES ITS TITLE THE TOP OF THE DOOR — a page key, an
+    /// arrow, a new size (the owner, 2026-11-10: "ao virar, a tela vai para
+    /// o título logo antes da lista"): paid once the reading for the page
+    /// asked is in ([`View::settle_on_list`]), with the cursor on its first
+    /// video.
+    top_owed: bool,
+    /// THE VIEW IS A WINDOW'S, where no keyboard reaches a shortcut and
+    /// `LEADER Alt` does: a sentence that teaches a key teaches it so
+    /// ([`View::page_keys`]). The footer's region teaches the bare key.
+    windowed: bool,
+    /// How the videos are laid out — a ring of four, the list at first.
     layout: Layout,
-    /// WHETHER THE GRID'S THUMBNAILS SAY THEIR CHANNEL, under the title —
-    /// off at first, and kept for the session as the layout is (the owner,
-    /// 2026-11-09): a list of one channel's videos has no use for it.
-    grid_channel: bool,
     /// A question on the page.
     confirm: Option<Confirm>,
     /// What the line's question is about — the row it was asked from.
@@ -1731,7 +1840,8 @@ impl View {
         let query = (page == Page::Videos).then(|| Query {
             filter: self.filter.clone(),
             page: self.page,
-            pictures: self.layout == Layout::Grid,
+            per_page: self.per_page.get(),
+            pictures: self.layout.pictures(),
         });
         Look { page, query }
     }
@@ -1746,11 +1856,121 @@ impl View {
         self.filter.published_after_s = since.seconds().map(|back| now_s() - back);
     }
 
+    /// THE VIDEOS LAID OUT SO, as the ring leaves them — for a test of a
+    /// door, which reaches no field of the view and would otherwise turn the
+    /// ring until it got there.
+    #[cfg(test)]
+    pub(crate) const fn laid_out(&mut self, layout: Layout) {
+        self.layout = layout;
+    }
+
     /// Whether the cursor moved without a key since the door last asked —
     /// a question the view put on the page from what an errand came to. The
     /// door follows it as it follows a key: it is the consequence of one.
     pub fn follow_owed(&mut self) -> bool {
         std::mem::take(&mut self.follow_owed)
+    }
+
+    /// THE LIST'S TITLE FIRST — paid ONCE, when a turned page owed it the top
+    /// of the door (a page key, an arrow, a new size) and the reading of the
+    /// page ASKED is in, its filter, its page and its size: the cursor goes
+    /// to the list's first video — its row, or its shelf's first cell — and
+    /// the answer is the line of the title, for the door to put first
+    /// (`Ui::place_top` in the window, `Paging::Top` in the footer's
+    /// region), so what the person turned to is what they see. `None` while
+    /// the page is still being read — the page drawn stays as it is — and
+    /// once paid.
+    pub fn settle_on_list(&mut self, rows: &[Row], r: &Readings) -> Option<usize> {
+        if !self.top_owed {
+            return None;
+        }
+        if *self.page() != Page::Videos || self.editing.is_some() || self.picking.is_some() {
+            self.top_owed = false;
+            return None;
+        }
+        // THE LAYOUT IS NOT ASKED ABOUT: a list read with its pictures is the
+        // same list.
+        let read = r
+            .listed
+            .as_ref()
+            .zip(self.look().query)
+            .is_some_and(|(l, q)| {
+                l.query.filter == q.filter
+                    && l.query.page == q.page
+                    && l.query.per_page == q.per_page
+            });
+        if !read {
+            return None;
+        }
+        self.top_owed = false;
+        let title = rows
+            .iter()
+            .position(|x| x.spot == crate::paging::LIST_TITLE)?;
+        if let Some((i, row)) = rows
+            .iter()
+            .enumerate()
+            .skip(title + 1)
+            .find(|(_, x)| x.stops())
+        {
+            self.at = row
+                .cells
+                .first()
+                .map_or_else(|| row.spot.clone(), |c| c.spot.clone());
+            self.last = i;
+        }
+        Some(title)
+    }
+
+    /// THE VIEW IS A WINDOW'S: what a sentence teaches of a key, it teaches
+    /// as `LEADER Alt` reaches it there ([`View::page_keys`]).
+    pub fn in_a_window(&mut self) {
+        self.windowed = true;
+    }
+
+    /// THE KEYS THAT TURN THE LIST'S PAGES, as this view's door reaches them —
+    /// built from [`OF_THE_VIEW`], never words in a `.ftl`
+    /// (`keys-are-never-text`): each command's first key — the quick one its
+    /// hint teaches, `[` and `]` — then the page keys, `PgUp`/`PgDn`, and
+    /// `Home`/`End`. In a window the quick keys are `LEADER Alt`'s (`⌥[`);
+    /// the page keys stay direct in both doors. The page row's sentence's
+    /// arguments, by name.
+    #[must_use]
+    pub fn page_keys(&self) -> [(&'static str, String); 6] {
+        let keys = |id: &str| {
+            crate::player::keys_said(
+                OF_THE_VIEW.iter().map(|(k, i, _)| (*k, *i)),
+                id,
+                &[LEADER_ALT_KEYS],
+                self.windowed,
+            )
+        };
+        let [back, on, first, last] = [
+            "video-metrics-page-back",
+            "video-metrics-page-on",
+            "video-metrics-page-first",
+            "video-metrics-page-last",
+        ]
+        .map(keys);
+        let nth = |keys: &[String], n: usize| keys.get(n).cloned().unwrap_or_default();
+        [
+            ("earlier", nth(&back, 0)),
+            ("prior", nth(&back, 1)),
+            ("later", nth(&on, 0)),
+            ("next", nth(&on, 1)),
+            ("first", nth(&first, 0)),
+            ("last", nth(&last, 0)),
+        ]
+    }
+
+    /// A ROW'S SENTENCE, said — and the page row's with the keys that turn
+    /// the page, as this door reaches them ([`View::page_keys`]).
+    fn said(&self, k: &'static str, texts: &ronoctua_i18n::Texts) -> String {
+        if k != key::ABOUT_VIDEO_METRICS_PAGE {
+            return texts.t(k);
+        }
+        let keys = self.page_keys();
+        let args: Vec<(&str, &str)> = keys.iter().map(|(n, v)| (*n, v.as_str())).collect();
+        texts.t_with(k, &args)
     }
 
     /// Whether a description is being edited — every key is its.
@@ -1932,7 +2152,8 @@ impl View {
     #[must_use]
     pub fn drawn_cursor(&self, rows: &[Row]) -> usize {
         if self.editing.is_some() {
-            return text_cursor(rows).unwrap_or(0);
+            let asking = self.editing.as_ref().and_then(|(_, a)| a.asking());
+            return text_cursor(rows, asking).unwrap_or(0);
         }
         self.cursor(rows)
     }
@@ -1953,9 +2174,7 @@ impl View {
 
     /// Whether the cursor is on a cell of the grid.
     fn on_the_grid(&self, target: &Target) -> bool {
-        self.layout == Layout::Grid
-            && *self.page() == Page::Videos
-            && matches!(target, Target::Video(_))
+        self.layout.grid() && *self.page() == Page::Videos && matches!(target, Target::Video(_))
     }
 
     /// The video the cursor is about: the page's, or the list's row or cell.
@@ -2001,8 +2220,8 @@ impl View {
     /// The sentence the pointer resting on row `n` reads: the row's own, or
     /// what its target is ([`about_of`]).
     #[must_use]
-    pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        sentence_of(rows.get(Row::owner(rows, n))?).map(|k| texts.t(k))
+    pub fn about(&self, rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        sentence_of(rows.get(Row::owner(rows, n))?).map(|k| self.said(k, texts))
     }
 
     /// WHAT THE THING ON LINE `n` IS, as a door explains it — the window's
@@ -2114,18 +2333,28 @@ impl View {
 
     /// WHETHER CELL `column` OF LINE `n` IS ITS ROW'S WORDS — what the
     /// pointer lights there ([`Row::lit_cells`]), the foot explains and a
-    /// click takes ([`View::clicked`]): every cell of a line with no glyphs;
-    /// on one with glyphs, only its words' box ([`Row::words_box`]) — never
-    /// a glyph, which acts on its own, nor the air before it, the margin or
-    /// a line of glyphs alone. With no column (`None`), whether the line has
-    /// words at all.
+    /// click takes ([`View::clicked`]): every cell of a line with no glyphs
+    /// — but on a line beside a picture, only from where its words begin
+    /// ([`Row::words_at`]); on one with glyphs, only its words' box
+    /// ([`Row::words_box`]) — never a glyph, which acts on its own, nor the
+    /// air before it, the margin or a line of glyphs alone. With no column
+    /// (`None`), whether the line has words at all.
+    ///
+    /// THE PICTURE IS NOBODY'S on every line of its video, as it already
+    /// was on the line of glyphs, whose words' box starts past it (the plan,
+    /// 2026-11-10: "a luz e o clique valem a partir do texto … nunca sobre a
+    /// figura"): a click on it once took the video on the title's lines and
+    /// nothing on the line of glyphs — a picture clickable but for a stripe
+    /// through it.
     #[must_use]
     pub fn on_the_words(&self, rows: &[Row], n: usize, column: Option<u16>) -> bool {
         let Some(line) = rows.get(n) else {
             return false;
         };
         if line.controls.is_empty() {
-            return true;
+            return line
+                .words_at
+                .is_none_or(|at| column.is_none_or(|c| c >= at));
         }
         let owner_stops = rows.get(Row::owner(rows, n)).is_some_and(Row::has_words);
         line.words_box(self.left.get(), owner_stops)
@@ -2168,7 +2397,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> crate::door::Explained {
         let mut said: Vec<(String, tokens::Color)> = sentence_of(row)
-            .map(|k| (texts.t(k), tokens::color::TEXT_SECONDARY))
+            .map(|k| (self.said(k, texts), tokens::color::TEXT_SECONDARY))
             .into_iter()
             .collect();
         if let Some(f) = &row.default {
@@ -2329,6 +2558,8 @@ impl View {
                 Press::Escape => Key::simple(Sym::Esc),
                 Press::PageBack => Key::simple(Sym::PageUp),
                 Press::PageOn => Key::simple(Sym::PageDown),
+                Press::PageFirst => Key::simple(Sym::Home),
+                Press::PageLast => Key::simple(Sym::End),
                 _ => return Errand::Nothing,
             };
             return self.pick_key(key);
@@ -2366,7 +2597,9 @@ impl View {
             Press::Escape => self.back(),
             Press::PageBack => self.turn_page(false, r),
             Press::PageOn => self.turn_page(true, r),
-            Press::Layout => self.relayout(),
+            Press::PageFirst => self.page_to(Some(0), r),
+            Press::PageLast => self.page_to(None, r),
+            Press::Layout => self.relayout(true),
             Press::Search => self.ask(
                 Ask::Search,
                 self.filter.text.clone(),
@@ -2643,7 +2876,7 @@ impl View {
                 days_of(now.or_else(|| r.settings.map(|s| s.keep))),
                 Some(target.clone()),
             ),
-            // A FACE OF THE RATING gives it — and the one the video has
+            // AN ARROW OF THE RATING gives it — and the one the video has
             // takes it away.
             Target::Rate(id, rating, lit) => {
                 Errand::Edit(Edit::Rating(id.clone(), (!*lit).then_some(*rating)))
@@ -2678,6 +2911,9 @@ impl View {
             }
             // A ROW OF THE PICKER is the picker's: its keys reach it first.
             Target::Pick(_) => Errand::Nothing,
+            // AN ARROW OF THE LIST'S PAGES, beside its title or at its end:
+            // the page before or after, as `[` and `]` turn it.
+            Target::PageTurn(on) => self.turn_page(*on, r),
             // A RING OR A SWITCH: `RET` turns it on, as `→` does.
             other => self.turn(other, true, r),
         }
@@ -2852,14 +3088,9 @@ impl View {
                 };
                 self.refiltered()
             }
-            // THE SESSION'S, and nothing to read: the rows are the same
-            // videos, one line taller.
-            Target::GridChannel => {
-                self.grid_channel = !self.grid_channel;
-                Errand::Nothing
-            }
-            Target::Layout => self.relayout(),
+            Target::Layout => self.relayout(on),
             Target::PageOf => self.turn_page(on, r),
+            Target::PerPage => self.resize(on),
             Target::Hide(id, _) => self.on_a_video(Press::Hide, id, r),
             _ => Errand::Nothing,
         }
@@ -2871,36 +3102,80 @@ impl View {
         Errand::Look(self.look())
     }
 
-    /// A list, or a grid — the cursor stays on its video.
-    fn relayout(&mut self) -> Errand {
+    /// THE NEXT LAYOUT OF THE RING, or the one before (`on`) — the cursor
+    /// stays on its video: its row, or its cell of a shelf, has its spot in
+    /// every layout. Read again only when the thumbnails come or go: the
+    /// three layouts that draw them draw the same ones, and a reading asked
+    /// for nothing new would read the catalogue for nothing.
+    fn relayout(&mut self, on: bool) -> Errand {
         if *self.page() != Page::Videos {
             return Errand::Nothing;
         }
-        self.layout = match self.layout {
-            Layout::List => Layout::Grid,
-            Layout::Grid => Layout::List,
-        };
-        Errand::Look(self.look())
+        let pictures = self.layout.pictures();
+        self.layout = ring_step(&Layout::ALL, &self.layout, on);
+        if self.layout.pictures() == pictures {
+            Errand::Nothing
+        } else {
+            Errand::Look(self.look())
+        }
     }
 
     /// The page of the list before or after — never past either end.
     fn turn_page(&mut self, on: bool, r: &Readings) -> Errand {
+        let to = if on {
+            Some(self.page + 1)
+        } else {
+            self.page.checked_sub(1)
+        };
+        match to {
+            Some(to) => self.page_to(Some(to), r),
+            None => Errand::Nothing,
+        }
+    }
+
+    /// PAGE `to` OF THE LIST — `None` for its last — never past either end:
+    /// asked of the feed, and its title owed the top of the door once the
+    /// page is read ([`View::settle_on_list`]). The cursor stays where it is
+    /// until then — on its video of the page still drawn, which stays drawn
+    /// while the next one is read.
+    fn page_to(&mut self, to: Option<u32>, r: &Readings) -> Errand {
         if *self.page() != Page::Videos {
             return Errand::Nothing;
         }
-        let pages = pages_of(r.listed.as_ref().map_or(0, |l| l.total));
-        let to = if on {
-            (self.page + 1).min(pages.saturating_sub(1))
-        } else {
-            self.page.saturating_sub(1)
-        };
+        let pages = self.pages(r);
+        let last = pages.saturating_sub(1);
+        let to = to.map_or(last, |to| to.min(last));
         if to == self.page {
             return Errand::Nothing;
         }
         self.page = to;
-        self.at.clear();
-        self.last = 0;
+        self.top_owed = true;
         Errand::Look(self.look())
+    }
+
+    /// HOW MANY VIDEOS A PAGE HOLDS, turned round its ring — and the page
+    /// that holds the first video of the one on screen asked, its title
+    /// owed the top of the door as a turned page's is.
+    fn resize(&mut self, on: bool) -> Errand {
+        if *self.page() != Page::Videos {
+            return Errand::Nothing;
+        }
+        let from = self.per_page;
+        self.per_page = from.turned(on);
+        self.page = crate::paging::resized(self.page, from.get(), self.per_page.get());
+        self.top_owed = true;
+        Errand::Look(self.look())
+    }
+
+    /// How many pages the list takes, at the size asked — as its reading
+    /// counts it, under the filter asked.
+    fn pages(&self, r: &Readings) -> u32 {
+        let total = r
+            .listed
+            .as_ref()
+            .filter(|l| l.query.filter == self.filter)
+            .map_or(0, |l| l.total);
+        crate::paging::pages_of(total, self.per_page.get())
     }
 
     /// What a key for a video does to it.
@@ -2947,7 +3222,7 @@ impl View {
         };
         self.confirm = Some(Confirm {
             what,
-            yes: false,
+            aim: crate::aim::Aim::born(false),
             under,
         });
         self.at = answer_spot(false).to_owned();
@@ -2961,13 +3236,16 @@ impl View {
             return Errand::Nothing;
         };
         match press {
+            // A KEY THAT MOVED THE CURSOR is a person's gesture: a click on
+            // where it now is answers.
             Press::Up | Press::Down | Press::Less | Press::More => {
-                c.yes = !c.yes;
-                self.at = answer_spot(c.yes).to_owned();
+                let yes = !c.yes();
+                c.aim.moved(yes);
+                self.at = answer_spot(yes).to_owned();
                 Errand::Nothing
             }
             Press::Enter => {
-                let yes = c.yes;
+                let yes = c.yes();
                 self.answer(yes)
             }
             Press::Escape => self.answer(false),
@@ -3016,23 +3294,26 @@ impl View {
         }
     }
 
-    /// A click on an answer — or its row chosen by the keys — given.
+    /// A click on an answer: `true` when it answers — the person's own
+    /// pick, clicked again ([`Confirm::aim`]). The first click on the "no"
+    /// the question was born on only picks it, as a click on the other
+    /// answer only moves the cursor there.
     fn answered_by_click(&mut self, yes: bool) -> bool {
         let Some(c) = self.confirm.as_mut() else {
             return false;
         };
-        if c.yes == yes {
-            return true;
-        }
-        c.yes = yes;
+        let answers = c.aim.clicked(yes);
         self.at = answer_spot(yes).to_owned();
-        false
+        answers
     }
 
-    /// A second click on an answer: the door turns it into this, as it turns
-    /// the second click on a row into `RET`.
+    /// A click on an answer — on ANY line of it, a long answer wrapped
+    /// being one answer ([`Row::owner`]): the first picks it, and the
+    /// second, on the answer picked, gives it — what the door does with a
+    /// second click on a row, `RET`.
     pub fn click_answers(&mut self, n: usize, rows: &[Row]) -> Option<Errand> {
-        let Target::Answer(yes) = rows.get(n)?.target else {
+        rows.get(n)?;
+        let Target::Answer(yes) = rows.get(Row::owner(rows, n))?.target else {
             return None;
         };
         if self.answered_by_click(yes) {
@@ -3043,7 +3324,7 @@ impl View {
     }
 
     /// A CLICK ON A GLYPH ACTS AT ONCE ([`Control`]) — the first click, and
-    /// not a second: a face of the rating gives it (the one the video has
+    /// not a second: an arrow of the rating gives it (the one the video has
     /// takes it away), the bookmark and the ∞ switch, the eye and the bin
     /// ask as their keys do, "no" first. The cursor goes to the video first
     /// — the entry's, or the shelf's cell over `column` (a field's `at`) —
@@ -3309,8 +3590,12 @@ impl View {
         r: &Readings,
         texts: &ronoctua_i18n::Texts,
     ) -> (Option<Said>, Errand) {
-        let long = |text: String| Some(Said::Long(text));
-        let normal = |text: String| Some(Said::Normal(text));
+        fn long(text: impl Into<crate::chrome::Named>) -> Option<Said> {
+            Some(Said::Long(text.into()))
+        }
+        fn normal(text: impl Into<crate::chrome::Named>) -> Option<Said> {
+            Some(Said::Normal(text.into()))
+        }
         match done {
             Done::Edited(edit, Ok(())) => {
                 if let Edit::SecondDescription(id, text) = &edit
@@ -3344,27 +3629,35 @@ impl View {
                     // and after its own mark.
                     Edit::SetAside(id, aside) => (
                         r.title_of(&id).map(|title| {
-                            Said::Normal(texts.t_with(
-                                if aside {
-                                    key::PLAYER_RANKING_NOW_SET_ASIDE
-                                } else {
-                                    key::PLAYER_RANKING_NO_LONGER_SET_ASIDE
-                                },
-                                &[("title", &title)],
-                            ))
+                            Said::Normal(
+                                texts
+                                    .t_args_marked(
+                                        if aside {
+                                            key::PLAYER_RANKING_NOW_SET_ASIDE
+                                        } else {
+                                            key::PLAYER_RANKING_NO_LONGER_SET_ASIDE
+                                        },
+                                        &[("title", Arg::Name(&title))],
+                                    )
+                                    .into(),
+                            )
                         }),
                         Errand::Nothing,
                     ),
                     Edit::KeepVideo(id, keep) => (
                         r.title_of(&id).map(|title| {
-                            Said::Normal(texts.t_with(
-                                if keep {
-                                    key::PLAYER_RANKING_NOW_FOREVER
-                                } else {
-                                    key::PLAYER_RANKING_NO_LONGER_FOREVER
-                                },
-                                &[("title", &title)],
-                            ))
+                            Said::Normal(
+                                texts
+                                    .t_args_marked(
+                                        if keep {
+                                            key::PLAYER_RANKING_NOW_FOREVER
+                                        } else {
+                                            key::PLAYER_RANKING_NO_LONGER_FOREVER
+                                        },
+                                        &[("title", Arg::Name(&title))],
+                                    )
+                                    .into(),
+                            )
                         }),
                         Errand::Nothing,
                     ),
@@ -3373,7 +3666,10 @@ impl View {
             }
             Done::Edited(_, Err(why)) => (long(texts.t(words::why_key(why))), Errand::Nothing),
             Done::Added(Ok(name)) => (
-                normal(texts.t_with(key::VIDEO_METRICS_CHANNEL_ADDED, &[("name", &name)])),
+                normal(texts.t_args_marked(
+                    key::VIDEO_METRICS_CHANNEL_ADDED,
+                    &[("name", Arg::Name(&name))],
+                )),
                 Errand::Nothing,
             ),
             Done::Added(Err(Unadded::Unresolved(k))) => (long(texts.t(k)), Errand::Nothing),
@@ -3404,7 +3700,7 @@ impl View {
                 Errand::Nothing,
             ),
             Done::Queued(play, Ok(())) => (
-                normal(texts.t_with(key::PLAYER_ADDED, &[("name", &play.title)])),
+                normal(texts.t_args_marked(key::PLAYER_ADDED, &[("name", Arg::Name(&play.title))])),
                 Errand::Nothing,
             ),
             // ALREADY THERE: asked on the page, "no" first, under the row the
@@ -3416,7 +3712,7 @@ impl View {
                 (None, self.asks(Pending::Again(play, name)))
             }
             Done::Queued(_, Err(Queued::Refused(t))) => (
-                long(crate::player::trouble_sentence(&t, texts)),
+                long(crate::player::trouble_named(&t, texts)),
                 Errand::Nothing,
             ),
             Done::Queued(_, Err(Queued::Unreachable)) => (
@@ -3426,9 +3722,12 @@ impl View {
             // HANDED OVER: the queue is opened where it is seen going (the
             // design's `t t`), and the sentence says how to come back to it.
             Done::Downloading(title, true) => (
-                normal(texts.t_with(
+                normal(texts.t_args_marked(
                     key::VIDEO_METRICS_DOWNLOADING,
-                    &[("title", &title), ("keys", &r.transfers_keys)],
+                    &[
+                        ("title", Arg::Name(&title)),
+                        ("keys", Arg::Text(&r.transfers_keys)),
+                    ],
                 )),
                 Errand::Transfers,
             ),
@@ -3490,11 +3789,11 @@ impl View {
             }
             Done::Registered(Err(why)) => (long(texts.t(words::why_key(why))), Errand::Nothing),
             Done::Exported(Ok((count, file))) => (
-                normal(texts.t_args(
+                normal(texts.t_args_marked(
                     key::VIDEO_METRICS_EXPORTED,
                     &[
                         ("count", Arg::Number(i64::from(count))),
-                        ("file", Arg::Text(&file.to_string_lossy())),
+                        ("file", Arg::Name(&file.to_string_lossy())),
                     ],
                 )),
                 Errand::Nothing,
@@ -3618,6 +3917,8 @@ impl View {
                     about: None,
                     name,
                     default: None,
+                    ground: None,
+                    words_at: None,
                 }
             })
             .collect();
@@ -3688,35 +3989,24 @@ impl View {
             setting(
                 "layout",
                 texts.t(key::VIDEO_METRICS_FILTER_LAYOUT),
-                texts.t(match self.layout {
-                    Layout::List => key::VIDEO_METRICS_LAYOUT_LIST,
-                    Layout::Grid => key::VIDEO_METRICS_LAYOUT_GRID,
-                }),
+                texts.t(self.layout.key()),
                 Target::Layout,
             ),
         ]);
-        // THE CHANNEL ON EVERY THUMBNAIL, or not — a row only where there are
-        // thumbnails.
-        if self.layout == Layout::Grid {
-            items.push(setting(
-                "grid-channel",
-                texts.t(key::VIDEO_METRICS_GRID_CHANNEL),
-                on_off(self.grid_channel, texts),
-                Target::GridChannel,
-            ));
-        }
-        // THE PAGE ASKED, and no other: a reading of the filter before (or of
-        // the page before) is not this list, and says "reading" until this
-        // one arrives. The layout is not asked about — the rows are the same.
-        let listed = r
-            .listed
-            .as_ref()
-            .filter(|l| l.query.page == self.page && l.query.filter == self.filter);
+        // THE FILTER ASKED, and no other: a reading of the filter before is
+        // not this list, and says "reading" until this one arrives. ANOTHER
+        // PAGE OF IT, or another size, is: the page still drawn stays drawn
+        // while the next one is read (the ranking's rule), and the Page row,
+        // the title's mark and its arrows say the page ASKED — so nothing
+        // blinks to "reading" between two pages, and the arrows never jump
+        // when the reading lands. The layout is not asked about — the rows
+        // are the same.
+        let listed = r.listed.as_ref().filter(|l| l.query.filter == self.filter);
         let Some(listed) = listed else {
             refused_or_reading(items, r, texts);
             return;
         };
-        let pages = pages_of(listed.total);
+        let pages = crate::paging::pages_of(listed.total, self.per_page.get());
         items.push(setting(
             "page",
             texts.t(key::VIDEO_METRICS_PAGE),
@@ -3733,13 +4023,28 @@ impl View {
             ),
             Target::PageOf,
         ));
-        items.push(Item::Heading(texts.t(match self.filter.order {
-            Order::Score => key::VIDEO_METRICS_BY_SCORE,
-            Order::NewestSetAside => key::VIDEO_METRICS_BY_SET_ASIDE,
-        })));
+        // HOW MANY A PAGE HOLDS, a ring of the session's, under the page.
+        items.push(setting(
+            "per-page",
+            texts.t(key::VIDEO_METRICS_PER_PAGE),
+            self.per_page.get().to_string(),
+            Target::PerPage,
+        ));
+        // THE LIST'S TITLE SAYS ITS PAGE, quietly — "By score 1 of 2" — with
+        // the arrows at its edge (the owner, 2026-11-10); a list of one page
+        // says neither.
+        let arrows = crate::paging::arrows(self.page, pages);
+        items.push(Item::Titled {
+            text: texts.t(match self.filter.order {
+                Order::Score => key::VIDEO_METRICS_BY_SCORE,
+                Order::NewestSetAside => key::VIDEO_METRICS_BY_SET_ASIDE,
+            }),
+            mark: crate::paging::mark(self.page, pages, texts),
+            controls: page_arrows(arrows, texts),
+        });
         if listed.rows.is_empty() {
             items.push(Item::Note(
-                texts.t(key::VIDEO_METRICS_NO_VIDEOS),
+                texts.t(key::VIDEO_METRICS_NO_VIDEOS).into(),
                 tokens::color::TEXT_DIM,
             ));
             return;
@@ -3756,32 +4061,77 @@ impl View {
                     items.push(Item::Entry(tile));
                 }
             }
-            Layout::Grid => {
-                let grid = grid_of(room, self.grid_channel);
+            // THE SAME ENTRY, ITS PICTURE AT ITS HEAD — where the door holds a
+            // picture beside a title as wide again; narrower, the list's own
+            // ([`lay_out`]).
+            Layout::Strip => {
+                for v in &listed.rows {
+                    items.push(Item::Strip(tile_of(v, r, texts)));
+                }
+            }
+            Layout::Grid | Layout::GridWithChannel => {
+                let channel = self.layout.channel();
+                let grid = grid_of(room, channel);
                 for shelf in listed.rows.chunks(usize::from(grid.across.max(1))) {
                     items.push(Item::Shelf(
                         shelf.iter().map(|v| tile_of(v, r, texts)).collect(),
                         grid,
-                        self.grid_channel,
+                        channel,
                     ));
                 }
             }
         }
+        // AND THE ARROWS AGAIN AT THE LIST'S END, where a person who read it
+        // to the bottom is — with the mark, in no title's ink: no section
+        // begins there (`section_ring`).
+        if let (Some(mark), Some(_)) = (crate::paging::mark(self.page, pages, texts), arrows) {
+            items.push(Item::Pager {
+                mark,
+                controls: page_arrows(arrows, texts),
+            });
+        }
     }
 }
 
-/// What the door says after a [`Done`], and for how long.
+/// THE TWO ARROWS OF A LIST'S PAGES, `[earlier, later]` — each a glyph
+/// acting at once, named and explained as the page keys are; `None` for one
+/// that cannot move, whose place stays empty ([`crate::paging::arrows`]).
+fn page_arrows(arrows: Option<[bool; 2]>, texts: &ronoctua_i18n::Texts) -> [Option<Control>; 2] {
+    let Some([earlier, later]) = arrows else {
+        return [None, None];
+    };
+    let arrow = |on: bool, glyph_of: char, name: &'static str| {
+        let target = Target::PageTurn(on);
+        let about = about_of(&target).unwrap_or(key::ABOUT_VIDEO_METRICS_PAGE);
+        glyph(glyph_of, target, texts.t(name), about, false)
+    };
+    [
+        earlier.then(|| {
+            arrow(
+                false,
+                tokens::icon::LIST_PAGE_EARLIER,
+                key::VIDEO_METRICS_PAGE_BACK,
+            )
+        }),
+        later.then(|| {
+            arrow(
+                true,
+                tokens::icon::LIST_PAGE_LATER,
+                key::VIDEO_METRICS_PAGE_ON,
+            )
+        }),
+    ]
+}
+
+/// What the door says after a [`Done`], and for how long — with the names
+/// it quotes told (`chrome::Named`): a title, a channel, a file is drawn in
+/// a name's ink on the window's foot and on the footer's line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Said {
     /// A sentence.
-    Normal(String),
+    Normal(crate::chrome::Named),
     /// A refusal, read to the end.
-    Long(String),
-}
-
-/// How many pages `total` videos make.
-fn pages_of(total: u64) -> u32 {
-    u32::try_from(total.div_ceil(u64::from(PER_PAGE))).unwrap_or(u32::MAX)
+    Long(crate::chrome::Named),
 }
 
 /// The band a rule covers, when it is a band.
@@ -3886,10 +4236,10 @@ const fn turns(t: &Target) -> bool {
             | Target::FilterSince
             | Target::Layout
             | Target::PageOf
+            | Target::PerPage
             | Target::ChannelKeep(..)
             | Target::KeepEverywhere(_)
             | Target::FilterSetAside
-            | Target::GridChannel
             | Target::SetAside(..)
             | Target::VideoKeep(..)
             | Target::Staged(..)
@@ -3965,13 +4315,20 @@ const fn about_of(target: &Target) -> Option<&'static str> {
         Target::FilterSetAside => key::ABOUT_VIDEO_METRICS_FILTER_SET_ASIDE,
         Target::FilterText => key::CMD_VIDEO_METRICS_SEARCH,
         Target::FilterSince => key::ABOUT_VIDEO_METRICS_FILTER_SINCE,
-        Target::Layout => key::CMD_VIDEO_METRICS_LAYOUT,
-        Target::GridChannel => key::ABOUT_VIDEO_METRICS_GRID_CHANNEL,
+        // THE CHOICE, as every ring's row says its own — not the command's
+        // "the next way": the row turns both ways (`←` the one before), and
+        // only `L` goes on to the next. `layouts`, never `about-<id>` of the
+        // command's id, which a hint line would never read beside its `cmd-`
+        // (every-hint-key-explains-itself).
+        Target::Layout => key::ABOUT_VIDEO_METRICS_LAYOUTS,
         Target::PageOf => key::ABOUT_VIDEO_METRICS_PAGE,
+        Target::PerPage => key::ABOUT_VIDEO_METRICS_PER_PAGE,
+        Target::PageTurn(false) => key::CMD_VIDEO_METRICS_PAGE_BACK,
+        Target::PageTurn(true) => key::CMD_VIDEO_METRICS_PAGE_ON,
         Target::SetAsideVideos => key::ABOUT_VIDEO_METRICS_SET_ASIDE_VIDEOS,
         Target::Video(_) => key::ABOUT_VIDEO_METRICS_VIDEO_ENTRY,
         Target::Rating(..) => key::ABOUT_VIDEO_METRICS_RATING,
-        // A FACE OF THE RATING, A BOOKMARK, AN ∞ — what the glyph says of
+        // AN ARROW OF THE RATING, A BOOKMARK, AN ∞ — what the glyph says of
         // the video now; a row of the video's page says its own (`Pair::about`).
         Target::Rate(_, _, false) => key::ABOUT_VIDEO_METRICS_GLYPH_RATE,
         Target::Rate(_, _, true) => key::ABOUT_VIDEO_METRICS_GLYPH_RATED,
@@ -4069,7 +4426,8 @@ const fn does_of(target: &Target) -> Option<&'static str> {
         | Target::Nyxt(_)
         | Target::ChannelKiosk(_)
         | Target::ChannelNyxt(_)
-        | Target::Download(_) => key::VIDEO_METRICS_ACT_DOES,
+        | Target::Download(_)
+        | Target::PageTurn(_) => key::VIDEO_METRICS_ACT_DOES,
         // THE PICKER'S `RET`, by what it is on: a place or a folder opens, the
         // ring turns, its question is answered, anything else is taken — a
         // file, the folder that is open, what was typed, the name to save
@@ -4105,11 +4463,10 @@ const fn does_of(target: &Target) -> Option<&'static str> {
         | Target::BlockShorts(_)
         | Target::Field(..)
         | Target::On(_)
-        | Target::Layout
-        | Target::GridChannel
         | Target::SetAside(..)
         | Target::VideoKeep(..)
         | Target::Hide(_, true) => key::VIDEO_METRICS_ACT_SWITCHES,
+        // A RING — the layout's four among them.
         Target::ChannelShorts(..)
         | Target::Match(_)
         | Target::Rating(..)
@@ -4119,7 +4476,9 @@ const fn does_of(target: &Target) -> Option<&'static str> {
         | Target::FilterHidden
         | Target::FilterSetAside
         | Target::FilterSince
+        | Target::Layout
         | Target::PageOf
+        | Target::PerPage
         | Target::Decide(..)
         | Target::DecideAll(Some(_)) => key::VIDEO_METRICS_ACT_TURNS,
         Target::Rate(_, _, false) => key::VIDEO_METRICS_ACT_PICKS,
@@ -4284,18 +4643,18 @@ struct Tile {
     spot: String,
     title: String,
     /// Its channel's title — data: under the title on a tile when the grid
-    /// says it ([`View::grid_channel`]).
+    /// says it ([`Layout::GridWithChannel`]).
     channel: String,
     /// Its channel, its age and its score, as the list says them before the
-    /// faces of its rating — and its age and score alone, for a line too
+    /// arrows of its rating — and its age and score alone, for a line too
     /// short for the channel ([`entry_line`]).
     said: [String; 2],
     /// How long ago it was published; empty when that is not known.
     age: String,
-    /// What it scores, a bare number (`words::score_number`): the faces of
+    /// What it scores, a bare number (`words::score_number`): the arrows of
     /// its rating follow it, and "points" on every line was in the way.
     score: String,
-    /// The four faces of its rating, not placed yet.
+    /// The four arrows of its rating, not placed yet.
     ratings: Vec<Control>,
     /// Its marks — set aside, hidden, deleted, never deleted — not placed
     /// yet: at the right edge of their line.
@@ -4361,9 +4720,9 @@ fn glyph(glyph: char, target: Target, name: String, about: &'static str, lit: bo
     }
 }
 
-/// THE FOUR FACES OF A VIDEO'S RATING, from very negative to very positive
-/// (the owner, 2026-11-09) — the one it has lit, and a click on it takes the
-/// rating away; on another, it rates the video so. The ranking's faces
+/// THE FOUR ARROWS OF A VIDEO'S RATING, from very negative to very positive
+/// (the owner, 2026-11-09; arrows since 2026-11-10) — the one it has lit, and a click on it takes the
+/// rating away; on another, it rates the video so. The ranking's arrows
 /// (`player_ranking`), in the catalogue's words.
 fn ratings_of(v: &RankedVideo, texts: &ronoctua_i18n::Texts) -> Vec<Control> {
     Rating::ALL
@@ -4500,6 +4859,45 @@ fn put_strip(row: &mut Row, glyphs: &[Control], from: u16) {
     }
 }
 
+/// THE ARROWS OF A LIST'S PAGES at a row's right edge `end` — each in a
+/// place as wide as the widest of them, a cell of air between two — in
+/// `colour`: a `None` keeps its place EMPTY, so the arrow beside it never
+/// slides into it (the owner, 2026-11-10: an arrow that cannot move is not
+/// drawn). Each one drawn is a field and the box a click takes, as a strip's
+/// glyph is ([`put_strip`]).
+fn put_slots(row: &mut Row, slots: &[Option<Control>; 2], end: u16, colour: tokens::Color) {
+    let place = slots.iter().flatten().map(|c| c.width).max().unwrap_or(0);
+    if place == 0 {
+        return;
+    }
+    let cells = place.saturating_mul(2).saturating_add(GLYPH_AIR);
+    let mut at = end.saturating_sub(cells);
+    for c in slots {
+        if let Some(c) = c {
+            row.fields
+                .push(piece(at, c.glyph.to_string(), colour, c.width));
+            row.controls.push(Control {
+                from: at,
+                ..c.clone()
+            });
+        }
+        at = at.saturating_add(place).saturating_add(GLYPH_AIR);
+    }
+}
+
+/// The room a row's arrows take from its words at its right edge, the cell
+/// of air before them included ([`put_slots`]) — none for a row with none.
+fn slots_room(slots: &[Option<Control>; 2]) -> u16 {
+    let place = slots.iter().flatten().map(|c| c.width).max().unwrap_or(0);
+    if place == 0 {
+        return 0;
+    }
+    place
+        .saturating_mul(2)
+        .saturating_add(GLYPH_AIR)
+        .saturating_add(GLYPH_AIR)
+}
+
 /// What a page says, before it is placed.
 #[derive(Debug, Clone)]
 enum Item {
@@ -4507,17 +4905,48 @@ enum Item {
     Heading(String),
     /// A row.
     Pair(Pair),
-    /// A sentence, wrapped and never cut.
-    Note(String, tokens::Color),
+    /// A sentence, wrapped and never cut — the names it quotes in the ink a
+    /// name in it wears (`chrome::quoted_ink`).
+    Note(crate::chrome::Named, tokens::Color),
     /// A video of the list: its title on the whole width, and under it what
     /// it scores, its channel and its age.
     Entry(Tile),
+    /// A VIDEO OF THE LIST WITH THUMBNAILS: an [`Item::Entry`] with its
+    /// picture at its head ([`strip_entry`]) — the list's own entry where
+    /// the door is too narrow to hold the picture beside a title.
+    Strip(Tile),
     /// A shelf of the grid, and whether its tiles say their channel.
     Shelf(Vec<Tile>, ronoctua_design::grid::Grid, bool),
     /// A picture on its own, `thumbLines` tall.
     Figure(PathBuf),
-    /// An answer of the question on the page.
-    Answer { yes: bool, label: String },
+    /// A LIST'S TITLE THAT SAYS ITS PAGE ("By score 1 of 2", the owner,
+    /// 2026-11-10): a section's title, its mark after it in the quiet ink,
+    /// and the arrows `[earlier, later]` at the row's edge — a `None` keeps
+    /// its place empty. Its spot is the list's (`paging::LIST_TITLE`), the
+    /// row a turned page brings to the top.
+    Titled {
+        /// The title.
+        text: String,
+        /// "1 of 2" — `None` for a list of one page.
+        mark: Option<String>,
+        /// The arrows, `[earlier, later]`.
+        controls: [Option<Control>; 2],
+    },
+    /// THE ARROWS AGAIN AT A LIST'S END, with its mark — a line the cursor
+    /// skips, in no title's ink: no section begins there.
+    Pager {
+        /// "1 of 2".
+        mark: String,
+        /// The arrows, `[earlier, later]`.
+        controls: [Option<Control>; 2],
+    },
+    /// THE QUESTION ON THE PAGE, a block of its own (`chrome::question_lines`):
+    /// what is asked, its answers' words `[no, yes]`, and what the yes costs.
+    Question {
+        asked: crate::chrome::Named,
+        answers: [String; 2],
+        stakes: crate::chrome::Stakes,
+    },
 }
 
 impl Item {
@@ -4525,7 +4954,7 @@ impl Item {
     fn has_spot(&self, spot: &str) -> bool {
         match self {
             Self::Pair(p) => p.spot == spot,
-            Self::Entry(t) => t.spot == spot,
+            Self::Entry(t) | Self::Strip(t) => t.spot == spot,
             Self::Shelf(tiles, ..) => tiles.iter().any(|t| t.spot == spot),
             _ => false,
         }
@@ -4597,7 +5026,7 @@ fn date_or_never(at: Option<i64>, r: &Readings, texts: &ronoctua_i18n::Texts) ->
 fn refused_or_reading(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
     match r.catalogue {
         Some(Err(why)) => items.push(Item::Note(
-            texts.t(words::why_key(why)),
+            texts.t(words::why_key(why)).into(),
             if why == Why::NotThere {
                 tokens::color::TEXT_DIM
             } else {
@@ -4605,69 +5034,111 @@ fn refused_or_reading(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n
             },
         )),
         _ => items.push(Item::Note(
-            texts.t(key::VIDEO_METRICS_READING),
+            texts.t(key::VIDEO_METRICS_READING).into(),
             tokens::color::TEXT_DIM,
         )),
     }
 }
 
-/// The question on the page, "no" first.
+/// The question on the page, "no" first: ITS OWN BLOCK among the rows —
+/// the sentence in the question's colour with what it is about in a name's,
+/// the answers set in under it, on a ground of its own with air before and
+/// after (owner, 2026-11-10: it had the tone and the inset of the options
+/// around it, and it all ran together) — and its "yes" in the colour of what
+/// it costs ([`Pending::stakes`]).
 fn question(items: &mut Vec<Item>, c: &Confirm, texts: &ronoctua_i18n::Texts) {
-    let (asked, no, yes) = match &c.what {
-        Pending::Delete(_, title) => (
-            texts.t_with(key::ASK_VIDEO_METRICS_DELETE, &[("title", title)]),
-            key::VIDEO_METRICS_KEEP_VIDEO,
-            key::VIDEO_METRICS_DELETE_IT,
-        ),
-        Pending::Hide(_, title) => (
-            texts.t_with(key::ASK_VIDEO_METRICS_HIDE, &[("title", title)]),
-            key::VIDEO_METRICS_LEAVE_SHOWN,
-            key::VIDEO_METRICS_HIDE_IT,
-        ),
-        Pending::RemoveChannel(_, name) => (
-            texts.t_with(key::ASK_VIDEO_METRICS_REMOVE_CHANNEL, &[("name", name)]),
-            key::VIDEO_METRICS_KEEP_CHANNEL,
-            key::VIDEO_METRICS_REMOVE_CHANNEL_IT,
-        ),
-        Pending::RemoveRule(_) => (
-            texts.t(key::ASK_VIDEO_METRICS_REMOVE_RULE),
-            key::VIDEO_METRICS_KEEP_RULE,
-            key::VIDEO_METRICS_REMOVE_RULE_IT,
-        ),
-        Pending::Again(_, name) => (
-            texts.t_with(key::ASK_VIDEO_METRICS_AGAIN, &[("name", name)]),
-            key::VIDEO_METRICS_NOT_AGAIN,
-            key::VIDEO_METRICS_AGAIN,
-        ),
-        Pending::Register(kept, discarded) => (
-            texts.t_args(
-                key::ASK_VIDEO_METRICS_REGISTER,
-                &[
-                    ("kept", Arg::Number(i64::from(*kept))),
-                    ("discarded", Arg::Number(i64::from(*discarded))),
-                ],
-            ),
-            key::VIDEO_METRICS_NOT_YET,
-            key::VIDEO_METRICS_REGISTER_THEM,
-        ),
-        Pending::DecideAll(decision, changed) => (
-            texts.t_args(
-                words::ask_decide_all_key(*decision),
-                &[("changed", Arg::Number(i64::from(*changed)))],
-            ),
-            key::VIDEO_METRICS_LEAVE_DECISIONS,
-            key::VIDEO_METRICS_DECIDE_THEM_ALL,
-        ),
-    };
-    items.push(Item::Note(asked, tokens::color::TEXT_SECONDARY));
-    items.push(Item::Answer {
-        yes: false,
-        label: texts.t(no),
+    let [no, yes] = c.what.answers();
+    items.push(Item::Question {
+        asked: c.what.asked(texts),
+        answers: [texts.t(no), texts.t(yes)],
+        stakes: c.what.stakes(),
     });
-    items.push(Item::Answer {
-        yes: true,
-        label: texts.t(yes),
-    });
+}
+
+impl Pending {
+    /// WHAT ITS "YES" COSTS — said by the colour the yes is drawn in
+    /// (`chrome::answer_tone`): what is deleted or removed for good, and
+    /// every channel's decision given in one, is lost; registering what was
+    /// decided weighs — it reaches every channel staged, and is not taken
+    /// back by a key —; adding again and hiding lose nothing (a hidden video
+    /// is shown again from its page).
+    #[must_use]
+    pub const fn stakes(&self) -> crate::chrome::Stakes {
+        use crate::chrome::Stakes;
+        match self {
+            Self::Delete(..)
+            | Self::RemoveChannel(..)
+            | Self::RemoveRule(_)
+            | Self::DecideAll(..) => Stakes::Lost,
+            Self::Register(..) => Stakes::Weighty,
+            Self::Again(..) | Self::Hide(..) => Stakes::Light,
+        }
+    }
+
+    /// What is asked, in words — the video's title, the channel's name,
+    /// the name the queue has it under each marked as a NAME the sentence
+    /// quotes (`Arg::Name`), drawn in a name's ink; a count stays a number.
+    #[must_use]
+    pub fn asked(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+        match self {
+            Self::Delete(_, title) => texts
+                .t_args_marked(
+                    key::ASK_VIDEO_METRICS_DELETE,
+                    &[("title", Arg::Name(title))],
+                )
+                .into(),
+            Self::Hide(_, title) => texts
+                .t_args_marked(key::ASK_VIDEO_METRICS_HIDE, &[("title", Arg::Name(title))])
+                .into(),
+            Self::RemoveChannel(_, name) => texts
+                .t_args_marked(
+                    key::ASK_VIDEO_METRICS_REMOVE_CHANNEL,
+                    &[("name", Arg::Name(name))],
+                )
+                .into(),
+            Self::RemoveRule(_) => texts.t(key::ASK_VIDEO_METRICS_REMOVE_RULE).into(),
+            Self::Again(_, name) => texts
+                .t_args_marked(key::ASK_VIDEO_METRICS_AGAIN, &[("name", Arg::Name(name))])
+                .into(),
+            Self::Register(kept, discarded) => texts
+                .t_args_marked(
+                    key::ASK_VIDEO_METRICS_REGISTER,
+                    &[
+                        ("kept", Arg::Number(i64::from(*kept))),
+                        ("discarded", Arg::Number(i64::from(*discarded))),
+                    ],
+                )
+                .into(),
+            Self::DecideAll(decision, changed) => texts
+                .t_args_marked(
+                    words::ask_decide_all_key(*decision),
+                    &[("changed", Arg::Number(i64::from(*changed)))],
+                )
+                .into(),
+        }
+    }
+
+    /// Its answers' words, `[no, yes]` — the order they are drawn in.
+    const fn answers(&self) -> [&'static str; 2] {
+        match self {
+            Self::Delete(..) => [key::VIDEO_METRICS_KEEP_VIDEO, key::VIDEO_METRICS_DELETE_IT],
+            Self::Hide(..) => [key::VIDEO_METRICS_LEAVE_SHOWN, key::VIDEO_METRICS_HIDE_IT],
+            Self::RemoveChannel(..) => [
+                key::VIDEO_METRICS_KEEP_CHANNEL,
+                key::VIDEO_METRICS_REMOVE_CHANNEL_IT,
+            ],
+            Self::RemoveRule(_) => [
+                key::VIDEO_METRICS_KEEP_RULE,
+                key::VIDEO_METRICS_REMOVE_RULE_IT,
+            ],
+            Self::Again(..) => [key::VIDEO_METRICS_NOT_AGAIN, key::VIDEO_METRICS_AGAIN],
+            Self::Register(..) => [key::VIDEO_METRICS_NOT_YET, key::VIDEO_METRICS_REGISTER_THEM],
+            Self::DecideAll(..) => [
+                key::VIDEO_METRICS_LEAVE_DECISIONS,
+                key::VIDEO_METRICS_DECIDE_THEM_ALL,
+            ],
+        }
+    }
 }
 
 /// The home page: the scan, the catalogue, what was left out.
@@ -4677,7 +5148,7 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         && why != Why::NotThere
     {
         items.push(Item::Note(
-            texts.t(words::why_key(why)),
+            texts.t(words::why_key(why)).into(),
             tokens::color::STATE_ERROR,
         ));
     }
@@ -4753,16 +5224,18 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
     }
     if let Some(stop) = scan.and_then(|s| s.stopped) {
         items.push(Item::Note(
-            texts.t(words::stop_key(stop)),
+            texts.t(words::stop_key(stop)).into(),
             tokens::color::STATE_WARNING,
         ));
     }
     if let Some(s) = scan.filter(|s| s.pending > 0) {
         items.push(Item::Note(
-            texts.t_args(
-                key::VIDEO_METRICS_PENDING,
-                &[("pending", Arg::Number(i64::from(s.pending)))],
-            ),
+            texts
+                .t_args(
+                    key::VIDEO_METRICS_PENDING,
+                    &[("pending", Arg::Number(i64::from(s.pending)))],
+                )
+                .into(),
             tokens::color::TEXT_DIM,
         ));
     }
@@ -4784,10 +5257,15 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
             controls: Vec::new(),
             default: None,
         }));
+        // THE HOSTS IT LETS BE ASKED are names, each its own — as the
+        // player's "Asking …" tells its hosts (`chrome::names_listed`).
         items.push(Item::Note(
-            texts.t_with(
+            crate::chrome::names_listed(
+                texts,
                 key::VIDEO_METRICS_ASK_YOUTUBE_NOTE,
-                &[("hosts", &ronoctua_video_metrics::HOSTS.join(", "))],
+                "hosts",
+                &ronoctua_video_metrics::HOSTS,
+                ", ",
             ),
             tokens::color::TEXT_DIM,
         ));
@@ -4873,7 +5351,7 @@ fn channels(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         && why != Why::NotThere
     {
         items.push(Item::Note(
-            texts.t(words::why_key(why)),
+            texts.t(words::why_key(why)).into(),
             tokens::color::STATE_ERROR,
         ));
     }
@@ -4906,7 +5384,7 @@ fn channels(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
     ));
     if r.channels.is_empty() {
         items.push(Item::Note(
-            texts.t(key::VIDEO_METRICS_NO_CHANNELS),
+            texts.t(key::VIDEO_METRICS_NO_CHANNELS).into(),
             tokens::color::TEXT_DIM,
         ));
         return;
@@ -4982,7 +5460,7 @@ fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua
     items.push(Item::Heading(c.title.clone()));
     if let Some(decision) = staged {
         items.push(Item::Note(
-            texts.t(key::VIDEO_METRICS_STAGED_NOTE),
+            texts.t(key::VIDEO_METRICS_STAGED_NOTE).into(),
             tokens::color::TEXT_DIM,
         ));
         items.push(setting(
@@ -5156,12 +5634,12 @@ fn import(
         && why != Why::NotThere
     {
         items.push(Item::Note(
-            texts.t(words::why_key(why)),
+            texts.t(words::why_key(why)).into(),
             tokens::color::STATE_ERROR,
         ));
     }
     items.push(Item::Note(
-        texts.t(key::VIDEO_METRICS_IMPORT_NOTE),
+        texts.t(key::VIDEO_METRICS_IMPORT_NOTE).into(),
         tokens::color::TEXT_DIM,
     ));
     items.push(setting(
@@ -5293,7 +5771,7 @@ fn rules(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctua_i1
                 Target::BlockShorts(block),
             ));
             items.push(Item::Note(
-                texts.t(key::VIDEO_METRICS_BLOCK_SHORTS_NOTE),
+                texts.t(key::VIDEO_METRICS_BLOCK_SHORTS_NOTE).into(),
                 tokens::color::TEXT_DIM,
             ));
             // HOW LONG A VIDEO STAYS, everywhere a channel keeps no time of
@@ -5320,10 +5798,12 @@ fn rules(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctua_i1
 fn expiring(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
     if let Some(n) = r.expiring.filter(|n| *n > 0) {
         items.push(Item::Note(
-            texts.t_args(
-                key::VIDEO_METRICS_EXPIRING,
-                &[("count", Arg::Number(i64::try_from(n).unwrap_or(i64::MAX)))],
-            ),
+            texts
+                .t_args(
+                    key::VIDEO_METRICS_EXPIRING,
+                    &[("count", Arg::Number(i64::try_from(n).unwrap_or(i64::MAX)))],
+                )
+                .into(),
             tokens::color::TEXT_DIM,
         ));
     }
@@ -5390,7 +5870,15 @@ fn everywhere_rule(
         let name = r
             .channel(id)
             .map_or_else(|| id.0.clone(), |c| c.title.clone());
-        texts.t_with(key::VIDEO_METRICS_RULE_INHERITED_NOTE, &[("name", &name)])
+        // THE CHANNEL IS A NAME (`Arg::Name`), told as every name is; what
+        // explains a row (`door::Explained`) is said in its own inks, which
+        // quote no name, so only the words go.
+        texts
+            .t_args_marked(
+                key::VIDEO_METRICS_RULE_INHERITED_NOTE,
+                &[("name", ronoctua_i18n::Arg::Name(&name))],
+            )
+            .text
     } else {
         texts.t(key::VIDEO_METRICS_FOLLOWS_RULE_EVERYWHERE)
     };
@@ -5470,7 +5958,7 @@ fn rule_rows(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctu
     ));
     if scope.is_some() && !bands.is_empty() && bands.iter().all(|b| b.channel.is_none()) {
         items.push(Item::Note(
-            texts.t(key::VIDEO_METRICS_BANDS_NOTE),
+            texts.t(key::VIDEO_METRICS_BANDS_NOTE).into(),
             tokens::color::TEXT_DIM,
         ));
     }
@@ -5549,7 +6037,7 @@ fn rule_page(
         (None, Slot::Id(_)) => {
             items.push(Item::Heading(texts.t(key::VIDEO_METRICS_RULES)));
             items.push(Item::Note(
-                texts.t(words::why_key(Why::NotFound)),
+                texts.t(words::why_key(Why::NotFound)).into(),
                 tokens::color::TEXT_DIM,
             ));
             return;
@@ -5563,20 +6051,23 @@ fn rule_page(
     };
     items.push(Item::Heading(title));
     if let Some(channel) = scope.as_ref().and_then(|id| r.channel(id)) {
+        // THE CHANNEL BY ITS NAME, in a name's ink near the note's.
         items.push(Item::Note(
-            texts.t_with(
-                if inherited || rule.id.is_none() {
-                    key::VIDEO_METRICS_RULE_INHERITED_NOTE
-                } else if !rule.enabled && rule.kind.is_single() {
-                    // ITS OWN, SWITCHED OFF: the kind counts for nothing on
-                    // this channel, and removing it brings the one
-                    // everywhere back.
-                    key::VIDEO_METRICS_RULE_OWN_OFF_NOTE
-                } else {
-                    key::VIDEO_METRICS_RULE_OWN_NOTE
-                },
-                &[("name", &channel.title)],
-            ),
+            texts
+                .t_args_marked(
+                    if inherited || rule.id.is_none() {
+                        key::VIDEO_METRICS_RULE_INHERITED_NOTE
+                    } else if !rule.enabled && rule.kind.is_single() {
+                        // ITS OWN, SWITCHED OFF: the kind counts for nothing on
+                        // this channel, and removing it brings the one
+                        // everywhere back.
+                        key::VIDEO_METRICS_RULE_OWN_OFF_NOTE
+                    } else {
+                        key::VIDEO_METRICS_RULE_OWN_NOTE
+                    },
+                    &[("name", Arg::Name(&channel.title))],
+                )
+                .into(),
             tokens::color::TEXT_DIM,
         ));
     }
@@ -5665,7 +6156,7 @@ fn rule_page(
 fn weights(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
     items.push(Item::Heading(texts.t(key::VIDEO_METRICS_WEIGHTS)));
     items.push(Item::Note(
-        texts.t(key::VIDEO_METRICS_WEIGHTS_NOTE),
+        texts.t(key::VIDEO_METRICS_WEIGHTS_NOTE).into(),
         tokens::color::TEXT_DIM,
     ));
     let Some(w) = r.weights else {
@@ -5697,7 +6188,7 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
             .is_some_and(|(read, v)| read == id && v.is_none())
         {
             items.push(Item::Note(
-                texts.t(words::why_key(Why::NotFound)),
+                texts.t(words::why_key(Why::NotFound)).into(),
                 tokens::color::TEXT_DIM,
             ));
         } else {
@@ -5836,7 +6327,10 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
     }
     if !v.description.trim().is_empty() {
         items.push(Item::Heading(texts.t(key::VIDEO_METRICS_DESCRIPTION)));
-        items.push(Item::Note(v.description.clone(), Kind::Fact.tones(false).1));
+        items.push(Item::Note(
+            v.description.clone().into(),
+            Kind::Fact.tones(false).1,
+        ));
     }
     items.push(Item::Heading(texts.t(key::VIDEO_METRICS_YOURS)));
     items.push(setting(
@@ -5909,7 +6403,7 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
     }));
     if !v.second_description.trim().is_empty() {
         items.push(Item::Note(
-            v.second_description.clone(),
+            v.second_description.clone().into(),
             Kind::Fact.tones(false).1,
         ));
     }
@@ -5987,6 +6481,8 @@ fn plain(fields: Vec<Field>, heading: bool, spot: String) -> Row {
         about: None,
         name: String::new(),
         default: None,
+        ground: None,
+        words_at: None,
     }
 }
 
@@ -6067,7 +6563,9 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
     for item in items {
         match item {
             Item::Heading(text) => {
-                if !out.is_empty() {
+                // AIR BEFORE A TITLE — but the first, and one already there:
+                // a question's block ends in a line of its own.
+                if !out.is_empty() && !out.last().is_some_and(is_air) {
                     out.push(plain(crate::chrome::AIR, true, spot("air")));
                 }
                 // A TITLE IS DATA WHEN IT IS A NAME (a channel, a video),
@@ -6080,19 +6578,81 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                     ));
                 }
             }
-            Item::Note(text, color) => {
-                for paragraph in text.split('\n') {
-                    for line in crate::chrome::note_lines(paragraph, room) {
-                        out.push(plain(
-                            if line.is_empty() {
-                                Vec::new()
-                            } else {
-                                vec![piece(left, line, color, room)]
-                            },
-                            true,
-                            spot("note"),
-                        ));
+            Item::Titled {
+                text,
+                mark,
+                controls,
+            } => {
+                if !out.is_empty() && !out.last().is_some_and(is_air) {
+                    out.push(plain(crate::chrome::AIR, true, spot("air")));
+                }
+                // THE TITLE AND ITS MARK in what the arrows leave, a cell of
+                // air between the two: on the title's line while the whole
+                // mark fits after it, else wrapped under it, whole — never
+                // cut, in either ink.
+                let words = room.saturating_sub(slots_room(&controls)).max(1);
+                let mut lines: Vec<Vec<Field>> = crate::chrome::note_lines(&text, words)
+                    .into_iter()
+                    .map(|line| vec![piece(left, line, tokens::color::TEXT_HEADING, words)])
+                    .collect();
+                if let Some(mark) = mark {
+                    let quiet = tokens::color::TEXT_DIM;
+                    let after = lines
+                        .last()
+                        .and_then(|l| l.last())
+                        .map_or(left, |f| f.at + width(&f.text) + 1);
+                    match lines.last_mut() {
+                        Some(last) if after + width(&mark) <= left + words => {
+                            last.push(piece(after, mark, quiet, words));
+                        }
+                        _ => {
+                            for line in crate::chrome::note_lines(&mark, words) {
+                                lines.push(vec![piece(left, line, quiet, words)]);
+                            }
+                        }
                     }
+                }
+                for (k, fields) in lines.into_iter().enumerate() {
+                    let mut row = plain(
+                        fields,
+                        true,
+                        if k == 0 {
+                            crate::paging::LIST_TITLE.to_owned()
+                        } else {
+                            spot("title")
+                        },
+                    );
+                    if k == 0 {
+                        put_slots(&mut row, &controls, end, tokens::color::TEXT_HEADING);
+                    }
+                    out.push(row);
+                }
+            }
+            Item::Pager { mark, controls } => {
+                if !out.is_empty() && !out.last().is_some_and(is_air) {
+                    out.push(plain(crate::chrome::AIR, true, spot("air")));
+                }
+                let quiet = tokens::color::TEXT_DIM;
+                let words = room.saturating_sub(slots_room(&controls)).max(1);
+                let mut row = plain(
+                    vec![piece(left, mark, quiet, words)],
+                    true,
+                    crate::paging::LIST_PAGER.to_owned(),
+                );
+                put_slots(&mut row, &controls, end, quiet);
+                out.push(row);
+            }
+            Item::Note(said, color) => {
+                // THE LINES ONE INK WOULD TAKE, its names in theirs
+                // (`chrome::note_fields`): each paragraph a line of its own or
+                // more, an empty one a row of nothing — and a sentence that
+                // ENDS a paragraph (a description's last newline) one more
+                // empty row, as splitting it at every newline always gave.
+                for fields in crate::chrome::note_fields(left, &said, color, room) {
+                    out.push(plain(fields, true, spot("note")));
+                }
+                if said.ends_with('\n') {
+                    out.push(plain(Vec::new(), true, spot("note")));
                 }
             }
             Item::Pair(p) => {
@@ -6135,6 +6695,8 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                         about: p.about,
                         name: p.label.clone(),
                         default: p.default.clone(),
+                        ground: None,
+                        words_at: None,
                     };
                     if k == 0 && !p.controls.is_empty() {
                         put_strip(
@@ -6146,14 +6708,26 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                     out.push(row);
                 }
             }
-            Item::Answer { yes, label } => {
-                let spot = answer_spot(yes).to_owned();
-                let focused = spot == at;
-                let colour = Kind::Setting.tones(focused).0;
-                let mut row = plain(vec![piece(left, label.clone(), colour, room)], false, spot);
-                row.target = Target::Answer(yes);
-                row.name = label;
-                out.push(row);
+            Item::Question {
+                asked,
+                answers,
+                stakes,
+            } => {
+                let lines = crate::chrome::question_lines(
+                    &asked,
+                    [answers[0].as_str(), answers[1].as_str()],
+                    left,
+                    room,
+                );
+                laid_question(
+                    &mut out,
+                    &lines,
+                    &answers,
+                    stakes,
+                    &mut spot,
+                    |yes| (answer_spot(yes).to_owned(), Target::Answer(yes)),
+                    |yes| answer_spot(yes) == at,
+                );
             }
             Item::Figure(file) => {
                 let lines = tokens::space::VIDEOMETRICS_THUMBLINES;
@@ -6170,13 +6744,12 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                     out.push(row);
                 }
             }
-            Item::Entry(t) => {
+            Item::Strip(t) if strip_holds_a_picture(room) => {
+                strip_entry(&mut out, &t, left, room, at, &mut spot);
+            }
+            Item::Entry(t) | Item::Strip(t) => {
                 let focused = t.spot == at;
-                let (label, value) = if t.hidden {
-                    Kind::Disabled.tones(focused)
-                } else {
-                    Kind::ListedSetting.tones(focused)
-                };
+                let (label, value) = entry_tones(&t, focused);
                 for (k, line) in crate::chrome::note_lines(&t.title, room)
                     .into_iter()
                     .enumerate()
@@ -6208,23 +6781,73 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
     out
 }
 
+/// Whether `row` is a LINE OF AIR between two blocks — the one a title
+/// puts before itself, the ones around a question, and the one a video of
+/// the list with thumbnails ends with ([`strip_entry`]).
+fn is_air(row: &Row) -> bool {
+    row.spot.starts_with("air#")
+}
+
+/// A QUESTION'S LINES ([`crate::chrome::question_lines`]) as rows of the
+/// page, after `out`'s: its air off the ground, and every other line on it;
+/// the sentence a note the cursor skips; each answer a row the cursor
+/// stops on, its first line `first_of(yes)` — its spot and what `RET` does
+/// there — and the lines that wrap it CONTINUING it ([`Row::owner`]), so a
+/// click anywhere on it is a click on it. `here(yes)`: the cursor is on that
+/// answer, whichever line of it, and every line of it wears the cursor's
+/// colour. No air where the line before is air already.
+fn laid_question(
+    out: &mut Vec<Row>,
+    lines: &[crate::chrome::QuestionLine],
+    answers: &[String; 2],
+    stakes: crate::chrome::Stakes,
+    spot: &mut impl FnMut(&str) -> String,
+    first_of: impl Fn(bool) -> (String, Target),
+    here: impl Fn(bool) -> bool,
+) {
+    use crate::chrome::QuestionLine;
+    for line in lines {
+        let mut row = match line {
+            QuestionLine::Air => {
+                if out.is_empty() || out.last().is_some_and(is_air) {
+                    continue;
+                }
+                plain(crate::chrome::AIR, true, spot("air"))
+            }
+            QuestionLine::Asked(_) => plain(line.fields(false, stakes), true, spot("asked")),
+            QuestionLine::Answer { yes, first, .. } => {
+                let mut row = plain(line.fields(here(*yes), stakes), false, spot("rest"));
+                if *first {
+                    (row.spot, row.target) = first_of(*yes);
+                } else {
+                    row.continues = true;
+                }
+                row.name.clone_from(&answers[usize::from(*yes)]);
+                row
+            }
+        };
+        row.ground = line.ground();
+        out.push(row);
+    }
+}
+
 /// THE LINE UNDER A LIST'S TITLE, from `left` to `end`: its channel, its
-/// age and its score — a bare number — and the four faces of its rating
+/// age and its score — a bare number — and the four arrows of its rating
 /// right after it, and its marks at the line's right edge. The words before
-/// the faces are the row's (`Row::words_box`): a click there takes the
+/// the arrows are the row's (`Row::words_box`): a click there takes the
 /// video, a click on a glyph does what it says. Where the line is too short
 /// the channel goes first, then the age; the score is never cut, and the
 /// glyphs go before it would be.
 fn entry_line(row: &mut Row, t: &Tile, colour: tokens::Color, left: u16, end: u16) {
     use ronoctua_render::layout::width;
     let room = end.saturating_sub(left);
-    let faces = strip_cells(&t.ratings);
+    let arrows = strip_cells(&t.ratings);
     let marks = strip_cells(&t.marks);
-    // WHAT THE WORDS BEFORE THE FACES MAY TAKE: the line less the faces, the
+    // WHAT THE WORDS BEFORE THE ARROWS MAY TAKE: the line less the arrows, the
     // marks and the air before each.
     let before = room.saturating_sub(
         GLYPH_AIR
-            .saturating_add(faces)
+            .saturating_add(arrows)
             .saturating_add(GLYPH_AIR)
             .saturating_add(marks),
     );
@@ -6238,9 +6861,9 @@ fn entry_line(row: &mut Row, t: &Tile, colour: tokens::Color, left: u16, end: u1
         .push(piece(left, words.to_owned(), colour, width(words)));
     let at = left.saturating_add(width(words)).saturating_add(GLYPH_AIR);
     // THE GLYPHS ONLY WHERE THEY FIT WHOLE — the marks against the edge,
-    // the faces after the score with a cell of air before the marks.
+    // the arrows after the score with a cell of air before the marks.
     let marks_from = end.saturating_sub(marks);
-    if at.saturating_add(faces).saturating_add(GLYPH_AIR) <= marks_from {
+    if at.saturating_add(arrows).saturating_add(GLYPH_AIR) <= marks_from {
         put_strip(row, &t.ratings, at);
     }
     if at <= marks_from {
@@ -6248,9 +6871,112 @@ fn entry_line(row: &mut Row, t: &Tile, colour: tokens::Color, left: u16, end: u1
     }
 }
 
+/// The tones of a video of the list, its title's and its words': a hidden
+/// one's are a disabled row's.
+fn entry_tones(t: &Tile, focused: bool) -> (tokens::Color, tokens::Color) {
+    if t.hidden {
+        Kind::Disabled.tones(focused)
+    } else {
+        Kind::ListedSetting.tones(focused)
+    }
+}
+
+/// WHETHER A DOOR `room` CELLS WIDE HOLDS A VIDEO'S PICTURE beside a title as
+/// wide again, a cell of air between — the player's strip's rule
+/// (`player_posters::strip`). Narrower, the list with thumbnails is the list:
+/// a title squeezed into the cells a picture leaves would be a word a line.
+const fn strip_holds_a_picture(room: u16) -> bool {
+    room >= tokens::space::VIDEOMETRICS_THUMBCELLS.saturating_mul(2) + ronoctua_design::GAP
+}
+
+/// A VIDEO OF THE LIST WITH THUMBNAILS (the owner, 2026-11-10: "uma lista com
+/// as imagens, como a lista do player") — the player's strip in this view's
+/// rows, which are not the player's (`player_posters::strip` writes
+/// `player_rows::Row`s): the picture at the head, `thumbCells` by
+/// `thumbLines` — the glyph of a video in its place until the scan fetches
+/// one —, and a cell of air after it, the title beside it WRAPPED WHOLE,
+/// never cut (the list's own rule: a title is the long half of a video), and
+/// under the title what it scores, with its glyphs ([`entry_line`], from the
+/// words' column). As tall as the title and that line, or as the picture
+/// when it is taller — and a line of air after it, the entry's own: two
+/// pictures one over the other read as one strip.
+///
+/// EVERY LINE CONTINUES THE ENTRY and says where its words begin
+/// ([`Row::words_at`]): the pointer lights the words, on every line of the
+/// video and never over its picture, and a click from there on takes the
+/// video — but on the line of glyphs, where the row's words are their box
+/// and each glyph acts on its own. The picture takes nothing and lights
+/// nothing, on any of its lines ([`View::on_the_words`]): not the player's
+/// strip's rule (`Lit::From`, a click anywhere on the line), the plan's.
+fn strip_entry(
+    out: &mut Vec<Row>,
+    t: &Tile,
+    left: u16,
+    room: u16,
+    at: &str,
+    spot: &mut impl FnMut(&str) -> String,
+) {
+    let cells = tokens::space::VIDEOMETRICS_THUMBCELLS;
+    let lines = tokens::space::VIDEOMETRICS_THUMBLINES;
+    let end = left + room;
+    let text_at = left + cells + ronoctua_design::GAP;
+    let words = end.saturating_sub(text_at).max(1);
+    let (label, value) = entry_tones(t, t.spot == at);
+    let title = crate::chrome::note_lines(&t.title, words);
+    let tall = (title.len() + 1).max(usize::from(lines));
+    for (k, line) in (0..tall).zip(0u16..) {
+        let mut row = plain(
+            Vec::new(),
+            false,
+            if k == 0 { t.spot.clone() } else { spot("rest") },
+        );
+        if k == 0 {
+            row.target = t.target.clone();
+        } else {
+            row.continues = true;
+        }
+        row.name.clone_from(&t.title);
+        row.words_at = Some(text_at);
+        if let Some(text) = title.get(k) {
+            row.fields.push(piece(text_at, text.clone(), label, words));
+        } else if k == title.len() {
+            entry_line(&mut row, t, value, text_at, end);
+        }
+        // THE PICTURE ON THE LINES OF ITS BOX, and on no other.
+        if line < lines {
+            match &t.file {
+                Some(file) => row.thumbs.push(Thumb {
+                    line,
+                    lines,
+                    left,
+                    cells,
+                    file: file.clone(),
+                }),
+                // NO PICTURE YET: the glyph of a video in its place, centred,
+                // as a tile of the grid says it.
+                None if line == lines / 2 => row.fields.push(piece(
+                    left + cells / 2,
+                    tokens::icon::VIDEO_NO_THUMB.to_string(),
+                    tokens::color::TEXT_DIM,
+                    1,
+                )),
+                None => {}
+            }
+        }
+        out.push(row);
+    }
+    // ITS LINE OF AIR, the video's — a title after the list takes no second
+    // one ([`is_air`]).
+    let mut row = plain(Vec::new(), false, spot("air"));
+    row.continues = true;
+    row.name.clone_from(&t.title);
+    row.words_at = Some(text_at);
+    out.push(row);
+}
+
 /// One shelf of the grid: the pictures' lines, the titles' two, the
 /// channels' when `channel` says so, the line that says what each scores
-/// with the faces of its rating, the one that says when with its marks, and
+/// with the arrows of its rating, the one that says when with its marks, and
 /// a line of air. Each tile sits [`TILE_AIR`] inside its cell, so the hover
 /// that lights the cell has the same air on both sides of it. The FIRST line
 /// carries the cells a click takes — the box the hover lights, never the air
@@ -6279,7 +7005,7 @@ fn shelf(
     let inside = |from: u16| from + TILE_AIR;
     let total = shelf_lines(channel);
     // THE LINES UNDER THE TITLE: its channel, when the grid says it; the
-    // score with the faces of its rating; the age with its marks.
+    // score with the arrows of its rating; the age with its marks.
     let channel_line = channel.then_some(lines + title_lines);
     let score_line = lines + title_lines + u16::from(channel);
     let age_line = score_line + 1;
@@ -6334,7 +7060,7 @@ fn shelf(
                     width,
                 ));
             } else if line == score_line {
-                // THE SCORE, never cut for a glyph — and the faces of its
+                // THE SCORE, never cut for a glyph — and the arrows of its
                 // rating a cell after it, where they fit whole.
                 let number = ronoctua_render::layout::width(&t.score);
                 row.fields.push(piece(
@@ -6343,9 +7069,9 @@ fn shelf(
                     Kind::ListedFact.tones(focused).1,
                     width,
                 ));
-                let faces = inside(*from) + number + GLYPH_AIR;
+                let arrows = inside(*from) + number + GLYPH_AIR;
                 if number + GLYPH_AIR + strip_cells(&t.ratings) <= width {
-                    put_strip(&mut row, &t.ratings, faces);
+                    put_strip(&mut row, &t.ratings, arrows);
                 }
             } else if line == age_line {
                 // ITS MARKS against the tile's right edge, and its age in
@@ -6426,59 +7152,73 @@ fn text_rows(
         row.name.clone_from(&name);
         out.push(row);
     }
+    // ITS QUESTION IS A QUESTION'S BLOCK, the page's own drawing — on its
+    // ground, with its air, "no" first — and its yes LOSES the text. Its
+    // answers are a question's answers (`Target::Answer`) for what explains
+    // them; a click on any line of one is read back as that answer
+    // (`text_hit`, by the row it continues), and never reaches the page's
+    // own question.
     if let Some(yes) = area.asking() {
-        out.push(plain(crate::chrome::AIR, true, "text-air".to_owned()));
-        for line in crate::chrome::note_lines(&texts.t(key::ASK_TEXT_AREA_DISCARD), room) {
-            out.push(plain(
-                vec![piece(left, line, tokens::color::TEXT_SECONDARY, room)],
-                true,
-                "text-asked".to_owned(),
-            ));
-        }
-        // ITS ANSWERS ARE A QUESTION'S ANSWERS (`Target::Answer`) for what
-        // explains them; a click on one is read by its spot (`text_hit`),
-        // and never reaches the page's own question.
-        for (answer, k) in [(false, key::TEXT_AREA_NO), (true, key::TEXT_AREA_YES)] {
-            let colour = Kind::Setting.tones(answer == yes).0;
-            let mut row = plain(
-                vec![piece(left, texts.t(k), colour, room)],
-                false,
-                format!("text-answer-{answer}"),
-            );
-            row.target = Target::Answer(answer);
-            row.name = texts.t(k);
-            out.push(row);
-        }
+        let answers = [texts.t(key::TEXT_AREA_NO), texts.t(key::TEXT_AREA_YES)];
+        let lines = crate::chrome::question_lines(
+            &texts.t(key::ASK_TEXT_AREA_DISCARD).into(),
+            [answers[0].as_str(), answers[1].as_str()],
+            left,
+            room,
+        );
+        let mut n = 0usize;
+        let mut spot = |kind: &str| {
+            n += 1;
+            format!("text-{kind}#{n}")
+        };
+        laid_question(
+            &mut out,
+            &lines,
+            &answers,
+            crate::chrome::Stakes::Lost,
+            &mut spot,
+            |answer| (text_answer_spot(answer), Target::Answer(answer)),
+            |answer| answer == yes,
+        );
     }
     out
 }
 
+/// The spot of an answer of the description's question.
+fn text_answer_spot(yes: bool) -> String {
+    format!("text-answer-{yes}")
+}
+
 /// The row the cursor of the description being edited is on — the caret's,
-/// or the question's answer — which the door keeps in sight.
+/// or, while its question is up (`asking`: the answer its cursor is on), the
+/// first line of that answer — which the door keeps in sight. Found by the
+/// answer's SPOT, never by its colour: the cursor's colour is the drawing's
+/// to choose.
 #[must_use]
-pub fn text_cursor(rows: &[Row]) -> Option<usize> {
-    rows.iter().position(|r| r.caret.is_some()).or_else(|| {
-        rows.iter().position(|r| {
-            r.spot.starts_with("text-answer-")
-                && r.fields
-                    .first()
-                    .is_some_and(|f| f.color == tokens::color::STATE_ACCENT)
-        })
-    })
+pub fn text_cursor(rows: &[Row], asking: Option<bool>) -> Option<usize> {
+    match asking {
+        Some(yes) => {
+            let spot = text_answer_spot(yes);
+            rows.iter().position(|r| r.spot == spot)
+        }
+        None => rows.iter().position(|r| r.caret.is_some()),
+    }
 }
 
 /// What a click on the text being edited landed on, at `column` (a field's
-/// `at`): a line, or an answer of its question.
+/// `at`): a line, or an answer of its question — on any line of it, a long
+/// answer wrapped being one ([`Row::owner`]).
 #[must_use]
 pub fn text_hit(rows: &[Row], n: usize, column: u16) -> Option<crate::text_area::Hit> {
     let row = rows.get(n)?;
-    match (&row.target, row.spot.as_str()) {
-        (Target::Text(at), _) => Some(crate::text_area::Hit::Text {
+    if let Target::Text(at) = &row.target {
+        return Some(crate::text_area::Hit::Text {
             at: *at,
             cell: column.saturating_sub(row.fields.first().map_or(0, |f| f.at)),
-        }),
-        (_, "text-answer-false") => Some(crate::text_area::Hit::Answer(false)),
-        (_, "text-answer-true") => Some(crate::text_area::Hit::Answer(true)),
+        });
+    }
+    match &rows.get(Row::owner(rows, n))?.target {
+        Target::Answer(yes) => Some(crate::text_area::Hit::Answer(*yes)),
         _ => None,
     }
 }
@@ -6662,6 +7402,7 @@ pub(crate) mod tests {
                 query: Query {
                     filter: Filter::default(),
                     page: 0,
+                    per_page: crate::paging::PerPage::default().get(),
                     pictures: false,
                 },
                 total: 10,
@@ -6679,6 +7420,19 @@ pub(crate) mod tests {
         rows.iter()
             .position(|r| r.spot == spot)
             .unwrap_or_else(|| panic!("no row `{spot}` among {:?}", spots(rows)))
+    }
+
+    /// The sentence of the question drawn between the row it was asked
+    /// from and its no — each line's runs joined as drawn (a name is a run
+    /// of its own, glued to its words), the lines by a space; the air reads
+    /// as nothing.
+    fn asked_between(rows: &[Row], from: usize, no: usize) -> String {
+        rows[from + 1..no]
+            .iter()
+            .map(|x| x.fields.iter().map(|f| f.text.as_str()).collect::<String>())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn spots(rows: &[Row]) -> Vec<&str> {
@@ -6727,14 +7481,15 @@ pub(crate) mod tests {
 
     /// FAILS IF: a page draws a key that has no words (`[key]` on screen), a
     /// field reaches past the region's right edge at a narrow, a middling or a
-    /// wide door — in either language — or the cursor is drawn on no row.
+    /// wide door — in either language, in every layout of the videos — or the
+    /// cursor is drawn on no row.
     #[test]
     fn every_page_draws_its_words_inside_the_door() {
         let mut r = readings();
         for language in ["en-GB", "pt-BR"] {
             let t = texts(language);
             for page in every_page() {
-                for layout in [Layout::List, Layout::Grid] {
+                for layout in Layout::ALL {
                     let (mut v, _) = View::fresh(page.clone());
                     v.layout = layout;
                     // A CHANNEL'S PAGE reads its own scope's rules.
@@ -6846,8 +7601,10 @@ pub(crate) mod tests {
         let rows = v.rows(&r, COLUMNS, &t);
         let no = row_of(&rows, "answer-no");
         let asked_from = row_of(&rows, "delete");
+        // UNDER IT: a line of air, the sentence — at most three lines — and
+        // the no.
         assert!(
-            asked_from < no && no <= asked_from + 4,
+            asked_from < no && no <= asked_from + 5,
             "the question is not under the row it was asked from: {:?}",
             spots(&rows)
         );
@@ -6855,7 +7612,7 @@ pub(crate) mod tests {
         assert_eq!(v.cursor(&rows), no, "the cursor was not born on the no");
         assert_eq!(
             rows[no].fields[0].color,
-            Kind::Setting.tones(true).0,
+            tokens::color::TEXT_HERE_ACTS,
             "the cursor is a colour"
         );
         assert_eq!(press(&mut v, &r, Press::Enter), Errand::Nothing);
@@ -7126,6 +7883,229 @@ pub(crate) mod tests {
         assert!(rows.iter().any(|x| x.spot == "text-answer-false"));
     }
 
+    /// FAILS IF: the first click on the "no" a question was born on gives
+    /// it — that cursor is the screen's, not the person's (invariant 19,
+    /// `aim::Aim`) — or the first click on its yes deletes; a click on the
+    /// answer a key moved the cursor to waits for a second; or a click on
+    /// the second line of an answer wrapped in a narrow door is not a click
+    /// on it.
+    #[test]
+    fn the_first_click_on_a_born_no_only_picks_it() {
+        let r = readings();
+        let t = texts("en-GB");
+        let id = VideoId("video000000".to_owned());
+        let asked = || {
+            let (mut v, _) = View::fresh(Page::Video(id.clone()));
+            onto(&mut v, &r, "delete");
+            assert_eq!(press(&mut v, &r, Press::Delete), Errand::Nothing);
+            v
+        };
+        // THE BORN NO: picked by the first click, given by the second.
+        let mut v = asked();
+        let rows = v.rows(&r, COLUMNS, &t);
+        let no = row_of(&rows, "answer-no");
+        assert_eq!(v.click_answers(no, &rows), Some(Errand::Nothing));
+        assert!(v.confirm.is_some(), "one click on the born no answered");
+        assert_eq!(v.click_answers(no, &rows), Some(Errand::Nothing));
+        assert!(v.confirm.is_none(), "the picked no did not answer");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(rows[v.cursor(&rows)].spot, "delete");
+        // THE YES: the first click only puts the cursor there.
+        let mut v = asked();
+        let rows = v.rows(&r, COLUMNS, &t);
+        let yes = row_of(&rows, "answer-yes");
+        assert_eq!(v.click_answers(yes, &rows), Some(Errand::Nothing));
+        assert!(v.confirm.is_some(), "one click on yes deleted");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(rows[v.cursor(&rows)].spot, "answer-yes");
+        assert_eq!(
+            v.click_answers(yes, &rows),
+            Some(Errand::Edit(Edit::Delete(id.clone())))
+        );
+        // A KEY THAT MOVED THE CURSOR is the person's: one click answers.
+        let mut v = asked();
+        press(&mut v, &r, Press::Down);
+        press(&mut v, &r, Press::Up);
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(
+            v.click_answers(row_of(&rows, "answer-no"), &rows),
+            Some(Errand::Nothing)
+        );
+        assert!(v.confirm.is_none(), "a keyed no waited for a second click");
+        // A WRAPPED ANSWER is one answer on every line of it.
+        const NARROW: u16 = 24;
+        let mut v = asked();
+        let rows = v.rows(&r, NARROW, &t);
+        let yes = row_of(&rows, "answer-yes");
+        assert!(
+            rows[yes + 1].continues && !rows[yes + 1].fields.is_empty(),
+            "the yes did not wrap at {NARROW} columns: {:?}",
+            spots(&rows)
+        );
+        assert!(
+            rows[yes..=yes + 1]
+                .iter()
+                .all(|x| x.fields.iter().all(|f| !f.text.contains('…'))),
+            "an answer was cut"
+        );
+        assert_eq!(v.click_answers(yes + 1, &rows), Some(Errand::Nothing));
+        assert_eq!(
+            v.click_answers(yes + 1, &rows),
+            Some(Errand::Edit(Edit::Delete(id.clone())))
+        );
+    }
+
+    /// FAILS IF: a question on the page stops standing apart from the rows
+    /// around it — a line of air off the ground before and after it, every
+    /// line of the sentence and the answers on the question's ground, the
+    /// sentence in the question's colour and the video's title in a name's,
+    /// the answers set in by `space.view.nestCells` —, a title after it
+    /// takes a second line of air, or its yes stops wearing what it costs:
+    /// an error's colour to delete, a warning's to register, a setting's to
+    /// hide; or the cursor is not the cursor's colour on it.
+    #[test]
+    fn a_question_stands_on_its_ground_with_air_around_it() {
+        use crate::chrome::QUESTION_GROUND;
+        let r = readings();
+        let t = texts("en-GB");
+        let id = VideoId("video000000".to_owned());
+        let (mut v, _) = View::fresh(Page::Video(id));
+        onto(&mut v, &r, "delete");
+        press(&mut v, &r, Press::Delete);
+        let rows = v.rows(&r, COLUMNS, &t);
+        let (no, yes) = (row_of(&rows, "answer-no"), row_of(&rows, "answer-yes"));
+        let first = rows
+            .iter()
+            .position(|x| x.ground.is_some())
+            .expect("a ground");
+        let last = (yes..rows.len())
+            .take_while(|&k| rows[k].ground.is_some())
+            .last()
+            .expect("the yes on the ground");
+        let before = &rows[first - 1];
+        assert!(
+            is_air(before) && before.fields.is_empty() && before.ground.is_none(),
+            "no air before the question: {:?}",
+            spots(&rows)
+        );
+        assert!(
+            rows[first..=last]
+                .iter()
+                .all(|x| x.ground == Some(QUESTION_GROUND)),
+            "a line of the block is off its ground"
+        );
+        let after = rows.get(last + 1).expect("air after the question");
+        assert!(is_air(after) && after.ground.is_none(), "no air after");
+        assert!(
+            rows.get(last + 2).is_none_or(|x| !is_air(x)),
+            "two lines of air after the question: {:?}",
+            spots(&rows)
+        );
+        // THE SENTENCE, in the question's colour; the title in a name's.
+        let fields: Vec<&Field> = rows[first..no].iter().flat_map(|x| &x.fields).collect();
+        assert!(
+            fields
+                .iter()
+                .any(|f| f.text == "A video, number 0"
+                    && f.color == tokens::color::QUESTION_QUOTED),
+            "the title is not in a name's ink: {fields:?}"
+        );
+        assert!(
+            fields
+                .iter()
+                .all(|f| f.color == tokens::color::QUESTION_ASKED
+                    || f.color == tokens::color::QUESTION_QUOTED),
+            "the sentence is not in the question's colour"
+        );
+        assert_eq!(
+            rows[no].fields[0].at,
+            rows[first].fields[0].at + tokens::space::VIEW_NESTCELLS,
+            "the answers are not set in"
+        );
+        assert_eq!(rows[no].fields[0].color, tokens::color::TEXT_HERE_ACTS);
+        assert_eq!(rows[yes].fields[0].color, tokens::color::STATE_ERROR);
+        // HIDING loses nothing.
+        let mut v = View::fresh(Page::Video(VideoId("video000000".to_owned()))).0;
+        onto(&mut v, &r, "hide");
+        press(&mut v, &r, Press::Enter);
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert!(matches!(
+            v.confirm.as_ref().map(|c| &c.what),
+            Some(Pending::Hide(..))
+        ));
+        assert_eq!(
+            rows[row_of(&rows, "answer-yes")].fields[0].color,
+            Kind::Setting.tones(false).0
+        );
+        // REGISTERING weighs.
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "register");
+        press(&mut v, &r, Press::Enter);
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(
+            rows[row_of(&rows, "answer-yes")].fields[0].color,
+            tokens::color::STATE_WARNING
+        );
+    }
+
+    /// FAILS IF: the description's question answers the first click on the
+    /// "no" it was born on, or on its yes; stops being a block on the
+    /// question's ground with its yes in an error's colour (it loses the
+    /// text); or the door's cursor stops being found on the answer the
+    /// question's cursor is on, whatever colour it is drawn in.
+    #[test]
+    fn the_description_s_discard_is_picked_before_it_answers() {
+        use crate::chrome::QUESTION_GROUND;
+        let r = readings();
+        let t = texts("en-GB");
+        let asking = || {
+            let (mut v, _) = View::fresh(Page::Video(VideoId("video000000".to_owned())));
+            onto(&mut v, &r, "second-description");
+            press(&mut v, &r, Press::Enter);
+            v.text_key(Key::simple(Sym::Char('x')), 60);
+            v.text_key(Key::simple(Sym::Esc), 60);
+            v
+        };
+        let mut v = asking();
+        let rows = v.rows(&r, COLUMNS, &t);
+        let no = row_of(&rows, "text-answer-false");
+        let yes = row_of(&rows, "text-answer-true");
+        assert_eq!(v.drawn_cursor(&rows), no, "the door does not follow the no");
+        assert_eq!(rows[no].ground, Some(QUESTION_GROUND));
+        assert_eq!(rows[yes].fields[0].color, tokens::color::STATE_ERROR);
+        assert!(
+            rows[no - 1].ground.is_some(),
+            "the sentence is off the ground"
+        );
+        assert!(rows[yes + 1].ground.is_none() && rows[yes + 1].fields.is_empty());
+        let on_no = text_hit(&rows, no, 0).expect("the no takes a click");
+        assert!(!v.text_clicked(on_no));
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert!(
+            rows.iter().any(|x| x.spot == "text-answer-false"),
+            "one click on the born no answered"
+        );
+        assert!(!v.text_clicked(on_no));
+        assert!(v.editing(), "the no threw the text away");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert!(
+            !rows.iter().any(|x| x.spot == "text-answer-false"),
+            "the picked no did not answer"
+        );
+        // THE YES: picked, then given.
+        let mut v = asking();
+        let rows = v.rows(&r, COLUMNS, &t);
+        let on_yes = text_hit(&rows, row_of(&rows, "text-answer-true"), 0).expect("yes");
+        assert!(
+            !v.text_clicked(on_yes),
+            "one click on yes threw the text away"
+        );
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(v.drawn_cursor(&rows), row_of(&rows, "text-answer-true"));
+        assert!(v.text_clicked(on_yes), "the picked yes did not answer");
+        assert!(!v.editing());
+    }
+
     /// FAILS IF: a video the queue has is added again unasked, the question
     /// is not "no" first, is not drawn under the row the person asked from,
     /// is not followed by the door (it would sit off screen while `a`
@@ -7193,7 +8173,7 @@ pub(crate) mod tests {
     fn the_pages_of_the_list_stop_at_their_ends() {
         let mut r = readings();
         if let Some(l) = r.listed.as_mut() {
-            l.total = u64::from(PER_PAGE) * 2 + 1;
+            l.total = u64::from(crate::paging::PerPage::default().get()) * 2 + 1;
         }
         let (mut v, _) = View::fresh(Page::Videos);
         assert_eq!(press(&mut v, &r, Press::PageBack), Errand::Nothing);
@@ -7205,6 +8185,291 @@ pub(crate) mod tests {
         press(&mut v, &r, Press::More);
         assert_eq!(v.page, 0, "a new filter kept the page");
         assert_eq!(v.filter.shorts, Shorts::Without);
+    }
+
+    /// The fixture's readings, its list read as page `page` of `total`
+    /// videos at `per` a page — its ten rows standing for the page.
+    fn paged(page: u32, per: u32, total: u64) -> Readings {
+        let mut r = readings();
+        if let Some(l) = r.listed.as_mut() {
+            l.query.page = page;
+            l.query.per_page = per;
+            l.total = total;
+        }
+        r
+    }
+
+    /// The Videos page open on page `page` of the list, its reading in.
+    fn on_page(page: u32, total: u64) -> (View, Readings) {
+        let (mut v, _) = View::fresh(Page::Videos);
+        v.page = page;
+        (v, paged(page, 25, total))
+    }
+
+    /// The arrows of a row: what each turns, and where it is drawn.
+    fn turns_of(row: &Row) -> Vec<(Target, u16)> {
+        row.controls
+            .iter()
+            .map(|c| (c.target.clone(), c.from))
+            .collect()
+    }
+
+    /// FAILS IF: a page's size does not turn round 25, 50 and 100, a new
+    /// size is not what the feed is asked for, or the page it lands on does
+    /// not hold the first video of the one that was on screen — or its
+    /// title is not owed the top of the door.
+    #[test]
+    fn a_page_size_turns_in_a_ring_and_keeps_the_first_video() {
+        let (mut v, r) = on_page(3, 230);
+        assert_eq!(v.per_page.get(), 25);
+        onto(&mut v, &r, "per-page");
+        let Errand::Look(look) = press(&mut v, &r, Press::More) else {
+            panic!("a new size asked nothing");
+        };
+        assert_eq!(look.query.map(|q| (q.page, q.per_page)), Some((1, 50)));
+        assert!(v.top_owed, "a new size owed its title nothing");
+        let rows = v.rows(&r, COLUMNS, &texts("en-GB"));
+        let size = row_of(&rows, "per-page");
+        assert!(
+            rows[size].fields.iter().any(|f| f.text == "50"),
+            "the row does not say the size"
+        );
+        press(&mut v, &r, Press::More);
+        assert_eq!((v.per_page.get(), v.page), (100, 0));
+        press(&mut v, &r, Press::More);
+        assert_eq!(
+            (v.per_page.get(), v.page),
+            (25, 0),
+            "the ring did not go round"
+        );
+        press(&mut v, &r, Press::Less);
+        assert_eq!(v.per_page.get(), 100, "back, round the ring");
+    }
+
+    /// FAILS IF: the list's title stops saying its page beside it in the
+    /// quiet ink, draws an arrow that cannot move — the first page's `‹`,
+    /// the last's `›` — or lets the other slide into its place, or a list
+    /// of one page draws a mark or an arrow, here or at its end.
+    #[test]
+    fn the_list_s_page_and_its_arrows_stop_at_the_ends() {
+        let t = texts("en-GB");
+        let title = |page: u32, total: u64| {
+            let (v, r) = on_page(page, total);
+            let rows = v.rows(&r, COLUMNS, &t);
+            rows[row_of(&rows, crate::paging::LIST_TITLE)].clone()
+        };
+        let middle = title(1, 60);
+        assert_eq!(middle.fields[0].text, t.t(key::VIDEO_METRICS_BY_SCORE));
+        assert_eq!(middle.fields[0].color, tokens::color::TEXT_HEADING);
+        let mark = middle
+            .fields
+            .iter()
+            .find(|f| f.text == "2 of 3")
+            .expect("the title's mark");
+        assert_eq!(mark.color, tokens::color::TEXT_DIM);
+        let both = turns_of(&middle);
+        assert_eq!(
+            both.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
+            [Target::PageTurn(false), Target::PageTurn(true)]
+        );
+        assert!(middle.takes(), "the arrows take no click");
+        // THE FIRST PAGE: no `‹`, and the `›` where it was.
+        assert_eq!(turns_of(&title(0, 60)), [both[1].clone()]);
+        // THE LAST: no `›`, and the `‹` where it was.
+        assert_eq!(turns_of(&title(2, 60)), [both[0].clone()]);
+        // ONE PAGE: the title alone, and no arrows at the end.
+        let (v, r) = on_page(0, 10);
+        let rows = v.rows(&r, COLUMNS, &t);
+        let alone = &rows[row_of(&rows, crate::paging::LIST_TITLE)];
+        assert_eq!(alone.fields.len(), 1, "one page says a mark");
+        assert!(alone.controls.is_empty(), "one page draws arrows");
+        assert!(!spots(&rows).contains(&crate::paging::LIST_PAGER));
+    }
+
+    /// FAILS IF: the list does not end with its arrows and its mark — or
+    /// they wear a title's ink, which would begin a section there
+    /// (`section_ring`), or the cursor stops on them, or an arrow there does
+    /// not turn the page at once and owe its title the top.
+    #[test]
+    fn the_list_ends_with_its_arrows_in_no_title_ink() {
+        let t = texts("en-GB");
+        let (mut v, r) = on_page(1, 60);
+        let rows = v.rows(&r, COLUMNS, &t);
+        let end = row_of(&rows, crate::paging::LIST_PAGER);
+        let last_video = rows
+            .iter()
+            .rposition(|x| x.spot.starts_with("video:"))
+            .expect("a video");
+        assert!(end > last_video, "the arrows are not at the list's end");
+        let pager = &rows[end];
+        assert!(
+            pager.heading && pager.takes(),
+            "the cursor stops on the arrows"
+        );
+        assert!(
+            pager
+                .fields
+                .iter()
+                .all(|f| f.color != tokens::color::TEXT_HEADING),
+            "the list's end wears a title's ink"
+        );
+        assert_eq!(pager.fields[0].text, "2 of 3");
+        assert_eq!(turns_of(pager).len(), 2);
+        let later = pager.controls[1].from;
+        let errand = v.click_control(end, later, &rows, &r);
+        assert!(
+            matches!(
+                errand,
+                Some(Errand::Look(Look {
+                    query: Some(Query { page: 2, .. }),
+                    ..
+                }))
+            ),
+            "the end's `›` did not turn: {errand:?}"
+        );
+        assert!(v.top_owed);
+    }
+
+    /// FAILS IF: a turned page does not put its title first, with the
+    /// cursor on its first video — the list's row, with its picture or
+    /// without, or the grid's first cell — or does so before the page asked
+    /// is read (the page still drawn moving under the person), or more than
+    /// once. In every layout.
+    #[test]
+    fn a_turned_page_puts_its_title_first_and_the_cursor_on_its_first_video() {
+        let t = texts("en-GB");
+        for layout in Layout::ALL {
+            let (mut v, mut r) = on_page(0, 60);
+            v.layout = layout;
+            let entries = row_of(&v.rows(&r, COLUMNS, &t), crate::paging::LIST_TITLE);
+            onto(&mut v, &r, "filter-shorts");
+            press(&mut v, &r, Press::PageOn);
+            assert_eq!(v.page, 1);
+            // THE PAGE BEFORE IS STILL DRAWN, saying the page asked.
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(row_of(&rows, crate::paging::LIST_TITLE), entries);
+            assert!(
+                rows.iter()
+                    .any(|x| x.fields.iter().any(|f| f.text == "2 of 3"))
+            );
+            assert_eq!(
+                v.settle_on_list(&rows, &r),
+                None,
+                "placed before its reading"
+            );
+            assert_eq!(
+                v.at, "filter-shorts",
+                "the cursor left before the page came"
+            );
+            // ITS READING CAME.
+            if let Some(l) = r.listed.as_mut() {
+                l.query.page = 1;
+            }
+            let rows = v.rows(&r, COLUMNS, &t);
+            let title = row_of(&rows, crate::paging::LIST_TITLE);
+            assert_eq!(v.settle_on_list(&rows, &r), Some(title), "{layout:?}");
+            let first = video_spot(&r.listed.as_ref().expect("a list").rows[0].id);
+            assert_eq!(
+                v.at, first,
+                "{layout:?}: the cursor is not on the first video"
+            );
+            assert_eq!(v.cursor(&rows), title + 1, "{layout:?}");
+            assert_eq!(v.settle_on_list(&rows, &r), None, "placed twice");
+        }
+    }
+
+    /// FAILS IF: `Home` and `End` stop going to the first and the last page
+    /// of the list, `[` and `]` stop turning it — or any of them turns a
+    /// page anywhere but on the videos.
+    #[test]
+    fn home_and_end_go_to_the_first_and_last_page() {
+        let (mut v, r) = on_page(1, 60);
+        assert_eq!(press_of_key(Key::simple(Sym::Home)), Some(Press::PageFirst));
+        assert_eq!(press_of_key(Key::simple(Sym::End)), Some(Press::PageLast));
+        assert_eq!(
+            press_of_key(Key::simple(Sym::Char('['))),
+            Some(Press::PageBack)
+        );
+        assert_eq!(
+            press_of_key(Key::simple(Sym::Char(']'))),
+            Some(Press::PageOn)
+        );
+        press(&mut v, &r, Press::PageLast);
+        assert_eq!(v.page, 2);
+        assert_eq!(
+            press(&mut v, &r, Press::PageLast),
+            Errand::Nothing,
+            "past the last"
+        );
+        press(&mut v, &r, Press::PageFirst);
+        assert_eq!(v.page, 0);
+        let (mut home, r) = (View::fresh(Page::Home).0, readings());
+        assert_eq!(press(&mut home, &r, Press::PageLast), Errand::Nothing);
+    }
+
+    /// FAILS IF: the page row's sentence stops teaching the keys that turn
+    /// the page — each one as its door reaches it: the bare `[` in the
+    /// footer, `LEADER Alt` and `[` in a window, the page keys alike in both
+    /// — or a language leaves one of them unsaid.
+    #[test]
+    fn the_page_row_teaches_its_keys_in_each_door() {
+        let (mut v, r) = on_page(0, 60);
+        let footer = v.page_keys();
+        assert_eq!(footer[0], ("earlier", "[".to_owned()));
+        assert_eq!(footer[1], ("prior", "<prior>".to_owned()));
+        assert_eq!(footer[2], ("later", "]".to_owned()));
+        assert_eq!(footer[3], ("next", "<next>".to_owned()));
+        assert_eq!(footer[4], ("first", "<home>".to_owned()));
+        assert_eq!(footer[5], ("last", "<end>".to_owned()));
+        // THE KEYS LEAD, IN FEW WORDS: the footer says the sentence on ONE
+        // line, after the click's gesture, and cuts it at its end. A 1280-px
+        // footer's line holds some 112 cells, and the gesture takes 65 of
+        // them in English and 55 in Portuguese; keys said after a clause of
+        // their own were cut there, `]` and `<end>` never shown.
+        for (language, room) in [("en-GB", 47), ("pt-BR", 57)] {
+            let t = texts(language);
+            let rows = v.rows(&r, COLUMNS, &t);
+            let page = row_of(&rows, "page");
+            let said = v
+                .explained_at(&rows, page, None, &t)
+                .expect("the page row explained")
+                .said[0]
+                .0
+                .clone();
+            assert!(said.starts_with(footer[0].1.as_str()), "{language}: {said}");
+            let last = footer[5].1.as_str();
+            let end = said.find(last).expect("the last key said") + last.len();
+            assert!(
+                said[..end].chars().count() <= room,
+                "{language}: the keys run past the footer's line: {said}"
+            );
+        }
+        v.in_a_window();
+        let window = v.page_keys();
+        assert_eq!(window[0].1, crate::chrome::leader_alt_text("[", false));
+        assert_eq!(window[2].1, crate::chrome::leader_alt_text("]", false));
+        assert_eq!(
+            window[1].1, "<prior>",
+            "a page key is direct in a window too"
+        );
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let rows = v.rows(&r, COLUMNS, &t);
+            let page = row_of(&rows, "page");
+            let said = v
+                .explained_at(&rows, page, None, &t)
+                .expect("the page row explained")
+                .said[0]
+                .0
+                .clone();
+            for (_, k) in &window {
+                assert!(
+                    said.contains(k.as_str()),
+                    "{language}: `{k}` untaught: {said}"
+                );
+            }
+            assert!(!unworded(&said), "{language}: {said}");
+        }
     }
 
     /// FAILS IF: a key of the view has no press, a question no command, or a
@@ -7497,6 +8762,91 @@ pub(crate) mod tests {
         assert_eq!(v.at, at, "the air between two cells took the cursor");
     }
 
+    /// The names a said sentence quotes, as they read in it.
+    fn names_in(said: Option<&Said>) -> Vec<&str> {
+        let (Some(Said::Normal(s)) | Some(Said::Long(s))) = said else {
+            panic!("nothing said");
+        };
+        s.names().iter().map(|r| &s[r.clone()]).collect()
+    }
+
+    /// FAILS IF: what an errand came to stops telling the NAME it quotes —
+    /// the channel added, the video queued or downloaded, its title when a
+    /// mark changed, the file the channels were written to — as the stretch
+    /// a door draws in a name's ink (`Arg::Name`), in either language; or a
+    /// count beside a name stops picking its plural (it travels as a
+    /// number), or the sentence stops being the one the key says.
+    #[test]
+    fn what_is_said_tells_the_names_it_quotes() {
+        let r = readings();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut v = View::default();
+            let channel = "Ancient Recipes of the Sea";
+            let (said, _) = v.took(Done::Added(Ok(channel.to_owned())), &r, &t);
+            assert_eq!(names_in(said.as_ref()), [channel], "{language}");
+            let (said, _) = v.took(Done::Downloading("A title".to_owned(), true), &r, &t);
+            assert_eq!(names_in(said.as_ref()), ["A title"], "{language}");
+            let id = VideoId("video000000".to_owned());
+            let (said, _) = v.took(Done::Edited(Edit::KeepVideo(id, true), Ok(())), &r, &t);
+            assert_eq!(names_in(said.as_ref()), ["A video, number 0"], "{language}");
+            let file = PathBuf::from("/home/someone/subscriptions.csv");
+            let (said, _) = v.took(Done::Exported(Ok((3, file.clone()))), &r, &t);
+            assert_eq!(
+                names_in(said.as_ref()),
+                ["/home/someone/subscriptions.csv"],
+                "{language}"
+            );
+            let Some(Said::Normal(exported)) = said else {
+                panic!("{language}: the export was not said");
+            };
+            assert_eq!(
+                exported.as_str(),
+                t.t_args(
+                    key::VIDEO_METRICS_EXPORTED,
+                    &[
+                        ("count", Arg::Number(3)),
+                        ("file", Arg::Text("/home/someone/subscriptions.csv")),
+                    ],
+                ),
+                "{language}"
+            );
+        }
+    }
+
+    /// FAILS IF: the note under the consent to YouTube stops telling each
+    /// host it lets be asked as a NAME of its own — the list told as one, the
+    /// joiner inside a name, a host lost — in either language; or its text
+    /// stops being the key's sentence with the hosts joined as before.
+    #[test]
+    fn the_youtube_note_tells_each_host_as_a_name() {
+        let r = readings();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut items = Vec::new();
+            home(&mut items, &r, &t);
+            let note = items
+                .iter()
+                .find_map(|i| match i {
+                    Item::Note(said, _) if said.contains(ronoctua_video_metrics::HOSTS[0]) => {
+                        Some(said)
+                    }
+                    _ => None,
+                })
+                .expect("the consent's note");
+            assert_eq!(
+                note.as_str(),
+                t.t_with(
+                    key::VIDEO_METRICS_ASK_YOUTUBE_NOTE,
+                    &[("hosts", &ronoctua_video_metrics::HOSTS.join(", "))],
+                ),
+                "{language}"
+            );
+            let names: Vec<&str> = note.names().iter().map(|r| &note[r.clone()]).collect();
+            assert_eq!(names, ronoctua_video_metrics::HOSTS, "{language}");
+        }
+    }
+
     /// What a page is open with, for [`every_taking_row_is_explained`]: as
     /// it opens, with a question on it, with the description being edited,
     /// and with the edit's own question up.
@@ -7517,22 +8867,35 @@ pub(crate) mod tests {
         out
     }
 
-    /// FAILS IF: a row a click takes — on any page, the list and the grid,
-    /// at a narrow, a middling and a wide door, in either language, with a
-    /// question on the page or the description being edited — has nothing
-    /// to say where it is explained (the window's foot, the footer's line):
-    /// no name, no sentence, a key with no words (`[key]`); or a video of a
-    /// shelf, or a glyph, is not explained at the cell under the pointer;
-    /// or a row no click takes says something; or, under a question, a row
-    /// that is not one of its answers promises what a second click does
-    /// there — it would give the question its answer instead.
+    /// Whether `said` holds a KEY WITH NO WORDS — `[video-metrics-x]`, what
+    /// a key the texts lack is drawn as — or an argument left unfilled
+    /// (`{ $x }`). A `[` alone is the page's quick key, which the page row's
+    /// sentence teaches ([`View::page_keys`]).
+    fn unworded(said: &str) -> bool {
+        said.contains('{')
+            || said.match_indices('[').any(|(i, _)| {
+                said[i + 1..].split(']').next().is_some_and(|k| {
+                    k.len() > 1 && k.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                })
+            })
+    }
+
+    /// FAILS IF: a row a click takes — on any page, in every layout of the
+    /// videos, at a narrow, a middling and a wide door, in either language,
+    /// with a question on the page or the description being edited — has
+    /// nothing to say where it is explained (the window's foot, the footer's
+    /// line): no name, no sentence, a key with no words (`[key]`); or a video
+    /// of a shelf, or a glyph, is not explained at the cell under the
+    /// pointer; or a row no click takes says something; or, under a
+    /// question, a row that is not one of its answers promises what a second
+    /// click does there — it would give the question its answer instead.
     ///
     /// IN EVERY STATE A VIDEO, A CHANNEL OR THE CATALOGUE IS SAID IN: as the
     /// fixture reads; then marked — a rating, set aside, kept by its own
     /// mark or by its channel's, a channel keeping days of its own and one
     /// keeping every video, a video with no date and one whose channel was
-    /// not read, the grid saying channels, the set-aside videos alone and
-    /// newest first —; then with no video deleted everywhere. So every face
+    /// not read, the set-aside videos alone and newest first —; then with
+    /// no video deleted everywhere. So every arrow
     /// lit or not, every bookmark, every ∞ ([`Lasting`]) and what holds once
     /// it is off ([`Control::follows`]), and every quiet default of a video's
     /// or a channel's page are said whole.
@@ -7604,7 +8967,8 @@ pub(crate) mod tests {
                             .cloned();
                         r.video = row.map(|x| (vid.clone(), Some(whole(x))));
                     }
-                    for layout in [Layout::List, Layout::Grid] {
+                    // EVERY LAYOUT — the channel under a thumbnail among them.
+                    for layout in Layout::ALL {
                         for open in [
                             Open::Plain,
                             Open::Question,
@@ -7613,10 +8977,9 @@ pub(crate) mod tests {
                         ] {
                             let (mut v, _) = View::fresh(page.clone());
                             v.layout = layout;
-                            // MARKED: the grid says channels, and the list is
-                            // the set-aside videos alone, newest first.
+                            // MARKED: the list is the set-aside videos alone,
+                            // newest first.
                             if varied {
-                                v.grid_channel = true;
                                 if fixture == "marked" {
                                     v.filter.set_aside = SetAside::Only;
                                     v.filter.order = Order::NewestSetAside;
@@ -7674,7 +9037,7 @@ pub(crate) mod tests {
                                         owner.cells.iter().map(|c| Some(c.from + 1)).collect()
                                     } else {
                                         assert!(
-                                            View::about(&rows, n, &t).is_some(),
+                                            v.about(&rows, n, &t).is_some(),
                                             "{what}: row {n} ({}) has no sentence",
                                             row.spot
                                         );
@@ -7695,10 +9058,7 @@ pub(crate) mod tests {
                                             row.spot
                                         );
                                         for p in pieces(&e) {
-                                            assert!(
-                                                !p.contains('[') && !p.contains('{'),
-                                                "{what}: row {n}: `{p}`"
-                                            );
+                                            assert!(!unworded(p), "{what}: row {n}: `{p}`");
                                         }
                                         // A GLYPH says its own sentence, and what
                                         // holds once it is off where it says it.
@@ -7737,10 +9097,7 @@ pub(crate) mod tests {
                                         "{what}: the cursor's thing has no name"
                                     );
                                     for p in pieces(&e) {
-                                        assert!(
-                                            !p.contains('[') && !p.contains('{'),
-                                            "{what}: the cursor's: `{p}`"
-                                        );
+                                        assert!(!unworded(p), "{what}: the cursor's: `{p}`");
                                     }
                                 }
                             }
@@ -8012,19 +9369,19 @@ pub(crate) mod tests {
             .expect("a click on a glyph does what it says")
     }
 
-    /// FAILS IF: a glyph beside a video — a face of its rating, its
+    /// FAILS IF: a glyph beside a video — an arrow of its rating, its
     /// bookmark, its ∞, its eye, its bin — waits for a second click, does
     /// anything but what its key does, leaves the cursor away from the video
-    /// it acted on, or takes the air beside it; the face a video has does
+    /// it acted on, or takes the air beside it; the arrow a video has does
     /// not take the rating away; the ∞ switches anything but the video's own
     /// mark (Reconciliation 4: also where its channel keeps it); or the bin
-    /// and the eye do not ask first, "no" first, under the video — on the
-    /// list and on the grid.
+    /// and the eye do not ask first, "no" first, under the video — in every
+    /// layout: the list, with its thumbnails or without, and the grid.
     #[test]
     fn a_glyph_acts_on_the_first_click() {
         let t = texts("en-GB");
         let id = VideoId("video000002".to_owned());
-        for layout in [Layout::List, Layout::Grid] {
+        for layout in Layout::ALL {
             let fresh = || {
                 let (mut v, _) = View::fresh(Page::Videos);
                 v.layout = layout;
@@ -8032,7 +9389,7 @@ pub(crate) mod tests {
             };
             let mine = |x: &VideoId| *x == id;
             let mut r = readings();
-            // A FACE GIVES ITS RATING at once — and the cursor is on the
+            // AN ARROW GIVES ITS RATING at once — and the cursor is on the
             // video it rated.
             let mut v = fresh();
             assert_eq!(
@@ -8644,22 +10001,262 @@ pub(crate) mod tests {
         );
     }
 
-    /// FAILS IF: the grid's thumbnails say their channel before the person
-    /// asks, the switch is a row anywhere but the grid, or switched on, a
-    /// shelf does not put the channel under each title, a line taller — or
-    /// the list reads anything again for it.
+    /// FAILS IF: the list with thumbnails stops putting each video's picture
+    /// at its head — `thumbCells` by `thumbLines`, on the first lines of its
+    /// entry and no other, the glyph of a video in its place while there is
+    /// none — with the title beside it wrapped WHOLE (never cut with "…") and
+    /// the line of what it scores under the title, glyphs and all, acting on
+    /// the first click; the entry is not as tall as its words or its
+    /// picture, a line of air after it; a line of it does not say where its
+    /// words begin, or a field of it is drawn over the picture; a first click
+    /// on its words does anything but select the video, or one on its
+    /// picture — on any line of it, the line of glyphs as the title's — takes
+    /// or explains anything (the plan: the click from the text, never over
+    /// the figure); or, too narrow for a picture, it is not the list's own
+    /// entry. At a narrow, a middling and a wide door, in either language.
     #[test]
-    fn the_grid_says_the_channel_only_when_asked() {
-        let t = texts("en-GB");
+    fn the_list_with_thumbnails_puts_each_picture_beside_its_words() {
+        use ronoctua_render::layout::width;
+        let cells = tokens::space::VIDEOMETRICS_THUMBCELLS;
+        let lines = usize::from(tokens::space::VIDEOMETRICS_THUMBLINES);
+        let file = PathBuf::from("/nowhere/video000000.jpg");
+        let long = "A video whose title says a great deal more than a line holds, \
+                    and then a little more again, so it wraps over several lines";
+        let mut r = readings();
+        with_video(&mut r, &VideoId("video000000".to_owned()), |x| {
+            x.thumb_file = Some(file.clone());
+            x.title = long.to_owned();
+        });
+        let mut narrow = 0;
+        let mut pictured_at = 0;
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            // AND A DOOR TOO NARROW for a picture beside a title.
+            for columns in [30, 44, 80, 200] {
+                let what = format!("{language} at {columns}");
+                let (left, room) = extent(columns);
+                let (mut v, _) = View::fresh(Page::Videos);
+                v.laid_out(Layout::Strip);
+                let rows = v.rows(&r, columns, &t);
+                if !strip_holds_a_picture(room) {
+                    // TOO NARROW: the list's own entries, line for line —
+                    // all but the spots of the lines that continue a row,
+                    // counted from the page's top, where the layout's own
+                    // words may wrap otherwise.
+                    let drawn = |rows: &[Row]| -> Vec<Row> {
+                        rows[row_of(rows, crate::paging::LIST_TITLE)..]
+                            .iter()
+                            .map(|x| Row {
+                                spot: if x.continues || x.heading {
+                                    String::new()
+                                } else {
+                                    x.spot.clone()
+                                },
+                                ..x.clone()
+                            })
+                            .collect()
+                    };
+                    let (mut list, _) = View::fresh(Page::Videos);
+                    list.laid_out(Layout::List);
+                    assert_eq!(
+                        drawn(&rows),
+                        drawn(&list.rows(&r, columns, &t)),
+                        "{what}: not the list"
+                    );
+                    narrow += 1;
+                    continue;
+                }
+                pictured_at += 1;
+                let text_at = left + cells + ronoctua_design::GAP;
+                for (k, spot, pictured) in [
+                    (0, "video:video000000", true),
+                    (1, "video:video000001", false),
+                ] {
+                    let n = row_of(&rows, spot);
+                    let tall = Row::lines_of(&rows, n);
+                    let entry = &rows[n..n + tall];
+                    let title = crate::chrome::note_lines(
+                        &r.listed.as_ref().expect("a list").rows[k].title,
+                        left + room - text_at,
+                    );
+                    assert_eq!(
+                        tall,
+                        (title.len() + 1).max(lines) + 1,
+                        "{what}: video {k} is {tall} lines"
+                    );
+                    assert!(
+                        entry.iter().all(|x| x.words_at == Some(text_at)),
+                        "{what}: a line of video {k} says no words' column"
+                    );
+                    let drawn: Vec<&str> = entry[..title.len()]
+                        .iter()
+                        .flat_map(|x| x.fields.iter().filter(|f| f.at == text_at))
+                        .map(|f| f.text.as_str())
+                        .collect();
+                    assert_eq!(drawn, title, "{what}: video {k}'s title");
+                    assert!(
+                        drawn.iter().all(|x| !x.contains('…')),
+                        "{what}: a title cut"
+                    );
+                    if k == 0 {
+                        assert_eq!(drawn.join(" "), long, "{what}: the title is not whole");
+                    }
+                    // THE PICTURE, on the lines of its box and on no other.
+                    for (l, x) in entry.iter().enumerate() {
+                        let want: Vec<Thumb> = if pictured && l < lines {
+                            vec![Thumb {
+                                line: u16::try_from(l).unwrap_or(u16::MAX),
+                                lines: tokens::space::VIDEOMETRICS_THUMBLINES,
+                                left,
+                                cells,
+                                file: file.clone(),
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(x.thumbs, want, "{what}: video {k}, line {l}");
+                        for f in &x.fields {
+                            let glyph = f.text == tokens::icon::VIDEO_NO_THUMB.to_string();
+                            assert!(
+                                f.at >= text_at || (glyph && !pictured && l == lines / 2),
+                                "{what}: `{}` over video {k}'s picture",
+                                f.text
+                            );
+                            assert!(f.at + width(&f.text) <= left + room, "{what}: `{}`", f.text);
+                        }
+                    }
+                    assert_eq!(
+                        !pictured,
+                        entry[lines / 2]
+                            .fields
+                            .iter()
+                            .any(|f| f.text == tokens::icon::VIDEO_NO_THUMB.to_string()),
+                        "{what}: video {k}'s place for a picture"
+                    );
+                    // WHAT IT SCORES under the title, with its glyphs.
+                    let meta = &entry[title.len()];
+                    assert!(
+                        !meta.controls.is_empty(),
+                        "{what}: no glyphs under the title"
+                    );
+                    assert_eq!(
+                        meta.words_box(left, true).map(|b| b.0),
+                        Some(text_at),
+                        "{what}: the words' box starts on the picture"
+                    );
+                    // AND ITS LINE OF AIR.
+                    let air = &entry[tall - 1];
+                    assert!(is_air(air) && air.fields.is_empty() && air.continues);
+                }
+                // A FIRST CLICK selects — on the title's words.
+                let n = row_of(&rows, "video:video000001");
+                for column in [text_at, text_at + 1] {
+                    let (mut v, _) = View::fresh(Page::Videos);
+                    v.laid_out(Layout::Strip);
+                    let rows = v.rows(&r, columns, &t);
+                    assert!(!v.clicked(n, column, &rows), "{what}: a first click acted");
+                    assert_eq!(v.at, "video:video000001", "{what}: at {column}");
+                }
+                // AND THE PICTURE IS NOBODY'S, on every line of its video —
+                // the title's, the line of glyphs, the air: a click there
+                // takes nothing and the foot says nothing of it.
+                let tall = Row::lines_of(&rows, n);
+                for line in n..n + tall {
+                    for column in [left, left + 1, text_at - 1] {
+                        let (mut v, _) = View::fresh(Page::Videos);
+                        v.laid_out(Layout::Strip);
+                        let rows = v.rows(&r, columns, &t);
+                        let was = v.at.clone();
+                        assert!(
+                            !v.clicked(line, column, &rows),
+                            "{what}: line {line} acted at {column}"
+                        );
+                        assert_eq!(v.at, was, "{what}: line {line} taken at {column}");
+                        assert!(
+                            v.explained_at(&rows, line, Some(column), &t).is_none(),
+                            "{what}: line {line} explained at {column}"
+                        );
+                    }
+                }
+                // A GLYPH under the title acts at once.
+                let (mut v, _) = View::fresh(Page::Videos);
+                v.laid_out(Layout::Strip);
+                let rows = v.rows(&r, columns, &t);
+                let (line, c) = glyph_at(&rows, &|x| matches!(x, Target::Rate(..)));
+                assert!(
+                    v.click_control(line, c.from, &rows, &r).is_some(),
+                    "{what}: a glyph waits"
+                );
+            }
+        }
+        assert!(
+            narrow > 0 && pictured_at > 0,
+            "{narrow} narrow, {pictured_at} pictured"
+        );
+    }
+
+    /// FAILS IF: the layouts stop turning as a ring of four — `→`, a click
+    /// and `RET` the next, `←` the one before, `L` the next — or say one
+    /// layout in another's words, or two in the same; the list reads the page
+    /// again for anything but the thumbnails coming or going; a switch of the
+    /// channel comes back beside the ring (the owner, 2026-11-10: one way to
+    /// one choice); or the grid with the channel does not put it under each
+    /// title, its shelves a line taller, while the grid without says none.
+    #[test]
+    fn the_layouts_turn_in_a_ring_and_one_says_the_channel() {
         let r = readings();
         let (mut v, _) = View::fresh(Page::Videos);
-        let rows = v.rows(&r, 100, &t);
-        assert!(
-            !spots(&rows).contains(&"grid-channel"),
-            "a switch on the list"
+        let pictures = |e: &Errand| match e {
+            Errand::Look(Look { query: Some(q), .. }) => Some(q.pictures),
+            _ => None,
+        };
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let said: Vec<String> = Layout::ALL.iter().map(|l| t.t(l.key())).collect();
+            let mut distinct = said.clone();
+            distinct.sort();
+            distinct.dedup();
+            assert_eq!(distinct.len(), 4, "{language}: two layouts alike: {said:?}");
+        }
+        let t = texts("en-GB");
+        onto(&mut v, &r, "layout");
+        // →: the next, read again only where the thumbnails come or go.
+        let mut asked = Vec::new();
+        for _ in Layout::ALL {
+            asked.push((pictures(&press(&mut v, &r, Press::More)), v.layout));
+            assert!(
+                !spots(&v.rows(&r, 100, &t)).contains(&"grid-channel"),
+                "{:?}: a switch of the channel beside the ring",
+                v.layout
+            );
+            let rows = v.rows(&r, 100, &t);
+            let layout = &rows[row_of(&rows, "layout")];
+            assert!(
+                layout.fields.iter().any(|f| f.text == t.t(v.layout.key())),
+                "{:?}: the row does not say it",
+                v.layout
+            );
+        }
+        assert_eq!(
+            asked,
+            vec![
+                (Some(true), Layout::Strip),
+                (None, Layout::Grid),
+                (None, Layout::GridWithChannel),
+                (Some(false), Layout::List),
+            ]
         );
-        v.layout = Layout::Grid;
-        let said = |v: &View| -> (usize, usize) {
+        // ←: the one before; `L` and `RET`: the next.
+        press(&mut v, &r, Press::Less);
+        assert_eq!(v.layout, Layout::GridWithChannel);
+        press(&mut v, &r, Press::Layout);
+        assert_eq!(v.layout, Layout::List);
+        press(&mut v, &r, Press::Enter);
+        assert_eq!(v.layout, Layout::Strip);
+        // THE CHANNEL under every title, a line taller — only in its layout.
+        let said = |layout: Layout| -> (usize, usize) {
+            let (mut v, _) = View::fresh(Page::Videos);
+            v.layout = layout;
             let rows = v.rows(&r, 100, &t);
             let shelf = rows
                 .iter()
@@ -8672,17 +10269,8 @@ pub(crate) mod tests {
                 .count();
             (Row::lines_of(&rows, shelf), channel)
         };
-        let (lines, channel) = said(&v);
-        assert_eq!(lines, usize::from(shelf_lines(false)));
-        assert_eq!(channel, 0, "the channel said unasked");
-        onto(&mut v, &r, "grid-channel");
-        assert_eq!(
-            press(&mut v, &r, Press::Enter),
-            Errand::Nothing,
-            "read again for a switch"
-        );
-        assert!(v.grid_channel);
-        let (lines, channel) = said(&v);
+        assert_eq!(said(Layout::Grid), (usize::from(shelf_lines(false)), 0));
+        let (lines, channel) = said(Layout::GridWithChannel);
         assert_eq!(lines, usize::from(shelf_lines(true)));
         assert_eq!(channel, 10, "not every tile says its channel");
     }
@@ -9055,11 +10643,7 @@ pub(crate) mod tests {
             key::ASK_VIDEO_METRICS_REGISTER,
             &[("kept", Arg::Number(1)), ("discarded", Arg::Number(0))],
         );
-        let said: Vec<&str> = rows[register + 1..no]
-            .iter()
-            .flat_map(|x| x.fields.iter().map(|f| f.text.as_str()))
-            .collect();
-        assert_eq!(said.join(" "), asked);
+        assert_eq!(asked_between(&rows, register, no), asked);
         assert_eq!(
             press(&mut v, &r, Press::Enter),
             Errand::Nothing,
@@ -9086,7 +10670,7 @@ pub(crate) mod tests {
             &[("kept", Arg::Number(12)), ("discarded", Arg::Number(1))],
         );
         let (said, _) = v.took(Done::Registered(Ok((done, None))), &r, &t);
-        assert_eq!(said, Some(Said::Normal(registered.clone())));
+        assert_eq!(said, Some(Said::Normal(registered.clone().into())));
         let why = words::unkept_alone_key(ronoctua_consent::Unkept::Unwritable);
         let (said, _) = v.took(Done::Registered(Ok((done, Some(why)))), &r, &t);
         let Some(Said::Long(said)) = said else {
@@ -9133,11 +10717,7 @@ pub(crate) mod tests {
                 key::ASK_VIDEO_METRICS_DECIDE_ALL_UNDECIDED,
                 &[("changed", Arg::Number(1))],
             );
-            let said: Vec<&str> = rows[all + 1..no]
-                .iter()
-                .flat_map(|x| x.fields.iter().map(|f| f.text.as_str()))
-                .collect();
-            assert_eq!(said.join(" "), asked);
+            assert_eq!(asked_between(&rows, all, no), asked);
             assert_eq!(
                 press(&mut v, &r, Press::Enter),
                 Errand::Nothing,

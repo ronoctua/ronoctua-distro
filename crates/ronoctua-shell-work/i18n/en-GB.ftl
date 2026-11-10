@@ -12,6 +12,7 @@
 echo-no-buffer = That screen was not built into this system
 files-items = { $n } items
 files-sidebar-pinned = { $name } is on the sidebar now
+files-sidebar-pinned-many = { $n } items are on the sidebar now
 
 ## The window menu — the modeline's app name, clicked (LEADER w o)
 

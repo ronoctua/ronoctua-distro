@@ -558,6 +558,23 @@ pub enum Register {
     /// (`text.subtle.figure`), told from the name and from the sentence
     /// around both (owner, 2026-11-09).
     Figure,
+    /// A NAME QUOTED IN WHAT THE LINE SAYS — a video's title in a message, a
+    /// file, a host — in an ink of its own (`text.subtle.quoted`; owner,
+    /// 2026-11-10: a name in a sentence takes a discreet colour of its own,
+    /// near the text's and told from it, in the whole distro): the line's own
+    /// grey with its hue turned a little, at its lightness.
+    ///
+    /// Not [`Register::Named`], which is the person's own name for what a
+    /// MARK is about, told to the pointer as loudly as a key: this one is
+    /// read INSIDE a sentence, and stays as quiet as the sentence is. Nobody
+    /// picks it by hand — the sentence says where its names are
+    /// ([`Named`], `ronoctua_i18n::Arg::Name`) and the register it is drawn
+    /// in says what they wear ([`Register::quoting`]).
+    Quoted,
+    /// The same, in a QUESTION ([`Register::Asked`]) — `question.quoted`, the
+    /// question's own colour with less of it, so the line still reads as one
+    /// thing that waits.
+    QuotedAsked,
     /// THE CHORD THAT IS WAITING for its next key.
     ///
     /// Blue is what says where the next key goes, and that is not a matter of
@@ -584,6 +601,8 @@ impl Register {
             Self::Typed => tokens::color::QUESTION_TYPED,
             Self::Named => tokens::color::TEXT_SUBTLE_NAMED,
             Self::Figure => tokens::color::TEXT_SUBTLE_FIGURE,
+            Self::Quoted => tokens::color::TEXT_SUBTLE_QUOTED,
+            Self::QuotedAsked => tokens::color::QUESTION_QUOTED,
             Self::Inert => tokens::color::TEXT_SUBTLE_INERT,
             Self::KeyLit => tokens::color::TEXT_SUBTLE_LIT_KEY,
             Self::AlternateLit => tokens::color::TEXT_SUBTLE_LIT_ALTERNATE,
@@ -598,6 +617,96 @@ impl Register {
             Self::Title => tokens::color::TEXT_HEADER_TITLE,
             Self::LeaderAlt => tokens::color::TEXT_SUBTLE_LEADER_ALT,
         }
+    }
+
+    /// THE REGISTER OF A NAME QUOTED IN A RUN OF THIS ONE — the hint line's
+    /// half of [`quoted_ink`], and the same decisions: what the line SAYS
+    /// quotes its names in [`Register::Quoted`], a question in
+    /// [`Register::QuotedAsked`], and what it says loudly keeps its one
+    /// colour, name and all (danger is a colour).
+    ///
+    /// Every other register answers itself, and is named: no `_` arm, so a
+    /// register added later arrives here with somebody deciding whether a
+    /// name inside it changes. A key, a label, a title — none of them is a
+    /// sentence with a name in it; each IS the thing.
+    #[must_use]
+    pub const fn quoting(self) -> Self {
+        match self {
+            Self::Said => Self::Quoted,
+            Self::Asked => Self::QuotedAsked,
+            // DANGER IS A COLOUR: the whole sentence wears it, the name too.
+            Self::Loud => Self::Loud,
+            Self::Key
+            | Self::Alternate
+            | Self::Contextual
+            | Self::Prose
+            | Self::Separator
+            | Self::Explain
+            | Self::Glyph
+            | Self::Label
+            | Self::Title
+            | Self::KeyLit
+            | Self::AlternateLit
+            | Self::ContextualLit
+            | Self::ProseLit
+            | Self::Action
+            | Self::ActionLit
+            | Self::ActionHere
+            | Self::Inert
+            | Self::LeaderAlt
+            | Self::Typed
+            | Self::Named
+            | Self::Figure
+            | Self::Quoted
+            | Self::QuotedAsked
+            | Self::Pending => self,
+        }
+    }
+}
+
+/// THE INK OF A NAME QUOTED IN A SENTENCE, by the sentence's own ink — one
+/// table, every case written out.
+///
+/// # Why by the sentence's ink
+///
+/// Because the name has to sit BESIDE the words it is read with (owner,
+/// 2026-11-10: a discreet colour, near the text's and told from it): a title
+/// in a window's message, a file in a page's note and a host in a quiet note
+/// are three different rungs of the content's grey, and each has its own
+/// quoted step at the same lightness (`colors.nix`, `text.quoted`). A caller
+/// says what its sentence wears; this says what the names in it wear, so no
+/// view picks a name's colour by hand.
+///
+/// # Why danger keeps its one colour
+///
+/// Danger is a colour (`AGENTS.md`): a warning or an error is said by its
+/// colour, and a second hue inside it would weaken the alarm — so the whole
+/// sentence wears it, the name too.
+///
+/// # And why everything else answers itself
+///
+/// A row's label or value, a heading, a cursor: the name IS the row there,
+/// not a word quoted in a sentence about something — and a row's tones are
+/// its `Kind`'s alone (`labels-say-what-they-are`), so this table never names
+/// them.
+#[must_use]
+pub const fn quoted_ink(around: tokens::Color) -> tokens::Color {
+    use tokens::color as c;
+    match around {
+        // THE MESSAGE AT A WINDOW'S FOOT (`door::foot`).
+        c::TEXT_PRIMARY => c::TEXT_QUOTED_STRONG,
+        // A PAGE'S NOTE.
+        c::TEXT_SECONDARY => c::TEXT_QUOTED_DEFAULT,
+        // A QUIET NOTE.
+        c::TEXT_DIM => c::TEXT_QUOTED_FAINT,
+        // A QUESTION — the page's, and the line's ([`Register::Asked`]).
+        c::QUESTION_ASKED => c::QUESTION_QUOTED,
+        // WHAT THE MINIBUFFER AND A WINDOW'S FIRST LINE SAY, drawn as spans
+        // ([`Register::Said`]).
+        c::TEXT_SUBTLE_STRONG => c::TEXT_SUBTLE_QUOTED,
+        // DANGER IS A COLOUR — see above.
+        c::STATE_WARNING | c::STATE_ERROR | c::NOTIFICATION_LOUD => around,
+        _ => around,
     }
 }
 
@@ -2255,7 +2364,7 @@ pub fn marked_sentence(
     let values: Vec<Option<String>> = args
         .iter()
         .map(|(_, a)| match a {
-            ronoctua_i18n::Arg::Text(t) => Some((*t).to_owned()),
+            ronoctua_i18n::Arg::Text(t) | ronoctua_i18n::Arg::Name(t) => Some((*t).to_owned()),
             ronoctua_i18n::Arg::Number(n) => Some(n.to_string()),
             // A FRACTION is written by the language's own mark, which only
             // the texts know: it reads as the words around it.
@@ -3660,6 +3769,10 @@ fn laid(pieces: &[Piece], column: u16, room: u16) -> Vec<Laid> {
             // account's name is a character.
             | Register::Named
             | Register::Figure
+            // AND SO IS A NAME A SENTENCE QUOTES — a file called `C-x+1`
+            // is a file.
+            | Register::Quoted
+            | Register::QuotedAsked
             | Register::Pending
             | Register::Glyph
             | Register::Label
@@ -3796,6 +3909,51 @@ pub fn hover_bands(
         });
     }
     out
+}
+
+/// The GROUNDS of a list's rows — one quad for each run of rows on screen
+/// that stand on the same ground, edge to edge (`QUESTION_GROUND` under a
+/// question's block), and nothing under a row that has none.
+///
+/// `grounds` is every row's, the list's whole length; `offset`, `room` and
+/// `first_line` are what [`hover_bands`] takes, so a ground is where its
+/// rows are drawn. ONE quad a run, and not one a row: a block of six lines is
+/// one ground, and six quads would be six seams for a renderer that rounds
+/// to the pixel. Drawn BEFORE the hover bands and the cursor's, so the light
+/// under the hand still reads on top of it — flat, no border and no radius
+/// (invariant 15).
+#[must_use]
+pub fn row_grounds(
+    grounds: &[Option<tokens::Color>],
+    offset: usize,
+    room: usize,
+    first_line: u16,
+    width: f32,
+) -> Vec<ronoctua_render::quad::Quad> {
+    let line_px = tokens::metrics::line_height(tokens::text::size());
+    // THE RUNS ON SCREEN: the first row of each, how many rows, and its ground.
+    let mut runs: Vec<(usize, usize, tokens::Color)> = Vec::new();
+    for (row, ground) in grounds.iter().enumerate().skip(offset).take(room) {
+        let Some(color) = *ground else { continue };
+        match runs.last_mut() {
+            Some((from, rows, c)) if *from + *rows == row && *c == color => *rows += 1,
+            _ => runs.push((row, 1, color)),
+        }
+    }
+    runs.into_iter()
+        .map(|(from, rows, color)| {
+            let line = usize::from(first_line) + (from - offset);
+            #[allow(clippy::cast_precision_loss)]
+            let (y, height) = (line as f32 * line_px, rows as f32 * line_px);
+            ronoctua_render::quad::Quad {
+                x: 0.0,
+                y,
+                width,
+                height,
+                color,
+            }
+        })
+        .collect()
 }
 
 /// Which of `cells` — each `(first column, columns)` of a row — column
@@ -4636,6 +4794,518 @@ pub fn note_lines(text: &str, room: u16) -> Vec<String> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// A NAME QUOTED IN A SENTENCE — its own ink, wherever the sentence goes
+// ---------------------------------------------------------------------------
+
+/// A SENTENCE AND THE NAMES IT QUOTES — where each title, file or host
+/// landed in it — so a name is drawn in an ink of its own wherever the
+/// sentence is drawn (owner, 2026-11-10: a discreet colour, near the text's
+/// and told from it, in the whole distro).
+///
+/// # Why the ranges travel WITH the sentence
+///
+/// Because a sentence goes far before it is drawn — a page's note, a
+/// window's message, the minibuffer's echo, a question — and only the call
+/// that resolved it knows where its names are (`ronoctua_i18n::Arg::Name`,
+/// [`ronoctua_i18n::Marked::names`]). Found back by value at the far end, it
+/// would be the guess `Texts::t_marked` was written to avoid: a name used
+/// twice tinted once, a title equal to another argument's value tinted in
+/// that argument's place.
+///
+/// # And why a plain `String` turns into one
+///
+/// Because most sentences quote nothing, and every place that says one takes
+/// `impl Into<Named>`: a sentence with no names is a `Named` with none, drawn
+/// exactly as it was. The text is the sentence byte for byte; only the
+/// ranges are added.
+///
+/// NOT [`Register::Named`], which is a register of the hint line — the
+/// person's own name for what a mark is about. A type and an enum's variant
+/// live in different namespaces: this one is the sentence, that one a
+/// colour.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Named {
+    /// The sentence, exactly as it reads.
+    text: String,
+    /// Where its names are, in bytes of `text`: sorted, apart, never empty,
+    /// on character boundaries — kept so by every constructor
+    /// ([`Named::kept`]), so a range can always slice the text.
+    names: Vec<core::ops::Range<usize>>,
+}
+
+impl Named {
+    /// The sentence.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The sentence without its names — for what only reads text: a log
+    /// line, the clipboard, a comparison.
+    #[must_use]
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    /// Where its names are, in bytes of [`Named::as_str`]: sorted and apart.
+    #[must_use]
+    pub fn names(&self) -> &[core::ops::Range<usize>] {
+        &self.names
+    }
+
+    /// The sentence as RUNS of content: its words in `around`, the ink the
+    /// sentence is drawn in, and each name in the one [`quoted_ink`] gives a
+    /// name in that sentence. An empty sentence is no runs.
+    #[must_use]
+    pub fn runs(&self, around: tokens::Color) -> Vec<(&str, tokens::Color)> {
+        self.split(around, quoted_ink(around))
+    }
+
+    /// The same as PIECES of a line — the minibuffer's echo, a window's
+    /// first line, a question typed into a door: the words in `around`, and
+    /// each name in the register a name in it is drawn in
+    /// ([`Register::quoting`]).
+    #[must_use]
+    pub fn pieces(&self, around: Register) -> Vec<Piece> {
+        self.split(around, around.quoting())
+            .into_iter()
+            .map(|(text, register)| Piece {
+                text: text.to_owned(),
+                register,
+                id: None,
+                press: None,
+            })
+            .collect()
+    }
+
+    /// This sentence, then `between`, then `next` — a trouble and who said
+    /// it — with the names of both kept where they now are.
+    #[must_use]
+    pub fn then(mut self, between: &str, next: impl Into<Self>) -> Self {
+        let next = next.into();
+        let shift = self.text.len() + between.len();
+        self.text.push_str(between);
+        self.text.push_str(&next.text);
+        self.names.extend(
+            next.names
+                .into_iter()
+                .map(|r| r.start + shift..r.end + shift),
+        );
+        self
+    }
+
+    /// A NAME SAID ALONE, with no sentence around it — one item of a list
+    /// that is said by itself when it is the only one: the whole text is
+    /// the name.
+    #[must_use]
+    pub fn alone(name: &str) -> Self {
+        Self {
+            text: name.to_owned(),
+            names: Self::kept(name, std::iter::once(0..name.len()).collect()),
+        }
+    }
+
+    /// A SENTENCE INSIDE A SENTENCE: `outer`, resolved with `inner`'s words
+    /// as one of its arguments (`ronoctua_i18n::Arg::Text(inner.as_str())`),
+    /// keeping `outer`'s names and `inner`'s — each where it now is.
+    ///
+    /// # Why the argument is told by its words, and the names are not
+    ///
+    /// Because a language decides the order its arguments read in, and
+    /// [`ronoctua_i18n::Marked::at`] holds exactly where each one landed — in
+    /// THAT order, not the call's. So which of those stretches is the inner
+    /// sentence is the one that reads it, byte for byte; the names inside it
+    /// are still `inner`'s own ranges, never searched for. An argument that
+    /// reads the very same words is the same characters, and its names fall
+    /// on the same ones; a stretch that reads anything else takes none.
+    #[must_use]
+    pub fn with_inner(outer: ronoctua_i18n::Marked, inner: &Self) -> Self {
+        let ronoctua_i18n::Marked {
+            text,
+            at,
+            mut names,
+        } = outer;
+        if !inner.names.is_empty() {
+            for r in at {
+                if text.get(r.clone()) == Some(inner.as_str()) {
+                    names.extend(
+                        inner
+                            .names
+                            .iter()
+                            .map(|n| n.start + r.start..n.end + r.start),
+                    );
+                }
+            }
+        }
+        Self {
+            names: Self::kept(&text, names),
+            text,
+        }
+    }
+
+    /// The sentence cut to `room` cells with an ellipsis, as
+    /// `layout::elide_end` cuts a line — and each name cut where the
+    /// sentence was: the `…` is nobody's, and a name the cut left nothing of
+    /// is gone with it.
+    #[must_use]
+    pub fn elided_end(&self, room: u16) -> Self {
+        let text = ronoctua_render::layout::elide_end(&self.text, room);
+        if text == self.text {
+            return self.clone();
+        }
+        // WHAT IS KEPT IS A PREFIX of the sentence, and the mark after it.
+        let kept = text.strip_suffix('…').map_or(text.len(), str::len);
+        let names = self
+            .names
+            .iter()
+            .filter(|r| r.start < kept)
+            .map(|r| r.start..r.end.min(kept))
+            .collect();
+        Self {
+            names: Self::kept(&text, names),
+            text,
+        }
+    }
+
+    /// The sentence cut at its names: the words in `words`, each name in
+    /// `name`, and nothing empty.
+    fn split<T: Copy>(&self, words: T, name: T) -> Vec<(&str, T)> {
+        let mut out = Vec::with_capacity(self.names.len() * 2 + 1);
+        let mut from = 0;
+        for r in &self.names {
+            if r.start > from {
+                out.push((&self.text[from..r.start], words));
+            }
+            out.push((&self.text[r.clone()], name));
+            from = r.end;
+        }
+        if from < self.text.len() {
+            out.push((&self.text[from..], words));
+        }
+        out
+    }
+
+    /// The ranges a sentence may keep: inside it, on character boundaries,
+    /// not empty, and apart — in order. Whatever a carrier handed in, a
+    /// range kept here slices the text, so nothing that draws one can panic
+    /// on it.
+    fn kept(text: &str, mut names: Vec<core::ops::Range<usize>>) -> Vec<core::ops::Range<usize>> {
+        names.sort_by_key(|r| r.start);
+        let mut end = 0;
+        names.retain(|r| {
+            let keep = r.start >= end
+                && r.start < r.end
+                && r.end <= text.len()
+                && text.is_char_boundary(r.start)
+                && text.is_char_boundary(r.end);
+            if keep {
+                end = r.end;
+            }
+            keep
+        });
+        names
+    }
+}
+
+impl From<String> for Named {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            names: Vec::new(),
+        }
+    }
+}
+
+impl From<&str> for Named {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+
+impl From<ronoctua_i18n::Marked> for Named {
+    fn from(m: ronoctua_i18n::Marked) -> Self {
+        let names = Self::kept(&m.text, m.names);
+        Self {
+            text: m.text,
+            names,
+        }
+    }
+}
+
+impl From<Named> for String {
+    fn from(n: Named) -> Self {
+        n.text
+    }
+}
+
+impl core::ops::Deref for Named {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl core::fmt::Display for Named {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl PartialEq<str> for Named {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for Named {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for Named {
+    fn eq(&self, other: &String) -> bool {
+        &self.text == other
+    }
+}
+
+/// THE ARGUMENTS THAT ARE NAMES, for a sentence that travels as DATA — a
+/// key and its values in a `ronoctua_files::mode::Explanation`, resolved far
+/// from where it was made ([`said_of`]).
+///
+/// A convention only where the call cannot say it. Everywhere a sentence is
+/// resolved where it is made, the call itself says which argument is a name
+/// (`ronoctua_i18n::Arg::Name`), and a check can read it there. An
+/// explanation carries plain strings, so its one resolver tells its names by
+/// the argument's NAME — never by value: the range is still Fluent's, exact,
+/// and only WHICH arguments count is decided here, once, for every carrier.
+///
+/// `into` is the file a seal makes ("Encrypting { $name } into { $into }"):
+/// two names in one sentence, and the second is as much a name as the first.
+pub const QUOTED_ARGUMENTS: &[&str] = &[
+    "title", "name", "file", "path", "program", "folder", "app", "channel", "device", "network",
+    "host", "service", "into",
+];
+
+/// A sentence carried as data, resolved with its names told
+/// ([`QUOTED_ARGUMENTS`]) — what an explanation is SAID through, in place of
+/// `t_with(e.key, &e.borrowed())`: the same text, byte for byte, and where
+/// its names landed.
+#[must_use]
+pub fn said_of(texts: &ronoctua_i18n::Texts, e: &ronoctua_files::mode::Explanation) -> Named {
+    let args: Vec<(&str, ronoctua_i18n::Arg<'_>)> = e
+        .args
+        .iter()
+        .map(|(name, value)| {
+            let value = value.as_str();
+            (
+                *name,
+                if QUOTED_ARGUMENTS.contains(name) {
+                    ronoctua_i18n::Arg::Name(value)
+                } else {
+                    ronoctua_i18n::Arg::Text(value)
+                },
+            )
+        })
+        .collect();
+    texts.t_args_marked(e.key, &args).into()
+}
+
+/// A sentence that quotes a LIST of names in its argument `arg` — the
+/// hosts a search asks — with each one told as a name of its own
+/// (`ronoctua_i18n::Arg::Name`), and `joiner` between them the sentence's
+/// own words: a list of names is not one name, and its commas are nobody's.
+///
+/// # Why resolved once, and cut after
+///
+/// Because the LANGUAGE places the list, and only the resolver knows where
+/// it landed. So the joined list goes in as the one name it is to Fluent,
+/// and the stretch that comes back — the list's bytes exactly — is cut
+/// where it was joined ([`listed`]).
+#[must_use]
+pub fn names_listed(
+    texts: &ronoctua_i18n::Texts,
+    key: &str,
+    arg: &str,
+    names: &[&str],
+    joiner: &str,
+) -> Named {
+    let joined = names.join(joiner);
+    listed(
+        texts.t_args_marked(key, &[(arg, ronoctua_i18n::Arg::Name(&joined))]),
+        &joined,
+        names,
+        joiner,
+    )
+}
+
+/// `said`, with each stretch it told as a name that is the list `joined` —
+/// `names` joined by `joiner` — cut into those names: each name's place
+/// inside the stretch is its length and the joiner's. A stretch that is not
+/// the list is kept as it came, so a sentence that also quotes another name
+/// (a list's last item, said apart) keeps it whole.
+#[must_use]
+pub fn listed(said: ronoctua_i18n::Marked, joined: &str, names: &[&str], joiner: &str) -> Named {
+    let ronoctua_i18n::Marked {
+        text,
+        at,
+        names: stretches,
+    } = said;
+    let names = stretches
+        .into_iter()
+        .flat_map(|r| {
+            if text.get(r.clone()) != Some(joined) {
+                return vec![r];
+            }
+            let mut from = r.start;
+            names
+                .iter()
+                .map(|n| {
+                    let one = from..from + n.len();
+                    from = one.end + joiner.len();
+                    one
+                })
+                .collect()
+        })
+        .collect();
+    ronoctua_i18n::Marked { text, at, names }.into()
+}
+
+/// A NOTE IN SEVERAL INKS, broken into the lines it takes: the very lines
+/// [`note_lines`] gives the same text, each cut into runs of the ink its
+/// characters were given.
+///
+/// # Why ONE wrap, and the inks laid over it after
+///
+/// Because a second wrapper would be a second answer to where a line breaks,
+/// and the window's foot, the scroll's arithmetic and every view that counts
+/// a note's rows ask the first: a sentence with a name in it has to take
+/// exactly the rows the same sentence takes in one colour. So the text is
+/// wrapped whole, as every note is, and each line it came to is then walked
+/// beside the source ([`projected`]) — a character is the source's next one
+/// and wears its ink, and a space between two words is the blanks the wrap
+/// folded into it, wearing the first one's.
+///
+/// # And never a cut, never a word lost
+///
+/// The runs only COLOUR what `note_lines` gave. Should a wrap ever answer
+/// with a line the walk cannot find in the source — `ronoctua_protocol::wrap`
+/// changing its contract — that line is still drawn, whole, in `around`: a
+/// name in the sentence's own colour is a smaller loss than a word.
+#[must_use]
+pub fn wrap_runs<T: Copy + PartialEq>(
+    runs: &[(&str, T)],
+    around: T,
+    room: u16,
+) -> Vec<Vec<(String, T)>> {
+    let flat: String = runs.iter().map(|(text, _)| *text).collect();
+    let lines = note_lines(&flat, room);
+    projected(runs, &lines).unwrap_or_else(|| {
+        lines
+            .into_iter()
+            .map(|line| {
+                if line.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![(line, around)]
+                }
+            })
+            .collect()
+    })
+}
+
+/// The `lines` a wrap made of the runs' text, each cut into the runs' inks —
+/// or `None` where a line is not the source's, which only a wrap with
+/// another contract could give.
+///
+/// The one walk both wrappers that keep inks take — a note's
+/// ([`wrap_runs`]) and the minibuffer's drawer (`fold::wrap_pieces`) — so a
+/// sentence drawn in several inks keeps its spacing in both: what was glued
+/// in the source stays glued (`“Title”.`), and only the blanks a wrap folds
+/// or breaks at are its own. Two neighbours of one ink are one run.
+pub(crate) fn projected<T: Copy + PartialEq>(
+    runs: &[(&str, T)],
+    lines: &[String],
+) -> Option<Vec<Vec<(String, T)>>> {
+    let mut source = runs
+        .iter()
+        .flat_map(|(text, ink)| text.chars().map(move |c| (c, *ink)))
+        .peekable();
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let mut row: Vec<(String, T)> = Vec::new();
+        for c in line.chars() {
+            let ink = if c == ' ' {
+                // A SPACE BETWEEN TWO WORDS: the source's blanks there, one or
+                // more — a tab, two spaces — folded into one.
+                let (blank, ink) = source.next()?;
+                if !blank.is_whitespace() {
+                    return None;
+                }
+                while source.next_if(|(s, _)| s.is_whitespace()).is_some() {}
+                ink
+            } else {
+                // A CHARACTER: the source's next one past the blanks a break
+                // or the end of a line took.
+                loop {
+                    let (s, ink) = source.next()?;
+                    if s.is_whitespace() {
+                        continue;
+                    }
+                    if s != c {
+                        return None;
+                    }
+                    break ink;
+                }
+            };
+            match row.last_mut() {
+                Some((text, last)) if *last == ink => text.push(c),
+                _ => row.push((c.to_string(), ink)),
+            }
+        }
+        out.push(row);
+    }
+    Some(out)
+}
+
+/// A NOTE IN SEVERAL INKS AS ROWS OF FIELDS — [`wrap_runs`] over a
+/// sentence's words and names ([`Named::runs`] in `around`): each line a
+/// row from `left`, each run a field at the cell the runs before it end on.
+///
+/// A field takes nothing (`Hit::Nothing`): a note is read. An empty line is
+/// a row of nothing, as [`AIR`] is — the shape a view already pushes for a
+/// blank line of a note.
+#[must_use]
+pub fn note_fields(
+    left: u16,
+    said: &Named,
+    around: tokens::Color,
+    room: u16,
+) -> Vec<Vec<crate::fields::Field>> {
+    wrap_runs(&said.runs(around), around, room)
+        .into_iter()
+        .map(|line| {
+            let mut at = left;
+            line.into_iter()
+                .map(|(text, color)| {
+                    let field = crate::fields::Field {
+                        ink: crate::fields::Ink::Grid,
+                        at,
+                        text,
+                        color,
+                        hit: crate::fields::Hit::Nothing,
+                        explain: None,
+                    };
+                    at = at.saturating_add(ronoctua_render::layout::width(&field.text));
+                    field
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Where a value begins, in the ROW's own cells.
 ///
 /// # One arithmetic, three views
@@ -4787,6 +5457,153 @@ impl Kind {
             ),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// A QUESTION ON A PAGE — a block of its own: ground, air, answers set in
+// ---------------------------------------------------------------------------
+
+/// WHAT A "YES" COSTS — which is what the colour it is drawn in says.
+///
+/// Danger is a colour (`AGENTS.md`): a yes that loses something reads as
+/// danger before it is read as a word. Five views had written that `if` by
+/// hand, each its own way, and two apps asked their questions with none of
+/// it — a "yes, delete it" in the tone of every other action on the page. So
+/// the cost is a type a question carries, and [`answer_tone`] is the one
+/// place that turns it into a colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stakes {
+    /// NOTHING IS LOST: it can be asked again or undone. The yes reads as
+    /// every setting of the page does.
+    Light,
+    /// IT WEIGHS: it reaches past the row — every place at once, the whole
+    /// program — and no key takes it back. A warning.
+    Weighty,
+    /// SOMETHING IS LOST, for good. An error's colour.
+    Lost,
+}
+
+/// THE GROUND A QUESTION ON A PAGE STANDS ON (owner, 2026-11-10): the
+/// header's band, edge to edge and with no outline (invariant 15), so the
+/// one block that waits for the person stands apart from the rows around it
+/// by ground and air — never by a border. The ground every window's foot
+/// already asks its questions on (`door::foot`), and one every question
+/// tone, the cursor's and the answers' are measured on (`gen-theme.py`).
+pub const QUESTION_GROUND: tokens::Color = tokens::color::SURFACE_HEADER;
+
+/// The colour of an answer: under the cursor, the cursor's (`text.here.acts`
+/// — the cursor is a colour); else a "no", and a yes that costs nothing, in
+/// a setting's label tone — what the rest of the page acts with, from
+/// [`Kind::tones`] and never named here — and a yes that costs something in
+/// the colour of what it costs ([`Stakes`]).
+#[must_use]
+pub const fn answer_tone(yes: bool, here: bool, stakes: Stakes) -> tokens::Color {
+    if here {
+        return tokens::color::TEXT_HERE_ACTS;
+    }
+    match (yes, stakes) {
+        (true, Stakes::Lost) => tokens::color::STATE_ERROR,
+        (true, Stakes::Weighty) => tokens::color::STATE_WARNING,
+        (true, Stakes::Light) | (false, _) => Kind::Setting.tones(false).0,
+    }
+}
+
+/// One line of a question on a page ([`question_lines`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuestionLine {
+    /// A LINE OF AIR, before the block and after it — off the ground, so the
+    /// ground reads as one block and not as one more row.
+    Air,
+    /// A line of the SENTENCE, in the question's colour with each name it
+    /// quotes in a name's ([`quoted_ink`]): its fields, placed.
+    Asked(Vec<crate::fields::Field>),
+    /// A line of an ANSWER: which of the two, whether it is the answer's
+    /// FIRST line — the one its spot names and a click is read on; the lines
+    /// that wrap it continue it — its words, and the cell they start at.
+    Answer {
+        /// The yes, or the no.
+        yes: bool,
+        /// Its first line?
+        first: bool,
+        /// The words of this line.
+        text: String,
+        /// The cell they start at: set in from the sentence's.
+        at: u16,
+    },
+}
+
+impl QuestionLine {
+    /// The ground under this line: the question's on every line of the
+    /// block, none on its air.
+    #[must_use]
+    pub const fn ground(&self) -> Option<tokens::Color> {
+        match self {
+            Self::Air => None,
+            Self::Asked(_) | Self::Answer { .. } => Some(QUESTION_GROUND),
+        }
+    }
+
+    /// The fields this line draws: nothing on air, the sentence's as they
+    /// are, and an answer's words in [`answer_tone`] — `here` when the
+    /// cursor is on that answer, whichever of its lines this is.
+    #[must_use]
+    pub fn fields(&self, here: bool, stakes: Stakes) -> Vec<crate::fields::Field> {
+        match self {
+            Self::Air => AIR,
+            Self::Asked(fields) => fields.clone(),
+            Self::Answer { yes, text, at, .. } => vec![crate::fields::Field {
+                ink: crate::fields::Ink::Grid,
+                at: *at,
+                text: text.clone(),
+                color: answer_tone(*yes, here, stakes),
+                hit: crate::fields::Hit::Nothing,
+                explain: None,
+            }],
+        }
+    }
+}
+
+/// A QUESTION ASKED AMONG A PAGE'S ROWS, as the lines it takes (owner,
+/// 2026-11-10: it had the tone and the inset of the options around it, and
+/// it all ran together).
+///
+/// A line of air; the sentence in the question's own colour with the names
+/// it quotes in theirs, wrapped from `left` in `room` cells; the two answers,
+/// `[no, yes]` in that order — a question that arrives by itself or about
+/// what cannot be undone draws its no first — set in by
+/// `space.view.nestCells` and wrapped too, never cut; and air again. Every
+/// line but the air stands on [`QUESTION_GROUND`] ([`QuestionLine::ground`]).
+///
+/// The view keeps the rest — which answer the cursor is on, the spot each
+/// answer's first line is, what a click does — and draws each line with
+/// [`QuestionLine::fields`], so both its doors draw the same block.
+#[must_use]
+pub fn question_lines(
+    asked: &Named,
+    answers: [&str; 2],
+    left: u16,
+    room: u16,
+) -> Vec<QuestionLine> {
+    let mut out = vec![QuestionLine::Air];
+    out.extend(
+        note_fields(left, asked, tokens::color::QUESTION_ASKED, room)
+            .into_iter()
+            .map(QuestionLine::Asked),
+    );
+    let at = left.saturating_add(tokens::space::VIEW_NESTCELLS);
+    let answer_room = room.saturating_sub(tokens::space::VIEW_NESTCELLS);
+    for (n, answer) in answers.iter().enumerate() {
+        for (k, text) in note_lines(answer, answer_room).into_iter().enumerate() {
+            out.push(QuestionLine::Answer {
+                yes: n == 1,
+                first: k == 0,
+                text,
+                at,
+            });
+        }
+    }
+    out.push(QuestionLine::Air);
+    out
 }
 
 /// The same row with its VALUE in a colour that says a STATE — a battery at
@@ -7536,5 +8353,514 @@ mod tests {
         // A LINE WITH NO ACTION has nothing to explain.
         let plain = vec![Piece::said("x")];
         assert_eq!(super::explained_in_place(&plain, "y"), plain);
+    }
+
+    /// FAILS IF: a sentence ink loses its decision — the five a sentence is
+    /// drawn in stop giving their names a quoted step of their own, or give
+    /// one the sentence's own colour back — danger stops being one colour
+    /// (a warning, an error or the loud line with a name in another), a row's
+    /// tones or a heading start quoting, or the line's registers disagree
+    /// with the content's table about the same ink.
+    #[test]
+    fn every_sentence_ink_has_a_decision() {
+        use super::quoted_ink;
+        use tokens::color as c;
+        for (sentence, name) in [
+            (c::TEXT_PRIMARY, c::TEXT_QUOTED_STRONG),
+            (c::TEXT_SECONDARY, c::TEXT_QUOTED_DEFAULT),
+            (c::TEXT_DIM, c::TEXT_QUOTED_FAINT),
+            (c::QUESTION_ASKED, c::QUESTION_QUOTED),
+            (c::TEXT_SUBTLE_STRONG, c::TEXT_SUBTLE_QUOTED),
+        ] {
+            assert_eq!(quoted_ink(sentence), name, "{}", sentence.name());
+            assert_ne!(name, sentence, "{} quotes in itself", sentence.name());
+        }
+        // DANGER IS A COLOUR, and what a row or a title is is not a quote.
+        for keeps in [
+            c::STATE_WARNING,
+            c::STATE_ERROR,
+            c::NOTIFICATION_LOUD,
+            c::TEXT_HEADING,
+            c::STATE_ACCENT,
+            c::TEXT_HERE_ACTS,
+            Kind::Setting.tones(false).0,
+            Kind::Fact.tones(false).1,
+        ] {
+            assert_eq!(quoted_ink(keeps), keeps, "{} quotes a name", keeps.name());
+        }
+        // THE LINE'S HALF AGREES with the content's, register by register.
+        for register in [Register::Said, Register::Asked, Register::Loud] {
+            assert_eq!(
+                register.quoting().color(),
+                quoted_ink(register.color()),
+                "{register:?}"
+            );
+        }
+        assert_eq!(Register::Said.quoting(), Register::Quoted);
+        assert_eq!(Register::Asked.quoting(), Register::QuotedAsked);
+        for register in [
+            Register::Key,
+            Register::Prose,
+            Register::Title,
+            Register::Named,
+        ] {
+            assert_eq!(register.quoting(), register, "{register:?} quotes");
+        }
+    }
+
+    /// The runs a sentence is cut into here, every `marks` byte a boundary.
+    fn runs_of<'a>(text: &'a str, marks: &[usize]) -> Vec<(&'a str, usize)> {
+        let mut out = Vec::new();
+        let mut from = 0;
+        for (n, &to) in marks.iter().chain(std::iter::once(&text.len())).enumerate() {
+            if to > from {
+                out.push((&text[from..to], n));
+            }
+            from = to;
+        }
+        out
+    }
+
+    /// FAILS IF: a note in several inks takes other lines than the same
+    /// text in one ink — a row more or less, a word moved, a space added at a
+    /// seam (`“ Title ”`) — or a character of it, a name's above all, is
+    /// drawn in another run's ink, at any width from 1 to 80; over Latin
+    /// words, ideographs, an emoji sequence, a long path, tabs, double
+    /// spaces, paragraphs and blanks at both ends. Two neighbours of one ink
+    /// are one run.
+    #[test]
+    fn a_note_in_several_inks_takes_the_lines_of_one_ink() {
+        let corpus: [(&str, &[&str]); 8] = [
+            (
+                "Delete “",
+                &["My long video title", "”? It cannot be undone."],
+            ),
+            (
+                "「",
+                &["日本語のタイトル", "」を削除しますか？ 元に戻せません。"],
+            ),
+            (
+                "👩\u{200d}👩\u{200d}👧\u{200d}👦 family ",
+                &["🏳\u{fe0f}\u{200d}🌈 flag", " and more"],
+            ),
+            (
+                "Renamed ",
+                &[
+                    "/home/someone/a/rather/long/path/to/some/notes.md",
+                    " to ",
+                    "notes.md",
+                    ".",
+                ],
+            ),
+            ("a\tb\t\tc  ", &["named\tthing", "   d"]),
+            ("first paragraph\n\n", &["second", " paragraph\n"]),
+            ("   lead ", &["and", " trail   "]),
+            ("", &["only a name"]),
+        ];
+        for (start, rest) in corpus {
+            let mut text = start.to_owned();
+            let mut marks = Vec::new();
+            for r in rest {
+                marks.push(text.len());
+                text.push_str(r);
+            }
+            let runs = runs_of(&text, &marks);
+            let source: Vec<(char, usize)> = runs
+                .iter()
+                .flat_map(|(t, ink)| t.chars().map(move |c| (c, *ink)))
+                .filter(|(c, _)| !c.is_whitespace())
+                .collect();
+            for room in 1..=80u16 {
+                let rows = super::wrap_runs(&runs, usize::MAX, room);
+                let joined: Vec<String> = rows
+                    .iter()
+                    .map(|r| r.iter().map(|(t, _)| t.as_str()).collect())
+                    .collect();
+                assert_eq!(
+                    joined,
+                    super::note_lines(&text, room),
+                    "{text:?} at {room}: not the lines of one ink"
+                );
+                let drawn: Vec<(char, usize)> = rows
+                    .iter()
+                    .flatten()
+                    .flat_map(|(t, ink)| t.chars().map(move |c| (c, *ink)))
+                    .filter(|(c, _)| !c.is_whitespace())
+                    .collect();
+                assert_eq!(
+                    drawn, source,
+                    "{text:?} at {room}: a character changed its ink"
+                );
+                for row in &rows {
+                    assert!(
+                        row.windows(2).all(|w| w[0].1 != w[1].1),
+                        "{text:?} at {room}: two runs of one ink side by side"
+                    );
+                }
+            }
+        }
+        // A LINE OF THE TEXT THE WALK CANNOT FIND is drawn whole, in the
+        // sentence's own ink: never lost.
+        let lines = ["not the source".to_owned()];
+        assert_eq!(super::projected(&[("other words", 1)], &lines), None);
+        let empty: Vec<(&str, usize)> = Vec::new();
+        assert_eq!(super::wrap_runs(&empty, 0, 10), vec![Vec::new()]);
+    }
+
+    /// FAILS IF: a note's fields are not placed one after another from
+    /// `left` — a name drawn over the words before it, or a cell apart —
+    /// take a click, or a blank line of it is anything but a row of nothing.
+    #[test]
+    fn a_note_in_several_inks_is_fields_one_after_another() {
+        let text = "Renamed “old.txt” to “日本.txt”.\n\nDone.";
+        let range = |name: &str| {
+            let at = text.find(name).expect("in the text");
+            at..at + name.len()
+        };
+        let said = super::Named::from(ronoctua_i18n::Marked {
+            text: text.to_owned(),
+            at: Vec::new(),
+            names: vec![range("old.txt"), range("日本.txt")],
+        });
+        let rows = super::note_fields(3, &said, tokens::color::TEXT_PRIMARY, 80);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[1].is_empty(), "a blank line is a row of nothing");
+        let first = &rows[0];
+        let mut at = 3;
+        for f in first {
+            assert_eq!(f.at, at, "{:?} is not where the run before it ends", f.text);
+            assert_eq!(f.hit, crate::fields::Hit::Nothing);
+            at += ronoctua_render::layout::width(&f.text);
+        }
+        let quoted: Vec<&str> = first
+            .iter()
+            .filter(|f| f.color == tokens::color::TEXT_QUOTED_STRONG)
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(quoted, vec!["old.txt", "日本.txt"]);
+        assert_eq!(
+            first.iter().map(|f| f.text.as_str()).collect::<String>(),
+            "Renamed “old.txt” to “日本.txt”."
+        );
+    }
+
+    /// FAILS IF: a sentence loses or moves its names — through Fluent with
+    /// `Arg::Name`, joined to another, or cut — a range lands off the name or
+    /// off a character's boundary, or a sentence with no names reads any
+    /// differently from the plain text it came from.
+    #[test]
+    fn a_sentence_keeps_its_names_wherever_it_goes() {
+        use ronoctua_i18n::Arg;
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let marked = t.t_args_marked(
+            crate::key::ECHO_THEME_REFUSED,
+            &[
+                ("file", Arg::Name("theme.json")),
+                ("field", Arg::Text("mode")),
+                ("value", Arg::Text("theme.json")),
+            ],
+        );
+        let plain = t.t_with(
+            crate::key::ECHO_THEME_REFUSED,
+            &[
+                ("file", "theme.json"),
+                ("field", "mode"),
+                ("value", "theme.json"),
+            ],
+        );
+        let said = super::Named::from(marked);
+        assert_eq!(said, plain.as_str(), "a name changed the sentence");
+        // ONE NAME, though its value is said twice: the other is a value.
+        assert_eq!(said.names().len(), 1);
+        assert_eq!(&said[said.names()[0].clone()], "theme.json");
+        let runs = said.runs(tokens::color::TEXT_SECONDARY);
+        assert_eq!(
+            runs.iter()
+                .filter(|(_, c)| *c == tokens::color::TEXT_QUOTED_DEFAULT)
+                .count(),
+            1
+        );
+        assert_eq!(runs.iter().map(|(t, _)| *t).collect::<String>(), plain);
+        let pieces = said.pieces(Register::Said);
+        assert!(
+            pieces
+                .iter()
+                .any(|p| p.register == Register::Quoted && p.text == "theme.json")
+        );
+        // A PLAIN SENTENCE has no names, and reads as it was.
+        let bare = super::Named::from("nothing quoted");
+        assert!(bare.names().is_empty());
+        assert_eq!(bare.to_string(), "nothing quoted");
+        assert_eq!(String::from(bare.clone()), "nothing quoted");
+        assert_eq!(
+            bare.pieces(Register::Said),
+            vec![Piece::said("nothing quoted")]
+        );
+        // JOINED: the names of both, where they now are.
+        let trouble = "Cannot read “a.txt”";
+        let at = trouble.find("a.txt").expect("in the text");
+        let name = at..at + "a.txt".len();
+        let joined = super::Named::from(ronoctua_i18n::Marked {
+            text: trouble.to_owned(),
+            at: Vec::new(),
+            names: vec![name],
+        })
+        .then(" — ", said.clone());
+        assert_eq!(joined.names().len(), 2);
+        for r in joined.names() {
+            assert!(["a.txt", "theme.json"].contains(&&joined[r.clone()]));
+        }
+        // CUT: a name the cut reaches ends with the text kept, the `…` is
+        // nobody's, and a name past the cut is gone.
+        for room in 0..=40u16 {
+            let cut = joined.elided_end(room);
+            assert_eq!(
+                cut.as_str(),
+                ronoctua_render::layout::elide_end(&joined, room)
+            );
+            for r in cut.names() {
+                assert!(cut.is_char_boundary(r.start) && cut.is_char_boundary(r.end));
+                assert!(
+                    !cut[r.clone()].contains('…'),
+                    "the ellipsis was a name's at {room}"
+                );
+            }
+        }
+        // AND A CARRIER'S BAD RANGES are dropped, never sliced.
+        let odd = super::Named::from(ronoctua_i18n::Marked {
+            text: "日本".to_owned(),
+            at: Vec::new(),
+            names: vec![1..3, 4..4, 3..9, 0..3, 2..6],
+        });
+        assert_eq!(odd.names().len(), 1, "{:?}", odd.names());
+        assert_eq!(odd.names()[0], 0..3);
+    }
+
+    /// FAILS IF: an explanation carried as data stops telling its names by
+    /// their argument — a file's — or tells a value that is not one, or says
+    /// anything but what `t_with` said for it.
+    #[test]
+    fn an_explanation_tells_its_names_by_their_argument() {
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let e = ronoctua_files::mode::Explanation {
+            key: crate::key::ECHO_THEME_REFUSED,
+            args: vec![
+                ("file", "theme.json".to_owned()),
+                ("field", "mode".to_owned()),
+                ("value", "dusk".to_owned()),
+            ],
+        };
+        let said = super::said_of(&t, &e);
+        assert_eq!(said, t.t_with(e.key, &e.borrowed()));
+        let names: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(names, vec!["theme.json"]);
+        assert!(super::QUOTED_ARGUMENTS.contains(&"file"));
+        assert!(!super::QUOTED_ARGUMENTS.contains(&"value"));
+    }
+
+    /// FAILS IF: a sentence said inside another loses its names, the outer
+    /// one's names move, the text is not the outer sentence's byte for byte,
+    /// or an inner sentence the outer does not say lends it names.
+    #[test]
+    fn a_sentence_inside_a_sentence_keeps_its_names() {
+        use ronoctua_i18n::Arg;
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("the language");
+            let inner: super::Named = t
+                .t_args_marked(
+                    crate::key::ECHO_THEME_REFUSED,
+                    &[
+                        ("file", Arg::Name("a.json")),
+                        ("field", Arg::Text("mode")),
+                        ("value", Arg::Text("dusk")),
+                    ],
+                )
+                .into();
+            let outer = t.t_args_marked(
+                crate::key::ECHO_THEME_KEPT,
+                &[
+                    ("file", Arg::Name("b.json")),
+                    ("why", Arg::Text(inner.as_str())),
+                ],
+            );
+            let said = super::Named::with_inner(outer.clone(), &inner);
+            assert_eq!(said.as_str(), outer.text, "{language}");
+            let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+            assert_eq!(quoted, ["b.json", "a.json"], "{language}: {said:?}");
+            let elsewhere = super::Named::with_inner(outer, &super::Named::alone("c.json"));
+            let quoted: Vec<&str> = elsewhere
+                .names()
+                .iter()
+                .map(|r| &elsewhere[r.clone()])
+                .collect();
+            assert_eq!(quoted, ["b.json"], "{language}: {elsewhere:?}");
+        }
+    }
+
+    /// FAILS IF: an answer's colour stops following what the yes costs —
+    /// a yes that loses something in a setting's tone, one that weighs in
+    /// another than the warning — a no is ever a danger, or the cursor is
+    /// anything but its own colour on either.
+    #[test]
+    fn a_yes_wears_what_it_costs_and_the_cursor_wears_its_colour() {
+        use super::{Stakes, answer_tone};
+        let setting = Kind::Setting.tones(false).0;
+        for stakes in [Stakes::Light, Stakes::Weighty, Stakes::Lost] {
+            assert_eq!(answer_tone(false, false, stakes), setting, "{stakes:?}");
+            for yes in [false, true] {
+                assert_eq!(
+                    answer_tone(yes, true, stakes),
+                    tokens::color::TEXT_HERE_ACTS,
+                    "{stakes:?}"
+                );
+            }
+        }
+        assert_eq!(answer_tone(true, false, Stakes::Light), setting);
+        assert_eq!(
+            answer_tone(true, false, Stakes::Weighty),
+            tokens::color::STATE_WARNING
+        );
+        assert_eq!(
+            answer_tone(true, false, Stakes::Lost),
+            tokens::color::STATE_ERROR
+        );
+    }
+
+    /// FAILS IF: a question stops standing apart — no air before or after
+    /// it, air on its ground or a line of it off the ground — its answers
+    /// are not set in by `space.view.nestCells` or are cut instead of
+    /// wrapped, the no is not drawn first, or a click has more than one
+    /// first line to be read on per answer.
+    #[test]
+    fn a_question_stands_apart_by_air_and_its_answers_are_set_in() {
+        use super::{QUESTION_GROUND, QuestionLine, Stakes, question_lines};
+        let asked = super::Named::from("Delete it?");
+        let yes = "Yes, delete it and everything that was ever written about it";
+        let lines = question_lines(&asked, ["No", yes], 2, 24);
+        assert_eq!(lines.first(), Some(&QuestionLine::Air));
+        assert_eq!(lines.last(), Some(&QuestionLine::Air));
+        for line in &lines[1..lines.len() - 1] {
+            assert_eq!(line.ground(), Some(QUESTION_GROUND), "{line:?}");
+        }
+        assert_eq!(QuestionLine::Air.ground(), None);
+        assert!(matches!(lines[1], QuestionLine::Asked(_)));
+        let answers: Vec<(bool, bool, &str, u16)> = lines
+            .iter()
+            .filter_map(|l| match l {
+                QuestionLine::Answer {
+                    yes,
+                    first,
+                    text,
+                    at,
+                } => Some((*yes, *first, text.as_str(), *at)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers[0],
+            (false, true, "No", 2 + tokens::space::VIEW_NESTCELLS)
+        );
+        let firsts = answers.iter().filter(|a| a.1).count();
+        assert_eq!(firsts, 2, "one first line per answer");
+        let said: Vec<&str> = answers.iter().filter(|a| a.0).map(|a| a.2).collect();
+        assert!(said.len() > 1, "the long yes did not wrap");
+        assert_eq!(said.join(" "), yes, "a word of the yes was lost");
+        for (_, _, text, at) in &answers {
+            assert_eq!(*at, 2 + tokens::space::VIEW_NESTCELLS);
+            assert!(!text.contains('…'), "an answer was cut: {text}");
+            assert!(ronoctua_render::layout::width(text) <= 24 - tokens::space::VIEW_NESTCELLS);
+        }
+        // AND EACH LINE DRAWS ITS ANSWER in the answer's tone, the cursor's
+        // when it is on it — on every line of the answer.
+        let here: Vec<tokens::Color> = lines
+            .iter()
+            .filter(|l| matches!(l, QuestionLine::Answer { yes: true, .. }))
+            .flat_map(|l| l.fields(true, Stakes::Lost))
+            .map(|f| f.color)
+            .collect();
+        assert!(here.iter().all(|c| *c == tokens::color::TEXT_HERE_ACTS));
+        let resting: Vec<tokens::Color> = lines
+            .iter()
+            .filter(|l| matches!(l, QuestionLine::Answer { yes: true, .. }))
+            .flat_map(|l| l.fields(false, Stakes::Lost))
+            .map(|f| f.color)
+            .collect();
+        assert!(resting.iter().all(|c| *c == tokens::color::STATE_ERROR));
+        assert!(QuestionLine::Air.fields(true, Stakes::Lost).is_empty());
+    }
+
+    /// FAILS IF: a name a question quotes loses its ink — or the sentence
+    /// its own — on the lines the question wraps to.
+    #[test]
+    fn a_name_in_a_question_keeps_its_ink_when_the_sentence_wraps() {
+        use super::{QuestionLine, question_lines};
+        let text = "It is already in the queue as “An evening of quiet music”. Add it again?";
+        let at = text.find("An evening").expect("in the text");
+        let name = at..at + "An evening of quiet music".len();
+        let asked = super::Named::from(ronoctua_i18n::Marked {
+            text: text.to_owned(),
+            at: Vec::new(),
+            names: vec![name],
+        });
+        assert_eq!(
+            &asked[asked.names()[0].clone()],
+            "An evening of quiet music"
+        );
+        for room in [12u16, 20, 30, 80] {
+            let lines = question_lines(&asked, ["No", "Yes"], 0, room);
+            let fields: Vec<crate::fields::Field> = lines
+                .iter()
+                .filter_map(|l| match l {
+                    QuestionLine::Asked(f) => Some(f.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let quoted: String = fields
+                .iter()
+                .filter(|f| f.color == tokens::color::QUESTION_QUOTED)
+                .map(|f| f.text.replace(' ', ""))
+                .collect();
+            assert_eq!(quoted, "Aneveningofquietmusic", "at {room}");
+            assert!(
+                fields.iter().all(|f| [
+                    tokens::color::QUESTION_ASKED,
+                    tokens::color::QUESTION_QUOTED
+                ]
+                .contains(&f.color)),
+                "at {room}"
+            );
+            assert!(fields.iter().any(|f| f.text.contains("Add")));
+        }
+    }
+
+    /// FAILS IF: a run of rows on one ground is more than one quad, a ground
+    /// is drawn for a row off the screen or for one with none, or a quad is
+    /// not where its rows are drawn.
+    #[test]
+    fn grounds_are_one_quad_a_run_and_only_on_screen() {
+        let g = Some(tokens::color::SURFACE_HEADER);
+        let s = Some(tokens::color::SURFACE_SELECTION);
+        // 0 none; 1 2 3 a run; 4 none; 5 6 a run cut by the screen's end;
+        // 7 another ground right after.
+        let grounds = [None, g, g, g, None, g, g, s];
+        let line = tokens::metrics::line_height(tokens::text::size());
+        let all = super::row_grounds(&grounds, 0, 8, 1, 300.0);
+        assert_eq!(all.len(), 3, "{all:?}");
+        assert!((all[0].y - 2.0 * line).abs() < 1e-3, "drawn off its rows");
+        assert!((all[0].height - 3.0 * line).abs() < 1e-3);
+        assert!((all[0].width - 300.0).abs() < 1e-3 && all[0].x.abs() < 1e-6);
+        assert_eq!(all[2].color, tokens::color::SURFACE_SELECTION);
+        // SCROLLED: rows 2..6 on screen, from line 0.
+        let shown = super::row_grounds(&grounds, 2, 4, 0, 300.0);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+        assert!(shown[0].y.abs() < 1e-3);
+        assert!((shown[0].height - 2.0 * line).abs() < 1e-3);
+        assert!((shown[1].y - 3.0 * line).abs() < 1e-3);
+        assert!(
+            (shown[1].height - line).abs() < 1e-3,
+            "a row off the screen was grounded"
+        );
+        assert!(super::row_grounds(&[None, None], 0, 2, 0, 300.0).is_empty());
     }
 }

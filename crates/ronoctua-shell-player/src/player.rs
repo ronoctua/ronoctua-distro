@@ -71,7 +71,6 @@ use ronoctua_player::{
     remote::Role,
     wire::{Ask, DeskKind, LaneChange, State, Thing, Track, Trouble},
 };
-use ronoctua_tokens as tokens;
 
 /// The keys this view teaches, and where each one applies.
 pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
@@ -185,7 +184,13 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("O", "player-listing-order", Where::OnAListing),
     // THE RANKING of the video catalogue (`ronoctua_shell_video_metrics::player_ranking`): its
     // pages, the other layout — and `e`, the `⋯` at the end of a video's row,
-    // its own page.
+    // its own page. THE PAGES' QUICK KEYS ARE `[` AND `]` (the owner,
+    // 2026-11-10), BEFORE `PgUp`/`PgDn`: a line shows an id under its first
+    // key, and only that key is offered after `LEADER Alt` in a window — the
+    // page keys stay direct there. The page row's sentence teaches them all
+    // ([`sentence_of`]).
+    ("[", "player-ranking-earlier", Where::OnTheRanking),
+    ("]", "player-ranking-later", Where::OnTheRanking),
     ("<prior>", "player-ranking-earlier", Where::OnTheRanking),
     ("<next>", "player-ranking-later", Where::OnTheRanking),
     ("<home>", "player-ranking-first", Where::OnTheRanking),
@@ -232,7 +237,8 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
 /// a letter this table already has:
 ///
 /// - carrying an entry earlier and later is `;` and `'`, as a kiosk's tab is
-///   carried; the globe's nearer and further `]` and `[`;
+///   carried; the globe's nearer and further `9` and `8` — `]` and `[` are
+///   the ranking's pages, its quick keys (the owner, 2026-11-10);
 /// - play now is `g` (go); every screen `x`; the order `q`; the lyrics'
 ///   translation `h`; the listing's full view `f`, its layout `.`, its source
 ///   `,` and its letter `` ` ``;
@@ -241,8 +247,8 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
 pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
     ("C-<up>", ";"),
     ("C-<down>", "'"),
-    ("C-k", "]"),
-    ("C-j", "["),
+    ("C-k", "9"),
+    ("C-j", "8"),
     ("P", "g"),
     ("M", "x"),
     ("O", "q"),
@@ -253,6 +259,75 @@ pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
     ("C-l", "`"),
     ("C-s", "\\"),
 ];
+
+/// EVERY KEY OF COMMAND `id` IN A VIEW'S TABLE `rows`, in its order, AS A
+/// SENTENCE SAYS IT in the door it is said in — built from the table and
+/// never words in a `.ftl` (`keys-are-never-text`): as the hint draws it
+/// (`chrome::key_text`), and in a WINDOW (`windowed`), where no keyboard
+/// reaches a shortcut, as `LEADER Alt` reaches it there — the glyph and the
+/// one key, `⌥[` (`chrome::leader_alt_text`), with the window's
+/// `exceptions`. What stays direct (`chrome::stays_direct`: the page keys,
+/// the arrows) is itself in both doors. A key with no one key after
+/// `LEADER Alt` is left out.
+pub fn keys_said<'a>(
+    rows: impl IntoIterator<Item = (&'a str, &'a str)>,
+    id: &str,
+    exceptions: &[&[(&str, &str)]],
+    windowed: bool,
+) -> Vec<String> {
+    rows.into_iter()
+        .filter(|(_, of)| *of == id)
+        .filter_map(|(notation, _)| ronoctua_keymap::Key::parse(notation).ok())
+        .filter_map(|key| {
+            if !windowed || crate::chrome::stays_direct(&key) {
+                return Some(crate::chrome::key_text(&key));
+            }
+            let one = crate::chrome::leader_alt_key(&key, exceptions)?;
+            Some(crate::chrome::leader_alt_text(
+                &crate::chrome::key_text(&one),
+                false,
+            ))
+        })
+        .collect()
+}
+
+/// WHAT A ROW OR A CONTROL WHOSE SENTENCE IS `id` SAYS UNDER THE POINTER
+/// (`chrome::hint_sentence`) — and THE RANKING'S PAGE ROW with the keys that
+/// turn its pages, as the door it is said in reaches them (`windowed`,
+/// [`keys_said`]): `[`/`]` in the footer and the column, which gate no key,
+/// `⌥[`/`⌥]` in a window, and the page keys in all three.
+#[must_use]
+pub fn sentence_of(id: &str, texts: &ronoctua_i18n::Texts, windowed: bool) -> Option<String> {
+    if id != "player-ranking-page" {
+        return crate::chrome::hint_sentence(id, texts);
+    }
+    let keys = |id: &str| {
+        keys_said(
+            OF_THE_VIEW.iter().map(|(k, i, _)| (*k, *i)),
+            id,
+            &[LEADER_ALT_KEYS],
+            windowed,
+        )
+    };
+    let [back, on, first, last] = [
+        "player-ranking-earlier",
+        "player-ranking-later",
+        "player-ranking-first",
+        "player-ranking-last",
+    ]
+    .map(keys);
+    let nth = |keys: &[String], n: usize| keys.get(n).cloned().unwrap_or_default();
+    let args = [
+        ("earlier", nth(&back, 0)),
+        ("prior", nth(&back, 1)),
+        ("later", nth(&on, 0)),
+        ("next", nth(&on, 1)),
+        ("first", nth(&first, 0)),
+        ("last", nth(&last, 0)),
+    ];
+    let args: Vec<(&str, &str)> = args.iter().map(|(n, v)| (*n, v.as_str())).collect();
+    Some(texts.t_with(crate::key::ABOUT_PLAYER_RANKING_PAGE, &args))
+}
 
 /// THE KEYS WHILE THE PICTURE'S CONTROLS HAVE THE KEYBOARD ([`View::pane`]):
 /// the hint they replace the view's with — `↑`/`↓` walk the controls in
@@ -1108,6 +1183,11 @@ pub enum Target {
     RankingLayout,
     /// Its page — a ring.
     RankingPage,
+    /// How many videos its page holds — a ring.
+    RankingPerPage,
+    /// AN ARROW OF ITS PAGES, beside the list's title and at its end: the
+    /// page after (`true`) or before — a control, at once.
+    RankingTurn(bool),
     /// Its Shorts — with them, without them, only them: a ring.
     RankingShorts,
     /// A QUICK MARK's glyph beside a video's words — a control a click acts
@@ -1136,6 +1216,9 @@ impl Target {
             Self::RankedDo(act) => Some(act.about()),
             Self::RankedRating => Some(RankedAct::Rate.about()),
             Self::RankingPage => Some("player-ranking-page"),
+            Self::RankingPerPage => Some("player-ranking-per-page"),
+            Self::RankingTurn(false) => Some("player-ranking-earlier"),
+            Self::RankingTurn(true) => Some("player-ranking-later"),
             Self::RankingLayout => Some(LAYOUT),
             Self::RankingShorts => Some("player-ranking-shorts"),
             _ => None,
@@ -1216,6 +1299,7 @@ impl Target {
                 // a video's rating on its own page.
                 | Self::RankingLayout
                 | Self::RankingPage
+                | Self::RankingPerPage
                 | Self::RankingShorts
                 | Self::RankedRating
         )
@@ -1339,8 +1423,16 @@ impl Purpose {
 /// A yes-or-no question on screen, and what each answer does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
-    /// What is asked, already in words.
-    sentence: String,
+    /// What is asked, already in words — and where the names it quotes
+    /// landed in it, drawn in a name's ink.
+    sentence: crate::chrome::Named,
+    /// Which answer the cursor is on (`true` is yes), and whether a PERSON
+    /// put it there: born on the "no" — the screen's cursor, so the first
+    /// click on it only picks it (invariant 19, `aim::Aim`).
+    aim: crate::aim::Aim<bool>,
+    /// What its yes costs — the colour the yes is drawn in
+    /// (`chrome::answer_tone`).
+    stakes: crate::chrome::Stakes,
     /// Where the cursor was, to go back to once it is answered.
     back: (usize, usize),
     /// What `yes` does.
@@ -1410,6 +1502,17 @@ impl Switch {
 }
 
 /// What the door has to do.
+///
+/// # Handed back whole, and a little over clippy's line
+///
+/// What a door carries out itself comes back as the `Err` of
+/// [`carry_out`] and its kin, the errand as it was. A sentence that tells
+/// its names ([`TellSaying`](Errand::TellSaying)'s `chrome::Named`, the
+/// text and where its names are) took the largest variant past the 128
+/// bytes `clippy::result_large_err` draws its line at — once per key, never
+/// on a frame's path — and boxing the ask would break every pattern a door
+/// and a test match an errand by. So those functions say so, each with an
+/// `allow` that points here.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Errand {
     /// Draw again.
@@ -1428,10 +1531,11 @@ pub enum Errand {
     /// Tell the player.
     Tell(Ask),
     /// Tell the player, and say what was done — the sentence already in
-    /// words.
-    TellSaying(Ask, String),
-    /// Say a sentence, already in words.
-    Said(String),
+    /// words, with the names it quotes told (`chrome::Named`): a title, a
+    /// file, a service is drawn in a name's ink wherever the door says it.
+    TellSaying(Ask, crate::chrome::Named),
+    /// Say a sentence, already in words — and its names, as above.
+    Said(crate::chrome::Named),
     /// Turn ONE switch of the preferences — MERGED into `player.json` as it
     /// is on disk, never this door's whole copy of it (another door may have
     /// let or withdrawn something since this one read it) — and tell the
@@ -1657,8 +1761,8 @@ pub enum Heard {
     /// footer's picture alone) brings them back, for the question is drawn
     /// there.
     Asked,
-    /// Said on the door's line, or nothing.
-    Said(Option<String>),
+    /// Said on the door's line, or nothing — with the names it quotes.
+    Said(Option<crate::chrome::Named>),
 }
 
 /// What a door does with `told`, `took` being whether its view took it
@@ -1675,29 +1779,39 @@ pub fn heard(took: bool, told: &Told, older: bool, texts: &ronoctua_i18n::Texts)
 /// What a door says of `told`: the refusal, in a sentence, or nothing when it
 /// was taken. `older`: the door's last state is an older player's
 /// ([`older`]) — an ask it dropped unheard is said as that, which its home
-/// says too, and not as a player that does not run.
+/// says too, and not as a player that does not run. The names it quotes —
+/// a file, a service — told, for the door to draw in a name's ink.
 #[must_use]
-pub fn told_sentence(told: &Told, older: bool, texts: &ronoctua_i18n::Texts) -> Option<String> {
+pub fn told_sentence(
+    told: &Told,
+    older: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<crate::chrome::Named> {
     use crate::key;
+    use ronoctua_i18n::Arg;
     match told {
         Told::Taken | Told::Working | Told::Draft(_) => None,
         Told::Listing { answer, .. } => told_sentence(answer, older, texts),
         // A QUESTION THE VIEW ASKS; said as the refusal only where no view
         // took it ([`Told::asks`]).
-        Told::Asks { trouble, .. } => Some(trouble_sentence(trouble, texts)),
-        Told::KeyTrouble(t) => Some(crate::player_internet::key_trouble(*t, texts)),
-        Told::Unlock(Ok(())) => Some(texts.t(key::PLAYER_ADULT_OPEN)),
-        Told::Unlock(Err(r)) => Some(texts.t(crate::player_seam::unlock_refused_key(*r))),
+        Told::Asks { trouble, .. } => Some(trouble_named(trouble, texts)),
+        Told::KeyTrouble(t) => Some(crate::player_internet::key_trouble(*t, texts).into()),
+        Told::Unlock(Ok(())) => Some(texts.t(key::PLAYER_ADULT_OPEN).into()),
+        Told::Unlock(Err(r)) => Some(texts.t(crate::player_seam::unlock_refused_key(*r)).into()),
         // A PAGE'S OWN ANSWER, in the page's words (`crate::player_seam`).
         Told::Ranking(_) => crate::player_seam::said(told, texts),
-        Told::KeyTaken(service) => Some(texts.t_with(
-            key::PLAYER_KEY_ACCEPTED,
-            &[("service", &texts.t(service_key(*service)))],
-        )),
-        Told::Refused(t) => Some(trouble_sentence(t, texts)),
-        Told::Unheard if older => Some(texts.t(key::PLAYER_OLD_DAEMON)),
-        Told::Unheard | Told::NotRunning => Some(texts.t(key::PLAYER_NOT_RUNNING)),
-        Told::NotInstalled => Some(texts.t(key::PLAYER_NOT_INSTALLED)),
+        Told::KeyTaken(service) => Some(
+            texts
+                .t_args_marked(
+                    key::PLAYER_KEY_ACCEPTED,
+                    &[("service", Arg::Name(&texts.t(service_key(*service))))],
+                )
+                .into(),
+        ),
+        Told::Refused(t) => Some(trouble_named(t, texts)),
+        Told::Unheard if older => Some(texts.t(key::PLAYER_OLD_DAEMON).into()),
+        Told::Unheard | Told::NotRunning => Some(texts.t(key::PLAYER_NOT_RUNNING).into()),
+        Told::NotInstalled => Some(texts.t(key::PLAYER_NOT_INSTALLED).into()),
     }
 }
 
@@ -1766,6 +1880,10 @@ pub struct View {
     asking: Option<Choice>,
     /// A control on a title's line, clicked: what the next `RET` does.
     clicked_control: Option<Target>,
+    /// A ROW OWED THE TOP OF THE DOOR — a list's title, once its page turned
+    /// ([`View::bring_to_top`]): its line, for the door to put first after
+    /// its own follow ([`View::take_top`]), once.
+    top_owed: Option<usize>,
     /// The home the picker's places are in, instead of this machine's own
     /// folders — a photograph's ([`View::blank`]).
     home: Option<std::path::PathBuf>,
@@ -1984,134 +2102,186 @@ fn number(n: usize) -> ronoctua_i18n::Arg<'static> {
 const SAID_BY: &str = "yt-dlp";
 
 /// A trouble, in a sentence — one for every variant the player can say.
+///
+/// [`trouble_named`]'s text: for what draws a trouble in one ink — a warning
+/// on a page, whose names wear the warning's colour as the rest of it does
+/// (danger is a colour) — and for what only reads it.
+#[must_use]
+pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
+    trouble_named(t, texts).into_text()
+}
+
+/// A trouble, in a sentence, with the NAMES it quotes told — the file, the
+/// program, the host, the service (`ronoctua_i18n::Arg::Name`) — for a door
+/// that says it on its line, where a name is drawn in a name's ink.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
+pub fn trouble_named(t: &Trouble, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    use crate::chrome::Named;
     use crate::key;
     use ronoctua_i18n::Arg;
-    let with = |k: &str, args: &[(&str, &str)]| texts.t_with(k, args);
+    let with = |k: &str, args: &[(&str, Arg<'_>)]| Named::from(texts.t_args_marked(k, args));
+    let plain = |k: &str| Named::from(texts.t(k));
     match t {
         // WHAT THE PROGRAM SAID is data, framed by a key of ours and never
         // taken for a sentence (`Trouble::Unplayable::said`).
         Trouble::Unplayable { why, said } => {
-            let unplayable = with(key::PLAYER_TROUBLE_UNPLAYABLE, &[("why", why)]);
+            let unplayable = with(key::PLAYER_TROUBLE_UNPLAYABLE, &[("why", Arg::Text(why))]);
             match said {
-                Some(text) => format!(
-                    "{unplayable} {}",
+                Some(text) => unplayable.then(
+                    " ",
                     with(
                         key::PLAYER_TROUBLE_SAID,
-                        &[("program", SAID_BY), ("text", text)]
-                    )
+                        &[("program", Arg::Name(SAID_BY)), ("text", Arg::Text(text))],
+                    ),
                 ),
                 None => unplayable,
             }
         }
         Trouble::AlreadyQueued { name, .. } => with(
             key::PLAYER_TROUBLE_ALREADY_QUEUED,
-            &[("name", &name_of(name, texts, u16::MAX))],
+            &[("name", Arg::Name(&name_of(name, texts, u16::MAX)))],
         ),
-        Trouble::ChangedOnDisk { path } => {
-            with(key::PLAYER_TROUBLE_CHANGED_ON_DISK, &[("path", path)])
-        }
-        Trouble::NoOrigin => texts.t(key::PLAYER_TROUBLE_NO_ORIGIN),
-        Trouble::NoSound { .. } => texts.t(key::PLAYER_TROUBLE_NO_SOUND),
+        Trouble::ChangedOnDisk { path } => with(
+            key::PLAYER_TROUBLE_CHANGED_ON_DISK,
+            &[("path", Arg::Name(path))],
+        ),
+        Trouble::NoOrigin => plain(key::PLAYER_TROUBLE_NO_ORIGIN),
+        Trouble::NoSound { .. } => plain(key::PLAYER_TROUBLE_NO_SOUND),
         Trouble::Translation(r) => with(
             key::PLAYER_TROUBLE_TRANSLATION,
-            &[("why", &translation_refusal(r.why, texts))],
+            &[("why", Arg::Text(&translation_refusal(r.why, texts)))],
         ),
         // WHICH ASK is the log's (the engine's `not_yet`), never the screen's: a
         // kebab-case name is no sentence in any language.
-        Trouble::NotYet { .. } => texts.t(key::PLAYER_TROUBLE_NOT_YET),
-        Trouble::NoDecoder { program } => {
-            with(key::PLAYER_TROUBLE_NO_DECODER, &[("program", program)])
-        }
-        Trouble::Unsupported { format } => {
-            with(key::PLAYER_TROUBLE_UNSUPPORTED, &[("format", format)])
-        }
-        Trouble::NoEngine { why } => with(key::PLAYER_TROUBLE_NO_ENGINE, &[("why", why)]),
-        Trouble::Remote { why } => with(key::PLAYER_TROUBLE_REMOTE, &[("why", why)]),
-        Trouble::NotUnderstood { why } => with(key::PLAYER_TROUBLE_NOT_UNDERSTOOD, &[("why", why)]),
-        Trouble::TooMany(too) => texts.t_args(
-            match too.what {
-                Limit::Leaves => key::PLAYER_TROUBLE_TOO_MANY_LEAVES,
-                Limit::Depth => key::PLAYER_TROUBLE_TOO_MANY_DEPTH,
-                Limit::Lanes => key::PLAYER_TROUBLE_TOO_MANY_LANES,
-                Limit::Subtitles => key::PLAYER_TROUBLE_TOO_MANY_SUBTITLES,
-                Limit::SubtitlePictures => key::PLAYER_TROUBLE_TOO_MANY_SUBTITLE_PICTURES,
-                Limit::Voices => key::PLAYER_TROUBLE_TOO_MANY_VOICES,
-                Limit::Pictures => key::PLAYER_TROUBLE_TOO_MANY_PICTURES,
-                Limit::Ambience => key::PLAYER_TROUBLE_TOO_MANY_AMBIENCE,
-                Limit::Drafts => key::PLAYER_TROUBLE_TOO_MANY_DRAFTS,
-                Limit::Writes => key::PLAYER_TROUBLE_TOO_MANY_WRITES,
-                Limit::Takes => key::PLAYER_TROUBLE_TOO_MANY_TAKES,
-            },
-            &[("most", number(too.most))],
+        Trouble::NotYet { .. } => plain(key::PLAYER_TROUBLE_NOT_YET),
+        Trouble::NoDecoder { program } => with(
+            key::PLAYER_TROUBLE_NO_DECODER,
+            &[("program", Arg::Name(program))],
         ),
-        Trouble::NoSuchEntry { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_ENTRY),
-        Trouble::NotAPlaylist { .. } => texts.t(key::PLAYER_TROUBLE_NOT_A_PLAYLIST),
-        Trouble::IntoItself => texts.t(key::PLAYER_TROUBLE_INTO_ITSELF),
-        Trouble::Nameless => texts.t(key::PLAYER_TROUBLE_NAMELESS),
-        Trouble::Unreadable { path } => with(key::PLAYER_TROUBLE_UNREADABLE, &[("path", path)]),
+        Trouble::Unsupported { format } => with(
+            key::PLAYER_TROUBLE_UNSUPPORTED,
+            &[("format", Arg::Text(format))],
+        ),
+        Trouble::NoEngine { why } => {
+            with(key::PLAYER_TROUBLE_NO_ENGINE, &[("why", Arg::Text(why))])
+        }
+        Trouble::Remote { why } => with(key::PLAYER_TROUBLE_REMOTE, &[("why", Arg::Text(why))]),
+        Trouble::NotUnderstood { why } => with(
+            key::PLAYER_TROUBLE_NOT_UNDERSTOOD,
+            &[("why", Arg::Text(why))],
+        ),
+        Trouble::TooMany(too) => texts
+            .t_args_marked(
+                match too.what {
+                    Limit::Leaves => key::PLAYER_TROUBLE_TOO_MANY_LEAVES,
+                    Limit::Depth => key::PLAYER_TROUBLE_TOO_MANY_DEPTH,
+                    Limit::Lanes => key::PLAYER_TROUBLE_TOO_MANY_LANES,
+                    Limit::Subtitles => key::PLAYER_TROUBLE_TOO_MANY_SUBTITLES,
+                    Limit::SubtitlePictures => key::PLAYER_TROUBLE_TOO_MANY_SUBTITLE_PICTURES,
+                    Limit::Voices => key::PLAYER_TROUBLE_TOO_MANY_VOICES,
+                    Limit::Pictures => key::PLAYER_TROUBLE_TOO_MANY_PICTURES,
+                    Limit::Ambience => key::PLAYER_TROUBLE_TOO_MANY_AMBIENCE,
+                    Limit::Drafts => key::PLAYER_TROUBLE_TOO_MANY_DRAFTS,
+                    Limit::Writes => key::PLAYER_TROUBLE_TOO_MANY_WRITES,
+                    Limit::Takes => key::PLAYER_TROUBLE_TOO_MANY_TAKES,
+                },
+                &[("most", number(too.most))],
+            )
+            .into(),
+        Trouble::NoSuchEntry { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_ENTRY),
+        Trouble::NotAPlaylist { .. } => plain(key::PLAYER_TROUBLE_NOT_A_PLAYLIST),
+        Trouble::IntoItself => plain(key::PLAYER_TROUBLE_INTO_ITSELF),
+        Trouble::Nameless => plain(key::PLAYER_TROUBLE_NAMELESS),
+        Trouble::Unreadable { path } => {
+            with(key::PLAYER_TROUBLE_UNREADABLE, &[("path", Arg::Name(path))])
+        }
         Trouble::Unwritable { path, why } => with(
             key::PLAYER_TROUBLE_UNWRITABLE,
-            &[("path", path), ("why", why)],
+            &[("path", Arg::Name(path)), ("why", Arg::Text(why))],
         ),
-        Trouble::NowhereToSave { path } => {
-            with(key::PLAYER_TROUBLE_NOWHERE_TO_SAVE, &[("path", path)])
+        Trouble::NowhereToSave { path } => with(
+            key::PLAYER_TROUBLE_NOWHERE_TO_SAVE,
+            &[("path", Arg::Name(path))],
+        ),
+        Trouble::NoRuntimeDir => plain(key::PLAYER_TROUBLE_NO_RUNTIME_DIR),
+        Trouble::TooLarge { path } => {
+            with(key::PLAYER_TROUBLE_TOO_LARGE, &[("path", Arg::Name(path))])
         }
-        Trouble::NoRuntimeDir => texts.t(key::PLAYER_TROUBLE_NO_RUNTIME_DIR),
-        Trouble::TooLarge { path } => with(key::PLAYER_TROUBLE_TOO_LARGE, &[("path", path)]),
-        Trouble::NotOurs { path } => with(key::PLAYER_TROUBLE_NOT_OURS, &[("path", path)]),
-        Trouble::Newer { path, found } => texts.t_args(
+        Trouble::NotOurs { path } => {
+            with(key::PLAYER_TROUBLE_NOT_OURS, &[("path", Arg::Name(path))])
+        }
+        Trouble::Newer { path, found } => with(
             key::PLAYER_TROUBLE_NEWER,
             &[
-                ("path", Arg::Text(path)),
+                ("path", Arg::Name(path)),
                 ("found", Arg::Number(i64::from(*found))),
             ],
         ),
-        Trouble::Damaged { path } => with(key::PLAYER_TROUBLE_DAMAGED, &[("path", path)]),
-        Trouble::Empty { path } => with(key::PLAYER_TROUBLE_EMPTY, &[("path", path)]),
-        Trouble::Missing { program } => with(key::PLAYER_TROUBLE_MISSING, &[("program", program)]),
+        Trouble::Damaged { path } => {
+            with(key::PLAYER_TROUBLE_DAMAGED, &[("path", Arg::Name(path))])
+        }
+        Trouble::Empty { path } => with(key::PLAYER_TROUBLE_EMPTY, &[("path", Arg::Name(path))]),
+        Trouble::Missing { program } => with(
+            key::PLAYER_TROUBLE_MISSING,
+            &[("program", Arg::Name(program))],
+        ),
         Trouble::SinkGone { device } => with(
             key::PLAYER_TROUBLE_SINK_GONE,
-            &[("device", &sink_label(device, &[], texts))],
+            &[("device", Arg::Name(&sink_label(device, &[], texts)))],
         ),
-        Trouble::NotAnAddress { address } => {
-            with(key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS, &[("typed", address)])
-        }
+        Trouble::NotAnAddress { address } => with(
+            key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS,
+            &[("typed", Arg::Text(address))],
+        ),
+        // THE ADDRESS THAT DID NOT ANSWER is a name, as an address put in
+        // the queue is ("Added: …"): what the sentence is about.
         Trouble::Unreachable { what, why } => with(
             key::PLAYER_TROUBLE_UNREACHABLE,
-            &[("what", what), ("why", why)],
+            &[("what", Arg::Name(what)), ("why", Arg::Text(why))],
         ),
-        Trouble::StreamDown { title, tried } => texts.t_args(
+        Trouble::StreamDown { title, tried } => with(
             key::PLAYER_TROUBLE_STREAM_DOWN,
-            &[("title", Arg::Text(title)), ("tried", number(*tried))],
+            &[("title", Arg::Name(title)), ("tried", number(*tried))],
         ),
         // A THEME'S LIVES are said by the theme's name in the person's
         // language — the daemon sends its id — and anything else as it is
-        // (a playlist's address).
+        // (a playlist's address): a name either way, what was to be listed.
         Trouble::Listing { what, why } => {
             let what = ronoctua_broadcast::table::Category::of(what)
                 .map_or_else(|| what.clone(), |c| texts.t(c.key));
-            with(listing_key(*why), &[("what", &what)])
+            with(listing_key(*why), &[("what", Arg::Name(&what))])
         }
         Trouble::Subtitle { path, why } => with(
             key::PLAYER_TROUBLE_SUBTITLE,
-            &[("path", path), ("why", &subtitle_refusal(why, texts))],
+            &[
+                ("path", Arg::Name(path)),
+                ("why", Arg::Text(&subtitle_refusal(why, texts))),
+            ],
         ),
-        Trouble::NoPicture { path } => with(key::PLAYER_TROUBLE_NO_PICTURE, &[("path", path)]),
-        Trouble::NothingPlaying => texts.t(key::PLAYER_TROUBLE_NOTHING_PLAYING),
-        Trouble::NoSuchLane { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_LANE),
-        Trouble::WrongKind { .. } => texts.t(key::PLAYER_TROUBLE_WRONG_KIND),
-        Trouble::BadValue { .. } => texts.t(key::PLAYER_TROUBLE_BAD_VALUE),
-        Trouble::LastLane => texts.t(key::PLAYER_TROUBLE_LAST_LANE),
-        Trouble::Following { host } => with(key::PLAYER_TROUBLE_FOLLOWING, &[("host", host)]),
-        Trouble::StreamPlaysAlone => texts.t(key::PLAYER_TROUBLE_STREAM_PLAYS_ALONE),
-        Trouble::NoAmbience => texts.t(key::PLAYER_TROUBLE_NO_AMBIENCE),
-        Trouble::NoSuchSound { id } => with(key::PLAYER_TROUBLE_NO_SUCH_SOUND, &[("id", id)]),
+        Trouble::NoPicture { path } => {
+            with(key::PLAYER_TROUBLE_NO_PICTURE, &[("path", Arg::Name(path))])
+        }
+        Trouble::NothingPlaying => plain(key::PLAYER_TROUBLE_NOTHING_PLAYING),
+        Trouble::NoSuchLane { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_LANE),
+        Trouble::WrongKind { .. } => plain(key::PLAYER_TROUBLE_WRONG_KIND),
+        Trouble::BadValue { .. } => plain(key::PLAYER_TROUBLE_BAD_VALUE),
+        Trouble::LastLane => plain(key::PLAYER_TROUBLE_LAST_LANE),
+        Trouble::Following { host } => {
+            with(key::PLAYER_TROUBLE_FOLLOWING, &[("host", Arg::Name(host))])
+        }
+        Trouble::StreamPlaysAlone => plain(key::PLAYER_TROUBLE_STREAM_PLAYS_ALONE),
+        Trouble::NoAmbience => plain(key::PLAYER_TROUBLE_NO_AMBIENCE),
+        Trouble::NoSuchSound { id } => {
+            with(key::PLAYER_TROUBLE_NO_SUCH_SOUND, &[("id", Arg::Text(id))])
+        }
+        // A SOUND'S NAME is a name like a file's: its own, quoted.
         Trouble::SoundUnplayable { id, why } => with(
             key::PLAYER_TROUBLE_SOUND_UNPLAYABLE,
-            &[("sound", &ambience_name(id, texts)), ("why", why)],
+            &[
+                ("sound", Arg::Name(&ambience_name(id, texts))),
+                ("why", Arg::Text(why)),
+            ],
         ),
         // A FILE'S TAGS: which file, and why — the why is also a row's own
         // sentence on the Metadata section, where the file is the page's.
@@ -2120,20 +2290,24 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
             &[
                 (
                     "name",
-                    &name_of(&Name::Location(path.clone()), texts, NAME_IN_A_SENTENCE),
+                    Arg::Name(&name_of(
+                        &Name::Location(path.clone()),
+                        texts,
+                        NAME_IN_A_SENTENCE,
+                    )),
                 ),
-                ("why", &tags_refusal(why, texts)),
+                ("why", Arg::Text(&tags_refusal(why, texts))),
             ],
         ),
-        Trouble::NoSuchDraft { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_DRAFT),
-        Trouble::Lookup(r) => lookup_refusal(*r, texts),
-        Trouble::Off { host } => with(key::PLAYER_TROUBLE_OFF, &[("host", host)]),
-        Trouble::Exists { path } => with(key::PLAYER_TROUBLE_EXISTS, &[("path", path)]),
-        Trouble::NoSuchCandidate { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_CANDIDATE),
+        Trouble::NoSuchDraft { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_DRAFT),
+        Trouble::Lookup(r) => lookup_named(*r, texts),
+        Trouble::Off { host } => with(key::PLAYER_TROUBLE_OFF, &[("host", Arg::Name(host))]),
+        Trouble::Exists { path } => with(key::PLAYER_TROUBLE_EXISTS, &[("path", Arg::Name(path))]),
+        Trouble::NoSuchCandidate { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_CANDIDATE),
         Trouble::Directory(r) => directory_refusal(*r, texts),
-        Trouble::NoSuchCategory { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_CATEGORY),
-        Trouble::NoSuchPick { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_PICK),
-        Trouble::Picks { why } => texts.t({
+        Trouble::NoSuchCategory { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_CATEGORY),
+        Trouble::NoSuchPick { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_PICK),
+        Trouble::Picks { why } => plain({
             use ronoctua_broadcast::picks::Trouble as Why;
             match why {
                 Why::NoHome => key::PLAYER_TROUBLE_PICKS_NO_HOME,
@@ -2144,9 +2318,9 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
         }),
         // THE CATALOGUE'S: a source's refusal, the files', the person's
         // sources' file — one sentence per reason (`ronoctua_shell_catalogue::player_catalog`).
-        Trouble::Source { why } => texts.t(crate::player_seam::source_trouble_key(*why)),
-        Trouble::Catalog { why } => texts.t(crate::player_seam::catalog_trouble_key(*why)),
-        Trouble::Sources { why } => texts.t({
+        Trouble::Source { why } => plain(crate::player_seam::source_trouble_key(*why)),
+        Trouble::Catalog { why } => plain(crate::player_seam::catalog_trouble_key(*why)),
+        Trouble::Sources { why } => plain({
             use ronoctua_player::wire::SourcesTrouble as Why;
             match why {
                 Why::NoHome => key::PLAYER_TROUBLE_SOURCES_NO_HOME,
@@ -2155,7 +2329,7 @@ pub fn trouble_sentence(t: &Trouble, texts: &ronoctua_i18n::Texts) -> String {
                 Why::Unwritable => key::PLAYER_TROUBLE_SOURCES_UNWRITABLE,
             }
         }),
-        Trouble::NoSuchSource { .. } => texts.t(key::PLAYER_TROUBLE_NO_SUCH_SOURCE),
+        Trouble::NoSuchSource { .. } => plain(key::PLAYER_TROUBLE_NO_SUCH_SOURCE),
     }
 }
 
@@ -2208,9 +2382,19 @@ pub const fn service_key(service: ronoctua_lookup::Service) -> &'static str {
     }
 }
 
-/// Why a lookup gave nothing, in a sentence that names the service.
+/// Why a lookup gave nothing, in a sentence that names the service —
+/// [`lookup_named`]'s text, for a warning on a page.
 #[must_use]
 pub fn lookup_refusal(r: ronoctua_lookup::Refusal, texts: &ronoctua_i18n::Texts) -> String {
+    lookup_named(r, texts).into_text()
+}
+
+/// The same, with the service's name told, for a door's line.
+#[must_use]
+pub fn lookup_named(
+    r: ronoctua_lookup::Refusal,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     use crate::key;
     use ronoctua_lookup::Why;
     let k = match r.why {
@@ -2230,12 +2414,24 @@ pub fn lookup_refusal(r: ronoctua_lookup::Refusal, texts: &ronoctua_i18n::Texts)
         Why::Dormant => key::PLAYER_TROUBLE_LOOKUP_DORMANT,
         Why::NotLet => key::PLAYER_TROUBLE_LOOKUP_NOT_LET,
     };
-    texts.t_with(k, &[("service", &texts.t(service_key(r.service)))])
+    texts
+        .t_args_marked(
+            k,
+            &[(
+                "service",
+                ronoctua_i18n::Arg::Name(&texts.t(service_key(r.service))),
+            )],
+        )
+        .into()
 }
 
-/// Why a directory gave nothing, in a sentence that names it.
+/// Why a directory gave nothing, in a sentence that names it — its own
+/// name told, radio-browser or iptv-org, as a service's is.
 #[must_use]
-pub fn directory_refusal(r: ronoctua_broadcast::Refusal, texts: &ronoctua_i18n::Texts) -> String {
+pub fn directory_refusal(
+    r: ronoctua_broadcast::Refusal,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     use crate::key;
     use ronoctua_broadcast::{Source, Why};
     let source = texts.t(match r.source {
@@ -2255,7 +2451,9 @@ pub fn directory_refusal(r: ronoctua_broadcast::Refusal, texts: &ronoctua_i18n::
         Why::NotAName => key::PLAYER_TROUBLE_DIRECTORY_NOT_A_NAME,
         Why::NotLet => key::PLAYER_TROUBLE_DIRECTORY_NOT_LET,
     };
-    texts.t_with(k, &[("source", &source)])
+    texts
+        .t_args_marked(k, &[("source", ronoctua_i18n::Arg::Name(&source))])
+        .into()
 }
 
 /// Why yt-dlp could not list a playlist, as the key of its sentence — one
@@ -2609,7 +2807,7 @@ impl View {
     /// and that is said.
     fn fold_picture(&self, texts: &ronoctua_i18n::Texts) -> Errand {
         if self.picture_fold.is_none() {
-            return Errand::Said(texts.t(crate::key::PLAYER_NO_PICTURE_TO_FOLD));
+            return Errand::Said(texts.t(crate::key::PLAYER_NO_PICTURE_TO_FOLD).into());
         }
         Errand::FoldPicture
     }
@@ -2825,6 +3023,7 @@ impl View {
             prefs,
             asking: None,
             clicked_control: None,
+            top_owed: None,
             home: None,
             swap: false,
             panel: false,
@@ -2934,10 +3133,10 @@ impl View {
             // A REFUSAL THE PERSON MAY OVERRULE: asked on the page, "no"
             // first, and "yes" sends the ask that overrules it.
             Told::Asks { again, trouble } => {
-                let Some((sentence, yes)) = self.overrule(again, trouble, texts) else {
+                let Some((sentence, yes, stakes)) = self.overrule(again, trouble, texts) else {
                     return false;
                 };
-                self.ask(sentence, yes, Errand::Nothing);
+                self.ask(sentence, yes, Errand::Nothing, stakes);
                 true
             }
             Told::KeyTrouble(_) => {
@@ -3238,7 +3437,7 @@ impl View {
             bytes = text.len(),
             "a text asked to be kept, and nothing keeps it"
         );
-        Errand::Said(texts.t(crate::key::TEXT_AREA_NOT_KEPT))
+        Errand::Said(texts.t(crate::key::TEXT_AREA_NOT_KEPT).into())
     }
 
     /// The hint line.
@@ -3371,6 +3570,20 @@ impl View {
         let Some(row) = rows.get(n) else {
             return false;
         };
+        // AN ANSWER OF THE QUESTION, on any line of it: the first click picks
+        // it, and only a click on the person's own pick gives it — the "no"
+        // the question was born on is the screen's cursor, and a press meant
+        // for the row that was there a moment ago answers nothing
+        // (invariant 19, `aim::Aim`).
+        if let Target::Answer(yes) = row.target
+            && let Some(q) = self.asking.as_mut()
+        {
+            let again = q.aim.clicked(yes);
+            let top = self.top_mut();
+            top.moved = true;
+            top.cursor = n;
+            return again;
+        }
         // THE PICKER'S ROWS: what is under the click is chosen there — a
         // cell of its grid by the same arithmetic its hover lights
         // (`chrome::cell_under`) — and the second click is its `RET`.
@@ -3645,6 +3858,48 @@ impl View {
         {
             self.top_mut().cursor = i;
         }
+    }
+
+    /// THE ROW `spot` BROUGHT TO THE TOP OF THE DOOR, the cursor on the
+    /// first of its controls `controls` it draws (by their cells' spots) — a
+    /// list's title once its page turned, the cursor on its `›` (the owner,
+    /// 2026-11-10: "ao virar, a tela vai para o título logo antes da lista"):
+    /// what the person turned to is what they see, and `RET` turns again.
+    /// The door puts the row first AFTER its own follow, which would scroll
+    /// it back by its margin ([`View::take_top`]). Nothing where the row is
+    /// not drawn.
+    pub fn bring_to_top(
+        &mut self,
+        spot: &str,
+        controls: &[&str],
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) {
+        let rows = self.rows(state, columns, texts);
+        let Some(n) = rows.iter().position(|r| r.spot == spot) else {
+            return;
+        };
+        let cell = controls.iter().find_map(|want| {
+            rows[n]
+                .cells
+                .iter()
+                .position(|c| c.control && c.spot == *want)
+        });
+        let top = self.top_mut();
+        top.cursor = n;
+        top.moved = true;
+        top.on_title = rows[n].heading && rows[n].walked_onto();
+        if let Some(k) = cell {
+            top.cell = k;
+        }
+        self.top_owed = Some(n);
+    }
+
+    /// The line a row brought to the top owes the door ([`View::bring_to_top`])
+    /// — taken, once.
+    pub fn take_top(&mut self) -> Option<usize> {
+        self.top_owed.take()
     }
 
     /// The cursor stays on its row by identity.
@@ -3987,7 +4242,7 @@ impl View {
             // TEN SECONDS BACK OR AHEAD, the seeks beside the clock.
             Press::Rewind | Press::Forward => {
                 if !state.is_some_and(loaded) {
-                    return Errand::Said(texts.t(crate::key::PLAYER_NOTHING));
+                    return Errand::Said(texts.t(crate::key::PLAYER_NOTHING).into());
                 }
                 return crate::player_transport::seek_errand(press == Press::Forward, texts);
             }
@@ -4093,7 +4348,7 @@ impl View {
                 Target::Silence => {
                     return Errand::TellSaying(
                         Ask::AmbientSilence,
-                        texts.t(crate::key::PLAYER_AMBIENCE_SILENCED),
+                        texts.t(crate::key::PLAYER_AMBIENCE_SILENCED).into(),
                     );
                 }
                 _ => {}
@@ -4248,7 +4503,10 @@ impl View {
                 self.typing = Some(typing);
                 Errand::Ask(question)
             }
-            Turned::Question(sentence, yes) => self.ask(sentence, yes, Errand::Nothing),
+            // A TAG OR A FILE WRITTEN OVER: what it said is lost.
+            Turned::Question(sentence, yes) => {
+                self.ask(sentence, yes, Errand::Nothing, crate::chrome::Stakes::Lost)
+            }
             // A PAGE is opened where the rows are at hand ([`View::keyed`]).
             Turned::Page(_) => Errand::Nothing,
             // A FIELD'S WORDS, opened over the page to be changed here.
@@ -4263,9 +4521,10 @@ impl View {
     }
 
     /// A yes-or-no question on the page about something that cannot be
-    /// undone — born on its "no", which does nothing.
-    pub fn ask_about(&mut self, sentence: String, yes: Errand) -> Errand {
-        self.ask(sentence, yes, Errand::Nothing)
+    /// undone — born on its "no", which does nothing, and its yes in the
+    /// colour of what is lost.
+    pub fn ask_about(&mut self, sentence: impl Into<crate::chrome::Named>, yes: Errand) -> Errand {
+        self.ask(sentence, yes, Errand::Nothing, crate::chrome::Stakes::Lost)
     }
 
     /// The picture this view holds under `key` — the cover of the file the
@@ -4282,8 +4541,15 @@ impl View {
     }
 
     /// Puts a question on screen; `no` is where the cursor starts, and what
-    /// `Esc` answers — a question that appears on its own answers no.
-    fn ask(&mut self, sentence: String, yes: Errand, no: Errand) -> Errand {
+    /// `Esc` answers — a question that appears on its own answers no — and
+    /// `stakes` what its yes costs.
+    fn ask(
+        &mut self,
+        sentence: impl Into<crate::chrome::Named>,
+        yes: Errand,
+        no: Errand,
+        stakes: crate::chrome::Stakes,
+    ) -> Errand {
         // A QUESTION TAKES EVERY KEY, and its cursor on "no" is the one
         // drawn: the picture's controls give the keyboard up.
         self.leave_pane();
@@ -4294,7 +4560,9 @@ impl View {
         top.on_title = false;
         top.moved = false;
         self.asking = Some(Choice {
-            sentence,
+            sentence: sentence.into(),
+            aim: crate::aim::Aim::born(false),
+            stakes,
             back,
             yes: Box::new(yes),
             no: Box::new(no),
@@ -4305,9 +4573,10 @@ impl View {
     }
 
     /// The question a SAVED DRAFT puts ([`crate::player_metadata::DraftQuestion`]):
-    /// asked as every question is, and withdrawn with its draft.
+    /// asked as every question is, and withdrawn with its draft. Its yes
+    /// writes over what the file says.
     fn ask_about_the_draft(&mut self, q: crate::player_metadata::DraftQuestion) {
-        self.ask(q.sentence, q.yes, q.no);
+        self.ask(q.sentence, q.yes, q.no, crate::chrome::Stakes::Lost);
         if let Some(c) = self.asking.as_mut() {
             c.draft = Some(q.id);
             c.quoted = q.quoted;
@@ -4325,8 +4594,20 @@ impl View {
         self.settle_in(state, columns, texts);
         let rows = self.rows(state, columns, texts);
         let answer = match press {
+            // A KEY THAT MOVED THE CURSOR is a person's gesture: a click on
+            // the answer it is now on answers. ONE THAT MOVED NOTHING is not:
+            // `↑` on the "no" the question was born on has nothing above it
+            // to walk onto — the sentence, the air, a title — and the cursor
+            // there is still the screen's (`aim::Aim`).
             Press::Up | Press::Down => {
+                let was = self.cursor();
                 self.walk(&rows, press == Press::Down);
+                if self.cursor() != was
+                    && let Some(Target::Answer(yes)) = rows.get(self.cursor()).map(|r| &r.target)
+                    && let Some(q) = self.asking.as_mut()
+                {
+                    q.aim.moved(*yes);
+                }
                 return Errand::Nothing;
             }
             Press::Escape => false,
@@ -4350,12 +4631,13 @@ impl View {
     fn ask_to_clear(&mut self, state: Option<&State>, texts: &ronoctua_i18n::Texts) -> Errand {
         use crate::key;
         if state.is_none() || self.outline.as_ref().is_none_or(|o| o.entries.is_empty()) {
-            return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY));
+            return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY).into());
         }
         self.ask(
             texts.t(key::PLAYER_ASK_CLEAR),
-            Errand::TellSaying(Ask::Clear, texts.t(key::PLAYER_QUEUE_CLEARED)),
+            Errand::TellSaying(Ask::Clear, texts.t(key::PLAYER_QUEUE_CLEARED).into()),
             Errand::Nothing,
+            crate::chrome::Stakes::Lost,
         )
     }
 
@@ -4375,7 +4657,7 @@ impl View {
             _ => None,
         };
         let Some(next) = state.and_then(|s| crate::player_tracks::next_page(on, s)) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_TRACKS_NONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_TRACKS_NONE).into());
         };
         if on == Some(next) {
             return Errand::Nothing;
@@ -4416,6 +4698,7 @@ impl View {
             texts.t(crate::key::PLAYER_ASK_QUIT),
             Errand::QuitEverywhere,
             Errand::Nothing,
+            crate::chrome::Stakes::Weighty,
         )
     }
 
@@ -4426,6 +4709,7 @@ impl View {
             texts.t(crate::key::PLAYER_ASK_RESTART),
             Errand::Restart,
             Errand::Nothing,
+            crate::chrome::Stakes::Weighty,
         )
     }
 
@@ -4439,7 +4723,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         if !state.is_some_and(loaded) {
-            return Errand::Said(texts.t(crate::key::PLAYER_NOTHING));
+            return Errand::Said(texts.t(crate::key::PLAYER_NOTHING).into());
         }
         self.levels.truncate(1);
         self.settle_in(state, columns, texts);
@@ -4472,7 +4756,7 @@ impl View {
             _ => state.and_then(|s| s.current),
         };
         let Some(id) = id else {
-            return Errand::Said(texts.t(key::PLAYER_NOTHING));
+            return Errand::Said(texts.t(key::PLAYER_NOTHING).into());
         };
         let Some(was) = self
             .outline
@@ -4480,7 +4764,7 @@ impl View {
             .and_then(|o| node_of(o, id))
             .map(|n| name_of(&n.name, texts, NAME_IN_A_SENTENCE))
         else {
-            return Errand::Said(texts.t(key::PLAYER_TROUBLE_NO_SUCH_ENTRY));
+            return Errand::Said(texts.t(key::PLAYER_TROUBLE_NO_SUCH_ENTRY).into());
         };
         self.typing = Some(Typing::Rename {
             id,
@@ -4503,7 +4787,7 @@ impl View {
         let name = match saved {
             Saved::Set => {
                 let Some(s) = state.filter(|s| loaded(s)) else {
-                    return Errand::Said(texts.t(key::PLAYER_NOTHING));
+                    return Errand::Said(texts.t(key::PLAYER_NOTHING).into());
                 };
                 s.current
                     .zip(self.outline.as_deref())
@@ -4515,7 +4799,7 @@ impl View {
             }
             Saved::Queue => {
                 if self.outline.as_ref().is_none_or(|o| o.entries.is_empty()) {
-                    return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY));
+                    return Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY).into());
                 }
                 String::new()
             }
@@ -4577,7 +4861,8 @@ impl View {
                 self.back(state, columns, texts);
                 Errand::Nothing
             }
-            Step::Say(e) => Errand::Said(texts.t_with(e.key, &e.borrowed())),
+            // THE PICKER'S SENTENCE, its names told (`chrome::said_of`).
+            Step::Say(e) => Errand::Said(crate::chrome::said_of(texts, &e)),
             Step::Paste => Errand::Paste,
             Step::Picked(picked) => match self.page() {
                 PageId::Pick(purpose) => self.picked(purpose, picked, state, columns, texts),
@@ -4605,23 +4890,27 @@ impl View {
         match (purpose, picked) {
             (Purpose::Queue, Picked::Paths { paths, how }) => {
                 let play = how == How::Alternate;
-                let said = match paths.as_slice() {
-                    [one] => texts.t_with(
-                        if play {
-                            key::PLAYER_PLAYING_NOW
-                        } else {
-                            key::PLAYER_ADDED
-                        },
-                        &[("name", &file_name(one))],
-                    ),
-                    several => texts.t_args(
-                        if play {
-                            key::PLAYER_PLAYING_SEVERAL
-                        } else {
-                            key::PLAYER_ADDED_SEVERAL
-                        },
-                        &[("count", number(several.len()))],
-                    ),
+                let said: crate::chrome::Named = match paths.as_slice() {
+                    [one] => texts
+                        .t_args_marked(
+                            if play {
+                                key::PLAYER_PLAYING_NOW
+                            } else {
+                                key::PLAYER_ADDED
+                            },
+                            &[("name", ronoctua_i18n::Arg::Name(&file_name(one)))],
+                        )
+                        .into(),
+                    several => texts
+                        .t_args(
+                            if play {
+                                key::PLAYER_PLAYING_SEVERAL
+                            } else {
+                                key::PLAYER_ADDED_SEVERAL
+                            },
+                            &[("count", number(several.len()))],
+                        )
+                        .into(),
                 };
                 // THROUGH `put_all`, where the rule of what goes in ONCE is
                 // — the one a single location follows too.
@@ -4632,7 +4921,12 @@ impl View {
             }
             (Purpose::Queue, Picked::Address(url)) => Errand::TellSaying(
                 put(url.clone(), false),
-                texts.t_with(key::PLAYER_ADDED, &[("name", &url)]),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_ADDED,
+                        &[("name", ronoctua_i18n::Arg::Name(&url))],
+                    )
+                    .into(),
             ),
             // A FOLDER WHOLE, played now or added: ONE location, which the
             // player makes a playlist named after the folder. What it plays
@@ -4640,19 +4934,21 @@ impl View {
             // said here, before it is sent.
             (Purpose::Queue, Picked::Extra { id, folder }) => {
                 if crate::player_kinds::gather(&folder).is_empty() {
-                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY));
+                    return Errand::Said(texts.t(key::PLAYER_BROWSE_NOTHING_TO_PLAY).into());
                 }
                 let play = id == PLAY_FOLDER.id;
                 Errand::TellSaying(
                     put(location(&folder), play),
-                    texts.t_with(
-                        if play {
-                            key::PLAYER_PLAYING_NOW
-                        } else {
-                            key::PLAYER_ADDED
-                        },
-                        &[("name", &file_name(&folder))],
-                    ),
+                    texts
+                        .t_args_marked(
+                            if play {
+                                key::PLAYER_PLAYING_NOW
+                            } else {
+                                key::PLAYER_ADDED
+                            },
+                            &[("name", ronoctua_i18n::Arg::Name(&file_name(&folder)))],
+                        )
+                        .into(),
                 )
             }
             // TOGETHER, a file is a lane of what plays: chosen, it plays with
@@ -4662,17 +4958,24 @@ impl View {
                 let source = location(&paths[0]);
                 Errand::TellSaying(
                     crate::player_question::together(source),
-                    texts.t_with(
-                        key::PLAYER_TOGETHER_ADDED,
-                        &[("name", &file_name(&paths[0]))],
-                    ),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_TOGETHER_ADDED,
+                            &[("name", ronoctua_i18n::Arg::Name(&file_name(&paths[0])))],
+                        )
+                        .into(),
                 )
             }
             (Purpose::Lane, Picked::Address(url)) => {
                 self.back(state, columns, texts);
                 Errand::TellSaying(
                     crate::player_question::together(url.clone()),
-                    texts.t_with(key::PLAYER_TOGETHER_ADDED, &[("name", &url)]),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_TOGETHER_ADDED,
+                            &[("name", ronoctua_i18n::Arg::Name(&url))],
+                        )
+                        .into(),
                 )
             }
             // A SUBTITLE FILE, over the picture: a lane of its own.
@@ -4719,13 +5022,20 @@ impl View {
                 self.back(state, columns, texts);
                 Errand::TellSaying(
                     ask,
-                    texts.t_with(
-                        key::PLAYER_SAVING,
-                        &[
-                            ("name", &file_name(at)),
-                            ("folder", &shown_path(at.parent().unwrap_or(at))),
-                        ],
-                    ),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_SAVING,
+                            &[
+                                ("name", ronoctua_i18n::Arg::Name(&file_name(at))),
+                                (
+                                    "folder",
+                                    ronoctua_i18n::Arg::Name(&shown_path(
+                                        at.parent().unwrap_or(at),
+                                    )),
+                                ),
+                            ],
+                        )
+                        .into(),
                 )
             }
             _ => Errand::Nothing,
@@ -4860,7 +5170,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let Some(lane) = state.and_then(|s| lane_of(s, id)) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE).into());
         };
         self.typing = Some(Typing::LaneStart(id));
         Errand::Ask(Question::holding(
@@ -4884,7 +5194,7 @@ impl View {
             return Errand::Nothing;
         };
         let Some(lane) = state.and_then(|s| lane_of(s, id)) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE).into());
         };
         match parse_start(said, lane.start_seconds) {
             // TYPED ON A LANE'S ROW, it moves that lane alone: the sound's
@@ -4897,10 +5207,14 @@ impl View {
                 },
             }),
             Err(Refusal::Empty) => Errand::Nothing,
-            Err(Refusal::NotATime) => Errand::Said(texts.t_with(
-                crate::key::PLAYER_LANE_START_REFUSED,
-                &[("said", said.trim())],
-            )),
+            Err(Refusal::NotATime) => Errand::Said(
+                texts
+                    .t_with(
+                        crate::key::PLAYER_LANE_START_REFUSED,
+                        &[("said", said.trim())],
+                    )
+                    .into(),
+            ),
         }
     }
 
@@ -4913,7 +5227,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let Some((s, lane)) = state.and_then(|s| lane_of(s, id).map(|l| (s, l))) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE).into());
         };
         self.typing = Some(Typing::LaneUntil(id));
         let now = crate::player_lane::until_now(s, lane);
@@ -4941,7 +5255,7 @@ impl View {
             return Errand::Nothing;
         };
         let Some((s, lane)) = state.and_then(|s| lane_of(s, id).map(|l| (s, l))) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE).into());
         };
         let now = crate::player_lane::until_now(s, lane).unwrap_or(lane.from_seconds);
         match parse_start(said, now) {
@@ -4953,18 +5267,26 @@ impl View {
                     voice: false,
                 },
             }),
-            Ok(_) => Errand::Said(texts.t_with(
-                crate::key::PLAYER_LANE_UNTIL_TOO_SOON,
-                &[(
-                    "from",
-                    &crate::player_lane::start_said(lane.from_seconds, texts),
-                )],
-            )),
+            Ok(_) => Errand::Said(
+                texts
+                    .t_with(
+                        crate::key::PLAYER_LANE_UNTIL_TOO_SOON,
+                        &[(
+                            "from",
+                            &crate::player_lane::start_said(lane.from_seconds, texts),
+                        )],
+                    )
+                    .into(),
+            ),
             Err(Refusal::Empty) => Errand::Nothing,
-            Err(Refusal::NotATime) => Errand::Said(texts.t_with(
-                crate::key::PLAYER_LANE_START_REFUSED,
-                &[("said", said.trim())],
-            )),
+            Err(Refusal::NotATime) => Errand::Said(
+                texts
+                    .t_with(
+                        crate::key::PLAYER_LANE_START_REFUSED,
+                        &[("said", said.trim())],
+                    )
+                    .into(),
+            ),
         }
     }
 
@@ -4977,7 +5299,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let Some((s, lane)) = state.and_then(|s| lane_of(s, id).map(|l| (s, l))) else {
-            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE));
+            return Errand::Said(texts.t(crate::key::PLAYER_PAGE_GONE).into());
         };
         let was = crate::player_queue::lane_name(lane, &s.lanes, texts, NAME_IN_A_SENTENCE);
         self.typing = Some(Typing::LaneTitle {
@@ -5006,12 +5328,22 @@ impl View {
         if name.is_empty() {
             return Errand::TellSaying(
                 ask,
-                texts.t_with(crate::key::PLAYER_RENAMED_BACK, &[("was", was.as_str())]),
+                texts
+                    .t_args_marked(
+                        crate::key::PLAYER_RENAMED_BACK,
+                        &[("was", ronoctua_i18n::Arg::Name(was.as_str()))],
+                    )
+                    .into(),
             );
         }
         Errand::TellSaying(
             ask,
-            texts.t_with(crate::key::PLAYER_RENAMED, &[("name", name)]),
+            texts
+                .t_args_marked(
+                    crate::key::PLAYER_RENAMED,
+                    &[("name", ronoctua_i18n::Arg::Name(name))],
+                )
+                .into(),
         )
     }
 
@@ -5034,7 +5366,12 @@ impl View {
                     id,
                     name: String::new(),
                 },
-                texts.t_with(crate::key::PLAYER_RENAMED_BACK, &[("was", was.as_str())]),
+                texts
+                    .t_args_marked(
+                        crate::key::PLAYER_RENAMED_BACK,
+                        &[("was", ronoctua_i18n::Arg::Name(was.as_str()))],
+                    )
+                    .into(),
             );
         }
         Errand::TellSaying(
@@ -5042,7 +5379,12 @@ impl View {
                 id,
                 name: name.to_owned(),
             },
-            texts.t_with(crate::key::PLAYER_RENAMED, &[("name", name)]),
+            texts
+                .t_args_marked(
+                    crate::key::PLAYER_RENAMED,
+                    &[("name", ronoctua_i18n::Arg::Name(name))],
+                )
+                .into(),
         )
     }
 
@@ -5068,7 +5410,12 @@ impl View {
         match kind_by_name(path) {
             Some(OwnKind::Set) => Errand::TellSaying(
                 put(location, true),
-                texts.t_with(key::PLAYER_PLAYING_NOW, &[("name", &name)]),
+                texts
+                    .t_args_marked(
+                        key::PLAYER_PLAYING_NOW,
+                        &[("name", ronoctua_i18n::Arg::Name(&name))],
+                    )
+                    .into(),
             ),
             Some(OwnKind::Queue) => {
                 let open = Errand::TellSaying(
@@ -5080,19 +5427,36 @@ impl View {
                         replace: true,
                         once: false,
                     },
-                    texts.t_with(key::PLAYER_QUEUE_OPENED, &[("name", &name)]),
+                    texts
+                        .t_args_marked(
+                            key::PLAYER_QUEUE_OPENED,
+                            &[("name", ronoctua_i18n::Arg::Name(&name))],
+                        )
+                        .into(),
                 );
                 if self.outline.as_ref().is_some_and(|o| !o.entries.is_empty()) {
+                    // THE QUEUE IN ITS PLACE GOES, as a cleared one does.
                     self.ask(
-                        texts.t_with(key::PLAYER_ASK_REPLACE_QUEUE, &[("name", &name)]),
+                        texts.t_args_marked(
+                            key::PLAYER_ASK_REPLACE_QUEUE,
+                            &[("name", ronoctua_i18n::Arg::Name(&name))],
+                        ),
                         open,
                         Errand::Nothing,
+                        crate::chrome::Stakes::Lost,
                     )
                 } else {
                     open
                 }
             }
-            None => Errand::Said(texts.t_with(key::PLAYER_OPEN_NOT_OURS, &[("name", &name)])),
+            None => Errand::Said(
+                texts
+                    .t_args_marked(
+                        key::PLAYER_OPEN_NOT_OURS,
+                        &[("name", ronoctua_i18n::Arg::Name(&name))],
+                    )
+                    .into(),
+            ),
         }
     }
 
@@ -5144,30 +5508,24 @@ impl View {
     fn page_rows(&self, state: Option<&State>, b: &mut Builder<'_>) {
         use crate::key;
         let top = self.top();
-        // A QUESTION ON SCREEN is all that is drawn: it waits for an answer.
+        // A QUESTION ON SCREEN is all that is drawn: it waits for an answer
+        // — under its title, a block of its own: on its ground, with air
+        // before and after, the answers set in, "no" first and the yes in
+        // the colour of what it costs.
         if let Some(q) = &self.asking {
             b.heading(key::PLAYER_HEADING_QUESTION);
-            for line in crate::chrome::note_lines(&q.sentence, b.room) {
-                b.inert(vec![Builder::piece(
-                    b.left,
-                    line,
-                    tokens::color::TEXT_SECONDARY,
-                )]);
-            }
-            b.pair(
-                b.t(key::PLAYER_ANSWER_NO),
-                String::new(),
-                Target::Answer(false),
-                "no",
-            );
-            b.pair(
-                b.t(key::PLAYER_ANSWER_YES),
-                String::new(),
-                Target::Answer(true),
-                "yes",
+            b.question(
+                &q.sentence,
+                [
+                    (b.t(key::PLAYER_ANSWER_NO), Target::Answer(false), "no"),
+                    (b.t(key::PLAYER_ANSWER_YES), Target::Answer(true), "yes"),
+                ],
+                q.stakes,
+                None,
             );
             // WHAT IT WOULD WRITE, under the answers — which stay in sight —
-            // wrapped and whole: a person says yes to words they read.
+            // wrapped and whole: a person says yes to words they read. Its
+            // title takes the air that closes the block.
             if !q.quoted.is_empty() {
                 b.heading_within(b.t(key::PLAYER_DRAFT_SAYS));
                 for said in &q.quoted {
@@ -5625,11 +5983,12 @@ impl std::fmt::Debug for ToldSender {
 /// # Errors
 ///
 /// The errand is one the DOOR carries out.
+#[allow(clippy::result_large_err)] // handed back whole: see `Errand`
 pub fn carry_out(
     errand: Errand,
     texts: &ronoctua_i18n::Texts,
     told: Option<&ToldSender>,
-) -> Result<Option<String>, Errand> {
+) -> Result<Option<crate::chrome::Named>, Errand> {
     let tell_off_the_loop = |ask: Ask| {
         let told = told.cloned();
         // A DIRECTORY'S LIST comes back with the list it was for: its page
@@ -5722,7 +6081,7 @@ pub fn carry_out(
                 });
             if let Err(e) = born {
                 tracing::error!(error = %e, thread, "could not start a page's thread");
-                return Ok(unstarted.map(|k| texts.t(k)));
+                return Ok(unstarted.map(|k| texts.t(k).into()));
             }
             Ok(None)
         }
@@ -5746,15 +6105,23 @@ pub fn carry_out(
                 Err(why) => {
                     use crate::key;
                     use ronoctua_consent::Unkept;
+                    use ronoctua_i18n::Arg;
                     let why = texts.t(match why {
                         Unkept::NoHome => key::PLAYER_FILE_NO_HOME,
                         Unkept::Unparseable => key::PLAYER_FILE_UNPARSEABLE,
                         Unkept::Unwritable => key::PLAYER_FILE_UNWRITABLE,
                     });
-                    Ok(Some(texts.t_with(
-                        key::ECHO_SETTING_NOT_WRITTEN,
-                        &[("file", ronoctua_consent::FILE), ("why", &why)],
-                    )))
+                    Ok(Some(
+                        texts
+                            .t_args_marked(
+                                key::ECHO_SETTING_NOT_WRITTEN,
+                                &[
+                                    ("file", Arg::Name(ronoctua_consent::FILE)),
+                                    ("why", Arg::Text(&why)),
+                                ],
+                            )
+                            .into(),
+                    ))
                 }
             }
         }
@@ -5769,7 +6136,7 @@ pub fn carry_out(
         }
         Errand::Restart => {
             restart(told.cloned());
-            Ok(Some(texts.t(crate::key::PLAYER_RESTARTING)))
+            Ok(Some(texts.t(crate::key::PLAYER_RESTARTING).into()))
         }
         // THE CONSENT, merged into what is on disk — and then what the press
         // asked, after it: the daemon reads the file when it asks.
@@ -5782,7 +6149,7 @@ pub fn carry_out(
             crate::daemon::about_to_act("the player's consents, written");
             match let_merged(&services, &directories, on) {
                 Ok(()) => carry_out(*then, texts, told),
-                Err(why) => Ok(Some(why.sentence(texts))),
+                Err(why) => Ok(Some(why.sentence(texts).into())),
             }
         }
         // A KEY OF THE PERSON'S, kept private from its first byte and tried
@@ -5820,7 +6187,7 @@ pub fn carry_out(
                 told.cloned(),
                 true,
             );
-            Ok(Some(crate::player_translator::kept_said(key, texts)))
+            Ok(Some(crate::player_translator::kept_said(key, texts).into()))
         }
         Errand::ForgetWordsKey(key) => {
             crate::daemon::about_to_act("a translation key of the person's, forgotten");
@@ -5829,7 +6196,7 @@ pub fn carry_out(
                 told.cloned(),
                 false,
             );
-            Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN)))
+            Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN).into()))
         }
         Errand::ForgetKey(key) => {
             crate::daemon::about_to_act("a key of the person's, forgotten");
@@ -5846,7 +6213,7 @@ pub fn carry_out(
             if let Err(e) = born {
                 tracing::error!(error = %e, "could not start the thread that forgets a key");
             }
-            Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN)))
+            Ok(Some(texts.t(crate::key::PLAYER_KEY_FORGOTTEN).into()))
         }
         // ONE SWITCH, merged into what is on disk — the same rule as the
         // consents: this door's copy is what it shows, never what it writes.
@@ -5861,7 +6228,7 @@ pub fn carry_out(
                     tell_if_running(&Ask::Reload);
                     None
                 }
-                Err(why) => Some(why.sentence(texts)),
+                Err(why) => Some(why.sentence(texts).into()),
             }
         }),
     }
@@ -5981,7 +6348,7 @@ fn key_kept_and_tried(
     keep: impl FnOnce() -> Result<(), ronoctua_lookup::keys::KeyTrouble> + Send + 'static,
     told: Option<ToldSender>,
     texts: &ronoctua_i18n::Texts,
-) -> String {
+) -> crate::chrome::Named {
     let born = std::thread::Builder::new()
         .name("player-key-check".to_owned())
         .spawn(move || {
@@ -6007,10 +6374,26 @@ fn key_kept_and_tried(
     if let Err(e) = born {
         tracing::error!(error = %e, "could not start the thread that keeps and tries a key");
     }
-    texts.t_with(
-        crate::key::PLAYER_KEY_CHECKING,
-        &[("service", &texts.t(service_key(service)))],
-    )
+    key_checking(service, texts)
+}
+
+/// "Checking the key with TMDB…" — the service's name told, for the door's
+/// line: what keeping a key says while the service is asked, in every door
+/// (the photograph's outbox too).
+#[must_use]
+pub fn key_checking(
+    service: ronoctua_lookup::Service,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
+    texts
+        .t_args_marked(
+            crate::key::PLAYER_KEY_CHECKING,
+            &[(
+                "service",
+                ronoctua_i18n::Arg::Name(&texts.t(service_key(service))),
+            )],
+        )
+        .into()
 }
 
 /// Tells the player `ask` OFF THE LOOP, starting it when nobody answers, and
@@ -7559,6 +7942,7 @@ mod tests {
     use crate::player_rows::{Slid, slid, slider_at};
     use fixture::{idle, outline, playing, track};
     use ronoctua_player::wire::TrackKind as Kind;
+    use ronoctua_tokens as tokens;
 
     fn texts() -> ronoctua_i18n::Texts {
         ronoctua_i18n::Texts::fresh("en-GB").expect("the base language")
@@ -8118,6 +8502,183 @@ mod tests {
         ));
     }
 
+    /// FAILS IF: a question on the page answers the FIRST click on the "no"
+    /// it was born on — the screen's cursor, not the person's — or the first
+    /// on the other answer; or a key that moved nothing (`↑` on the born
+    /// "no") makes it the person's; or a click on the answer a key moved the
+    /// cursor to waits for a second (invariant 19, `aim::Aim`).
+    #[test]
+    fn a_page_question_is_picked_before_it_answers() {
+        let t = texts();
+        let state = playing();
+        let answer = |v: &View, yes: bool| {
+            v.rows(Some(&state), 80, &t)
+                .iter()
+                .position(|r| r.target == Target::Answer(yes))
+                .expect("an answer")
+        };
+        let mut v = queued(View::blank(None));
+        v.key(Press::Clear, Some(&state), 80, &t);
+        let rows = v.rows(Some(&state), 80, &t);
+        let no = answer(&v, false);
+        assert_eq!(v.cursor(), no, "the cursor is not born on the no");
+        assert!(
+            !v.clicked_at(no, 0, &rows),
+            "one click on the born no answered"
+        );
+        assert!(v.asking.is_some());
+        assert!(
+            v.clicked_at(no, 0, &rows),
+            "a second click on the no did not answer"
+        );
+        assert_eq!(v.key(Press::Enter, Some(&state), 80, &t), Errand::Nothing);
+        assert!(v.asking.is_none(), "the no left the question up");
+        // THE YES: the first click only moves the cursor there.
+        v.key(Press::Clear, Some(&state), 80, &t);
+        let rows = v.rows(Some(&state), 80, &t);
+        let yes = answer(&v, true);
+        assert!(
+            !v.clicked_at(yes, 0, &rows),
+            "one click on the yes cleared the queue"
+        );
+        assert_eq!(v.cursor(), yes);
+        assert!(v.clicked_at(yes, 0, &rows));
+        assert!(matches!(
+            v.key(Press::Enter, Some(&state), 80, &t),
+            Errand::TellSaying(Ask::Clear, _)
+        ));
+        // A KEY THAT MOVED NOTHING is not: `↑` on the born no has nothing
+        // above it to walk onto, and the no still takes two clicks.
+        v.key(Press::Clear, Some(&state), 80, &t);
+        v.key(Press::Up, Some(&state), 80, &t);
+        let rows = v.rows(Some(&state), 80, &t);
+        let no = answer(&v, false);
+        assert_eq!(v.cursor(), no, "the up arrow left the no");
+        assert!(
+            !v.clicked_at(no, 0, &rows),
+            "a key that moved nothing made the born no the person's"
+        );
+        assert!(v.clicked_at(no, 0, &rows));
+        assert_eq!(v.key(Press::Enter, Some(&state), 80, &t), Errand::Nothing);
+        assert!(v.asking.is_none());
+        // A KEY THAT MOVED THE CURSOR is the person's: one click answers.
+        v.key(Press::Clear, Some(&state), 80, &t);
+        v.key(Press::Down, Some(&state), 80, &t);
+        let rows = v.rows(Some(&state), 80, &t);
+        assert_eq!(v.cursor(), answer(&v, true));
+        assert!(
+            v.clicked_at(answer(&v, true), 0, &rows),
+            "a keyed yes waited"
+        );
+    }
+
+    /// FAILS IF: a question on the page stops standing apart from its page —
+    /// a line of air off the ground before it and after it, the sentence
+    /// and the answers on the question's ground, the sentence in the
+    /// question's colour, the answers set in by `space.view.nestCells` — or
+    /// its yes stops wearing what it costs: an error's colour where it
+    /// clears the queue, a warning's where it closes the player everywhere,
+    /// a setting's where it adds a song again; or the cursor stops being the
+    /// cursor's colour on it.
+    #[test]
+    fn a_page_question_stands_on_its_ground() {
+        use crate::chrome::{QUESTION_GROUND, Stakes, answer_tone};
+        let t = texts();
+        let state = playing();
+        let block = |v: &View| {
+            let rows = v.rows(Some(&state), 80, &t);
+            let no = rows
+                .iter()
+                .position(|r| r.target == Target::Answer(false))
+                .expect("a no");
+            let yes = rows
+                .iter()
+                .position(|r| r.target == Target::Answer(true))
+                .expect("a yes");
+            (rows, no, yes)
+        };
+        let mut v = queued(View::blank(None));
+        v.key(Press::Clear, Some(&state), 80, &t);
+        let (rows, no, yes) = block(&v);
+        // THE BLOCK: air, the sentence, the answers, air.
+        let first = (0..no)
+            .rev()
+            .find(|&k| rows[k].ground.is_none())
+            .expect("air before")
+            + 1;
+        let air = &rows[first - 1];
+        assert!(
+            air.fields.is_empty() && air.heading,
+            "no air before: {rows:?}"
+        );
+        let after = &rows[yes + 1];
+        assert!(
+            after.fields.is_empty() && after.ground.is_none(),
+            "no air after: {rows:?}"
+        );
+        for row in &rows[first..=yes] {
+            assert_eq!(row.ground, Some(QUESTION_GROUND), "off the ground: {row:?}");
+        }
+        assert!(first < no, "no sentence on the ground");
+        let asked: String = rows[first..no]
+            .iter()
+            .map(|r| r.fields.iter().map(|f| f.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(asked, t.t(crate::key::PLAYER_ASK_CLEAR));
+        assert!(
+            rows[first..no]
+                .iter()
+                .flat_map(|r| &r.fields)
+                .all(|f| f.color == tokens::color::QUESTION_ASKED),
+            "the sentence is not in the question's colour"
+        );
+        let sentence_at = rows[first].fields[0].at;
+        assert_eq!(
+            rows[no].fields[0].at,
+            sentence_at + tokens::space::VIEW_NESTCELLS,
+            "the answers are not set in"
+        );
+        // THE CURSOR on the no, the yes in what it costs.
+        assert_eq!(rows[no].fields[0].color, tokens::color::TEXT_HERE_ACTS);
+        assert_eq!(
+            rows[yes].fields[0].color,
+            answer_tone(true, false, Stakes::Lost),
+            "clearing the queue is not an error's colour"
+        );
+        assert_eq!(
+            answer_tone(true, false, Stakes::Lost),
+            tokens::color::STATE_ERROR
+        );
+        v.key(Press::Escape, Some(&state), 80, &t);
+        // CLOSING EVERYWHERE weighs.
+        assert_eq!(v.ask_to_quit(&t), Errand::Nothing);
+        v.settle_in(Some(&state), 80, &t);
+        let (rows, _, yes) = block(&v);
+        assert_eq!(rows[yes].fields[0].color, tokens::color::STATE_WARNING);
+        v.key(Press::Escape, Some(&state), 80, &t);
+        // ADDING AGAIN loses nothing.
+        let trouble = Trouble::AlreadyQueued {
+            entry: ronoctua_player::queue::EntryId(2),
+            name: ronoctua_player::queue::Name::Titled("Two".into()),
+        };
+        let again = crate::player::put("/m/two.flac".into(), false);
+        assert!(v.told(
+            &Told::Asks {
+                again: Box::new(again),
+                trouble,
+            },
+            &t
+        ));
+        v.settle_in(Some(&state), 80, &t);
+        let (rows, _, yes) = block(&v);
+        assert_eq!(
+            rows[yes].fields[0].color,
+            crate::chrome::Kind::Setting.tones(false).0,
+            "adding again is drawn as if something were lost"
+        );
+    }
+
     /// FAILS IF: the files open with the cursor on their heading — where the
     /// hint line teaches none of the level's keys, as the photograph of the
     /// first form showed — or `Esc` from them lands anywhere but on the row
@@ -8147,7 +8708,7 @@ mod tests {
         let mut v = among(&root);
         assert_eq!(
             picking(&mut v, "C-p"),
-            Errand::Said(t.t(crate::key::PLAYER_BROWSE_NOTHING_TO_PLAY))
+            Errand::Said(t.t(crate::key::PLAYER_BROWSE_NOTHING_TO_PLAY).into())
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -8602,19 +9163,119 @@ mod tests {
         assert_eq!(heard(true, &Told::Taken, false, &t), Heard::Said(None));
         assert_eq!(
             heard(false, &Told::NotRunning, false, &t),
-            Heard::Said(Some(t.t(crate::key::PLAYER_NOT_RUNNING)))
+            Heard::Said(Some(t.t(crate::key::PLAYER_NOT_RUNNING).into()))
         );
     }
 
+    /// FAILS IF: a trouble said on a door's line stops telling the NAMES it
+    /// quotes — a file, a title inside a plural's branch, the program after
+    /// what it said, an address that did not answer or could not be listed —
+    /// as the stretches a door draws in a name's ink, in either language; or
+    /// its text, the one a warning draws too ([`trouble_sentence`]), stops
+    /// being the keys' own sentences, resolved here apart — the two joined
+    /// by one space, the count of a plural's branch a number.
+    #[test]
+    fn a_trouble_tells_the_names_it_quotes() {
+        use crate::key;
+        use ronoctua_i18n::Arg;
+        let path = "/films/a long name/the film.mkv";
+        let address = "https://example.org/a/list";
+        for language in ["en-GB", "pt-BR"] {
+            let t = ronoctua_i18n::Texts::fresh(language).expect("a declared language");
+            let told = |trouble: &Trouble| {
+                let said = trouble_named(trouble, &t);
+                let names = said
+                    .names()
+                    .iter()
+                    .map(|r| said[r.clone()].to_owned())
+                    .collect::<Vec<_>>();
+                (said.into_text(), names)
+            };
+            let (text, names) = told(&Trouble::Unreadable { path: path.into() });
+            assert_eq!(names, [path], "{language}");
+            assert_eq!(
+                text,
+                t.t_with(key::PLAYER_TROUBLE_UNREADABLE, &[("path", path)]),
+                "{language}"
+            );
+            // A NAME INSIDE A PLURAL'S BRANCH, the count still a number.
+            let (text, names) = told(&Trouble::StreamDown {
+                title: "Radio Ünïcode".into(),
+                tried: 3,
+            });
+            assert_eq!(names, ["Radio Ünïcode"], "{language}");
+            assert_eq!(
+                text,
+                t.t_args(
+                    key::PLAYER_TROUBLE_STREAM_DOWN,
+                    &[
+                        ("title", Arg::Text("Radio Ünïcode")),
+                        ("tried", Arg::Number(3))
+                    ],
+                ),
+                "{language}"
+            );
+            // TWO SENTENCES JOINED: the program's name where it now is.
+            let (text, names) = told(&Trouble::Unplayable {
+                why: "no format".into(),
+                said: Some("ERROR: [youtube] gone".into()),
+            });
+            assert_eq!(names, [SAID_BY], "{language}");
+            assert_eq!(
+                text,
+                format!(
+                    "{} {}",
+                    t.t_with(key::PLAYER_TROUBLE_UNPLAYABLE, &[("why", "no format")]),
+                    t.t_with(
+                        key::PLAYER_TROUBLE_SAID,
+                        &[("program", SAID_BY), ("text", "ERROR: [youtube] gone")],
+                    ),
+                ),
+                "{language}"
+            );
+            // AN ADDRESS is a name, as one put in the queue is: the one that
+            // did not answer, and the one yt-dlp could not list.
+            let (text, names) = told(&Trouble::Unreachable {
+                what: address.into(),
+                why: "timed out".into(),
+            });
+            assert_eq!(names, [address], "{language}");
+            assert_eq!(
+                text,
+                t.t_with(
+                    key::PLAYER_TROUBLE_UNREACHABLE,
+                    &[("what", address), ("why", "timed out")],
+                ),
+                "{language}"
+            );
+            let (text, names) = told(&Trouble::Listing {
+                what: address.into(),
+                why: ronoctua_player::Listing::NotAList,
+            });
+            assert_eq!(names, [address], "{language}");
+            assert_eq!(
+                text,
+                t.t_with(key::PLAYER_TROUBLE_LISTING_NOT_A_LIST, &[("what", address)]),
+                "{language}"
+            );
+        }
+    }
+
     /// FAILS IF: a key the service took stops being said in the door that
-    /// kept it, naming the service.
+    /// kept it, naming the service — or the service's name is not told as
+    /// the NAME it quotes (`chrome::Named`), the one stretch a door draws in
+    /// a name's ink.
     #[test]
     fn a_key_taken_is_said_naming_its_service() {
         let t = texts();
+        let said = told_sentence(&Told::KeyTaken(ronoctua_lookup::Service::Tmdb), false, &t)
+            .expect("a key taken is said");
         assert_eq!(
-            told_sentence(&Told::KeyTaken(ronoctua_lookup::Service::Tmdb), false, &t),
-            Some(t.t_with(crate::key::PLAYER_KEY_ACCEPTED, &[("service", "TMDB")]))
+            said.as_str(),
+            t.t_with(crate::key::PLAYER_KEY_ACCEPTED, &[("service", "TMDB")])
         );
+        let names: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(names, ["TMDB"], "{said:?}");
     }
 
     /// FAILS IF: a label of a page is cut instead of wrapped in a narrow
@@ -8959,6 +9620,47 @@ mod tests {
         assert_eq!(pressed_in(&table, "x", |_| None), None);
     }
 
+    /// FAILS IF: after `LEADER Alt` in the window the globe stops being
+    /// `9` nearer and `8` further, or `[` and `]` stop being the ranking's
+    /// pages — the owner's quick keys (2026-11-10), which took the globe's
+    /// old keys; or the ranking's page row stops teaching them as each door
+    /// reaches them, the page keys alike in both.
+    #[test]
+    fn the_globe_and_the_pages_after_leader_alt() {
+        let rows: Vec<(&str, &str)> = OF_THE_VIEW.iter().map(|r| (r.0, r.1)).collect();
+        let keys = crate::chrome::leader_alt_census(&[&rows], &[LEADER_ALT_KEYS])
+            .unwrap_or_else(|wrong| panic!("{wrong}"));
+        let key_of = |id: &str| {
+            keys.iter()
+                .find(|(_, of)| of == id)
+                .map(|(k, _)| k.as_str())
+        };
+        assert_eq!(key_of("player-nearer"), Some("9"));
+        assert_eq!(key_of("player-further"), Some("8"));
+        assert_eq!(key_of("player-ranking-earlier"), Some("["));
+        assert_eq!(key_of("player-ranking-later"), Some("]"));
+        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let footer = sentence_of("player-ranking-page", &t, false).expect("a sentence");
+        let window = sentence_of("player-ranking-page", &t, true).expect("a sentence");
+        for k in ["[", "]", "<prior>", "<next>", "<home>", "<end>"] {
+            assert!(footer.contains(k), "`{k}` untaught in the footer: {footer}");
+        }
+        // THE KEYS LEAD: the footer's one line is cut at its end, and the
+        // clause about pressing the row comes after them.
+        assert!(footer.starts_with('['), "{footer}");
+        for k in ["[", "]"] {
+            let reached = crate::chrome::leader_alt_text(k, false);
+            assert!(
+                window.contains(&reached),
+                "`{reached}` untaught in a window: {window}"
+            );
+        }
+        assert!(
+            window.contains("<prior>") && !window.contains('{'),
+            "{window}"
+        );
+    }
+
     #[test]
     fn every_key_of_the_table_is_a_press() {
         for (k, id, _) in OF_THE_VIEW {
@@ -9159,7 +9861,11 @@ mod tests {
                     id: EntryId(1),
                     name: "Morning".into()
                 },
-                t.t_with(crate::key::PLAYER_RENAMED, &[("name", "Morning")])
+                t.t_args_marked(
+                    crate::key::PLAYER_RENAMED,
+                    &[("name", ronoctua_i18n::Arg::Name("Morning"))]
+                )
+                .into()
             )
         );
         // `e` ON AN ENTRY: that one.
@@ -9182,7 +9888,12 @@ mod tests {
                     id: EntryId(2),
                     name: String::new()
                 },
-                t.t_with(crate::key::PLAYER_RENAMED_BACK, &[("was", "Two")])
+                // THE NAME IT HAD, told as one.
+                t.t_args_marked(
+                    crate::key::PLAYER_RENAMED_BACK,
+                    &[("was", ronoctua_i18n::Arg::Name("Two"))]
+                )
+                .into()
             ),
         );
         assert_eq!(
@@ -9235,10 +9946,15 @@ mod tests {
                 to: to.to_string_lossy().into_owned(),
                 name: Some("Film night".into()),
             },
-            t.t_with(
+            // THE FILE AND ITS FOLDER, each told as the name it is.
+            t.t_args_marked(
                 key::PLAYER_SAVING,
-                &[("name", "Film night.rset"), ("folder", &shown_path(&music))],
-            ),
+                &[
+                    ("name", ronoctua_i18n::Arg::Name("Film night.rset")),
+                    ("folder", ronoctua_i18n::Arg::Name(&shown_path(&music))),
+                ],
+            )
+            .into(),
         );
         assert_eq!(v.key(Press::Enter, Some(&s), 80, &t), saving);
         assert_eq!(v.page(), PageId::Home, "the picker closes on the save");
@@ -9302,7 +10018,11 @@ mod tests {
             v.key(Press::Enter, Some(&s), 80, &t),
             Errand::TellSaying(
                 put(to.to_string_lossy().into_owned(), true),
-                t.t_with(key::PLAYER_PLAYING_NOW, &[("name", "Film night.rset")])
+                t.t_args_marked(
+                    key::PLAYER_PLAYING_NOW,
+                    &[("name", ronoctua_i18n::Arg::Name("Film night.rset"))]
+                )
+                .into()
             )
         );
         assert_eq!(v.page(), PageId::Home, "the page closes on the choice");
@@ -9324,7 +10044,11 @@ mod tests {
                     replace: true,
                     once: false,
                 },
-                t.t_with(key::PLAYER_QUEUE_OPENED, &[("name", "Week.rqueue")])
+                t.t_args_marked(
+                    key::PLAYER_QUEUE_OPENED,
+                    &[("name", ronoctua_i18n::Arg::Name("Week.rqueue"))]
+                )
+                .into()
             )
         );
         // A NAME TYPED FROM NO QUESTION (`LEADER :` with an argument) opens
@@ -9410,12 +10134,12 @@ mod tests {
         // AN OLDER PLAYER drops what it cannot read: its door says that.
         let t = texts();
         assert_eq!(
-            told_sentence(&Told::Unheard, true, &t),
-            Some(t.t(crate::key::PLAYER_OLD_DAEMON))
+            told_sentence(&Told::Unheard, true, &t).as_deref(),
+            Some(t.t(crate::key::PLAYER_OLD_DAEMON).as_str())
         );
         assert_eq!(
-            told_sentence(&Told::Unheard, false, &t),
-            Some(t.t(crate::key::PLAYER_NOT_RUNNING))
+            told_sentence(&Told::Unheard, false, &t).as_deref(),
+            Some(t.t(crate::key::PLAYER_NOT_RUNNING).as_str())
         );
         assert_eq!(told_sentence(&Told::Working, false, &t), None);
     }

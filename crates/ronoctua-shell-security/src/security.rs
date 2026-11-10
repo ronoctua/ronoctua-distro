@@ -1310,8 +1310,9 @@ pub enum Errand {
     Show(Section),
     /// Open an address in the browser.
     Url(String),
-    /// Say this on the door's line.
-    Say(String),
+    /// Say this on the door's line — a name it quotes told, so the line
+    /// draws it in a name's ink.
+    Say(crate::chrome::Named),
     /// Hand this seal to the queue on a thread ([`Job::Seal`]), and say
     /// what it answered.
     Seal(crate::report::SealDoing),
@@ -2065,11 +2066,16 @@ impl View {
     /// The page's own question, "no" first, the cursor born on it.
     fn question(&self, b: &mut Lines<'_>, confirm: &Confirm) {
         let (sentence, warning) = match confirm {
+            // THE FILE IS A NAME the question quotes (`Arg::Name`), told as
+            // every name is; the question is drawn in a title's ink, which a
+            // name shares (`chrome::quoted_ink`), so only the words go.
             Confirm::Upload { path, .. } => (
-                b.texts.t_with(
-                    key::SECURITY_VT_ASK_UPLOAD,
-                    &[("file", &path.to_string_lossy())],
-                ),
+                b.texts
+                    .t_args_marked(
+                        key::SECURITY_VT_ASK_UPLOAD,
+                        &[("file", Arg::Name(&path.to_string_lossy()))],
+                    )
+                    .text,
                 Some(b.t(key::SECURITY_VT_UPLOAD_WARNING)),
             ),
             Confirm::RemoveFinger(f) => (
@@ -2079,11 +2085,16 @@ impl View {
                 ),
                 None,
             ),
+            // THE KEY'S HANDLE IS A NAME the question quotes (`Arg::Name`),
+            // told as every name is; the question is drawn in a title's ink,
+            // which a name shares (`chrome::quoted_ink`), so only the words go.
             Confirm::RemoveKey(credential) => (
-                b.texts.t_with(
-                    key::SECURITY_KEYS_ASK_REMOVE,
-                    &[("key", &key_shown(credential))],
-                ),
+                b.texts
+                    .t_args_marked(
+                        key::SECURITY_KEYS_ASK_REMOVE,
+                        &[("key", Arg::Name(&key_shown(credential)))],
+                    )
+                    .text,
                 Some(b.t(key::SECURITY_KEYS_REMOVE_WARNING)),
             ),
         };
@@ -2929,7 +2940,7 @@ impl View {
                 Some(Act::Finger(f)) => self.act(Act::Finger(f), scene, texts),
                 // A KEY, asked first as `RET` on it asks.
                 Some(Act::Key(credential)) => self.act(Act::Key(credential), scene, texts),
-                _ => Errand::Say(texts.t(key::ECHO_SECURITY_NOTHING_TO_DELETE)),
+                _ => Errand::Say(texts.t(key::ECHO_SECURITY_NOTHING_TO_DELETE).into()),
             },
             Press::Enrol => self.act(Act::Enrol, scene, texts),
         }
@@ -3014,7 +3025,7 @@ impl View {
                 if self.registering {
                     Errand::Nothing
                 } else if scene.keys.len() >= ronoctua_security::u2f::MOST_KEYS {
-                    Errand::Say(keys_full(texts))
+                    Errand::Say(keys_full(texts).into())
                 } else {
                     self.registering = true;
                     // ITS ROW BECOMES THE LINE THAT ASKS FOR THE TOUCH: the
@@ -3050,9 +3061,11 @@ impl View {
             }
             // NO READER, NO PASSWORD ASKED: the refusal is said before the
             // door is knocked on, not after somebody typed for nothing.
-            Act::Enrol if scene.reader.is_none() => {
-                Errand::Say(texts.t(crate::security_words::refusal(Why::NoReader)))
-            }
+            Act::Enrol if scene.reader.is_none() => Errand::Say(
+                texts
+                    .t(crate::security_words::refusal(Why::NoReader))
+                    .into(),
+            ),
             Act::Enrol => match self.offered(scene) {
                 Some(f) => {
                     self.step = None;
@@ -3170,7 +3183,7 @@ impl View {
                         }
                         None => settings.rules.push(rule.clone()),
                     }),
-                    None => Errand::Say(texts.t(key::ECHO_SECURITY_RULE_NOT_UNDERSTOOD)),
+                    None => Errand::Say(texts.t(key::ECHO_SECURITY_RULE_NOT_UNDERSTOOD).into()),
                 }
             }
             VT_KEY => Errand::KeepKey(Secret::new(text.trim())),
@@ -3236,8 +3249,9 @@ impl View {
                 },
                 None => Outcome::quiet(),
             },
+            // AN EXPLANATION CARRIED AS DATA, its names told (`said_of`).
             Came::SealHanded(e) => Outcome {
-                say: Some(texts.t_with(e.key, &e.borrowed())),
+                say: Some(crate::chrome::said_of(texts, &e)),
                 ..Outcome::quiet()
             },
             Came::Scene(fresh) => {
@@ -3257,7 +3271,7 @@ impl View {
                     if word == ronoctua_private::STARTED && w.touches() {
                         self.vault_started = true;
                         return Outcome {
-                            say: Some(texts.t(key::SECURITY_PRIVATE_TOUCH)),
+                            say: Some(texts.t(key::SECURITY_PRIVATE_TOUCH).into()),
                             ..Outcome::quiet()
                         };
                     }
@@ -3287,7 +3301,7 @@ impl View {
                         use ronoctua_security::u2f::{MOST_KEYS, with_key};
                         let credentials = with_key(&scene.keys, &credential);
                         let errand = if credentials.len() > MOST_KEYS {
-                            Errand::Say(keys_full(texts))
+                            Errand::Say(keys_full(texts).into())
                         } else {
                             Errand::Door(Work::Keys {
                                 change: KeyChange::Register,
@@ -3301,7 +3315,7 @@ impl View {
                         }
                     }
                     Err(why) => Outcome {
-                        say: Some(texts.t(crate::security_words::refusal(why))),
+                        say: Some(texts.t(crate::security_words::refusal(why)).into()),
                         ..Outcome::quiet()
                     },
                 }
@@ -3315,7 +3329,7 @@ impl View {
                             self.step = None;
                         }
                         Outcome {
-                            say: Some(texts.t(work.done_key())),
+                            say: Some(texts.t(work.done_key()).into()),
                             errand: Errand::Nothing,
                             read: true,
                             show: false,
@@ -3335,7 +3349,8 @@ impl View {
                         Outcome {
                             say: Some(
                                 texts
-                                    .t(said.unwrap_or_else(|| crate::security_words::refusal(why))),
+                                    .t(said.unwrap_or_else(|| crate::security_words::refusal(why)))
+                                    .into(),
                             ),
                             errand: Errand::Nothing,
                             read: true,
@@ -3346,8 +3361,8 @@ impl View {
             }
             Came::Shields(result) => Outcome {
                 say: Some(match result {
-                    Ok(()) => texts.t(key::ECHO_SECURITY_SHIELDS_UP),
-                    Err(why) => texts.t(crate::security_words::refusal(why)),
+                    Ok(()) => texts.t(key::ECHO_SECURITY_SHIELDS_UP).into(),
+                    Err(why) => texts.t(crate::security_words::refusal(why)).into(),
                 }),
                 errand: Errand::Nothing,
                 read: true,
@@ -3396,23 +3411,29 @@ impl View {
                     show: true,
                 }
             }
+            // THE FILE IS A NAME the verdict quotes (`Arg::Name`), as the
+            // upload's sentence tells it; and a refusal tells its service.
             Ok((_, ronoctua_lookup::virustotal::Checked::Known(report))) => Outcome {
-                say: Some(texts.t_with(
-                    key::ECHO_SECURITY_FILE_CHECKED,
-                    &[
-                        ("file", &path.to_string_lossy()),
-                        (
-                            "verdict",
-                            &crate::security_words::verdict(report.stats, texts),
-                        ),
-                    ],
-                )),
+                say: Some(
+                    texts
+                        .t_args_marked(
+                            key::ECHO_SECURITY_FILE_CHECKED,
+                            &[
+                                ("file", Arg::Name(&path.to_string_lossy())),
+                                (
+                                    "verdict",
+                                    Arg::Text(&crate::security_words::verdict(report.stats, texts)),
+                                ),
+                            ],
+                        )
+                        .into(),
+                ),
                 errand: Errand::Nothing,
                 read: true,
                 show: false,
             },
             Err(r) => Outcome {
-                say: Some(crate::security_words::lookup_refusal(r, texts)),
+                say: Some(crate::security_words::lookup_named(r, texts)),
                 errand: Errand::Nothing,
                 read: false,
                 show: false,
@@ -3508,8 +3529,8 @@ impl View {
 /// What a door does after [`View::came`].
 #[derive(Debug)]
 pub struct Outcome {
-    /// A sentence for the door's line.
-    pub say: Option<String>,
+    /// A sentence for the door's line, a name it quotes told.
+    pub say: Option<crate::chrome::Named>,
     /// What to do next.
     pub errand: Errand,
     /// Read the scene again.
@@ -3789,20 +3810,24 @@ impl View {
             return Errand::Nothing;
         }
         let cap_of = |text: &str| match ronoctua_private::parse_size(text) {
-            None => Err(Errand::Say(texts.t(key::ECHO_PRIVATE_NOT_A_SIZE))),
-            Some(c) if c < ronoctua_private::MIN_CAP_BYTES => Err(Errand::Say(texts.t_with(
-                key::ECHO_PRIVATE_TOO_SMALL,
-                &[(
-                    "size",
-                    &crate::sizes::readable_bytes(
-                        ronoctua_private::MIN_CAP_BYTES,
-                        texts.decimal_mark(),
-                    ),
-                )],
-            ))),
+            None => Err(Errand::Say(texts.t(key::ECHO_PRIVATE_NOT_A_SIZE).into())),
+            Some(c) if c < ronoctua_private::MIN_CAP_BYTES => Err(Errand::Say(
+                texts
+                    .t_with(
+                        key::ECHO_PRIVATE_TOO_SMALL,
+                        &[(
+                            "size",
+                            &crate::sizes::readable_bytes(
+                                ronoctua_private::MIN_CAP_BYTES,
+                                texts.decimal_mark(),
+                            ),
+                        )],
+                    )
+                    .into(),
+            )),
             Some(c) => Ok(c),
         };
-        let mismatch = || Errand::Say(texts.t(key::ECHO_PRIVATE_MISMATCH));
+        let mismatch = || Errand::Say(texts.t(key::ECHO_PRIVATE_MISMATCH).into());
         match (id, asking) {
             (CAP, Asking::Create { .. }) => match cap_of(text) {
                 Ok(cap) => {
@@ -3899,8 +3924,8 @@ impl View {
         use crate::vault::Act as V;
         use ronoctua_private::State;
         match vault_status(scene) {
-            Err(()) => Errand::Say(texts.t(key::SECURITY_PRIVATE_UNREADABLE)),
-            Ok(None) => Errand::Say(texts.t(key::SECURITY_PRIVATE_MISSING)),
+            Err(()) => Errand::Say(texts.t(key::SECURITY_PRIVATE_UNREADABLE).into()),
+            Ok(None) => Errand::Say(texts.t(key::SECURITY_PRIVATE_MISSING).into()),
             Ok(Some(s)) => match s.state {
                 State::Absent => Errand::Show(Section::Private),
                 State::Open => Errand::Command("private-show"),
@@ -3915,13 +3940,15 @@ impl View {
     pub fn private_lock(&mut self, scene: &Scene, texts: &ronoctua_i18n::Texts) -> Errand {
         use ronoctua_private::{State, Why as V};
         match vault_status(scene) {
-            Err(()) => Errand::Say(texts.t(key::SECURITY_PRIVATE_UNREADABLE)),
-            Ok(None) => Errand::Say(texts.t(key::SECURITY_PRIVATE_MISSING)),
+            Err(()) => Errand::Say(texts.t(key::SECURITY_PRIVATE_UNREADABLE).into()),
+            Ok(None) => Errand::Say(texts.t(key::SECURITY_PRIVATE_MISSING).into()),
             Ok(Some(s)) => match s.state {
                 State::Open => self.vault_act(crate::vault::Act::Lock, scene),
-                State::SuspendedInUse => Errand::Say(texts.t(crate::vault::refusal(V::Busy))),
-                State::Absent => Errand::Say(texts.t(crate::vault::refusal(V::Absent))),
-                State::Locked => Errand::Say(texts.t(key::ECHO_PRIVATE_ALREADY_LOCKED)),
+                State::SuspendedInUse => {
+                    Errand::Say(texts.t(crate::vault::refusal(V::Busy)).into())
+                }
+                State::Absent => Errand::Say(texts.t(crate::vault::refusal(V::Absent)).into()),
+                State::Locked => Errand::Say(texts.t(key::ECHO_PRIVATE_ALREADY_LOCKED).into()),
             },
         }
     }
@@ -4191,7 +4218,7 @@ impl View {
             return Errand::Nothing;
         };
         match h.pasted(text) {
-            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Say(e) => Errand::Say(crate::chrome::said_of(texts, &e)),
             _ => Errand::Nothing,
         }
     }
@@ -4277,7 +4304,7 @@ impl View {
                 self.open_at = Some(Target::Section(Section::Encrypt));
                 Errand::Nothing
             }
-            Hosting::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Hosting::Say(e) => Errand::Say(crate::chrome::said_of(texts, &e)),
             Hosting::Paste => Errand::Paste,
             Hosting::Picked(pick, Picked::Paths { paths, .. }) => {
                 self.picking = None;
@@ -4322,15 +4349,20 @@ impl View {
         &mut self,
         report: &crate::report::SealReport,
         texts: &ronoctua_i18n::Texts,
-    ) -> Option<String> {
+    ) -> Option<crate::chrome::Named> {
         crate::seal::job_ended(&mut self.seal_sent, report)?;
         let crate::report::SealReport::Refused { from, why, .. } = report else {
             return None;
         };
-        Some(texts.t_with(
-            crate::seal::why_key(*why),
-            &[("name", &crate::seal::name_of(from))],
-        ))
+        // THE FILE IS A NAME the refusal quotes (`Arg::Name`).
+        Some(
+            texts
+                .t_args_marked(
+                    crate::seal::why_key(*why),
+                    &[("name", Arg::Name(&crate::seal::name_of(from)))],
+                )
+                .into(),
+        )
     }
 
     fn seal_next(&mut self, next: crate::seal::Next, texts: &ronoctua_i18n::Texts) -> Errand {
@@ -4355,7 +4387,7 @@ impl View {
                 self.seal_sent.record(&doing);
                 Errand::Seal(doing)
             }
-            Next::Say(e) => Errand::Say(texts.t_with(e.key, &e.borrowed())),
+            Next::Say(e) => Errand::Say(crate::chrome::said_of(texts, &e)),
         }
     }
 }
@@ -4546,16 +4578,27 @@ fn privacy(b: &mut Lines<'_>, scene: &Scene) {
         let mac = Mac::ALL.into_iter().find(|m| m.id() == link.mac);
         let dns = Tls::ALL.into_iter().find(|t| t.id() == link.dns);
         let unknown = b.t(key::SECURITY_UNKNOWN);
+        // THE LINK IS A NAME (`Arg::Name`), told as every name is; a row's
+        // label wears its `Kind`'s tones (`labels-say-what-they-are`), so
+        // only the words go.
         b.pair(
             &b.texts
-                .t_with(key::SECURITY_PRIVACY_MAC, &[("name", &link.name)]),
+                .t_args_marked(
+                    key::SECURITY_PRIVACY_MAC,
+                    &[("name", Arg::Name(&link.name))],
+                )
+                .text,
             &mac.map_or_else(|| unknown.clone(), |m| b.t(crate::security_words::mac(m))),
             None,
             (mac == Some(Mac::Permanent)).then_some(tokens::color::STATE_WARNING),
         );
         b.pair(
             &b.texts
-                .t_with(key::SECURITY_PRIVACY_DNS, &[("name", &link.name)]),
+                .t_args_marked(
+                    key::SECURITY_PRIVACY_DNS,
+                    &[("name", Arg::Name(&link.name))],
+                )
+                .text,
             &dns.map_or(unknown, |t| b.t(crate::security_words::dns(t))),
             None,
             (dns == Some(Tls::No)).then_some(tokens::color::STATE_WARNING),
@@ -5089,15 +5132,26 @@ pub fn forget_key(texts: &ronoctua_i18n::Texts) -> String {
 }
 
 /// Queues a file's upload on the transfer queue, and says how it went.
+/// The file is a name the sentence quotes (`Arg::Name`), drawn in a name's
+/// ink.
 #[must_use]
-pub fn queue_upload(path: PathBuf, sha256: String, texts: &ronoctua_i18n::Texts) -> String {
+pub fn queue_upload(
+    path: PathBuf,
+    sha256: String,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     let name = path.to_string_lossy().into_owned();
     let work = ronoctua_transfers::Work::Scan { path, sha256 };
     match ronoctua_transfers::client::tell(&ronoctua_transfers::Ask::Add { work }) {
-        Ok(()) => texts.t_with(key::ECHO_SECURITY_UPLOAD_QUEUED, &[("file", &name)]),
+        Ok(()) => texts
+            .t_args_marked(
+                key::ECHO_SECURITY_UPLOAD_QUEUED,
+                &[("file", Arg::Name(&name))],
+            )
+            .into(),
         Err(e) => {
             tracing::warn!(error = %e, "the transfer queue did not take the upload");
-            texts.t(key::TRANSFERS_OFFLINE)
+            texts.t(key::TRANSFERS_OFFLINE).into()
         }
     }
 }
@@ -5172,7 +5226,7 @@ pub fn home_errand(scene: &Scene, texts: &ronoctua_i18n::Texts) -> Errand {
         .map(|s| ronoctua_security::firewall::public_unplaced(s, &links))
         .unwrap_or_default();
     match waiting.as_slice() {
-        [] => Errand::Say(texts.t(key::ECHO_SECURITY_NO_NEW_NETWORK)),
+        [] => Errand::Say(texts.t(key::ECHO_SECURITY_NO_NEW_NETWORK).into()),
         [(uuid, _)] => {
             let uuid = uuid.clone();
             changed(scene, texts, |settings| {
@@ -5198,7 +5252,7 @@ fn changed(
             change(&mut settings);
             Errand::Door(Work::Firewall(Box::new(settings)))
         }
-        Err(why) => Errand::Say(texts.t(crate::security_words::refusal(why))),
+        Err(why) => Errand::Say(texts.t(crate::security_words::refusal(why)).into()),
     }
 }
 
@@ -5281,7 +5335,7 @@ fn keys_with(change: KeyChange, credentials: &[String], texts: &ronoctua_i18n::T
     if credentials.is_empty() {
         Errand::Nothing
     } else if credentials.len() > ronoctua_security::u2f::MOST_KEYS {
-        Errand::Say(keys_full(texts))
+        Errand::Say(keys_full(texts).into())
     } else {
         Errand::Door(Work::Keys {
             change,
@@ -5645,7 +5699,10 @@ mod tests {
                 "{why:?}: {:?}",
                 out.errand
             );
-            assert_eq!(out.say, Some(t.t(crate::security_words::refusal(why))));
+            assert_eq!(
+                out.say,
+                Some(t.t(crate::security_words::refusal(why)).into())
+            );
         }
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let gate = crate::sudo::Gate::fake(std::sync::Arc::clone(&log), Ok(()));
@@ -6279,7 +6336,7 @@ mod tests {
         let out = v.came(Came::Registered(Err(Why::NoKey)), &mut s, &t);
         assert_eq!(
             out.say,
-            Some(t.t(crate::security_words::refusal(Why::NoKey)))
+            Some(t.t(crate::security_words::refusal(Why::NoKey)).into())
         );
         // FULL: never a ninth.
         let full: Vec<String> = (0..ronoctua_security::u2f::MOST_KEYS)

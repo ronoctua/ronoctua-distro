@@ -8,6 +8,7 @@
 
 use crate::player::Errand;
 use crate::player_machines::{Code, Pairing};
+use ronoctua_i18n::Arg;
 use ronoctua_player::wire::{Ask, Thing};
 
 /// The command that plays a path or an address now — right after what plays,
@@ -198,18 +199,23 @@ fn told(ask: Ask, texts: &ronoctua_i18n::Texts) -> Errand {
         )
     };
     let sentence = match &ask {
-        Ask::AddLane { source, .. } => {
-            texts.t_with(key::PLAYER_TOGETHER_ADDED, &[("name", &name(source))])
-        }
+        Ask::AddLane { source, .. } => texts
+            .t_args_marked(
+                key::PLAYER_TOGETHER_ADDED,
+                &[("name", Arg::Name(&name(source)))],
+            )
+            .into(),
         Ask::Put { what, play, .. } => match what.as_slice() {
-            [Thing::Location(one)] => texts.t_with(
-                if *play {
-                    key::PLAYER_PLAYING_NOW
-                } else {
-                    key::PLAYER_ADDED
-                },
-                &[("name", &name(one))],
-            ),
+            [Thing::Location(one)] => texts
+                .t_args_marked(
+                    if *play {
+                        key::PLAYER_PLAYING_NOW
+                    } else {
+                        key::PLAYER_ADDED
+                    },
+                    &[("name", Arg::Name(&name(one)))],
+                )
+                .into(),
             _ => return Errand::Tell(ask),
         },
         _ => return Errand::Tell(ask),

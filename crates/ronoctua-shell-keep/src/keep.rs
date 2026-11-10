@@ -75,7 +75,8 @@ pub enum NotChanged {
 
 impl NotChanged {
     /// Its sentence, as a key and its arguments — what the file manager's
-    /// line takes.
+    /// line takes, and what every door says it through
+    /// (`chrome::said_of`, which tells the file it quotes as a name).
     #[must_use]
     pub fn explanation(&self) -> Explanation {
         match self {
@@ -86,13 +87,6 @@ impl NotChanged {
                 args: vec![("file", prefs::FILE.to_owned()), ("why", why.to_string())],
             },
         }
-    }
-
-    /// Its sentence.
-    #[must_use]
-    pub fn sentence(&self, texts: &ronoctua_i18n::Texts) -> String {
-        let e = self.explanation();
-        texts.t_with(e.key, &e.borrowed())
     }
 }
 
@@ -176,18 +170,27 @@ pub fn keep_under(places: &Places, paths: &[PathBuf]) -> Explanation {
     if let Err(why) = changed {
         return why.explanation();
     }
-    let name = if logical.len() == 1 {
-        shown_path(&logical[0], Some(places), false)
+    // ONE PATH IS A NAME, and several a COUNT — a sentence of its own,
+    // because a count is not a name (the file manager tells every `name` it
+    // says as one).
+    if let [one] = logical.as_slice() {
+        Explanation {
+            key: if all_kept {
+                key::BELONGINGS_STOPPED_KEEPING
+            } else {
+                key::BELONGINGS_NOW_KEPT
+            },
+            args: vec![("name", shown_path(one, Some(places), false))],
+        }
     } else {
-        logical.len().to_string()
-    };
-    Explanation {
-        key: if all_kept {
-            key::BELONGINGS_STOPPED_KEEPING
-        } else {
-            key::BELONGINGS_NOW_KEPT
-        },
-        args: vec![("name", name)],
+        Explanation {
+            key: if all_kept {
+                key::BELONGINGS_STOPPED_KEEPING_MANY
+            } else {
+                key::BELONGINGS_NOW_KEPT_MANY
+            },
+            args: vec![("n", logical.len().to_string())],
+        }
     }
 }
 

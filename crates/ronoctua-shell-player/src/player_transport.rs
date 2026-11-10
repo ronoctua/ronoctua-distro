@@ -155,7 +155,7 @@ pub const fn stepped_volume(now: u8, up: bool) -> u8 {
 #[must_use]
 pub fn volume_step(s: Option<&State>, up: bool, texts: &ronoctua_i18n::Texts) -> Errand {
     s.map_or_else(
-        || Errand::Said(texts.t(crate::key::PLAYER_NOT_RUNNING)),
+        || Errand::Said(texts.t(crate::key::PLAYER_NOT_RUNNING).into()),
         |s| {
             Errand::Tell(Ask::Volume {
                 percent: stepped_volume(s.volume, up),
@@ -218,7 +218,7 @@ pub fn seek_errand(ahead: bool, texts: &ronoctua_i18n::Texts) -> Errand {
             seconds: if ahead { step } else { -step },
             relative: true,
         },
-        seek_said(ahead, texts),
+        seek_said(ahead, texts).into(),
     )
 }
 

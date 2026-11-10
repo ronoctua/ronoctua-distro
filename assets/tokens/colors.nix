@@ -733,6 +733,46 @@
       named = {
         of = "group.text";
       };
+      # A NAME QUOTED IN WHAT THE MINIBUFFER AND A WINDOW'S FIRST LINE SAY
+      # (owner, 2026-11-10) — the same ask as `text.quoted` (see there), in
+      # the discreet register: the sentence's own `subtle.text`, its hue
+      # turned a little over half of the way at its own lightness. Not
+      # `named` beside it, which is a mark's name told to the pointer and as
+      # loud as a key; and not the group's purple the content's names turn
+      # to, because owl's `subtle.text` already leans to it and the turn
+      # would be the sentence again.
+      #
+      # TOWARD THE DEVICE'S FADED BLUE, AND NOT THE AZURE IT WAS DRAWN WITH.
+      # This register is the most crowded line of the system — a key, a
+      # guest, the `⌥`, the sentence under it, a mark's name and value — and
+      # its sentence has little colour to turn (a chroma of 0.03–0.04), so
+      # where the turn lands is decided by the hue it turns to. The azure is
+      # a content hue each seed places for its own syntax, and measured over
+      # the 44 palettes half of the way came 0.026 from the sentence
+      # (flashbang's backdrop) and further would have come under 0.025 from
+      # the mark's purple in cyber, whose azure leans to it. The device's
+      # family is a faded blue every seed places for the modeline: hue 235 in
+      # ten of them (frost's is 250, its greys being blue already, and
+      # flashbang's carries more colour for the same reason).
+      #
+      # AND ONLY A LITTLE OVER HALF OF THE WAY, because that blue is the
+      # Bluetooth device's mark on the modeline right above the echo, and a
+      # hue at the same lightness is a KIND of thing: seven tenths of the
+      # way came 0.021 from it (owl), and a name in the echo would have worn
+      # the device's kind. The turn has a narrow room between its two ends —
+      # the sentence on one side, the device on the other — and at 0.55 the
+      # device keeps its warn line in every theme (0.030 at the nearest,
+      # owl), the mark's purple too (0.030, cyber), and the one shortfall
+      # falls on the side of discretion: 0.029 from the sentence in
+      # papyrus's backdrop. Its other close neighbour is the cool grey of the
+      # sentence under a hint line, a hue it shares and a lightness it does
+      # not — never drawn on the echo's line (`gen-theme.py` says by how
+      # much, and holds every one of these apart).
+      quoted = {
+        of = "subtle.text";
+        toward = "device.text";
+        mix = 0.55;
+      };
       figure = {
         of = "orange.text";
         chroma = 1.5;
@@ -921,6 +961,53 @@
       of = "neutral.text";
       toward = "follow.text";
       mix = 0.40;
+    };
+
+    # A NAME QUOTED IN A SENTENCE — a video's title in "Delete …?", a file in
+    # "Renamed … to …", a host, a channel (owner, 2026-11-10): a discreet
+    # colour of its own, near the text's and told from it, in the whole
+    # distro. The sentence marks its names itself (`ronoctua_i18n::Arg::Name`),
+    # and the kit picks the ink by the sentence's own (`chrome::quoted_ink`):
+    # one quoted tone for each of the content's three rungs, so a name in a
+    # window's message, in a page's note and in a quiet note sits beside the
+    # words it is read with.
+    #
+    # A STEP OF THE WAY, as `listening` above: each theme's own text rung,
+    # its hue turned four fifths of the way toward the group's purple
+    # at the SAME lightness — so the name keeps its sentence's weight and
+    # only its colour moves. A louder or quieter name would read as more or
+    # less important than the sentence it is in, and it is neither; it is
+    # another KIND of word, which in this palette is a hue. The group's,
+    # because it is already what the system draws "a name" in
+    # (`text.subtle.named`, a mark's name for its thing), and every one of
+    # the eleven themes holds it well off its grey ramp (0.055 at the
+    # nearest, cyber), which is what a hue turned part of the way needs to
+    # read as one.
+    #
+    # NEVER IN A WARNING OR AN ERROR: danger is a colour, the whole sentence
+    # wears it, and a second hue inside it would weaken the alarm — that is
+    # the kit's table, not a recipe here. Told from the sentence (and held
+    # close to it), from the cursor, the accent, an action's label and a
+    # heading by the gates (`gen-theme.py`, `QUOTED_NEAR`).
+    quoted = {
+      # beside `text.primary`: the message at a window's foot.
+      strong = {
+        of = "neutral.text-strong";
+        toward = "group.text";
+        mix = 0.8;
+      };
+      # beside `text.secondary`: a page's note.
+      default = {
+        of = "neutral.text";
+        toward = "group.text";
+        mix = 0.8;
+      };
+      # beside `text.dim`: a quiet note.
+      faint = {
+        of = "neutral.text-muted";
+        toward = "group.text";
+        mix = 0.8;
+      };
     };
 
     # HOW A TASK STANDS, OR HOW A RUN ENDED — the brain's last column, and the
@@ -1654,6 +1741,19 @@
     # WHAT IS TYPED: read letter by letter while it is being written, so a
     # loud text step, coloured — never the content's white.
     typed = "reply.text-loud";
+    # A NAME QUOTED IN THE QUESTION — the video in "Delete …?" (owner,
+    # 2026-11-10; see `text.quoted`): the question's own solid with seven
+    # tenths of its colour, a step lighter (Lc +6). Less colour alone, at the
+    # same contrast, stayed too near the question to be seen at 1×, and any
+    # less than seven tenths drifts into the headings' purple in flashbang;
+    # the step of light is what tells it. Close to the question, so the line
+    # still reads as one thing that waits, and told from it — and from what
+    # is typed beside it — by the gates.
+    quoted = {
+      of = "question.solid";
+      chroma = 0.70;
+      shift = 6;
+    };
   };
 
 }

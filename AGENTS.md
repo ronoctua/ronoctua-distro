@@ -612,6 +612,9 @@ OSC 7501, que o guardião lê.
 - Dois rótulos de uma vista não dizem a mesma coisa (cobra `labels-of-a-view-are-distinct`).
 - Separador só sai de `chrome::rule`/`chrome::divider` (cobra `separators-come-from-chrome`); o texto
   recua por `chrome::INSET`, régua e seleção vão de borda a borda.
+- Um nome citado numa frase (título, arquivo, host) é dito pela chamada (`Arg::Name` em
+  `t_args_marked`, nunca achado pelo valor), viaja como `chrome::Named` e veste a tinta `quoted` da
+  tinta da frase (`chrome::quoted_ink`); numa frase de perigo, a do perigo.
 - Perigo é cor, não outro desenho. A modeline em repouso é muda: uma marca só existe quando diz algo.
 
 <!-- anchor: L11 -->
@@ -670,6 +673,9 @@ OSC 7501, que o guardião lê.
 - Pergunta que aparece sozinha, ou sobre algo que não se desfaz, desenha o `não` primeiro; a que um
   clique abre nasce sob o ponteiro, o primeiro clique seleciona e o segundo responde (`aim::Aim`,
   `files::Picker::aimed`).
+- Pergunta no meio de uma página é um bloco (`chrome::question_lines`): ar, um chão `surface.header`
+  de borda a borda sob a frase e as respostas recuadas, ar; o "sim" na cor do que custa
+  (`chrome::Stakes`, `answer_tone`), e o primeiro clique no `não` nascido só o escolhe.
 - Recusa é um valor com frase, nunca ausência: painel vazio e painel recusado são iguais na tela.
   Opção que ainda não faz nada diz isso, em vez de parecer funcionar.
 - Nada automático pergunta: sem agente polkit, toda chamada leva `auth.no_user_interaction`, e

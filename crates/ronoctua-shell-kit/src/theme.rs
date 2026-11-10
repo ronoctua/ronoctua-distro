@@ -728,23 +728,34 @@ impl Complaint {
 
     /// The sentence the footer's line says (invariant 8: the frame is a text
     /// key; the file's name, its key and what it said are the file's own
-    /// words, carried as they are).
+    /// words, carried as they are) — the file told as the name it quotes
+    /// (`ronoctua_i18n::Arg::Name`), drawn in a name's ink.
     #[must_use]
-    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> String {
+    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+        use ronoctua_i18n::Arg;
         match self {
-            Self::Unreadable(error) => texts.t_with(
+            Self::Unreadable(error) => texts.t_args_marked(
                 crate::key::ECHO_THEME_UNREADABLE,
-                &[("file", FILE), ("error", error)],
+                &[("file", Arg::Name(FILE)), ("error", Arg::Text(error))],
             ),
-            Self::Unknown { field, value } => texts.t_with(
+            Self::Unknown { field, value } => texts.t_args_marked(
                 crate::key::ECHO_THEME_REFUSED,
-                &[("file", FILE), ("field", field), ("value", value)],
+                &[
+                    ("file", Arg::Name(FILE)),
+                    ("field", Arg::Text(field)),
+                    ("value", Arg::Text(value)),
+                ],
             ),
-            Self::UnknownDefault(id) => texts.t_with(
+            Self::UnknownDefault(id) => texts.t_args_marked(
                 crate::key::ECHO_THEME_REFUSED,
-                &[("file", theme::ENV), ("field", "theme"), ("value", id)],
+                &[
+                    ("file", Arg::Name(theme::ENV)),
+                    ("field", Arg::Text("theme")),
+                    ("value", Arg::Text(id)),
+                ],
             ),
         }
+        .into()
     }
 }
 
@@ -885,17 +896,28 @@ pub enum NotWritten {
 
 impl NotWritten {
     /// The sentence the footer's line says (invariant 8: the frame is a text
-    /// key; the file's name and the reason are carried as they are).
+    /// key; the file's name and the reason are carried as they are) — the
+    /// file told as the name it quotes. The reason goes in as the words it
+    /// is: a sentence inside a sentence is one argument to the language, and
+    /// the names it quotes are still names
+    /// ([`crate::chrome::Named::with_inner`]).
     #[must_use]
-    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> String {
+    pub fn said(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+        use ronoctua_i18n::Arg;
         match self {
-            Self::Kept(why) => texts.t_with(
-                crate::key::ECHO_THEME_KEPT,
-                &[("file", FILE), ("why", &why.said(texts))],
-            ),
-            Self::Io(e) => {
-                texts.t_with(crate::key::ECHO_THEME_UNSAVED, &[("error", &e.to_string())])
+            Self::Kept(why) => {
+                let why = why.said(texts);
+                crate::chrome::Named::with_inner(
+                    texts.t_args_marked(
+                        crate::key::ECHO_THEME_KEPT,
+                        &[("file", Arg::Name(FILE)), ("why", Arg::Text(why.as_str()))],
+                    ),
+                    &why,
+                )
             }
+            Self::Io(e) => texts
+                .t_with(crate::key::ECHO_THEME_UNSAVED, &[("error", &e.to_string())])
+                .into(),
         }
     }
 }
@@ -1781,6 +1803,19 @@ mod tests {
             said.contains(FILE) && said.contains("borders") && said.contains("Discreet"),
             "{said}"
         );
+        // AND THE FILE IS THE NAME IT QUOTES, in a name's ink on the line —
+        // both times: the one this sentence names, and the one the reason
+        // inside it names, in every language.
+        let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(quoted, [FILE, FILE], "{said:?}");
+        let other = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
+        let said = NotWritten::Kept(Complaint::Unknown {
+            field: "borders",
+            value: "Discreet".to_owned(),
+        })
+        .said(&other);
+        let quoted: Vec<&str> = said.names().iter().map(|r| &said[r.clone()]).collect();
+        assert_eq!(quoted, [FILE, FILE], "{said:?}");
         let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 

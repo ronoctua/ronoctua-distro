@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(
             std::mem::take(&mut w.owed),
             vec![Effect::Say(
-                texts().t(crate::key::AGENTS_AGENT_ENDED),
+                texts().t(crate::key::AGENTS_AGENT_ENDED).into(),
                 crate::echo::Echo::Long
             )]
         );

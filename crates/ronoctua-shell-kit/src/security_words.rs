@@ -34,6 +34,16 @@ pub const fn refusal(why: Why) -> &'static str {
 /// Why an online check gave nothing, as a sentence that names the service.
 #[must_use]
 pub fn lookup_refusal(r: ronoctua_lookup::Refusal, texts: &ronoctua_i18n::Texts) -> String {
+    lookup_named(r, texts).into_text()
+}
+
+/// The same, with the service's name told (`ronoctua_i18n::Arg::Name`), for
+/// a door's line — where a name is drawn in a name's ink.
+#[must_use]
+pub fn lookup_named(
+    r: ronoctua_lookup::Refusal,
+    texts: &ronoctua_i18n::Texts,
+) -> crate::chrome::Named {
     use ronoctua_lookup::Why as W;
     let k = match r.why {
         W::NoKey => key::SECURITY_ONLINE_REFUSAL_NO_KEY,
@@ -47,7 +57,15 @@ pub fn lookup_refusal(r: ronoctua_lookup::Refusal, texts: &ronoctua_i18n::Texts)
         W::Unreadable | W::TooSmall => key::SECURITY_ONLINE_REFUSAL_UNREADABLE,
         W::NotLet => key::SECURITY_ONLINE_REFUSAL_NOT_LET,
     };
-    texts.t_with(k, &[("service", &texts.t(service_key(r.service)))])
+    texts
+        .t_args_marked(
+            k,
+            &[(
+                "service",
+                ronoctua_i18n::Arg::Name(&texts.t(service_key(r.service))),
+            )],
+        )
+        .into()
 }
 
 /// A lookup service's name — the security centre's three; the player's are
@@ -329,7 +347,8 @@ mod tests {
     }
 
     /// FAILS IF: a variant of a closed set has no words in a language — one
-    /// frame per variant of every enum that becomes a key.
+    /// frame per variant of every enum that becomes a key — or an online
+    /// refusal said on a door's line does not quote the service as a name.
     #[test]
     fn every_variant_has_words_in_every_language() {
         for language in ["en-GB", "pt-BR"] {
@@ -394,6 +413,22 @@ mod tests {
                 assert!(
                     !s.is_empty() && !s.starts_with('['),
                     "{language}: a missing key: {s}"
+                );
+            }
+            // AND A REFUSAL ON A DOOR'S LINE QUOTES THE SERVICE as a name —
+            // the same words, the service's name told wherever it is said
+            // (one sentence, an unreadable file, says none).
+            let service = t.t(service_key(ronoctua_lookup::Service::VirusTotal));
+            for why in ronoctua_lookup::Why::ALL {
+                let r = ronoctua_lookup::Refusal::new(ronoctua_lookup::Service::VirusTotal, why);
+                let named = lookup_named(r, &t);
+                assert_eq!(named.as_str(), lookup_refusal(r, &t), "{language}");
+                let quoted: Vec<&str> = named.names().iter().map(|n| &named[n.clone()]).collect();
+                let says = usize::from(named.contains(service.as_str()));
+                assert_eq!(
+                    quoted,
+                    vec![service.as_str(); says],
+                    "{language}: {named:?}"
                 );
             }
         }

@@ -33,6 +33,7 @@
 
 use crate::player::{Errand, Target, View};
 use crate::player_rows::{Builder, on_off};
+use ronoctua_i18n::Arg;
 use ronoctua_lookup::Service;
 use ronoctua_lookup::keys::Key;
 use ronoctua_player::find::Directory;
@@ -286,18 +287,28 @@ impl View {
         // person taps to consent NAMES who is asked, and a label is never cut
         // on these pages — it wraps (`chrome::aligned_pair`) — while a value
         // that carried the host was cut to `desligado (lrc…` in a narrow door.
+        //
+        // EACH HOST IS A NAME (`Arg::Name`), told as every name is; a row's
+        // label wears its `Kind`'s tones (`labels-say-what-they-are`), so
+        // only the words go.
         b.pair(
             b.texts
-                .t_with(key::PLAYER_LYRICS_ONLINE, &[("host", prefs::LRCLIB_HOST)]),
+                .t_args_marked(
+                    key::PLAYER_LYRICS_ONLINE,
+                    &[("host", ronoctua_i18n::Arg::Name(prefs::LRCLIB_HOST))],
+                )
+                .text,
             on_off(self.prefs.lyrics_online, b.texts),
             Target::LyricsOnline,
             "lyrics-online",
         );
         b.pair(
-            b.texts.t_with(
-                key::PLAYER_SPONSORBLOCK,
-                &[("host", prefs::SPONSORBLOCK_HOST)],
-            ),
+            b.texts
+                .t_args_marked(
+                    key::PLAYER_SPONSORBLOCK,
+                    &[("host", ronoctua_i18n::Arg::Name(prefs::SPONSORBLOCK_HOST))],
+                )
+                .text,
             on_off(self.prefs.sponsorblock, b.texts),
             Target::Sponsors,
             "sponsorblock",
@@ -333,9 +344,12 @@ impl View {
                 .iter()
                 .map(|s| b.t(crate::player::service_key(*s)))
                 .collect();
-            let hosts = b.texts.t_with(
+            // THE HOSTS UNDER THE ROW are names, each its own, as the host
+            // a key is sent to is (`player-key-sent-to`, below).
+            let hosts = crate::player_find::hosts_said(
                 key::PLAYER_CONSENT_HOSTS,
-                &[("hosts", &crate::player_find::hosts_of(services, b.texts))],
+                &crate::player_find::host_names(services),
+                b.texts,
             );
             // WHAT THE PLAYER DOES, and why: LRCLIB is asked by the switch
             // above as well as by a press — the row says it is allowed, and
@@ -344,12 +358,14 @@ impl View {
             let allowed = crate::player_find::allowed(&self.prefs, services);
             let by_the_switch = allowed && !consented(&self.prefs, services);
             let under = if by_the_switch {
-                [hosts, b.t(crate::key::PLAYER_CONSENT_BY_THE_SWITCH)]
-                    .join(&b.t(crate::key::PLAYER_META_JOINER))
+                hosts.then(
+                    &b.t(crate::key::PLAYER_META_JOINER),
+                    b.t(crate::key::PLAYER_CONSENT_BY_THE_SWITCH),
+                )
             } else {
                 hosts
             };
-            b.pair_under(
+            b.pair_under_named(
                 names.join(&joiner),
                 let_said(allowed, b.texts),
                 &under,
@@ -358,10 +374,9 @@ impl View {
             );
         }
         for d in Directory::ALL {
-            let hosts = b
-                .texts
-                .t_with(key::PLAYER_CONSENT_HOSTS, &[("hosts", d.host())]);
-            b.pair_under(
+            let hosts =
+                crate::player_find::hosts_said(key::PLAYER_CONSENT_HOSTS, &[d.host()], b.texts);
+            b.pair_under_named(
                 b.t(directory_key(d)),
                 let_said(self.prefs.allows_directory(d), b.texts),
                 &hosts,
@@ -376,11 +391,17 @@ impl View {
             .into_iter()
             .filter(|k| k.scope() == ronoctua_lookup::Scope::Player)
         {
-            let sent = b.texts.t_with(
-                key::PLAYER_KEY_SENT_TO,
-                &[("host", ronoctua_player::prefs::host_of(k.service()))],
-            );
-            b.pair_under(
+            let sent: crate::chrome::Named = b
+                .texts
+                .t_args_marked(
+                    key::PLAYER_KEY_SENT_TO,
+                    &[(
+                        "host",
+                        Arg::Name(ronoctua_player::prefs::host_of(k.service())),
+                    )],
+                )
+                .into();
+            b.pair_under_named(
                 key_label(k, b.texts),
                 b.t(if self.kept.has(k) {
                     key::PLAYER_KEY_KEPT
@@ -466,10 +487,14 @@ impl View {
             }
             (Target::Key(k), Press::Remove) => {
                 if !self.kept.has(*k) {
-                    return Some(Errand::Said(texts.t_with(
-                        crate::key::PLAYER_KEY_NOTHING_TO_FORGET,
-                        &[("what", &key_words(*k, texts))],
-                    )));
+                    return Some(Errand::Said(
+                        texts
+                            .t_with(
+                                crate::key::PLAYER_KEY_NOTHING_TO_FORGET,
+                                &[("what", &key_words(*k, texts))],
+                            )
+                            .into(),
+                    ));
                 }
                 let sentence = texts.t_with(
                     crate::key::PLAYER_ASK_FORGET_KEY,
@@ -756,12 +781,20 @@ mod tests {
         let s = State::default();
         let mut v = on_the_internet_page(&s);
         let rows = v.rows(Some(&s), 80, &t);
-        // A LABEL WRAPS onto the lines under its row: its words are all of
-        // them.
+        // A LABEL WRAPS onto the lines under its row, and the hosts are
+        // said under it: its words are all of them — a line under it read
+        // whole, its runs glued (a host among its words is a run of its own,
+        // `chrome::note_fields`), and of the row itself its label only.
         let label = |target: &Target| -> String {
             rows.iter()
                 .filter(|r| &r.target == target)
-                .flat_map(|r| r.fields.first().map(|f| f.text.clone()))
+                .map(|r| {
+                    if r.continues {
+                        r.fields.iter().map(|f| f.text.as_str()).collect()
+                    } else {
+                        r.fields.first().map(|f| f.text.clone()).unwrap_or_default()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         };

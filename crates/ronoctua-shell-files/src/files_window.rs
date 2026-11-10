@@ -383,11 +383,11 @@ impl crate::region::Doorway for WindowWay<'_> {
     fn photographing(&self) -> bool {
         crate::region::Doorway::photographing(&*self.ui)
     }
-    fn say(&mut self, text: String, class: crate::echo::Echo) {
-        crate::region::Doorway::say(self.ui, text, class);
+    fn say_named(&mut self, text: crate::chrome::Named, class: crate::echo::Echo) {
+        crate::region::Doorway::say_named(self.ui, text, class);
     }
-    fn hold(&mut self, text: String) {
-        crate::region::Doorway::hold(self.ui, text);
+    fn hold_named(&mut self, text: crate::chrome::Named) {
+        crate::region::Doorway::hold_named(self.ui, text);
     }
     fn ask(&mut self, line: crate::line::Line) {
         crate::region::Doorway::ask(self.ui, line);
@@ -2307,8 +2307,9 @@ pub(crate) struct Scene<'a> {
     pub view: &'a mut crate::files::View,
     /// The interface's words.
     pub texts: &'a ronoctua_i18n::Texts,
-    /// What the last action had to say, if anything.
-    pub message: Option<String>,
+    /// What the last action had to say, if anything — with the names it
+    /// quotes told (`chrome::Named`).
+    pub message: Option<crate::chrome::Named>,
     /// The question on line 0 while [`Ui::ask`] has one up — ahead of the
     /// message and of the shortcuts, its `ESC` and `RET` clickable.
     pub question: Option<Vec<crate::chrome::Piece>>,
@@ -2418,8 +2419,8 @@ pub(crate) fn frame(s: &mut Scene<'_>) -> Painted {
     // about: what a view raised is an answer, whole.
     let second = s
         .message
-        .clone()
-        .map(|t| vec![crate::chrome::Piece::said(t)])
+        .as_ref()
+        .map(crate::door::list::said_pieces)
         .or(does)
         .or(explained)
         // A QUESTION TAKES THE LINE, and is drawn as the shortcuts are — its

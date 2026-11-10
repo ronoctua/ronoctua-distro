@@ -102,7 +102,16 @@ impl PartlyRead {
     /// how many more, and that the file keeps them.
     #[must_use]
     pub fn said(&self, texts: &ronoctua_i18n::Texts) -> String {
+        self.said_named(texts).into_text()
+    }
+
+    /// [`PartlyRead::said`], with the file it names told
+    /// (`ronoctua_i18n::Arg::Name`) — for a door that says it on its line,
+    /// where a name is drawn in a name's ink. The same words, byte for byte.
+    #[must_use]
+    pub fn said_named(&self, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
         use crate::key;
+        use ronoctua_i18n::Arg;
         let mut named = self.places.iter().take(NAMED).map(|(place, why)| {
             texts.t_with(
                 key::PARTLY_READ_PLACE,
@@ -120,17 +129,19 @@ impl PartlyRead {
         if more > 0 {
             let more = texts.t_args(
                 key::PARTLY_READ_MORE,
-                &[(
-                    "n",
-                    ronoctua_i18n::Arg::Number(i64::try_from(more).unwrap_or(i64::MAX)),
-                )],
+                &[("n", Arg::Number(i64::try_from(more).unwrap_or(i64::MAX)))],
             );
             listed = then(&listed, &more);
         }
-        texts.t_with(
-            key::PARTLY_READ,
-            &[("file", &self.file), ("places", &listed)],
-        )
+        texts
+            .t_args_marked(
+                key::PARTLY_READ,
+                &[
+                    ("file", Arg::Name(&self.file)),
+                    ("places", Arg::Text(&listed)),
+                ],
+            )
+            .into()
     }
 }
 
@@ -255,8 +266,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FAILS IF: a carried read that replaced the whole file owes the line, or
-    /// the line names more places than [`NAMED`] instead of counting them.
+    /// FAILS IF: a carried read that replaced the whole file owes the line,
+    /// the line names more places than [`NAMED`] instead of counting them,
+    /// or a door's line does not quote the file as a name.
     #[test]
     fn the_line_names_a_few_places_and_counts_the_rest() {
         assert_eq!(PartlyRead::of_repairs("x.json", &[]), None);
@@ -287,6 +299,12 @@ mod tests {
                 "{language}: the rest is not counted: {said}"
             );
             assert!(!said.contains('['), "{language}: a key is missing: {said}");
+            // THE FILE IS THE NAME IT QUOTES, and only the file: a place is
+            // a word of the sentence.
+            let named = partly.said_named(&t);
+            assert_eq!(named.as_str(), said, "{language}");
+            let quoted: Vec<&str> = named.names().iter().map(|r| &named[r.clone()]).collect();
+            assert_eq!(quoted, ["x.json"], "{language}: {named:?}");
         }
         for why in Why::ALL {
             for language in ["en-GB", "pt-BR"] {

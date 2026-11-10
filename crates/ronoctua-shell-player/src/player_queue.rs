@@ -31,6 +31,7 @@
 use crate::key;
 use crate::player::{Errand, Target, View, name_of, node_of};
 use crate::player_rows::{Builder, Entry};
+use ronoctua_i18n::Arg;
 use ronoctua_player::own::{Lane, LaneKind};
 use ronoctua_player::queue::{EntryId, Name, Node, NodeKind, Outline, QueueKept};
 use ronoctua_player::wire::State;
@@ -277,8 +278,16 @@ pub fn kept_mark(
             tokens::color::STATE_ERROR,
         )),
         QueueKept::Same { name, .. } => Some((name.clone(), tokens::color::TEXT_HEADING)),
+        // THE QUEUE'S NAME (`Arg::Name`), told as every name is; a mark in
+        // danger's ink keeps its one colour (`chrome::quoted_ink`), so only
+        // the words go.
         QueueKept::Changed { name, .. } => Some((
-            texts.t_with(key::PLAYER_QUEUE_UNSAVED, &[("name", name)]),
+            texts
+                .t_args_marked(
+                    key::PLAYER_QUEUE_UNSAVED,
+                    &[("name", ronoctua_i18n::Arg::Name(name))],
+                )
+                .text,
             tokens::color::STATE_ERROR,
         )),
     }
@@ -430,52 +439,67 @@ pub fn number_of(outline: &Outline, id: EntryId) -> Option<String> {
 }
 
 impl View {
-    /// The question a refusal the person may overrule is asked with, and
-    /// what its "yes" sends — `again`, said as the order it is: the
-    /// queue's "already there, add it again?" (decision A5) and "the file
-    /// changed on the disk, write over it?". `None` for a refusal that is
-    /// none of those.
+    /// The question a refusal the person may overrule is asked with — the
+    /// name it quotes marked as one (`Arg::Name`) — what its "yes" sends —
+    /// `again`, said as the order it is — and what that costs: the queue's
+    /// "already there, add it again?" (decision A5) loses nothing, and "the
+    /// file changed on the disk, write over it?" loses what the disk now
+    /// says. `None` for a refusal that is none of those.
     pub fn overrule(
         &self,
         again: &Ask,
         trouble: &Trouble,
         texts: &ronoctua_i18n::Texts,
-    ) -> Option<(String, Errand)> {
+    ) -> Option<(crate::chrome::Named, Errand, crate::chrome::Stakes)> {
         match trouble {
             Trouble::AlreadyQueued { entry, name } => {
                 let name = name_of(name, texts, crate::player::NAME_IN_A_SENTENCE);
                 let number = self.outline.as_deref().and_then(|o| number_of(o, *entry));
                 let sentence = match &number {
-                    Some(number) => texts.t_with(
+                    Some(number) => texts.t_args_marked(
                         key::ASK_PLAYER_ALREADY_QUEUED,
-                        &[("name", name.as_str()), ("number", number)],
+                        &[("name", Arg::Name(&name)), ("number", Arg::Text(number))],
                     ),
-                    None => texts.t_with(
+                    None => texts.t_args_marked(
                         key::ASK_PLAYER_ALREADY_QUEUED_SOMEWHERE,
-                        &[("name", name.as_str())],
+                        &[("name", Arg::Name(&name))],
                     ),
                 };
                 let play = matches!(again, Ask::Put { play: true, .. });
-                let said = texts.t_with(
-                    if play {
-                        key::PLAYER_PLAYING_NOW
-                    } else {
-                        key::PLAYER_ADDED
-                    },
-                    &[("name", &name)],
-                );
-                Some((sentence, Errand::TellSaying(again.clone(), said)))
+                let said = texts
+                    .t_args_marked(
+                        if play {
+                            key::PLAYER_PLAYING_NOW
+                        } else {
+                            key::PLAYER_ADDED
+                        },
+                        &[("name", Arg::Name(&name))],
+                    )
+                    .into();
+                Some((
+                    sentence.into(),
+                    Errand::TellSaying(again.clone(), said),
+                    crate::chrome::Stakes::Light,
+                ))
             }
             Trouble::ChangedOnDisk { path } => {
                 let file = std::path::Path::new(path)
                     .file_name()
                     .map_or_else(|| path.clone(), |f| f.to_string_lossy().into_owned());
                 Some((
-                    texts.t_with(key::ASK_PLAYER_QUEUE_CHANGED_ON_DISK, &[("path", path)]),
+                    texts
+                        .t_args_marked(
+                            key::ASK_PLAYER_QUEUE_CHANGED_ON_DISK,
+                            &[("path", Arg::Name(path))],
+                        )
+                        .into(),
                     Errand::TellSaying(
                         again.clone(),
-                        texts.t_with(key::PLAYER_SAVED_AGAIN, &[("name", &file)]),
+                        texts
+                            .t_args_marked(key::PLAYER_SAVED_AGAIN, &[("name", Arg::Name(&file))])
+                            .into(),
                     ),
+                    crate::chrome::Stakes::Lost,
                 ))
             }
             _ => None,
@@ -494,10 +518,10 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let Some(s) = state else {
-            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING));
+            return Errand::Said(texts.t(key::PLAYER_NOT_RUNNING).into());
         };
         match &s.queue_file {
-            QueueKept::Empty => Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY)),
+            QueueKept::Empty => Errand::Said(texts.t(key::PLAYER_QUEUE_EMPTY).into()),
             QueueKept::Never => self.save(crate::player::Saved::Queue, state, columns, texts),
             QueueKept::Same { path, .. } | QueueKept::Changed { path, .. } => {
                 let file = std::path::Path::new(path)
@@ -505,7 +529,9 @@ impl View {
                     .map_or_else(|| path.clone(), |f| f.to_string_lossy().into_owned());
                 Errand::TellSaying(
                     Ask::SaveQueueAgain { force: false },
-                    texts.t_with(key::PLAYER_SAVED_AGAIN, &[("name", &file)]),
+                    texts
+                        .t_args_marked(key::PLAYER_SAVED_AGAIN, &[("name", Arg::Name(&file))])
+                        .into(),
                 )
             }
         }
@@ -1488,7 +1514,7 @@ mod tests {
         let (empty, _) = kept_as(QueueKept::Empty);
         assert_eq!(
             v.key(Press::SaveQueueAgain, Some(&empty), 100, &t),
-            Errand::Said(t.t(key::PLAYER_QUEUE_EMPTY))
+            Errand::Said(t.t(key::PLAYER_QUEUE_EMPTY).into())
         );
     }
 
@@ -1528,14 +1554,22 @@ mod tests {
         ));
         v.settle_in(Some(&s), 100, &t);
         let rows = v.rows(Some(&s), 100, &t);
+        // A LINE'S RUNS JOINED AS DRAWN — the name is a run of its own, in a
+        // name's ink, glued to the words after it — and the lines by a space.
         let words: String = rows
             .iter()
-            .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+            .map(|r| r.fields.iter().map(|f| f.text.as_str()).collect::<String>())
             .collect::<Vec<_>>()
             .join(" ");
         assert!(
             words.contains("Two is already in the queue as 2"),
             "{words}"
+        );
+        // THE NAME IS MARKED, in a name's ink inside the question's.
+        assert!(
+            rows.iter().flat_map(|r| &r.fields).any(|f| f.text == "Two"
+                && f.color == crate::chrome::quoted_ink(tokens::color::QUESTION_ASKED)),
+            "the name is not in a name's ink: {rows:?}"
         );
         assert_eq!(rows[v.cursor()].target, Target::Answer(false), "no first");
         assert_eq!(v.key(Press::Escape, Some(&s), 100, &t), Errand::Nothing);

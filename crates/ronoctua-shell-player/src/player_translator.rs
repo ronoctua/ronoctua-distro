@@ -163,16 +163,22 @@ impl View {
             "translator",
         );
         let hosts = hosts(&self.prefs);
-        b.pair_under(
+        let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
+        // THE HOSTS UNDER THE ROW are names, each its own, as the other
+        // consents' are (`crate::player_internet`).
+        b.pair_under_named(
             b.t(key::PLAYER_CONSENT_TRANSLATION),
             b.t(if self.translator_let {
                 key::PLAYER_CONSENT_ALLOWED
             } else {
                 key::PLAYER_CONSENT_NOT_ALLOWED
             }),
-            &b.texts.t_with(
+            &crate::chrome::names_listed(
+                b.texts,
                 key::PLAYER_CONSENT_HOSTS,
-                &[("hosts", &hosts.join(&b.t(key::PLAYER_SET_JOINER)))],
+                "hosts",
+                &hosts,
+                &b.t(key::PLAYER_SET_JOINER),
             ),
             Target::Translator,
             "consent-translation",
@@ -247,7 +253,9 @@ impl View {
                 let what = texts.t(key_words(*k));
                 if !self.words_kept.contains(k) {
                     return Some(Errand::Said(
-                        texts.t_with(key::PLAYER_KEY_NOTHING_TO_FORGET, &[("what", &what)]),
+                        texts
+                            .t_with(key::PLAYER_KEY_NOTHING_TO_FORGET, &[("what", &what)])
+                            .into(),
                     ));
                 }
                 let sentence = texts.t_with(key::PLAYER_ASK_FORGET_KEY, &[("what", &what)]);
@@ -278,7 +286,9 @@ impl View {
                 }
                 if ronoctua_words::host_of(said).is_none() {
                     return Errand::Said(
-                        texts.t_with(key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS, &[("typed", said)]),
+                        texts
+                            .t_with(key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS, &[("typed", said)])
+                            .into(),
                     );
                 }
                 self.translator_chosen(Provider::LibreTranslate {
@@ -394,10 +404,13 @@ mod tests {
             assert_eq!(errand, Errand::Ask(Question::plain(ADDRESS, false)));
             assert_eq!(
                 v.translator_answered("http://plain.example", &t),
-                Errand::Said(t.t_with(
-                    key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS,
-                    &[("typed", "http://plain.example")]
-                )),
+                Errand::Said(
+                    t.t_with(
+                        key::PLAYER_TRANSLATOR_NOT_AN_ADDRESS,
+                        &[("typed", "http://plain.example")]
+                    )
+                    .into()
+                ),
                 "plain http names no host to ask"
             );
             v.typing = Some(Typing::TranslatorAddress);
@@ -440,10 +453,13 @@ mod tests {
         stand(&mut v, &Target::WordsKey(Key::DeepL), &t);
         assert_eq!(
             v.key(Press::Remove, None, 80, &t),
-            Errand::Said(t.t_with(
-                key::PLAYER_KEY_NOTHING_TO_FORGET,
-                &[("what", &t.t(key::PLAYER_KEY_WORDS_DEEPL))]
-            ))
+            Errand::Said(
+                t.t_with(
+                    key::PLAYER_KEY_NOTHING_TO_FORGET,
+                    &[("what", &t.t(key::PLAYER_KEY_WORDS_DEEPL))]
+                )
+                .into()
+            )
         );
         assert_eq!(
             v.key(Press::Enter, None, 80, &t),

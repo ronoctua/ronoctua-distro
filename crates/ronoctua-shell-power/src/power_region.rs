@@ -439,11 +439,15 @@ pub fn carry_out(
                 && let Err(e) = ronoctua_power::prefs::persist(&dir, profile)
             {
                 tracing::warn!(error = %e, file = ronoctua_power::prefs::FILE, "a preference could not be written");
-                let said = way.texts().t_with(
+                // THE FILE IS A NAME the sentence quotes (`Arg::Name`).
+                let said = way.texts().t_args_marked(
                     crate::key::ECHO_PREFERENCE_NOT_WRITTEN,
                     &[
-                        ("file", ronoctua_power::prefs::FILE),
-                        ("why", &e.to_string()),
+                        (
+                            "file",
+                            ronoctua_i18n::Arg::Name(ronoctua_power::prefs::FILE),
+                        ),
+                        ("why", ronoctua_i18n::Arg::Text(&e.to_string())),
                     ],
                 );
                 way.say(said, crate::echo::Echo::Long);
@@ -521,7 +525,7 @@ mod tests {
         let said = texts().t(crate::key::POWER_NO_DAEMON);
         assert_eq!(
             way.owed,
-            vec![region::Effect::Say(said, crate::echo::Echo::Normal)]
+            vec![region::Effect::Say(said.into(), crate::echo::Echo::Normal)]
         );
     }
 

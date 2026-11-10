@@ -33,6 +33,7 @@ um compromisso: nada aqui precisa se parecer com nenhum outro programa.
 | Renderer | wgpu + cosmic-text + glyphon | vello (não há carga vetorial) |
 | Buffers nativos | WASM Component Model, display list retida | pixels, ou plugins nativos |
 | i18n | Fluent | gettext |
+| Nome citado numa frase | dito pela chamada (`Arg::Name`) e levado com a frase (`chrome::Named`), numa tinta que sai da tinta da frase | achado pelo valor na frase pronta |
 | Fontes | assets de um Release, quatro inputs fixados por hash | dentro do repositório |
 | Janelas | uma `Door<C>` genérica com padrões sobrescrevíveis | uma macro por janela; um trait de janela com toda a encanação |
 | Build Rust | o cargo planeja (`plan.json`), o Nix constrói uma derivation por unidade, os terceiros inclusive | o workspace inteiro numa derivation do crane; crate2nix/`buildRustCrate`; cache entre máquinas |
@@ -715,6 +716,20 @@ continuam todos lá. A escolha é do tamanho, não do gosto: o anel é fiel ao D
 tamanho e o ponto menor é fiel ao TOM no tamanho em que isto é desenhado.
 
 Medido: 10.764 nomes no `glyphnames.json`, 10.473 codepoints na fonte, **0 que não resolvem**.
+
+#### Um sinal do próprio texto, pelo nome Unicode: `uni-`
+
+As notas de um vídeo viraram setas simples e duplas, `⇊ ↓ ↑ ⇈` (decisão do dono, 2026-11-10), e
+nenhuma família do Nerd Fonts tem a seta dupla com haste: o que elas têm dobrado é chevron, e o
+chevron vertical é da gaveta. As quatro existem na face do TEXTO, no traço dos dígitos da pontuação
+ao lado, mas o `glyphnames.json` só nomeia os desenhos da área privada. Então o gerador ganhou um
+terceiro prefixo, ao lado do `ours-` (`gen-glyphdb.py`, `UNI`): `uni-upwards_paired_arrows` é
+`UPWARDS PAIRED ARROWS`, procurado no banco Unicode do próprio Python (`unicodedata.lookup`, que
+também responde uma sequência nomeada — recusada: um token é um glifo) e guardado como todo token:
+o codepoint tem de estar no cmap real da face, e a tinta é medida lá. O nome continua sendo a
+autoridade sobre o que EXISTE e o codepoint continua nunca escrito à mão (inv. 9); só a área privada
+deixa de valer para ele. As setas `md-arrow_up`/`md-arrow_down` não serviam: na mesma janela elas
+movem uma faixa da fila.
 
 #### As tags são bilíngues, e isso é uma garantia — não um esforço
 
@@ -1592,6 +1607,14 @@ em volta — e quem sabe as cores é o `chrome::hint_spans`. Quebrando o texto j
 como um único cinza, e a mesma frase seria desenhada de um jeito na primeira linha e de outro três
 linhas abaixo. O espaço de junção fica no trecho ANTERIOR: com ele à frente do seguinte, `C-m` seria
 ` C-m` e a corrida pintada como tecla começaria uma célula cedo.
+
+**Mas uma linha sem tecla é UMA frase, e é quebrada como uma** (`fold::wrap_pieces`, 2026-11-10).
+Partida em palavras trecho a trecho e juntada com espaço, a costura abria onde a tinta mudava dentro
+de uma palavra — `as “ Title ”. Add`, nas dicas das marcas do brain (`“{ $label }”`) e na gaveta do
+gerenciador de arquivos. Com um nome citado em cada frase ("O nome citado numa frase", abaixo), seria
+em quase toda. Então uma linha sem tecla é quebrada pelo TEXTO que lê (`layout::wrap`, a quebra de
+toda nota) e as tintas voltam por cima das linhas que deram (`chrome::projected`): o que estava colado
+continua colado. A linha de atalhos continua palavra a palavra, que é o que ela precisa.
 
 **O `Tab` alcança o controle, e é por isso que ele é um `Pane`.** O anel de foco é um só no sistema —
 `View::cycle_pane` sobre `panes_on` — e o dono pediu o controle nele. `Pane::Fold` não é seção e não
@@ -3101,6 +3124,123 @@ Os fragmentos: `write_fragments` escreve `scroll-<mesa>-<bordas>.conf` (seis), c
 cada classe de cliente e o `output * bg` da mesa, e `ghostty-<página>.conf` (quatro);
 `theme::fragments` escolhe quais copiar a partir da escolha, pela mesa vestida.
 
+### O nome citado numa frase — uma tinta própria, em toda a distro
+
+O dono pediu (2026-11-10) que o nome citado numa frase — o título de um vídeo em "Apagar … para
+sempre?", um arquivo, um host, um canal — tivesse uma cor discreta, perto da do texto e distinta
+dela, na distro inteira: umas 325 chaves em 35 crates.
+
+#### Quem diz onde está o nome é a chamada (`Arg::Name`)
+
+Achar o nome DEPOIS, pelo valor, na frase pronta é o palpite que o `Texts::t_marked` foi escrito para
+evitar, e ele erra justamente aqui: um título igual ao valor de outro argumento toma a tinta no lugar
+do outro, um nome que a língua diz duas vezes é achado uma, e um nome dentro do ramo de um seletor
+não tem fronteira em que uma busca confie. A chamada sabe o que entrega: `ronoctua_i18n::Arg::Name` é
+formatado como o `Arg::Text` — a frase sai a mesma, byte a byte — e o `Texts::t_args_marked` devolve
+onde cada nome caiu (`Marked::names`), uma faixa por vez que a frase o diz. Contagem continua
+`Arg::Number`.
+
+O nome atravessa o Fluent cercado por dois NÃO-CARACTERES, U+FDD0 e U+FDD1 (`NAME_OPENS`,
+`NAME_CLOSES`): pontos que o Unicode reserva ao uso interno de um programa, e que nenhum texto trocado
+entre pessoas carrega. O `marked` tira a cerca onde já tirava as marcas de isolamento. Dois casos vão
+sem ela, para a cerca nunca mudar o que a frase DIZ: o argumento que a mensagem SELECIONA, ou entrega
+a uma função ou a um termo, nela e nas mensagens que ela cita (cercado, o valor de
+`{ $program -> [mkvextract] … }` não casaria ramo nenhum e cairia calado no padrão); e a chamada em
+que um valor já traz um dos dois caracteres — um arquivo com eles no nome continua arquivo, e a frase
+sai certa, só sem dizer nomes. Um teste passa cada chave dos dois idiomas com toda variável como nome
+e cobra o mesmo texto, nenhuma cerca na saída, nenhuma faixa fora do nome e todo nome impresso dito.
+
+#### O nome viaja com a frase (`chrome::Named`)
+
+Uma frase vai longe antes de ser desenhada — a nota de uma página, a mensagem da janela, o eco do
+minibuffer, uma pergunta —, e só quem a resolveu sabe onde estão os nomes. Então ela viaja como
+`chrome::Named`, o texto e as faixas (ordenadas, separadas e em fronteira de caractere, mantidas
+assim por todo construtor: uma faixa nunca fatia fora). Todo lugar que diz uma frase aceita
+`impl Into<Named>`, e um `String` é uma frase sem nome, desenhada como sempre: `Ui.message` e
+`Ui::say`/`say_for`/`hold`; na vista, `way.say`/`way.hold`, que moram num `impl dyn Doorway` — a vista
+segura a porta como `&mut dyn Doorway`, e um método genérico não cabe no trait, que leva
+`say_named`/`hold_named`; o `Effect::Say`/`Hold`; o eco do rodapé; o pé da janela; a linha 0
+(`list::said_pieces`, o construtor do eco também); e a pergunta digitada (`Line::asks_names`,
+`Line::question_named`). O que só lê texto — um log, a área de transferência, um rótulo — pega o
+`as_str`.
+
+Três formas pediram mais que um `From`. A frase DENTRO de outra (`Named::with_inner`): o argumento é
+achado pelas faixas do `Marked::at` que leem as mesmas palavras, e os nomes de dentro são os dela,
+deslocados — nunca procurados. Uma LISTA de nomes num argumento só (`chrome::names_listed`, os hosts
+de uma busca): o Fluent põe a lista inteira, e a faixa que volta é cortada onde ela foi juntada — a
+vírgula não é de ninguém. E a frase que viaja como DADO, chave e valores num `Explanation`
+(`chrome::said_of`): ali nenhuma chamada pode dizer qual argumento é nome, então o resolvedor único
+diz pelo NOME do argumento (`QUOTED_ARGUMENTS`: `title`, `name`, `file`, `path`, `host`… e `into`, o
+arquivo que um selo faz), nunca pelo valor; a faixa continua a do Fluent.
+
+#### Uma quebra, e as tintas por cima (`wrap_runs`)
+
+Uma frase com um nome tem de ocupar exatamente as linhas que a mesma frase ocupa numa tinta só: o pé
+da janela conta a altura por elas, e toda vista que conta as linhas de uma nota pergunta ao
+`note_lines`. Um segundo quebrador seria uma segunda resposta. Então a frase é quebrada inteira, como
+toda nota, e cada linha que deu é percorrida ao lado da fonte (`chrome::projected`): um caractere é o
+próximo da fonte e veste a tinta dele, e um espaço são os brancos que a quebra dobrou ali. O
+`wrap_runs` dá as linhas em trechos, e o `note_fields` as põe em campos a partir de uma coluna. Se
+uma quebra um dia der uma linha que a caminhada não acha na fonte, a linha sai inteira na tinta da
+frase: um nome sem cor perde menos que uma palavra. O `a-note-is-wrapped-and-not-cut` aceita os
+três, e a gaveta do minibuffer anda pela mesma caminhada ("Mas uma linha sem tecla é UMA frase",
+acima).
+
+#### Cinco tintas, pela tinta da frase — e o perigo fica com a dele
+
+O nome fica AO LADO das palavras com que é lido, então a tinta dele sai da tinta da frase, numa
+tabela com cada caso escrito (`chrome::quoted_ink`; nos trechos de uma linha, `Register::quoting`,
+sem braço curinga — um registro novo chega lá com alguém decidindo):
+
+| A frase | O nome |
+|---|---|
+| `text.primary` — a mensagem no pé da janela | `text.quoted.strong` |
+| `text.secondary` — a nota de uma página | `text.quoted.default` |
+| `text.dim` — a nota quieta | `text.quoted.faint` |
+| `text.subtle.strong` — o eco e a linha 0 (`Register::Said`) | `text.subtle.quoted` (`Register::Quoted`) |
+| `question.asked` (`Register::Asked`) | `question.quoted` (`Register::QuotedAsked`) |
+
+- **Os três de conteúdo** são o degrau de texto do próprio tema com o matiz girado 0,8 do caminho até
+  o roxo de `group.text`, na MESMA luminosidade (`toward`/`mix`, como `text.listening`). Um nome mais
+  alto ou mais baixo que a frase se leria como mais ou menos importante, e ele não é nenhum dos dois:
+  é outro TIPO de palavra, e nesta paleta tipo é matiz. O roxo porque já é o que o sistema desenha
+  como "um nome" (`text.subtle.named`) e fica longe da escada cinza em todo tema (0,055 no mais
+  perto, cyber). A primeira receita ia pouco além da metade do caminho; nas fotos o título na
+  mensagem da janela não se distinguia da frase a 1×, e um nome que não se vê não é "distinto".
+- **O da pergunta** é o sólido dela com 0,70 do croma e um degrau mais claro (Lc +6). Só menos cor,
+  no mesmo contraste, ficava perto demais a 1×, e abaixo de 0,70 deriva para o roxo dos títulos no
+  flashbang; o degrau de luz é o que o distingue.
+- **O discreto** é o cinza do registro (`subtle.text`) 0,55 do caminho até o azul desbotado do
+  aparelho (`device.text`). É a linha mais cheia do sistema — tecla, hóspede, `⌥`, a frase, o nome e o
+  valor de uma marca — sobre uma frase com pouca cor para girar, então quem decide é o matiz de
+  destino: o azure de cada semente caía a 0,026 da frase, ou abaixo de 0,025 do roxo das marcas no
+  cyber. E só um pouco além da metade, porque esse azul é a marca do aparelho Bluetooth logo acima do
+  eco: a sete décimos ficava a 0,021 dela (owl), e um nome no eco se leria como mais um aparelho. A
+  0,55 o aparelho e o roxo das marcas ficam além da linha de aviso em todo tema, e a única falta —
+  0,029 da frase, no backdrop do papyrus — cai do lado da discrição.
+
+**Os portões (`gen-theme.py`)** medem o contraste de cada um nos fundos em que a frase dele é
+desenhada, com o piso da frase ou um passo abaixo (um nome é lido dentro de uma linha que já diz do
+que trata), e a distância: da frase (pisos de 0,035 nos três, 0,025 no discreto, 0,05 na pergunta, e
+0,06 do que se digita nela) e um TETO, `QUOTED_NEAR` (falha acima de 0,11, aviso acima de 0,10),
+porque um nome que se afasta mais deixou de ser discreto e se lê como outro registro, uma tecla ou um
+link. Os três de conteúdo ficam longe do cursor, do acento, do rótulo de ação e do título — uma nota
+com um nome que parece um deles parece aceitar clique —; o discreto, de toda tinta da linha do
+minibuffer e do aparelho; o da pergunta, da tinta mais próxima da paleta. Medido nas 44 paletas, a
+distância da frase vai de 0,043 a 0,100 nos três de conteúdo, de 0,064 a 0,099 na pergunta e de 0,029
+a 0,061 no discreto.
+
+**Perigo é cor, e o nome numa frase de perigo veste a cor dela.** Um aviso ou um erro é dito pela cor
+(`state.warning`, `state.error`, `notification.loud`), e um segundo matiz dentro dele enfraqueceria o
+alarme. Quem decide é a tabela, nunca uma vista: o `quoted_ink` devolve a tinta inteira, e o
+`Register::Loud` não cita. Também não muda o que não é frase: o rótulo e o valor de uma linha (ali o
+nome É a linha, e os tons são do `Kind`), um título, o cursor.
+
+**Fica de fora**: o `.ftl` dos módulos do brain, que já desenham o nome de uma marca em
+`Register::Named` (a quebra corrigida arrumou o espaçamento deles); a linha de comando e os logs; os
+buffers WASM (inv. 11); a faixa de notificação (as tintas `notification.*`); e o que se explica sob o
+ponteiro (o `door::Explained` e o `joined` dele). As aspas “ ” em volta dos nomes nos `.ftl` ficaram.
+
 ---
 
 ## 4. Teclado, keymap e a leader
@@ -3964,6 +4104,67 @@ notificações, cujo valor só girava pelas setas.
 - **A foto.** O `photograph --door footer` ganhou `--notification <arquivo>`: um aviso como o bus o
   entrega, decidido pelo catálogo — o cartão de pareamento e a escolha de uma ação se fotografam
   com `--press`.
+
+#### Uma pergunta numa página é um bloco: chão, ar e o custo do "sim"
+
+O dono mostrou (2026-11-10) "Já está na fila como … Adicionar de novo?" na página de um vídeo: a
+frase e as respostas tinham o tom e o recuo das opções em volta, e tudo se misturava. Agora a
+pergunta que uma página faz entre as linhas é UM bloco (`chrome::question_lines`): uma linha de ar, a
+frase em `question.asked` com os nomes que cita em `question.quoted`, as duas respostas — o `não`
+primeiro — recuadas por `space.view.nestCells` e quebradas, nunca cortadas, e ar de novo. Toda linha
+menos o ar fica sobre `surface.header` (`chrome::QUESTION_GROUND`), de borda a borda e sem contorno
+(inv. 15): chão e ar, nunca régua. É o chão em que o pé de toda janela já pergunta, e os portões
+medem nele o cursor (`text.here.acts`) e o rótulo de ação (`text.label.acts`). Por enquanto, nos dois
+apps de vídeo (o catálogo e o player, e as linhas de texto que os dois editam).
+
+- **O "sim" tem a cor do que custa** (`chrome::Stakes`, e `chrome::answer_tone`, o único lugar que a
+  transforma em cor): `Lost` em `state.error` (apagar, remover um canal ou uma regra, decidir todos
+  de uma vez, descartar a descrição, gravar tags ou um arquivo, limpar ou trocar a fila, o arquivo
+  que mudou no disco, o rascunho), `Weighty` em `state.warning` (cadastrar a lista, fechar o player
+  em todo lugar, reiniciá-lo), `Light` no tom de ação da página (adicionar de novo, ocultar). O `não`
+  fica no tom de ação, e sob o cursor qualquer um veste `text.here.acts`. Cinco outras vistas
+  escrevem esse `if` à mão, cada uma do seu jeito (`docs/PENDING.md`), e os dois apps perguntavam
+  sem ele.
+- **O primeiro clique no `não` nascido só o escolhe.** O catálogo (`answered_by_click`), o player
+  (`clicked_at`) e as linhas de texto (`text_area`) respondiam no primeiro clique no `não` em que a
+  pergunta nasceu — contra o inv. 19 e o `aim::Aim`. Agora guardam um `Aim<bool>`, no molde da
+  pergunta da janela de atualização (`approval::Question`), e o segundo aperto de um clique duplo dado
+  na linha de cima nunca responde.
+- **O chão é da linha, e as duas portas o pintam embaixo de tudo.** A linha leva `ground`; a janela
+  faz um quad por corrida de linhas no mesmo chão (`chrome::row_grounds`: seis linhas são um quad, e
+  seis quads seriam seis costuras para um renderizador que arredonda ao pixel), antes das faixas do
+  ponteiro e do cursor. No rodapé a região diz `Told::ground`, e o rodapé o pinta com os chãos das
+  prateleiras, antes da linha em foco e das faixas, só na largura da faixa da linha — os dois painéis
+  do player. O `Region::paint` não servia: roda depois das faixas, e quads sem profundidade pintam em
+  ordem. Numa linha com chão próprio o ponteiro não acende o campo no acento (`field_ink`): o acento
+  é o mesmo hex do cursor, e um "sim" vermelho sob a mão ficava azul ao lado do `não` azul do cursor.
+
+#### Um título com controles continua sendo seção
+
+O anel do `TAB` (`section_ring`) contava como título só a linha na tinta de título que não aceita
+clique. Um título que ganhou controles — as setas de página, os glifos de um layout, o chevron de
+uma gaveta — deixava de ser seção: as linhas dele caíam na seção de cima, e uma página com um título
+só desligava o `TAB`. O dono decidiu (2026-11-10) que um título com glifos continua seção, e o
+título é reconhecido pela TINTA (`section_ring::is_title`): a linha que não aceita clique, por
+qualquer campo em `text.heading`, como sempre; a que aceita, pelo PRIMEIRO campo — as palavras antes
+do que ela oferece —, para uma linha que só leva a tinta de título no meio (o nome de uma unidade
+escolhida, depois de uma marca) não virar título. E a linha de uma GAVETA é título qualquer que seja
+a tinta, porque começa pelo chevron que a abre: sob o cursor ela veste o acento inteira, e o
+`Shift+TAB` da própria linha dela pulava a seção de cima. O chevron vertical é da gaveta e de mais
+ninguém, então ele diz o que a linha é. A linha de setas no fim de uma lista não leva tinta de
+título: ali não começa seção.
+
+#### Uma página virada traz o título ao topo, uma vez
+
+Virar a página de uma lista leva a tela ao título logo antes dela (pedido do dono, 2026-11-10). Mas
+toda tecla da janela, e todo clique numa linha da lista, termina com a lista seguindo o cursor
+(`follow_into`) com duas linhas de margem: com o cursor na linha sob o título, esse seguir rolava o
+título de volta para fora do topo, no mesmo gesto que o pôs lá. `Ui::place_top` põe a linha
+primeiro, até onde o fim da lista deixa, e a protege do seguir que termina ESTE gesto — uma vez, e só
+enquanto o cursor está na tela: um cursor que a colocação deixou fora é seguido como sempre, e nunca
+se perde por um título. O gesto seguinte segue como todo gesto, e uma colocação que nenhum gesto
+seguiu (uma leitura que chegou) morre com a volta do laço. O rodapé faz o mesmo com o
+`Paging::Top` que uma região pede com a tecla (`Footer::top_placed`, `top_placed_holds`).
 
 ## 5. Buffers nativos e o protocolo
 
@@ -10535,13 +10736,22 @@ um volume, nada diria qual estava certo. A análise mudou para o `ronoctua-audio
 teclado: a coluna `Where::OnACard` existe porque `OnADevice` responde QUAL TELA e esta pergunta é
 sobre o que a coisa naquela tela sabe fazer.
 
-**O desenho do teclado é a única exceção medida do `chrome-icons-match-the-text`.** Um teclado é um
-desenho LARGO e baixo: a tinta dele já ocupa a célula inteira, então nenhum tamanho o leva à altura
-do dígito sem encostar no caractere ao lado, e não existe teclado quadrado na fonte (os nove que
-passam na faixa são caps-lock, um `x`, uma engrenagem ou a tecla ⌘ — a coisa errada dita com
+**O desenho do teclado foi a primeira exceção medida do `chrome-icons-match-the-text`.** Um teclado
+é um desenho LARGO e baixo: a tinta dele já ocupa a célula inteira, então nenhum tamanho o leva à
+altura do dígito sem encostar no caractere ao lado, e não existe teclado quadrado na fonte (os nove
+que passam na faixa são caps-lock, um `x`, uma engrenagem ou a tecla ⌘ — a coisa errada dita com
 clareza). Então ele é medido pela outra régua, com o motivo escrito no check: preenche a célula e
 não é uma lasca. Os outros cinco desenhos que a faixa recusou trocaram de glifo, que é o que a
-mensagem do check manda fazer.
+mensagem do check manda fazer. A lista (`WIDE`) cresceu depois, cada nome com o motivo ao lado: os
+quatro pontos da Tailscale, o olho aberto e o riscado do catálogo de vídeos e o ∞ do "nunca apagar".
+
+**O ∞ é a única exceção abaixo do piso comum, e é do dono** (2026-11-10). O sinal tem o dobro da
+largura da altura, e na largura da célula fica em 44% do dígito da idade ao lado — abaixo até dos
+60% que um desenho largo guarda (`FLOOR`). Por isso ele andava numa caixa
+(`md-all_inclusive_box_outline`, o ∞ do Material na altura do dígito); o dono pediu o sinal puro
+(`md-infinity`) sabendo disso. O check dá a ele um piso próprio (`FLOORS`, 0,40, que ainda recusa uma
+lasca), que só vale para um nome do `WIDE`, e continua exigindo que ele encha a célula e não encoste
+no vizinho.
 
 **O perfil de áudio não é trocável aqui, e isso está escrito** (`docs/PENDING.md`): o BlueZ diz o que
 está tocando (`MediaTransport1`), não o que se pode escolher — quem sabe isso é o PipeWire, e é uma
@@ -12143,7 +12353,8 @@ por tema (`LEADER p r`, `p v`, `p g`), e cada uma é uma pilha de páginas (`cra
   clique; `View::globe_keeps_the_scroll`), o segundo faz o `RET` dela — uma estação
   toca, um país abre a página — e um grupo de várias linhas enquadra e RECORTA a lista nelas, com a
   linha "Mostrando n de N: mostrar todos" e `Esc` devolvendo todas antes de sair da página. Arrastar
-  (depois de `atlas.clickSlack`) gira, a roda aproxima, `C-k`/`C-j`/`C-r`. A caixa em que o globo é
+  (depois de `atlas.clickSlack`) gira, a roda aproxima, `C-k`/`C-j`/`C-r` (na janela, `⌥9`/`⌥8`
+  aproximam e afastam: o `⌥[`/`⌥]` vira as páginas do ranking). A caixa em que o globo é
   pintado e a que o ponteiro lê são uma conta só (`player_globe::box_of`, `picture_px`). No rodapé,
   cada tela guarda onde o desenhou (pelo conector), o ponteiro é lido pela caixa da tela em que está,
   e o globo é medido UMA vez por quadro, na maior — medido por tela, uma trocava o tamanho da outra.
@@ -14787,26 +14998,55 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   `video-metrics-readers-are-read-only`, que só deixa os arquivos da porta nomearem `person`.
 - **O cursor é uma identidade** (um `spot`), nunca um índice: a varredura que reordena a lista não
   tira o cursor do vídeo. Numa página recém-aberta ele é desenhado onde uma tecla agiria.
-- **A lista tem duas linhas por vídeo**: o título na largura toda, quebrado, e embaixo pontuação,
-  canal e idade. Como rótulo e valor, a coluna do rótulo dobrava o título em três pedaços curtos.
-  A grade de miniaturas é a `ronoctua_design::Grid`; o realce do ponteiro na grade é a CÉLULA, nunca
-  uma faixa na prateleira (nas duas portas). A célula é a miniatura com um `GAP` de ar dos DOIS lados
-  (`video_metrics::TILE`), e o clique pega a mesma caixa: o ar entre duas células não é de ninguém.
-  A pontuação e a idade de um vídeo da grade são uma linha cada: juntas não cabem na largura. O canal
-  sob o título de cada miniatura se liga numa linha da página Vídeos (`View.grid_channel`, só na
-  grade), desligado de partida e guardado só na sessão, como o layout: a lista de um canal só não
-  tem uso para ele.
+- **Quatro disposições num anel** (`Layout`, decisão do dono de 2026-11-10; `←`/`→`, o clique e `L`
+  na linha "Disposição", só na sessão): lista, lista com miniaturas, miniaturas e miniaturas com
+  canal. A lista tem duas linhas por vídeo: o título na largura toda, quebrado, e embaixo pontuação,
+  canal e idade (como rótulo e valor, a coluna do rótulo dobrava o título em três pedaços curtos). A
+  lista com miniaturas (`Layout::Strip`, `strip_entry`) é a tira do player nas linhas desta vista: a
+  miniatura à cabeça, o título inteiro quebrado ao lado e a linha de meta com os glifos sob ele, da
+  altura do título mais essa linha ou da figura, e uma linha de ar; cada linha diz onde as palavras
+  começam (`Row::words_at`), e a luz e o clique valem dali, nunca sobre a figura. Estreita demais para
+  figura e título (`strip_holds_a_picture`), ela é a lista. A grade de miniaturas é a
+  `ronoctua_design::Grid`; o realce do ponteiro na grade é a CÉLULA, nunca uma faixa na prateleira
+  (nas duas portas). A célula é a miniatura com um `GAP` de ar dos DOIS lados (`video_metrics::TILE`),
+  e o clique pega a mesma caixa: o ar entre duas células não é de ninguém. A pontuação e a idade de
+  um vídeo da grade são uma linha cada: juntas não cabem na largura. O canal sob o título de cada
+  miniatura era um interruptor ao lado ("Canal nas miniaturas"); virou a quarta disposição, para uma
+  escolha ter um caminho só.
+- **As páginas de uma lista de vídeos** (`paging.rs`, do catálogo e do ranking do player; pedidos do
+  dono de 2026-11-10). Uma página tem 25, 50 ou 100 vídeos (`PER_PAGES`; a linha "Por página" depois
+  de "Página"), um anel só da sessão, como os filtros; trocar o tamanho fica na página que contém o
+  primeiro vídeo da página em que se estava (`paging::resized`), e não volta à primeira como um
+  filtro. Eram 24, e o teto de miniaturas (`videoMetrics.thumbsMost`) subiu de 48 para 100: a maior
+  página é desenhada inteira, sob o `files.thumbMost` (uns 23 MB de miniaturas por porta). O título
+  da lista ("Por pontuação") leva a marca "1 de 2" em `text.dim` e, na borda, as setas ‹ ›
+  (`list-page-earlier`/`later`, os chevrons horizontais da calculadora e do acesso rápido); o fim da
+  lista repete marca e setas numa linha sem tinta de título, que o cursor pula e as setas alcançam.
+  Uma seta que não anda deixa o lugar vazio e a outra fica no dela; uma lista de uma página não tem
+  marca nem setas (a linha "Página" ainda diz "1 de 1").
+  - As teclas: `[`/`]`, depois `PgUp`/`PgDn` e `Home`/`End`; na janela, `⌥[`/`⌥]`. As de colchete
+    vêm primeiro na tabela porque só a primeira tecla de um comando é oferecida depois de `LEADER
+    Alt`. A frase da linha "Página" as ensina por argumentos (`{ $earlier } { $prior } …`, montados
+    da `OF_THE_VIEW` por `View::page_keys`): as puras no rodapé, `⌥[` na janela
+    (`keys-are-never-text`), as teclas primeiro, porque o rodapé a diz numa linha cortada no fim.
+  - Virar leva a tela ao título da lista ("Uma página virada traz o título ao topo, uma vez", na
+    porta): a vista deve o topo (`top_owed`) e paga quando chega a leitura da página PEDIDA
+    (`View::settle_on_list`), com o cursor no primeiro vídeo — `Ui::place_top` na janela,
+    `Paging::Top` na região. Até lá a página antiga fica desenhada: nada pisca "lendo…".
 - **As marcas de um vídeo são glifos que agem no PRIMEIRO clique** (`Control`): na grade, a linha
-  da pontuação leva o número e as quatro caras da nota; a da idade, separar, ocultar ou mostrar,
-  apagar e o ∞; na lista, o mesmo numa linha de meta. A cara acesa é a nota atual, e clicar nela a
-  tira; só apagar pergunta. Caras e não setas: os chevrons são de abrir e fechar. O ponteiro acende
+  da pontuação leva o número e as quatro setas da nota (`⇊ ↓ ↑ ⇈`); a da idade, separar, ocultar ou
+  mostrar, apagar e o ∞; na lista, o mesmo numa linha de meta. A seta acesa é a nota atual, e clicar
+  nela a tira; só apagar pergunta. Eram quatro caras, escolhidas porque uma seta na linha de um
+  vídeo poderia ler "isto abre"; o dono pediu as setas simples e duplas do próprio texto (`uni-`, na
+  seção 1), e não chevrons, que são da gaveta. A força é o NÚMERO de setas. O ponteiro acende
   só o glifo sob ele. Os controles moram FORA das células da prateleira: o cursor lê as células como
   paradas em cinco funções, e um controle entre elas pediria a cada uma que o pulasse — as setas
   nunca param num glifo, e o teclado tem as teclas dele (`s`, `f`, `h`, `d`). Uma marca do próprio
   vídeo, ligada (separar, o ∞ dele), diz o que vale quando sai (`Control::follows`, lido de
   `lasting` sem ela): sem o ∞ próprio, um vídeo de canal eterno continua.
-- **Pergunta é linha da página, embaixo da linha de onde foi pedida**, com o "não" primeiro e o
-  cursor nele: apagar, ocultar, remover canal ou regra, e "já está na fila" (o player recusa um
+- **Pergunta é um bloco da página, embaixo da linha de onde foi pedida** ("Uma pergunta numa
+  página é um bloco", na porta), com o "não" primeiro e o cursor nascido nele: apagar, ocultar,
+  remover canal ou regra, cadastrar a lista, decidir todos, e "já está na fila" (o player recusa um
   `Put{once}` com `AlreadyQueued`; o "sim" manda de novo sem `once`). Essa última chega de um
   recado, não de uma tecla, e a porta a SEGUE como seguiria a tecla que ela responde
   (`View::follow_owed`): no topo da página ela ficava fora da tela e o `a` parecia não fazer nada.
@@ -15638,7 +15878,7 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
 - **Um vídeo entra na fila titulado e uma vez**: `Put { Named, once: true }`, e o "já está na fila"
   é a recusa do daemon virando a pergunta da vista com o "não" primeiro (`player::overruled`,
   `Told::Asks`) — o mesmo caminho do resto das portas, nada reimplementado aqui.
-- **As marcas são glifos que agem no primeiro clique**, e teclas: as quatro caras da nota logo
+- **As marcas são glifos que agem no primeiro clique**, e teclas: as quatro setas da nota logo
   depois da pontuação (`1`–`4`; a acesa é a atual, e clicar nela a tira) e, no fim da linha,
   separar, ocultar, apagar e o ∞ (`b`, `v`, `d`, `F`), com as regras do catálogo — o ∞ é a marca do
   próprio vídeo, e só apagar pergunta. A pontuação é um número nu: a lista é por pontuação, e
@@ -15657,11 +15897,18 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   caía em renomear o que toca.
 - **Lista ou miniaturas** (`L`, o glifo do título): a lista é uma linha por vídeo com a miniatura à
   cabeça (`player_posters::strip`), a grade são as caixas do catálogo de canais
-  (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas). Na grade, a
-  pontuação com as caras e o `⋯`, e embaixo o canal com as marcas, ficam em linhas INERTES sob o
-  título: um controle na linha que é a do vídeo valeria para a coluna dele em toda a altura da
-  caixa, e o clique na figura abriria a página. Essas linhas acendem só o glifo sob o ponteiro
-  (`Lit::Controls`), porque o clique só pega ele.
+  (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas). As duas listas
+  abrem em miniaturas, nas duas portas (decisão do dono, 2026-11-10: o `Default` do `Ranking`, já
+  escrito à mão, abre em `Layout::Grid`; o padrão do `Layout` continua a lista, em que nada abre).
+  Na grade, a pontuação com as setas e o `⋯`, e embaixo o canal com as marcas, ficam em linhas
+  INERTES sob o título: um controle na linha que é a do vídeo valeria para a coluna dele em toda a
+  altura da caixa, e o clique na figura abriria a página. Essas linhas acendem só o glifo sob o
+  ponteiro (`Lit::Controls`), porque o clique só pega ele.
+- **As páginas são as do catálogo** ("As páginas de uma lista de vídeos", acima): 25, 50 ou 100 por
+  página ("Vídeos por página"), as mesmas teclas, e as setas no título e no fim (`heading_paged`,
+  `pager`). O título "1–25 de 230" já diz a página e ganha só as setas. Virar põe o título no topo
+  com o cursor na › dele (`View::bring_to_top`), e o `RET` vira de novo. Na janela, o globo das
+  páginas do mundo aproxima e afasta com `⌥9`/`⌥8`: o `[`/`]` é das páginas.
 - **Um controle é pego na linha em que é desenhado.** Uma linha de vídeo da lista tem seis ou sete
   linhas, e o `⋯` está na primeira: `player_rows::controls_under`, `control_under` e
   `View::clicked_at` só tomam um controle na linha dele — no resto da linha o clique é da linha.

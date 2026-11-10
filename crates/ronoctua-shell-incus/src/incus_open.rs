@@ -170,10 +170,14 @@ pub fn carry_out(errand: Errand, open: &mut Open, layout: Layout, way: &mut dyn 
             way.say(said, Echo::Normal);
         }
         Errand::Do(deed, name) => {
+            // WHAT IS ACTED ON IS A NAME the sentence quotes (`Arg::Name`).
             let what = way.texts().t(deed.key());
-            let said = way.texts().t_with(
+            let said = way.texts().t_args_marked(
                 crate::key::INCUS_ECHO_ASKED,
-                &[("what", &what), ("name", &name)],
+                &[
+                    ("what", ronoctua_i18n::Arg::Text(&what)),
+                    ("name", ronoctua_i18n::Arg::Name(&name)),
+                ],
             );
             way.say(said, Echo::Normal);
             open.feed.deed(deed, name);

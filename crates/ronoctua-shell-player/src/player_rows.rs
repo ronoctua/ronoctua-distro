@@ -67,6 +67,12 @@ pub struct Row {
     /// whole, the words beside a figure at its head, or only its controls —
     /// what both doors paint, through [`lighting`].
     pub lit: Lit,
+    /// A GROUND OF ITS OWN under the line — a question's block
+    /// (`chrome::QUESTION_GROUND`, [`Builder::question`]), edge to edge and
+    /// with no outline: each door paints it under the line's light and the
+    /// cursor's (`chrome::row_grounds` in the window, `region::Told::ground`
+    /// in the footer). `None`: the page's ground, as every row.
+    pub ground: Option<tokens::Color>,
 }
 
 /// How the pointer resting on a line lights it — the answer both doors paint
@@ -523,6 +529,7 @@ pub fn of_the_picker(r: crate::file_picker::Row) -> Row {
         globe: None,
         caret: r.caret,
         lit: Lit::Row,
+        ground: None,
     }
 }
 
@@ -772,6 +779,7 @@ impl Builder<'_> {
             globe: None,
             caret: None,
             lit: Lit::Row,
+            ground: None,
         });
     }
 
@@ -812,12 +820,108 @@ impl Builder<'_> {
     /// A heading INSIDE a section: its title, with the air before it, and the
     /// section's values still in one column with those above it — the ambient
     /// sounds' groups, whose bars are one length only while they start in one
-    /// column.
+    /// column. No second line of air under a block that closes with its own
+    /// — a question's ([`Builder::question`]): what its draft would write,
+    /// titled under it.
     pub fn heading_within(&mut self, text: String) {
-        if !self.out.is_empty() {
+        if !self.out.is_empty() && !self.closes_a_block() {
             self.inert(crate::chrome::AIR);
         }
         self.title_lines(text);
+    }
+
+    /// Whether the last line written is a LINE OF AIR: nothing on it, no
+    /// figure over it, no ground under it.
+    fn ends_in_air(&self) -> bool {
+        self.out.last().is_some_and(|r| {
+            r.heading
+                && r.fields.is_empty()
+                && r.cells.is_empty()
+                && r.covers.is_empty()
+                && r.deck.is_none()
+                && r.schematic.is_none()
+                && r.globe.is_none()
+                && r.ground.is_none()
+        })
+    }
+
+    /// Whether the last line written is the AIR that closes a block on a
+    /// ground of its own — the line under a question's.
+    fn closes_a_block(&self) -> bool {
+        let n = self.out.len();
+        n >= 2 && self.ends_in_air() && self.out[n - 2].ground.is_some()
+    }
+
+    /// A QUESTION ASKED ON THE PAGE, as a block of its own
+    /// (`chrome::question_lines`; owner, 2026-11-10): a line of air, the
+    /// sentence in the question's colour with each name it quotes in a
+    /// name's, the two answers `[no, yes]` set in under it — wrapped, never
+    /// cut — and air again; every line but the air on the question's ground,
+    /// and the yes in the colour of what it costs (`chrome::answer_tone`).
+    ///
+    /// Each answer is `(words, target, spot)`: a row the cursor stops on at
+    /// its first line, the lines that wrap it CONTINUING it ([`Row::owner`])
+    /// with its target and spot, so a click on any of them is a click on it.
+    /// `here`: the answer a cursor of the caller's own is on — a text's
+    /// question (`crate::text_area`) — or `None` for the page's cursor
+    /// ([`Builder::lit_at`]). Answers the line each answer starts on.
+    pub fn question(
+        &mut self,
+        asked: &crate::chrome::Named,
+        answers: [(String, Target, &str); 2],
+        stakes: crate::chrome::Stakes,
+        here: Option<bool>,
+    ) -> [usize; 2] {
+        use crate::chrome::QuestionLine;
+        let lines = crate::chrome::question_lines(
+            asked,
+            [answers[0].0.as_str(), answers[1].0.as_str()],
+            self.left,
+            self.room,
+        );
+        let mut firsts = [self.out.len(); 2];
+        let mut lit = false;
+        for line in &lines {
+            match line {
+                QuestionLine::Air => {
+                    if self.out.is_empty() || self.ends_in_air() {
+                        continue;
+                    }
+                    self.inert(crate::chrome::AIR);
+                }
+                QuestionLine::Asked(_) => self.inert(line.fields(false, stakes)),
+                QuestionLine::Answer { yes, first, .. } => {
+                    let n = usize::from(*yes);
+                    if *first {
+                        firsts[n] = self.out.len();
+                        lit = here.map_or_else(|| self.lit_at(self.out.len()), |h| h == *yes);
+                    }
+                    let (_, target, spot) = &answers[n];
+                    self.out.push(Row {
+                        fields: line.fields(lit, stakes),
+                        focused: lit,
+                        heading: false,
+                        target: target.clone(),
+                        spot: (*spot).to_owned(),
+                        cells: Vec::new(),
+                        slider: None,
+                        continues: !*first,
+                        chips: Vec::new(),
+                        deck: None,
+                        schematic: None,
+                        covers: Vec::new(),
+                        globe: None,
+                        caret: None,
+                        lit: Lit::Row,
+                        ground: None,
+                    });
+                }
+            }
+            if let Some(row) = self.out.last_mut() {
+                row.ground = line.ground();
+            }
+        }
+        firsts
     }
 
     /// A sentence, wrapped — never cut.
@@ -832,6 +936,18 @@ impl Builder<'_> {
     pub fn told(&mut self, said: &str) {
         for line in crate::chrome::note_lines(said, self.room) {
             self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
+        }
+    }
+
+    /// [`Builder::told`], with the names the sentence quotes — a file, a
+    /// title — in the ink a name in a note wears (`chrome::quoted_ink`): on
+    /// the very lines the same words take in one ink (`chrome::note_fields`),
+    /// so a note with a name in it is as tall as it was.
+    pub fn told_named(&mut self, said: &crate::chrome::Named) {
+        for fields in
+            crate::chrome::note_fields(self.left, said, tokens::color::TEXT_DIM, self.room)
+        {
+            self.inert(fields);
         }
     }
 
@@ -892,6 +1008,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1059,6 +1176,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1121,12 +1239,108 @@ impl Builder<'_> {
         self.title_said_marked(text, mark, controls);
     }
 
+    /// A LIST'S TITLE WITH THE ARROWS OF ITS PAGES at the end of its line,
+    /// `[earlier, later]` — [`Builder::heading_controls_said`], but a `None`
+    /// keeps its place EMPTY (an arrow that cannot move is not drawn, and the
+    /// one beside it stays in its own cells: the owner, 2026-11-10), and the
+    /// row is found by `spot`, its own: the row a turned page brings to the
+    /// top of the door (`View::bring_to_top`). A mark set before it
+    /// ([`Builder::title_mark`]) is taken by it.
+    pub fn heading_paged(
+        &mut self,
+        text: String,
+        controls: &[Option<(char, Target, &'static str)>; 2],
+        spot: &str,
+    ) {
+        let mark = self.mark.take();
+        self.title_placed(text, mark, controls, Some(spot));
+    }
+
+    /// THE ARROWS OF A LIST'S PAGES AGAIN AT ITS END, `[earlier, later]`,
+    /// with its `mark` ("1 of 2") — where a person who read the list to its
+    /// bottom is: a line the cursor skips but the arrows walk onto
+    /// ([`Row::walked_onto`]), as a title's controls, and a click acts on at
+    /// once. IN NO TITLE'S INK: no section begins there (`section_ring` reads
+    /// a title by it), and it is quieter than the list's own title — the mark
+    /// and the arrows in the quiet ink, an arrow the cursor stands on in the
+    /// cursor's colour. A `None` keeps its place empty.
+    pub fn pager(
+        &mut self,
+        mark: String,
+        controls: &[Option<(char, Target, &'static str)>; 2],
+        spot: &str,
+    ) {
+        if !self.out.is_empty() && !self.ends_in_air() {
+            self.inert(crate::chrome::AIR);
+        }
+        let first = self.out.len();
+        let step = tokens::space::PLAYER_QUEUEGLYPH;
+        let cells = 2u16
+            .saturating_mul(step)
+            .saturating_add(tokens::space::PLAYER_QUEUEAIR);
+        // THE MARK IN WHAT THE ARROWS LEAVE, wrapped there and never cut —
+        // its first line beside them.
+        let words = self.room.saturating_sub(cells).max(1);
+        for line in crate::chrome::note_lines(&mark, words) {
+            self.inert(vec![Self::piece(self.left, line, tokens::color::TEXT_DIM)]);
+        }
+        if self.out.len() == first {
+            self.inert(Vec::new());
+        }
+        let edge = self.left + self.room;
+        let drawn: Vec<(u16, &(char, Target, &'static str))> = (0u16..)
+            .zip(controls)
+            .filter_map(|(k, c)| Some((k, c.as_ref()?)))
+            .collect();
+        let chosen = self.cell.min(drawn.len().saturating_sub(1));
+        let (on, lit) = (self.at_cursor(first), self.lit_at(first));
+        let Some(row) = self.out.get_mut(first) else {
+            return;
+        };
+        row.spot = spot.to_owned();
+        if on && let Some((_, (_, target, _))) = drawn.get(chosen) {
+            row.target = target.clone();
+            row.focused = lit;
+        }
+        for (j, (k, (glyph, target, about))) in drawn.into_iter().enumerate() {
+            let at = edge.saturating_sub((2 - k).saturating_mul(step));
+            row.fields.push(Self::piece(
+                at,
+                glyph.to_string(),
+                cursor_or(tokens::color::TEXT_DIM, lit && j == chosen),
+            ));
+            row.cells.push(Cell {
+                from: at,
+                width: step,
+                target: target.clone(),
+                spot: format!("{spot}-control-{k}"),
+                control: true,
+                about: Some(about),
+            });
+        }
+    }
+
     /// [`Builder::title_marked`], for a title already in words.
     fn title_said_marked(
         &mut self,
         text: String,
         mark: Option<(String, tokens::Color)>,
         controls: &[(char, Target, &'static str)],
+    ) {
+        let controls: Vec<Option<(char, Target, &'static str)>> =
+            controls.iter().cloned().map(Some).collect();
+        self.title_placed(text, mark, &controls, None);
+    }
+
+    /// A title, its mark and its controls, each control in a place COUNTED
+    /// FROM THE RIGHT EDGE — a `None` keeps its place empty — and the row's
+    /// identity `spot`, or its first control's (`title-<about>`).
+    fn title_placed(
+        &mut self,
+        text: String,
+        mark: Option<(String, tokens::Color)>,
+        controls: &[Option<(char, Target, &'static str)>],
+        spot: Option<&str>,
     ) {
         self.section += 1;
         if let Some(m) = self.measured.as_mut() {
@@ -1178,22 +1392,32 @@ impl Builder<'_> {
         // one chosen (`cell`) is what the row does then — a grid's row says
         // the entry the cursor is on — and its glyph wears the cursor's
         // colour while the cursor is drawn.
-        let chosen = self.cell.min(controls.len().saturating_sub(1));
+        let cell = self.cell;
         let (on, lit) = (self.at_cursor(first), self.lit_at(first));
         let Some(row) = self.out.get_mut(first) else {
             return;
         };
-        // AN IDENTITY OF ITS OWN, by its first control, so the cursor on it
-        // stays there across a rebuild (`View::follow`): a title's line had
-        // none.
-        if let Some((_, _, about)) = controls.first() {
+        // AN IDENTITY OF ITS OWN — the one asked, or its first control's —
+        // so the cursor on it stays there across a rebuild (`View::follow`):
+        // a title's line had none.
+        if let Some(spot) = spot {
+            spot.clone_into(&mut row.spot);
+        } else if let Some((_, _, about)) = controls.iter().flatten().next() {
             row.spot = format!("title-{about}");
         }
-        if on && let Some((_, target, _)) = controls.get(chosen) {
+        // THE ONES DRAWN are the ones the arrows choose among: an empty place
+        // is no stop.
+        let drawn: Vec<(usize, &(char, Target, &'static str))> = controls
+            .iter()
+            .enumerate()
+            .filter_map(|(k, c)| Some((k, c.as_ref()?)))
+            .collect();
+        let chosen = cell.min(drawn.len().saturating_sub(1));
+        if on && let Some((_, (_, target, _))) = drawn.get(chosen) {
             row.target = target.clone();
             row.focused = lit;
         }
-        for (k, (glyph, target, about)) in controls.iter().enumerate() {
+        for (j, (k, (glyph, target, about))) in drawn.into_iter().enumerate() {
             let from_edge = (n - u16::try_from(k).unwrap_or(0)).saturating_mul(step);
             let at = edge.saturating_sub(from_edge);
             // THE GLYPH WEARS ITS TITLE'S TONE, as the drawers' chevrons do
@@ -1203,7 +1427,7 @@ impl Builder<'_> {
             row.fields.push(Self::piece(
                 at,
                 glyph.to_string(),
-                cursor_or(tokens::color::TEXT_HEADING, lit && k == chosen),
+                cursor_or(tokens::color::TEXT_HEADING, lit && j == chosen),
             ));
             row.cells.push(Cell {
                 from: at,
@@ -1345,6 +1569,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1483,6 +1708,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1502,14 +1728,34 @@ impl Builder<'_> {
         target: Target,
         spot: &str,
     ) {
+        self.pair_under_named(label, value, &under.into(), target, spot);
+    }
+
+    /// [`Builder::pair_under`], with the names what is said under the row
+    /// quotes — the host a key is sent to — in the ink a name in a note
+    /// wears, on the very lines the same words take in one ink
+    /// (`chrome::note_fields`).
+    pub fn pair_under_named(
+        &mut self,
+        label: String,
+        value: String,
+        under: &crate::chrome::Named,
+        target: Target,
+        spot: &str,
+    ) {
         self.pair(label, value, target.clone(), spot);
         let nest = tokens::space::VIEW_NESTCELLS.min(self.room);
-        for line in crate::chrome::note_lines(under, self.room - nest) {
-            if line.is_empty() {
+        for fields in crate::chrome::note_fields(
+            self.left + nest,
+            under,
+            tokens::color::TEXT_DIM,
+            self.room - nest,
+        ) {
+            if fields.is_empty() {
                 continue;
             }
             self.out.push(Row {
-                fields: vec![Self::piece(self.left + nest, line, tokens::color::TEXT_DIM)],
+                fields,
                 focused: false,
                 heading: false,
                 target: target.clone(),
@@ -1524,6 +1770,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1599,6 +1846,7 @@ impl Builder<'_> {
                 }),
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }
@@ -1721,6 +1969,7 @@ impl Builder<'_> {
                     globe: None,
                     caret: None,
                     lit: Lit::Row,
+                    ground: None,
                 }),
             }
         }
@@ -1929,6 +2178,7 @@ impl Builder<'_> {
             globe: None,
             caret: None,
             lit: Lit::Row,
+            ground: None,
         });
     }
 
@@ -1979,6 +2229,7 @@ impl Builder<'_> {
                 globe: None,
                 caret: None,
                 lit: Lit::Row,
+                ground: None,
             });
         }
     }

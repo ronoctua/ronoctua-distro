@@ -167,9 +167,12 @@ impl FooterSettingsWindow {
             }
             Changed::NotWritten(why) => {
                 tracing::warn!(error = %why, "the footer's settings could not be written");
-                let said = ui.texts.t_with(
+                let said = ui.texts.t_args_marked(
                     crate::key::ECHO_SETTING_NOT_WRITTEN,
-                    &[("file", crate::adapt::FILE), ("why", &why.to_string())],
+                    &[
+                        ("file", ronoctua_i18n::Arg::Name(crate::adapt::FILE)),
+                        ("why", ronoctua_i18n::Arg::Text(&why.to_string())),
+                    ],
                 );
                 ui.say_for(said, crate::echo::Echo::Long);
             }

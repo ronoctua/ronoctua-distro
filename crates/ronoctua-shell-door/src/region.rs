@@ -260,6 +260,14 @@ pub struct Told {
     /// tell them, so the footer does not ask [`Region::control_of`] row by
     /// row, which lays them all out again for each. `None`: it asks.
     pub control: Option<usize>,
+    /// A GROUND OF THE ROW'S OWN under its line — a block of rows that is to
+    /// stand apart from the rows around it, on a colour of its own and no
+    /// outline (invariant 15). Painted under everything else of the line —
+    /// the cursor's, the pointer's and a grid cell's light are drawn over it
+    /// — and only as wide as the row's band, so a row in a pane beside a
+    /// picture stops at the pane, and a row inside a container ([`Shelf`])
+    /// at the container's edges. `None`: the region's ground, as every row.
+    pub ground: Option<ronoctua_tokens::Color>,
 }
 
 impl From<Row> for Told {
@@ -1527,12 +1535,16 @@ pub trait Doorway {
     /// Whether the door is a photograph's (or a test's): nothing of the
     /// machine is to be reached.
     fn photographing(&self) -> bool;
-    /// Says a sentence, for as long as its class says.
-    fn say(&mut self, text: String, class: crate::echo::Echo);
+    /// Says a sentence, for as long as its class says — with the names it
+    /// quotes told ([`crate::chrome::Named`]), so each door draws them in
+    /// their own ink. What a view calls is `say`, on the doorway it holds
+    /// (`impl dyn Doorway`), which takes any sentence.
+    fn say_named(&mut self, text: crate::chrome::Named, class: crate::echo::Echo);
     /// Holds a state on the line, until something replaces it: no timer
     /// takes it off in either door (the window's `Ui::hold`, the footer's
     /// held echo), since nothing would put it back while it is still true.
-    fn hold(&mut self, text: String);
+    /// What a view calls is `hold` (`impl dyn Doorway`).
+    fn hold_named(&mut self, text: crate::chrome::Named);
     /// Asks a question on the door's line; the answer comes back to
     /// [`Region::answered`] under the line's id.
     fn ask(&mut self, line: crate::line::Line);
@@ -1731,6 +1743,32 @@ pub trait Doorway {
     }
 }
 
+/// WHAT A VIEW SAYS THROUGH ITS DOORWAY: any sentence — a `String` that
+/// quotes no name, or a resolved one that says where its names landed
+/// (`ronoctua_i18n::Marked`, [`crate::chrome::Named`]).
+///
+/// # Why on the trait object, and not in the trait
+///
+/// Because a view holds its doorway as `&mut dyn Doorway` — one errand
+/// handler for both doors — and a trait with a generic method cannot be made
+/// into one. The trait takes the sentence whole ([`Doorway::say_named`]);
+/// this is the door every view's `way.say(..)` goes through, so a sentence
+/// that starts quoting its names changes at the call that resolves it and
+/// nowhere else.
+impl dyn Doorway + '_ {
+    /// Says a sentence, for as long as its class says
+    /// ([`Doorway::say_named`]).
+    pub fn say(&mut self, text: impl Into<crate::chrome::Named>, class: crate::echo::Echo) {
+        self.say_named(text.into(), class);
+    }
+
+    /// Holds a state on the line, until something replaces it
+    /// ([`Doorway::hold_named`]).
+    pub fn hold(&mut self, text: impl Into<crate::chrome::Named>) {
+        self.hold_named(text.into());
+    }
+}
+
 /// How the page moves ([`Doorway::page`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Paging {
@@ -1787,10 +1825,10 @@ impl PartialEq for News {
 /// region was borrowed and done once it is back ([`Recorder`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// [`Doorway::say`].
-    Say(String, crate::echo::Echo),
-    /// [`Doorway::hold`].
-    Hold(String),
+    /// [`Doorway::say_named`]: the sentence, its names told.
+    Say(crate::chrome::Named, crate::echo::Echo),
+    /// [`Doorway::hold_named`].
+    Hold(crate::chrome::Named),
     /// [`Doorway::ask`].
     Ask(crate::line::Line),
     /// [`Doorway::paste`].
@@ -1964,10 +2002,10 @@ impl Doorway for Recorder {
     fn photographing(&self) -> bool {
         self.photographing
     }
-    fn say(&mut self, text: String, class: crate::echo::Echo) {
+    fn say_named(&mut self, text: crate::chrome::Named, class: crate::echo::Echo) {
         self.owed.push(Effect::Say(text, class));
     }
-    fn hold(&mut self, text: String) {
+    fn hold_named(&mut self, text: crate::chrome::Named) {
         self.owed.push(Effect::Hold(text));
     }
     fn ask(&mut self, line: crate::line::Line) {
@@ -2129,11 +2167,11 @@ impl Doorway for Lending<'_> {
     fn photographing(&self) -> bool {
         self.way.photographing()
     }
-    fn say(&mut self, text: String, class: crate::echo::Echo) {
-        self.way.say(text, class);
+    fn say_named(&mut self, text: crate::chrome::Named, class: crate::echo::Echo) {
+        self.way.say_named(text, class);
     }
-    fn hold(&mut self, text: String) {
-        self.way.hold(text);
+    fn hold_named(&mut self, text: crate::chrome::Named) {
+        self.way.hold_named(text);
     }
     fn ask(&mut self, line: crate::line::Line) {
         self.way.ask(line);
@@ -3183,7 +3221,7 @@ mod tests {
         assert_eq!(slots.get("fake").and_then(Region::cursor), Some(1));
         assert_eq!(
             w.owed,
-            vec![Effect::Say("down".to_owned(), crate::echo::Echo::Brief)]
+            vec![Effect::Say("down".into(), crate::echo::Echo::Brief)]
         );
         assert!(slots.take("fake").is_some());
         assert!(!slots.is_open("fake"));
@@ -3504,8 +3542,8 @@ mod tests {
         assert_eq!(
             w.owed,
             vec![
-                Effect::Say("answered".to_owned(), crate::echo::Echo::Normal),
-                Effect::Say("answered".to_owned(), crate::echo::Echo::Normal),
+                Effect::Say("answered".into(), crate::echo::Echo::Normal),
+                Effect::Say("answered".into(), crate::echo::Echo::Normal),
             ]
         );
         let idle = Box::new(Lingering {

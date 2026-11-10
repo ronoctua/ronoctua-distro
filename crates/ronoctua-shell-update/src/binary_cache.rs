@@ -644,6 +644,8 @@ impl Page {
     fn ask_key(&mut self, name: String, now: Option<&str>) -> Errand {
         let mut line = crate::line::Line::new(KEY, false, now);
         line.asks_with = vec![("name", name.clone())];
+        // THE CACHE'S NAME is quoted: drawn in a name's ink.
+        line.asks_names = vec!["name"];
         self.asking = Some(Asking::Key { name });
         Errand::Ask(line)
     }
@@ -1004,8 +1006,8 @@ pub const fn why_key(why: ronoctua_cachix::Why) -> &'static str {
 /// must be made to agree now (the sudo door, through the footer).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied {
-    /// The key of the sentence, with its name argument when it has one.
-    pub said: String,
+    /// The sentence — the cache's name told (`Arg::Name`) when it says one.
+    pub said: crate::chrome::Named,
     /// Whether root's netrc no longer agrees with the person's choice.
     pub netrc: bool,
 }
@@ -1016,7 +1018,7 @@ pub struct Applied {
 #[must_use]
 pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::Texts) -> Applied {
     let said = |k: &str| Applied {
-        said: texts.t(k),
+        said: texts.t(k).into(),
         netrc: false,
     };
     let refused = |why: ronoctua_cachix::Why| said(why_key(why));
@@ -1048,7 +1050,12 @@ pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::
                 return said(key::BINARY_CACHE_SAID_NOT_LET);
             }
             Applied {
-                said: texts.t_with(key::BINARY_CACHE_SAID_NAMED, &[("name", name.as_str())]),
+                said: texts
+                    .t_args_marked(
+                        key::BINARY_CACHE_SAID_NAMED,
+                        &[("name", ronoctua_i18n::Arg::Name(name.as_str()))],
+                    )
+                    .into(),
                 netrc: visibility == Visibility::Private && r.token_kept(),
             }
         }
@@ -1061,10 +1068,12 @@ pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::
                 return refused(why);
             }
             Applied {
-                said: texts.t(match v {
-                    Visibility::Public => key::BINARY_CACHE_SAID_PUBLIC,
-                    Visibility::Private => key::BINARY_CACHE_SAID_PRIVATE,
-                }),
+                said: texts
+                    .t(match v {
+                        Visibility::Public => key::BINARY_CACHE_SAID_PUBLIC,
+                        Visibility::Private => key::BINARY_CACHE_SAID_PRIVATE,
+                    })
+                    .into(),
                 netrc: (*v == Visibility::Private && r.token_kept())
                     || (*v == Visibility::Public && r.netrc),
             }
@@ -1077,7 +1086,7 @@ pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::
                 return refused(why);
             }
             Applied {
-                said: texts.t(key::BINARY_CACHE_SAID_TOKEN),
+                said: texts.t(key::BINARY_CACHE_SAID_TOKEN).into(),
                 netrc: private_now,
             }
         }
@@ -1092,7 +1101,7 @@ pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::
                 return refused(why);
             }
             Applied {
-                said: texts.t(key::BINARY_CACHE_SAID_FORGOTTEN),
+                said: texts.t(key::BINARY_CACHE_SAID_FORGOTTEN).into(),
                 netrc: r.netrc,
             }
         }
@@ -1101,12 +1110,12 @@ pub fn apply(edit: &Edit, places: &Places, r: &Readings, texts: &ronoctua_i18n::
                 return refused(why);
             }
             Applied {
-                said: texts.t(key::BINARY_CACHE_SAID_REMOVED),
+                said: texts.t(key::BINARY_CACHE_SAID_REMOVED).into(),
                 netrc: r.netrc,
             }
         }
         Edit::Netrc => Applied {
-            said: String::new(),
+            said: crate::chrome::Named::default(),
             netrc: true,
         },
     }

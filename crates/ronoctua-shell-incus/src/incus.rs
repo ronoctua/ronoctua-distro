@@ -1111,8 +1111,9 @@ pub enum Errand {
     Open(Use, String),
     /// Let these hosts in `consent.json`.
     Allow(Vec<String>),
-    /// Say this; it is already a sentence.
-    Say(String),
+    /// Say this; it is already a sentence — a name it quotes told, so the
+    /// line draws it in a name's ink.
+    Say(crate::chrome::Named),
 }
 
 /// What has to be read for what is shown.
@@ -1283,8 +1284,14 @@ impl<'a> Col<'a> {
 
     /// A sentence, wrapped, never cut.
     fn note(&mut self, text: &str, color: tokens::Color) {
-        for line in crate::chrome::note_lines(text, self.room) {
-            self.push(vec![piece(0, line, color)], Target::Nothing, true);
+        self.note_named(&crate::chrome::Named::from(text), color);
+    }
+
+    /// The same, a name it quotes a field of its own in a name's ink
+    /// ([`crate::chrome::note_fields`]: the same breaks).
+    fn note_named(&mut self, text: &crate::chrome::Named, color: tokens::Color) {
+        for fields in crate::chrome::note_fields(0, text, color, self.room) {
+            self.push(fields, Target::Nothing, true);
         }
     }
 
@@ -1790,18 +1797,24 @@ impl View {
             if !mine || matches!(job.stage, ronoctua_transfers::Stage::Done) {
                 continue;
             }
-            let what = texts.t_with(
+            // WHAT IS WORKED ON IS A NAME the note quotes (`Arg::Name`).
+            let what = texts.t_args_marked(
                 crate::key::INCUS_WORKING,
                 &[
-                    ("what", &words::job_said(which, texts)),
-                    ("name", label),
+                    (
+                        "what",
+                        ronoctua_i18n::Arg::Text(&words::job_said(which, texts)),
+                    ),
+                    ("name", ronoctua_i18n::Arg::Name(label)),
                     (
                         "stage",
-                        &texts.t(&format!("transfers-stage-{}", job.stage.word())),
+                        ronoctua_i18n::Arg::Text(
+                            &texts.t(&format!("transfers-stage-{}", job.stage.word())),
+                        ),
                     ),
                 ],
             );
-            col.note(&what, tokens::color::TEXT_DIM);
+            col.note_named(&what.into(), tokens::color::TEXT_DIM);
         }
     }
 
@@ -2367,12 +2380,15 @@ impl View {
             return;
         }
         let offered = match r.catalogue_of(&remote.name) {
+            // THE REMOTE ASKED IS A NAME the note quotes (`Arg::Name`).
             None => {
-                col.note(
-                    &texts.t_with(
-                        crate::key::INCUS_CATALOGUE_READING,
-                        &[("remote", &remote.name)],
-                    ),
+                col.note_named(
+                    &texts
+                        .t_args_marked(
+                            crate::key::INCUS_CATALOGUE_READING,
+                            &[("remote", ronoctua_i18n::Arg::Name(&remote.name))],
+                        )
+                        .into(),
                     tokens::color::TEXT_DIM,
                 );
                 return;
@@ -2454,37 +2470,47 @@ impl View {
     }
 
     fn question_rows(&self, col: &mut Col<'_>, q: &Question) {
+        use ronoctua_i18n::Arg;
         let texts = col.texts;
-        let sentence = match q {
+        // WHAT IS ASKED ABOUT IS A NAME the question quotes (`Arg::Name`) —
+        // the instance, the image, the snapshot — drawn in a name's ink.
+        let sentence: crate::chrome::Named = match q {
             Question::Delete {
                 name,
                 running,
                 snapshots,
             } => {
-                let mut s = texts.t_with(crate::key::INCUS_ASK_DELETE, &[("name", name)]);
+                let mut s: crate::chrome::Named = texts
+                    .t_args_marked(crate::key::INCUS_ASK_DELETE, &[("name", Arg::Name(name))])
+                    .into();
                 if *running {
-                    s.push(' ');
-                    s.push_str(&texts.t(crate::key::INCUS_ASK_DELETE_RUNNING));
+                    s = s.then(" ", texts.t(crate::key::INCUS_ASK_DELETE_RUNNING));
                 }
                 if *snapshots {
-                    s.push(' ');
-                    s.push_str(&texts.t(crate::key::INCUS_ASK_DELETE_SNAPSHOTS));
+                    s = s.then(" ", texts.t(crate::key::INCUS_ASK_DELETE_SNAPSHOTS));
                 }
                 s
             }
-            Question::DeleteImage { label, .. } => {
-                texts.t_with(crate::key::INCUS_ASK_DELETE_IMAGE, &[("name", label)])
-            }
-            Question::DeleteSnapshot { name, snapshot } => texts.t_with(
-                crate::key::INCUS_ASK_DELETE_SNAPSHOT,
-                &[("name", name), ("snapshot", snapshot)],
-            ),
-            Question::Restore { name, snapshot } => texts.t_with(
-                crate::key::INCUS_ASK_RESTORE,
-                &[("name", name), ("snapshot", snapshot)],
-            ),
+            Question::DeleteImage { label, .. } => texts
+                .t_args_marked(
+                    crate::key::INCUS_ASK_DELETE_IMAGE,
+                    &[("name", Arg::Name(label))],
+                )
+                .into(),
+            Question::DeleteSnapshot { name, snapshot } => texts
+                .t_args_marked(
+                    crate::key::INCUS_ASK_DELETE_SNAPSHOT,
+                    &[("name", Arg::Name(name)), ("snapshot", Arg::Name(snapshot))],
+                )
+                .into(),
+            Question::Restore { name, snapshot } => texts
+                .t_args_marked(
+                    crate::key::INCUS_ASK_RESTORE,
+                    &[("name", Arg::Name(name)), ("snapshot", Arg::Name(snapshot))],
+                )
+                .into(),
         };
-        col.note(&sentence, tokens::color::TEXT_PRIMARY);
+        col.note_named(&sentence, tokens::color::TEXT_PRIMARY);
         col.push(crate::chrome::AIR, Target::Nothing, true);
         // "NO" FIRST, and the cursor is born on it. "Yes" is in the colour
         // of danger: what it does cannot be undone.
@@ -2529,13 +2555,17 @@ impl View {
                 Target::Field(field),
             );
         }
-        // WHAT THE IMAGE'S LINE TAKES, with the remotes there are.
+        // WHAT THE IMAGE'S LINE TAKES, with the remotes there are: each a
+        // name of its own (`chrome::names_listed`), the commas nobody's.
         col.push(crate::chrome::AIR, Target::Nothing, true);
         let remotes: Vec<&str> = r.remotes_read().iter().map(|x| x.name.as_str()).collect();
-        col.note(
-            &texts.t_with(
+        col.note_named(
+            &crate::chrome::names_listed(
+                texts,
                 crate::key::INCUS_IMAGE_HINT,
-                &[("remotes", &remotes.join(", "))],
+                "remotes",
+                &remotes,
+                ", ",
             ),
             tokens::color::TEXT_DIM,
         );
@@ -3557,7 +3587,7 @@ impl View {
             kind: Some(machine),
         };
         if !r.lets(&job.needs_hosts()) {
-            return Errand::Say(words::refused(Refusal::of(Why::NotLet), texts));
+            return Errand::Say(words::refused(Refusal::of(Why::NotLet), texts).into());
         }
         Errand::Queue(job, format!("{}:{alias}", remote.name))
     }
@@ -3593,13 +3623,13 @@ impl View {
             return Errand::Nothing;
         };
         let (Some(source), false) = (d.source.clone(), d.name.is_empty()) else {
-            return Errand::Say(texts.t(crate::key::INCUS_REFUSED_UNCHOSEN));
+            return Errand::Say(texts.t(crate::key::INCUS_REFUSED_UNCHOSEN).into());
         };
         if let Some(refused) = name_refused(&d.name, r, texts) {
             return Errand::Say(refused);
         }
         if !r.lets(&d.hosts()) {
-            return Errand::Say(words::refused(Refusal::of(Why::NotLet), texts));
+            return Errand::Say(words::refused(Refusal::of(Why::NotLet), texts).into());
         }
         let mut limits = d.limits;
         if d.machine == Machine::Vm {
@@ -3631,10 +3661,14 @@ impl View {
     }
 
     fn cannot(&self, texts: &ronoctua_i18n::Texts) -> Errand {
-        Errand::Say(texts.t_with(
-            crate::key::INCUS_REFUSED_NOT_HERE,
-            &[("kind", &texts.t(words::kind_key(self.kind)))],
-        ))
+        Errand::Say(
+            texts
+                .t_with(
+                    crate::key::INCUS_REFUSED_NOT_HERE,
+                    &[("kind", &texts.t(words::kind_key(self.kind)))],
+                )
+                .into(),
+        )
     }
 
     /// `C-d`: an instance, an image, or the snapshot under the cursor — each
@@ -3685,7 +3719,7 @@ impl View {
         };
         let name = i.name.clone();
         let running = i.status == Status::Running;
-        let not_running = || Errand::Say(texts.t(crate::key::INCUS_REFUSED_NOT_RUNNING));
+        let not_running = || Errand::Say(texts.t(crate::key::INCUS_REFUSED_NOT_RUNNING).into());
         let act = |action| {
             Errand::Do(
                 Deed::Act {
@@ -3714,7 +3748,7 @@ impl View {
                 name,
             ),
             Press::Screen if i.kind != Machine::Vm => {
-                Errand::Say(texts.t(crate::key::INCUS_REFUSED_NOT_VM))
+                Errand::Say(texts.t(crate::key::INCUS_REFUSED_NOT_VM).into())
             }
             Press::Screen if running => Errand::Open(Use::Screen, name),
             Press::Console | Press::Shell | Press::Screen => not_running(),
@@ -3784,13 +3818,23 @@ impl View {
                 // "done" over a row that still reads the same would lie.
                 Ok(None) if !limit.is_set(own) => {
                     if limit.is_set(limits) {
-                        Errand::Say(texts.t_with(
-                            crate::key::INCUS_REFUSED_LIMIT_PROFILE,
-                            &[
-                                ("limit", &texts.t(words::limit_key(limit))),
-                                ("name", &name),
-                            ],
-                        ))
+                        // THE INSTANCE IS A NAME the refusal quotes.
+                        Errand::Say(
+                            texts
+                                .t_args_marked(
+                                    crate::key::INCUS_REFUSED_LIMIT_PROFILE,
+                                    &[
+                                        (
+                                            "limit",
+                                            ronoctua_i18n::Arg::Text(
+                                                &texts.t(words::limit_key(limit)),
+                                            ),
+                                        ),
+                                        ("name", ronoctua_i18n::Arg::Name(&name)),
+                                    ],
+                                )
+                                .into(),
+                        )
                     } else {
                         Errand::Nothing
                     }
@@ -3806,10 +3850,12 @@ impl View {
                         name,
                     ),
                     None => Errand::Say(
-                        texts.t_with(crate::key::INCUS_REFUSED_NUMBER, &[("said", said)]),
+                        texts
+                            .t_with(crate::key::INCUS_REFUSED_NUMBER, &[("said", said)])
+                            .into(),
                     ),
                 },
-                Err(refused) => Errand::Say(refused),
+                Err(refused) => Errand::Say(refused.into()),
             },
             Asking::Snapshot { name } => {
                 if said.is_empty() {
@@ -3824,7 +3870,12 @@ impl View {
                     )
                 } else {
                     Errand::Say(
-                        texts.t_with(crate::key::INCUS_REFUSED_SNAPSHOT_NAME, &[("name", said)]),
+                        texts
+                            .t_args_marked(
+                                crate::key::INCUS_REFUSED_SNAPSHOT_NAME,
+                                &[("name", ronoctua_i18n::Arg::Name(said))],
+                            )
+                            .into(),
                     )
                 }
             }
@@ -3835,7 +3886,12 @@ impl View {
                 let from = path(said);
                 if !from.is_file() {
                     return Errand::Say(
-                        texts.t_with(crate::key::INCUS_REFUSED_NO_FILE, &[("path", said)]),
+                        texts
+                            .t_args_marked(
+                                crate::key::INCUS_REFUSED_NO_FILE,
+                                &[("path", ronoctua_i18n::Arg::Name(said))],
+                            )
+                            .into(),
                     );
                 }
                 let base = from
@@ -3855,9 +3911,14 @@ impl View {
                     name,
                 ),
                 None if said.is_empty() => Errand::Nothing,
-                None => {
-                    Errand::Say(texts.t_with(crate::key::INCUS_REFUSED_INSIDE, &[("path", said)]))
-                }
+                None => Errand::Say(
+                    texts
+                        .t_args_marked(
+                            crate::key::INCUS_REFUSED_INSIDE,
+                            &[("path", ronoctua_i18n::Arg::Name(said))],
+                        )
+                        .into(),
+                ),
             },
             Asking::PullFrom { name } => match inside(said) {
                 Some(from) => {
@@ -3866,9 +3927,14 @@ impl View {
                     Errand::Ask(PULL_TO, Some(format!("~/{base}")))
                 }
                 None if said.is_empty() => Errand::Nothing,
-                None => {
-                    Errand::Say(texts.t_with(crate::key::INCUS_REFUSED_INSIDE, &[("path", said)]))
-                }
+                None => Errand::Say(
+                    texts
+                        .t_args_marked(
+                            crate::key::INCUS_REFUSED_INSIDE,
+                            &[("path", ronoctua_i18n::Arg::Name(said))],
+                        )
+                        .into(),
+                ),
             },
             Asking::PullTo { name, from } => match new_file(said, home, texts) {
                 Ok(to) => Errand::Queue(
@@ -3898,7 +3964,12 @@ impl View {
                 let from = path(said);
                 if !from.is_file() {
                     return Errand::Say(
-                        texts.t_with(crate::key::INCUS_REFUSED_NO_FILE, &[("path", said)]),
+                        texts
+                            .t_args_marked(
+                                crate::key::INCUS_REFUSED_NO_FILE,
+                                &[("path", ronoctua_i18n::Arg::Name(said))],
+                            )
+                            .into(),
                     );
                 }
                 let label = from
@@ -3913,7 +3984,15 @@ impl View {
                 } else if said.chars().any(|c| c.is_whitespace() || c.is_control())
                     || said.len() > 255
                 {
-                    Errand::Say(texts.t_with(crate::key::INCUS_REFUSED_ALIAS, &[("alias", said)]))
+                    // THE ALIAS TYPED IS A NAME the refusal quotes.
+                    Errand::Say(
+                        texts
+                            .t_args_marked(
+                                crate::key::INCUS_REFUSED_ALIAS,
+                                &[("alias", ronoctua_i18n::Arg::Name(said))],
+                            )
+                            .into(),
+                    )
                 } else {
                     Errand::Queue(
                         Job::Publish {
@@ -3964,16 +4043,22 @@ impl View {
                             d.limits.processes = None;
                         }
                     }
+                    // THE IMAGE TYPED IS A NAME the refusal quotes.
                     None => {
                         return Errand::Say(
-                            texts.t_with(crate::key::INCUS_REFUSED_NO_IMAGE, &[("image", said)]),
+                            texts
+                                .t_args_marked(
+                                    crate::key::INCUS_REFUSED_NO_IMAGE,
+                                    &[("image", ronoctua_i18n::Arg::Name(said))],
+                                )
+                                .into(),
                         );
                     }
                 }
             }
             Field::Limit(limit) => match limit_of(limit, said, texts) {
                 Ok(value) => set_limit(&mut d.limits, limit, value),
-                Err(refused) => return Errand::Say(refused),
+                Err(refused) => return Errand::Say(refused.into()),
             },
         }
         Errand::Nothing
@@ -3993,13 +4078,31 @@ const fn press_of_use(what: Use) -> Press {
 }
 
 /// Why a new instance's name is refused, as a sentence: a name Incus does
-/// not take, or one an instance already has.
-fn name_refused(name: &str, r: &Readings, texts: &ronoctua_i18n::Texts) -> Option<String> {
+/// not take, or one an instance already has. What was typed is a name the
+/// sentence quotes (`Arg::Name`), as in every refusal of what was typed here.
+fn name_refused(
+    name: &str,
+    r: &Readings,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<crate::chrome::Named> {
     if !ronoctua_incus::is_instance_name(name) {
-        return Some(texts.t_with(crate::key::INCUS_REFUSED_NAME, &[("name", name)]));
+        return Some(
+            texts
+                .t_args_marked(
+                    crate::key::INCUS_REFUSED_NAME,
+                    &[("name", ronoctua_i18n::Arg::Name(name))],
+                )
+                .into(),
+        );
     }
-    r.instance(name)
-        .map(|_| texts.t_with(crate::key::INCUS_REFUSED_NAME_TAKEN, &[("name", name)]))
+    r.instance(name).map(|_| {
+        texts
+            .t_args_marked(
+                crate::key::INCUS_REFUSED_NAME_TAKEN,
+                &[("name", ronoctua_i18n::Arg::Name(name))],
+            )
+            .into()
+    })
 }
 
 /// A limit typed: `None` (no limit) for an empty answer, the value, or the
@@ -4091,26 +4194,36 @@ fn new_file(
     said: &str,
     home: Option<&Path>,
     texts: &ronoctua_i18n::Texts,
-) -> Result<PathBuf, Option<String>> {
+) -> Result<PathBuf, Option<crate::chrome::Named>> {
     if said.is_empty() {
         return Err(None);
     }
     let to = expanded(said, home);
     if to.exists() || to.is_symlink() {
         return Err(Some(
-            texts.t_with(crate::key::INCUS_REFUSED_EXISTS, &[("path", said)]),
+            texts
+                .t_args_marked(
+                    crate::key::INCUS_REFUSED_EXISTS,
+                    &[("path", ronoctua_i18n::Arg::Name(said))],
+                )
+                .into(),
         ));
     }
     if !to.parent().is_some_and(Path::is_dir) {
         return Err(Some(
-            texts.t_with(crate::key::INCUS_REFUSED_NO_FOLDER, &[("path", said)]),
+            texts
+                .t_args_marked(
+                    crate::key::INCUS_REFUSED_NO_FOLDER,
+                    &[("path", ronoctua_i18n::Arg::Name(said))],
+                )
+                .into(),
         ));
     }
     Ok(to)
 }
 
 /// What the line says for a refusal of [`new_file`].
-fn refusing(said: Option<String>) -> Errand {
+fn refusing(said: Option<crate::chrome::Named>) -> Errand {
     said.map_or(Errand::Nothing, Errand::Say)
 }
 
@@ -4671,6 +4784,18 @@ pub(crate) mod tests {
             Errand::Nothing
         );
         assert!(matches!(v.question(), Some(Question::Restore { .. })));
+        // BOTH NAMES ARE TOLD — the instance and the snapshot — each a field
+        // of its own in the ink a name takes in the question's.
+        let quoted = crate::chrome::quoted_ink(tokens::color::TEXT_PRIMARY);
+        let lines = v.lines(&r, WIDE, Layout::Panes, ROOM, &t);
+        let named: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| &l.fields)
+            .filter(|f| f.color == quoted)
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(named.len(), 2, "{}", texts_of(&lines));
+        assert_eq!(named[0], "web", "{}", texts_of(&lines));
         v.key(Press::Escape, &r, WIDE, Layout::Panes, &t);
         assert_eq!(
             v.key(Press::Delete, &r, WIDE, Layout::Panes, &t),
@@ -4731,17 +4856,24 @@ pub(crate) mod tests {
             Errand::Say(_)
         ));
         // NOTHING TYPED on a profile's limit: nothing of its own to take
-        // away, and the screen says why rather than "done".
+        // away, and the screen says why rather than "done" — the instance
+        // told as the name it is.
         v.key(Press::Enter, &r, WIDE, Layout::Panes, &t);
         assert_eq!(
             v.answered(MEMORY, "", &r, None, &t),
-            Errand::Say(t.t_with(
-                crate::key::INCUS_REFUSED_LIMIT_PROFILE,
-                &[
-                    ("limit", &t.t(words::limit_key(Limit::Memory))),
-                    ("name", "web")
-                ],
-            ))
+            Errand::Say(
+                t.t_args_marked(
+                    crate::key::INCUS_REFUSED_LIMIT_PROFILE,
+                    &[
+                        (
+                            "limit",
+                            ronoctua_i18n::Arg::Text(&t.t(words::limit_key(Limit::Memory)))
+                        ),
+                        ("name", ronoctua_i18n::Arg::Name("web"))
+                    ],
+                )
+                .into()
+            )
         );
         // A VALUE: that limit, and nothing else, goes to the daemon.
         v.key(Press::Enter, &r, WIDE, Layout::Panes, &t);

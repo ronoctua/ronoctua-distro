@@ -278,7 +278,10 @@ mod tests {
         );
         assert_eq!(r.command("geo-open", None, &mut w), Taken::Yes);
         let busy = w.texts().t(crate::key::ECHO_VIEW_BUSY);
-        assert_eq!(w.owed.first(), Some(&Effect::Say(busy, Echo::Normal)));
+        assert_eq!(
+            w.owed.first(),
+            Some(&Effect::Say(busy.into(), Echo::Normal))
+        );
     }
 
     /// FAILS IF: a closed view answers a command that is not its own, opens
@@ -318,7 +321,7 @@ mod tests {
             vec![
                 Effect::Ask(Line::new(FIND, false, None)),
                 Effect::Repaint,
-                Effect::Say(said, Echo::Normal),
+                Effect::Say(said.into(), Echo::Normal),
                 Effect::Repaint,
                 Effect::Close,
             ]

@@ -50,6 +50,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use ronoctua_i18n::Arg;
+
 /// The command (`cmd-dev-clone`, bound to `/ c`).
 pub const COMMAND: &str = "dev-clone";
 
@@ -93,14 +95,15 @@ pub enum Step {
         /// from its folder: that clone is over.
         again: bool,
     },
-    /// Say this, and do nothing else (a refusal).
-    Say(String),
+    /// Say this, and do nothing else (a refusal) — the folder or host it
+    /// quotes told as a name.
+    Say(crate::chrome::Named),
     /// Let the host, mint its pass, and clone.
     Clone(Plan),
     /// The clone ended: say this, and open the folder when it worked.
     Done {
-        /// The sentence.
-        said: String,
+        /// The sentence, the folder told as a name.
+        said: crate::chrome::Named,
         /// The folder, when the clone made it.
         open: Option<PathBuf>,
     },
@@ -197,13 +200,17 @@ pub fn step(
         return came_back(back, address, texts);
     }
     if let Some(folder) = running {
-        return Step::Say(texts.t_with(
-            crate::key::DEV_CLONE_RUNNING,
-            &[("folder", &folder.to_string_lossy())],
-        ));
+        return Step::Say(
+            texts
+                .t_args_marked(
+                    crate::key::DEV_CLONE_RUNNING,
+                    &[("folder", Arg::Name(&folder.to_string_lossy()))],
+                )
+                .into(),
+        );
     }
     let Some(url) = address.filter(|a| ronoctua_git::host_of(a).is_some()) else {
-        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_ADDRESS));
+        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_ADDRESS).into());
     };
     let Some(typed) = argument else {
         return Step::Resolve {
@@ -212,13 +219,17 @@ pub fn step(
         };
     };
     let Some(into) = folder_of(typed, home) else {
-        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER));
+        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER).into());
     };
     if occupied(&into) {
-        return Step::Say(texts.t_with(
-            crate::key::DEV_CLONE_OCCUPIED,
-            &[("folder", &into.to_string_lossy())],
-        ));
+        return Step::Say(
+            texts
+                .t_args_marked(
+                    crate::key::DEV_CLONE_OCCUPIED,
+                    &[("folder", Arg::Name(&into.to_string_lossy()))],
+                )
+                .into(),
+        );
     }
     // AN ANSWER NO QUESTION NAMED A HOST FOR — the command run with its
     // folder — is asked first, the folder offered: the host is let only by
@@ -321,24 +332,33 @@ pub fn occupied(into: &Path) -> bool {
 /// # Errors
 ///
 /// The sentence, when the consent could not be kept or would not mint.
-pub fn consent(host: &str, texts: &ronoctua_i18n::Texts) -> Result<ronoctua_consent::Pass, String> {
+pub fn consent(
+    host: &str,
+    texts: &ronoctua_i18n::Texts,
+) -> Result<ronoctua_consent::Pass, crate::chrome::Named> {
     if let Err(unkept) = ronoctua_consent::let_hosts(&[host], true) {
-        return Err(texts.t(&format!("dev-clone-unkept-{}", unkept.id())));
+        return Err(texts.t(&format!("dev-clone-unkept-{}", unkept.id())).into());
     }
-    ronoctua_consent::pass(host)
-        .map_err(|_| texts.t_with(crate::key::DEV_CLONE_NOT_LET, &[("host", host)]))
+    ronoctua_consent::pass(host).map_err(|_| {
+        texts
+            .t_args_marked(crate::key::DEV_CLONE_NOT_LET, &[("host", Arg::Name(host))])
+            .into()
+    })
 }
 
-/// The sentence said while the clone runs.
+/// The sentence said while the clone runs — the host and the folder told
+/// as the names they are.
 #[must_use]
-pub fn cloning(plan: &Plan, texts: &ronoctua_i18n::Texts) -> String {
-    texts.t_with(
-        crate::key::DEV_CLONE_CLONING,
-        &[
-            ("folder", &plan.into.to_string_lossy()),
-            ("host", &plan.host),
-        ],
-    )
+pub fn cloning(plan: &Plan, texts: &ronoctua_i18n::Texts) -> crate::chrome::Named {
+    texts
+        .t_args_marked(
+            crate::key::DEV_CLONE_CLONING,
+            &[
+                ("folder", Arg::Name(&plan.into.to_string_lossy())),
+                ("host", Arg::Name(&plan.host)),
+            ],
+        )
+        .into()
 }
 
 /// Runs the clone (on the thread that called it) and gives back the
@@ -408,12 +428,12 @@ pub fn back_of(outcome: Result<(), ronoctua_git::Refusal>, into: &Path) -> Strin
 /// that it could not be read, or how the clone ended.
 fn came_back(back: &str, address: Option<&str>, texts: &ronoctua_i18n::Texts) -> Step {
     let Some((word, rest)) = back.split_once(BACK) else {
-        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER));
+        return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER).into());
     };
     match word {
         AT | AGAIN => {
             let Some((effective, first)) = rest.split_once(BACK) else {
-                return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER));
+                return Step::Say(texts.t(crate::key::DEV_CLONE_NO_FOLDER).into());
             };
             return asked_of(effective, first, address, word == AGAIN, texts);
         }
@@ -424,7 +444,7 @@ fn came_back(back: &str, address: Option<&str>, texts: &ronoctua_i18n::Texts) ->
                 why = rest,
                 "where the distro's address leads could not be read"
             );
-            return Step::Say(texts.t(crate::key::DEV_CLONE_UNREAD));
+            return Step::Say(texts.t(crate::key::DEV_CLONE_UNREAD).into());
         }
         _ => {}
     }
@@ -433,7 +453,9 @@ fn came_back(back: &str, address: Option<&str>, texts: &ronoctua_i18n::Texts) ->
     let shown = into.to_string_lossy().into_owned();
     if word == "ok" {
         return Step::Done {
-            said: texts.t_with(crate::key::DEV_CLONE_DONE, &[("folder", &shown)]),
+            said: texts
+                .t_args_marked(crate::key::DEV_CLONE_DONE, &[("folder", Arg::Name(&shown))])
+                .into(),
             open: Some(into),
         };
     }
@@ -443,10 +465,12 @@ fn came_back(back: &str, address: Option<&str>, texts: &ronoctua_i18n::Texts) ->
         .unwrap_or(ronoctua_git::Why::Failed);
     let reason = crate::git_line::why_said(why, texts);
     Step::Done {
-        said: texts.t_with(
-            crate::key::DEV_CLONE_FAILED,
-            &[("folder", &shown), ("why", &reason)],
-        ),
+        said: texts
+            .t_args_marked(
+                crate::key::DEV_CLONE_FAILED,
+                &[("folder", Arg::Name(&shown)), ("why", Arg::Text(&reason))],
+            )
+            .into(),
         open: None,
     }
 }
@@ -462,7 +486,16 @@ fn asked_of(
     texts: &ronoctua_i18n::Texts,
 ) -> Step {
     let Some(host) = ronoctua_git::host_of(effective) else {
-        return Step::Say(texts.t_with(crate::key::DEV_CLONE_NO_HOST, &[("to", effective)]));
+        // WHERE THE SETTINGS SEND THE ADDRESS is quoted as a name, as a host
+        // is: the place the person reads back from their own git settings.
+        return Step::Say(
+            texts
+                .t_args_marked(
+                    crate::key::DEV_CLONE_NO_HOST,
+                    &[("to", Arg::Name(effective))],
+                )
+                .into(),
+        );
     };
     let from = address
         .and_then(ronoctua_git::host_of)
@@ -492,9 +525,13 @@ pub fn reading(texts: &ronoctua_i18n::Texts) -> String {
 pub fn question(first: &str, host: String, from: Option<String>) -> crate::line::Line {
     let mut line = crate::line::Line::new(COMMAND, false, Some(first));
     line.asks_with = vec![("host", host)];
+    // THE HOSTS THE QUESTION QUOTES — the one asked, and the address's own
+    // beside it — are names, drawn in a name's ink (`Line::asks_names`).
+    line.asks_names = vec!["host"];
     if let Some(from) = from {
         line.asks = Some(crate::key::DEV_CLONE_ELSEWHERE);
         line.asks_with.push(("from", from));
+        line.asks_names.push("from");
     }
     line
 }
@@ -631,7 +668,7 @@ mod tests {
             );
             assert_eq!(
                 step(Some(&back), Some(URL), None, None, None, &t),
-                Step::Say(t.t(crate::key::DEV_CLONE_UNREAD))
+                Step::Say(t.t(crate::key::DEV_CLONE_UNREAD).into())
             );
         }
     }
@@ -764,8 +801,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// FAILS IF: what came back is said in the wrong words, a folder that
+    /// was not cloned is opened — or the folder is said in the sentence's
+    /// own ink rather than told as the name it is (`Arg::Name`), or the
+    /// reason is told as one.
     #[test]
     fn what_comes_back_is_said_and_only_a_clone_opens() {
+        let names = |said: &crate::chrome::Named| -> Vec<String> {
+            said.names()
+                .iter()
+                .map(|r| said.as_str()[r.clone()].to_owned())
+                .collect()
+        };
         for language in ["en-GB", "pt-BR"] {
             let t = texts(language);
             let into = Path::new("/home/ada/ronoctua-distro");
@@ -778,6 +825,7 @@ mod tests {
             };
             assert_eq!(open.as_deref(), Some(into));
             assert!(said.contains("/home/ada/ronoctua-distro"), "{said}");
+            assert_eq!(names(&said), ["/home/ada/ronoctua-distro"], "{said}");
             for why in ronoctua_git::Why::ALL {
                 let back = back_of(Err(ronoctua_git::Refusal { why }), into);
                 let Step::Done { said, open } = step(Some(&back), None, None, None, None, &t)
@@ -786,6 +834,7 @@ mod tests {
                 };
                 assert_eq!(open, None);
                 assert!(said.contains(&crate::git_line::why_said(why, &t)), "{said}");
+                assert_eq!(names(&said), ["/home/ada/ronoctua-distro"], "{said}");
                 assert!(!said.contains("dev-clone-"), "{said}");
             }
         }

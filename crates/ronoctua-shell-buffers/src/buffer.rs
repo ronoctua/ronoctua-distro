@@ -3813,9 +3813,21 @@ impl Host {
                     Refusal::NeedsAdmin => crate::key::FORMAT_REFUSED_ADMIN,
                     _ => crate::key::FORMAT_REFUSED_OTHER,
                 };
+                // THE VOLUME IS A NAME the sentence quotes (`Arg::Name`), told
+                // as every name is; the buffer draws its own words in its own
+                // ink (inv. 11), so only the words cross.
                 ronoctua_protocol::Outcome {
                     done: false,
-                    trouble: self.texts.t_with(key, &[("name", name), ("why", why)]),
+                    trouble: self
+                        .texts
+                        .t_args_marked(
+                            key,
+                            &[
+                                ("name", ronoctua_i18n::Arg::Name(name)),
+                                ("why", ronoctua_i18n::Arg::Text(why)),
+                            ],
+                        )
+                        .text,
                 }
             }
         };

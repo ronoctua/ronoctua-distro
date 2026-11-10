@@ -84,6 +84,7 @@ use ronoctua_belongings::requests::{Request, Requests};
 use ronoctua_belongings::scope::{self, Scope};
 use ronoctua_belongings::secret::Typed;
 use ronoctua_belongings::status::{Budget, Last, Offer, Outcome, Status};
+use ronoctua_i18n::Arg;
 use ronoctua_render::layout;
 use ronoctua_tokens as tokens;
 
@@ -1615,8 +1616,9 @@ enum Entry {
     },
     /// A line of air between two items of one list.
     Air,
-    /// A sentence under the row before it, wrapped.
-    Note(String, tokens::Color),
+    /// A sentence under the row before it, wrapped — a name it quotes in a
+    /// name's ink ([`crate::chrome::note_fields`]).
+    Note(crate::chrome::Named, tokens::Color),
     /// A sentence in under the rows it belongs to, wrapped in what is left:
     /// a field's value before both sides changed it, under that field's two
     /// values.
@@ -1740,9 +1742,9 @@ impl Builder<'_> {
                     continues: false,
                 }),
                 Entry::Note(text, colour) => {
-                    for line in crate::chrome::note_lines(&text, self.room) {
+                    for fields in crate::chrome::note_fields(self.left, &text, colour, self.room) {
                         self.out.push(Row {
-                            fields: vec![piece(self.left, line, colour, self.room)],
+                            fields,
                             target: None,
                             continues: false,
                         });
@@ -1827,8 +1829,8 @@ fn tinted(label: String, value: String, target: Target, acts: bool, tint: tokens
 }
 
 /// A dim sentence.
-fn note(text: String) -> Entry {
-    Entry::Note(text, tokens::color::TEXT_DIM)
+fn note(text: impl Into<crate::chrome::Named>) -> Entry {
+    Entry::Note(text.into(), tokens::color::TEXT_DIM)
 }
 
 /// One piece of text, elided to `room`.
@@ -1876,7 +1878,6 @@ fn side_text(
 /// The sentence a run's ending says.
 #[must_use]
 pub fn outcome_text(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
-    use ronoctua_i18n::Arg;
     let n = |v: u32| Arg::Number(i64::from(v));
     match outcome {
         Outcome::Synced {
@@ -2041,8 +2042,9 @@ pub enum Errand {
     Close,
     /// Open this question on the door's own line.
     Ask(crate::line::Line),
-    /// Say this sentence on the door's line.
-    Say(String),
+    /// Say this sentence on the door's line — a name it quotes told
+    /// (`ronoctua_i18n::Arg::Name`), so the line draws it in a name's ink.
+    Say(crate::chrome::Named),
     /// Put this on the clipboard.
     Copy(String),
     /// Put this order on the queue — every file it reads is written already.
@@ -2400,7 +2402,7 @@ impl View {
                         let path = path.to_owned();
                         self.decide(r, &path, d, texts)
                     }
-                    None => Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE)),
+                    None => Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE).into()),
                 },
             },
             Press::Sync => self.start_sync(r, texts),
@@ -2499,16 +2501,16 @@ impl View {
             Target::Apply => self.apply(r, texts),
             Target::Abandon => {
                 if r.plan.is_none() {
-                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED));
+                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED).into());
                 }
                 if r.busy {
-                    return Errand::Say(texts.t(words::refusal_key(Why::Busy)));
+                    return Errand::Say(texts.t(words::refusal_key(Why::Busy)).into());
                 }
                 Errand::Queue(Op::Abandon)
             }
             Target::All(d) => {
                 let Some(plan) = r.plan.as_ref() else {
-                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED));
+                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED).into());
                 };
                 let mut decided = r.decided();
                 decided.extend(plan.all(d));
@@ -2529,12 +2531,12 @@ impl View {
             Target::Auth => self.change(r, texts, flip_auth),
             Target::Keygen => {
                 if r.has_key {
-                    return Errand::Say(texts.t(key::BELONGINGS_KEY_ALREADY));
+                    return Errand::Say(texts.t(key::BELONGINGS_KEY_ALREADY).into());
                 }
                 Errand::Queue(Op::Keygen)
             }
             Target::CopyKey => r.public_key.clone().map_or_else(
-                || Errand::Say(texts.t(key::BELONGINGS_NO_KEY_YET)),
+                || Errand::Say(texts.t(key::BELONGINGS_NO_KEY_YET).into()),
                 Errand::Copy,
             ),
             Target::Token => self.ask(Ask::Token, r),
@@ -2547,15 +2549,15 @@ impl View {
             }),
             Target::Passphrase => {
                 if !r.prefs.has_repository() {
-                    return Errand::Say(texts.t(words::refusal_key(Why::NoRepository)));
+                    return Errand::Say(texts.t(words::refusal_key(Why::NoRepository)).into());
                 }
                 if r.first_run() {
-                    return Errand::Say(texts.t(key::BELONGINGS_PASSPHRASE_FIRST));
+                    return Errand::Say(texts.t(key::BELONGINGS_PASSPHRASE_FIRST).into());
                 }
                 // A CHANGE OF PASSPHRASE WRITES THE PASSPHRASE'S FILE, which a
                 // waiting sync and a running one are using.
                 if let Some(said) = in_the_way(r, texts) {
-                    return Errand::Say(said);
+                    return Errand::Say(said.into());
                 }
                 self.ask(Ask::Old, r)
             }
@@ -2595,14 +2597,14 @@ impl View {
                         target: id.to_owned(),
                     },
                 ) {
-                    return Errand::Say(texts.t(said));
+                    return Errand::Say(texts.t(said).into());
                 }
                 if let Err(said) = change_the_file(r.places.as_ref(), |p| {
                     for path in target_paths(id) {
                         p.keep(path);
                     }
                 }) {
-                    return Errand::Say(said.sentence(texts));
+                    return Errand::Say(crate::chrome::said_of(texts, &said.explanation()));
                 }
                 self.start_sync(r, texts)
             }
@@ -2635,7 +2637,7 @@ impl View {
                 }
                 match answer(places, status.at_s, &offer, Said::No) {
                     Ok(()) => Errand::Nothing,
-                    Err(said) => Errand::Say(texts.t(said)),
+                    Err(said) => Errand::Say(texts.t(said).into()),
                 }
             }
             Target::InstallExtensions => install_extensions(r, None, texts),
@@ -2646,7 +2648,7 @@ impl View {
             // THE PIN IS A ROOT GESTURE: its password, key or finger is the
             // sudo bar's to ask, never this view's line.
             Target::Pin => match pin_refusal(r) {
-                Some(said) => Errand::Say(texts.t(said)),
+                Some(said) => Errand::Say(texts.t(said).into()),
                 None => Errand::Pin {
                     key: r.plain.signer.clone(),
                     fingerprint: r.plain.fingerprint.clone(),
@@ -2654,7 +2656,7 @@ impl View {
             },
             Target::Sign => {
                 if let Some(said) = unready(r, texts) {
-                    return Errand::Say(said);
+                    return Errand::Say(said.into());
                 }
                 if r.kept_until.is_some() {
                     return Errand::Queue(Op::Sign);
@@ -2673,7 +2675,7 @@ impl View {
             // once: written as decisions, which "Apply" carries out.
             Target::Gone(root, yes) => {
                 let Some(plan) = r.plan.as_ref() else {
-                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED));
+                    return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED).into());
                 };
                 let d = if yes {
                     Decision::KeepLocal
@@ -2706,7 +2708,7 @@ impl View {
         if matches!(q, Question::Compact)
             && let Some(said) = unready(r, texts).or_else(|| not_let(r, texts))
         {
-            return Errand::Say(said);
+            return Errand::Say(said.into());
         }
         self.mode = Mode::Question(q);
         self.aim = Some(Target::Answer(false));
@@ -2742,13 +2744,13 @@ impl View {
                         target: id.to_owned(),
                     },
                 ) {
-                    return Errand::Say(texts.t(said));
+                    return Errand::Say(texts.t(said).into());
                 }
                 self.start_sync(r, texts)
             }
             Question::Compact => {
                 if let Some(said) = unready(r, texts).or_else(|| not_let(r, texts)) {
-                    return Errand::Say(said);
+                    return Errand::Say(said.into());
                 }
                 if r.asks_nothing() {
                     return Errand::Queue(Op::Compact);
@@ -2765,7 +2767,7 @@ impl View {
         match change_the_file(r.places.as_ref(), |p| p.keep_unlocked = on) {
             Ok(()) if on => Errand::Nothing,
             Ok(()) => Errand::Queue(Op::Forget),
-            Err(said) => Errand::Say(said.sentence(texts)),
+            Err(said) => Errand::Say(crate::chrome::said_of(texts, &said.explanation())),
         }
     }
 
@@ -2781,7 +2783,7 @@ impl View {
     /// with, else the passphrase is asked.
     fn start_sync(&mut self, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
         if let Some(said) = unready(r, texts).or_else(|| not_let(r, texts)) {
-            return Errand::Say(said);
+            return Errand::Say(said.into());
         }
         // THE SESSION REMEMBERS IT: the sync asks nothing
         // (`ronoctua_belongings::unlock`).
@@ -2795,32 +2797,36 @@ impl View {
     /// holds the lock.
     fn apply(&self, r: &Readings, texts: &ronoctua_i18n::Texts) -> Errand {
         let Some(plan) = r.plan.as_ref() else {
-            return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED));
+            return Errand::Say(texts.t(key::BELONGINGS_NOTHING_PREPARED).into());
         };
         if r.busy {
-            return Errand::Say(texts.t(words::refusal_key(Why::Busy)));
+            return Errand::Say(texts.t(words::refusal_key(Why::Busy)).into());
         }
         // AN APPLY PUSHES: refused by the CLI with no pass, it would take the
         // session and the decisions with it — so it is refused here first.
         if let Some(said) = not_let(r, texts) {
-            return Errand::Say(said);
+            return Errand::Say(said.into());
         }
         let decided = r.decided();
         if !plan.conflicts.iter().all(|c| r.settled(c)) {
             let left = plan.questions().saturating_sub(settled_questions(r, plan));
-            return Errand::Say(texts.t_args(
-                key::BELONGINGS_UNDECIDED_LEFT,
-                &[(
-                    "n",
-                    ronoctua_i18n::Arg::Number(i64::try_from(left).unwrap_or(i64::MAX)),
-                )],
-            ));
+            return Errand::Say(
+                texts
+                    .t_args(
+                        key::BELONGINGS_UNDECIDED_LEFT,
+                        &[(
+                            "n",
+                            ronoctua_i18n::Arg::Number(i64::try_from(left).unwrap_or(i64::MAX)),
+                        )],
+                    )
+                    .into(),
+            );
         }
         // WHAT IS DECIDED, WRITTEN BEFORE THE ORDER: the CLI reads the file,
         // and a suggestion nobody touched is a decision too.
         match write_decisions_file(r, &decided) {
             Ok(()) => Errand::Queue(Op::Apply),
-            Err(said) => Errand::Say(texts.t(said)),
+            Err(said) => Errand::Say(texts.t(said).into()),
         }
     }
 
@@ -2833,7 +2839,7 @@ impl View {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
         let Some(c) = conflict_of(r, path) else {
-            return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE));
+            return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE).into());
         };
         if !d.allowed(c) {
             // EACH REFUSAL WITH ITS OWN WORDS: a merge nobody reached, or
@@ -2844,7 +2850,7 @@ impl View {
                 }
                 _ => key::BELONGINGS_BOTH_ONLY_ADDED,
             };
-            return Errand::Say(texts.t(why));
+            return Errand::Say(texts.t(why).into());
         }
         let mut decided = r.decided();
         decided.insert(path.to_owned(), d);
@@ -2869,11 +2875,15 @@ impl View {
             .zip(r.places.as_ref())
             .map(|(name, p)| p.theirs(&format!("{name}.diff")));
         let Some(text) = file.and_then(|f| std::fs::read_to_string(f).ok()) else {
-            return Errand::Say(texts.t(if c.text {
-                key::BELONGINGS_NO_DIFFERENCE
-            } else {
-                key::BELONGINGS_NOT_TEXT
-            }));
+            return Errand::Say(
+                texts
+                    .t(if c.text {
+                        key::BELONGINGS_NO_DIFFERENCE
+                    } else {
+                        key::BELONGINGS_NOT_TEXT
+                    })
+                    .into(),
+            );
         };
         let lines: Vec<String> = text
             .lines()
@@ -2896,7 +2906,7 @@ impl View {
     ) -> Errand {
         match change_the_file(r.places.as_ref(), change) {
             Ok(()) => Errand::Nothing,
-            Err(said) => Errand::Say(said.sentence(texts)),
+            Err(said) => Errand::Say(crate::chrome::said_of(texts, &said.explanation())),
         }
     }
 
@@ -2922,7 +2932,7 @@ impl View {
             Ask::Repository => {
                 let address = said.trim();
                 if let Err(why) = prefs::repository_is_plain(address) {
-                    return Errand::Say(texts.t(words::invalid_key(why)));
+                    return Errand::Say(texts.t(words::invalid_key(why)).into());
                 }
                 // TYPING THE ADDRESS IS THE CONSENT to ask its host, kept in
                 // `consent.json` like any other: no sync or compaction
@@ -2940,34 +2950,34 @@ impl View {
             }
             Ask::Path => {
                 let Some(places) = r.places.as_ref() else {
-                    return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+                    return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES).into());
                 };
                 match logical_of_typed(places, said.trim()) {
                     Some(logical) if kept::plain_root(&logical).is_some() => {
-                        Errand::Say(texts.t(key::BELONGINGS_PLAIN_ALREADY))
+                        Errand::Say(texts.t(key::BELONGINGS_PLAIN_ALREADY).into())
                     }
                     Some(logical) if kept::may_add(&logical) => self.change(r, texts, |p| {
                         p.keep(&logical);
                     }),
-                    Some(_) => Errand::Say(texts.t(key::BELONGINGS_NEVER_KEPT)),
-                    None => Errand::Say(texts.t(key::BELONGINGS_OUTSIDE_HOME)),
+                    Some(_) => Errand::Say(texts.t(key::BELONGINGS_NEVER_KEPT).into()),
+                    None => Errand::Say(texts.t(key::BELONGINGS_OUTSIDE_HOME).into()),
                 }
             }
             Ask::Token => {
                 if typed.expose().trim().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 match write_secret(r, Places::token, typed.expose().trim()) {
-                    Ok(()) => Errand::Say(texts.t(key::BELONGINGS_TOKEN_KEPT)),
-                    Err(said) => Errand::Say(texts.t(said)),
+                    Ok(()) => Errand::Say(texts.t(key::BELONGINGS_TOKEN_KEPT).into()),
+                    Err(said) => Errand::Say(texts.t(said).into()),
                 }
             }
             Ask::Passphrase => {
                 if typed.expose().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 if let Some(refused) = unready(r, texts) {
-                    return Errand::Say(refused);
+                    return Errand::Say(refused.into());
                 }
                 // A FIRST SYNC ASKS IT TWICE: when the repository is empty,
                 // what is typed becomes its passphrase for good.
@@ -2978,58 +2988,58 @@ impl View {
             }
             Ask::Compact => {
                 if typed.expose().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 if let Some(refused) = unready(r, texts) {
-                    return Errand::Say(refused);
+                    return Errand::Say(refused.into());
                 }
                 match write_secret(r, Places::passphrase, typed.expose()) {
                     Ok(()) => Errand::Queue(Op::Compact),
-                    Err(said) => Errand::Say(texts.t(said)),
+                    Err(said) => Errand::Say(texts.t(said).into()),
                 }
             }
             Ask::Confirm(first) => {
                 if typed != first {
-                    return Errand::Say(texts.t(key::BELONGINGS_FIRST_PASSPHRASES_DIFFER));
+                    return Errand::Say(texts.t(key::BELONGINGS_FIRST_PASSPHRASES_DIFFER).into());
                 }
                 if let Some(refused) = unready(r, texts) {
-                    return Errand::Say(refused);
+                    return Errand::Say(refused.into());
                 }
                 send_passphrase(r, &typed, texts)
             }
             Ask::Old => {
                 if typed.expose().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 self.ask(Ask::New(typed), r)
             }
             Ask::New(old) => {
                 if typed.expose().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 self.ask(Ask::Again(old, typed), r)
             }
             Ask::Sign => {
                 if typed.expose().is_empty() {
-                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET));
+                    return Errand::Say(texts.t(key::BELONGINGS_EMPTY_SECRET).into());
                 }
                 if let Some(refused) = unready(r, texts) {
-                    return Errand::Say(refused);
+                    return Errand::Say(refused.into());
                 }
                 match write_secret(r, Places::passphrase, typed.expose()) {
                     Ok(()) => Errand::Queue(Op::Sign),
-                    Err(said) => Errand::Say(texts.t(said)),
+                    Err(said) => Errand::Say(texts.t(said).into()),
                 }
             }
             Ask::Again(old, new) => {
                 if typed != new {
-                    return Errand::Say(texts.t(key::BELONGINGS_PASSPHRASES_DIFFER));
+                    return Errand::Say(texts.t(key::BELONGINGS_PASSPHRASES_DIFFER).into());
                 }
                 let written = write_secret(r, Places::passphrase, old.expose())
                     .and_then(|()| write_secret(r, Places::new_passphrase, new.expose()));
                 match written {
                     Ok(()) => Errand::Queue(Op::Rekey),
-                    Err(said) => Errand::Say(texts.t(said)),
+                    Err(said) => Errand::Say(texts.t(said).into()),
                 }
             }
         }
@@ -3127,7 +3137,7 @@ fn pin_refusal(r: &Readings) -> Option<&'static str> {
 /// not be kept is said (`consent_rows::unkept`), never silent.
 fn let_host(r: &Readings, host: &str, texts: &ronoctua_i18n::Texts) -> Errand {
     let Some(places) = r.places.as_ref() else {
-        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES).into());
     };
     match ronoctua_consent::let_hosts_under(&places.config, &[host], true) {
         Ok(()) => Errand::Nothing,
@@ -3149,7 +3159,7 @@ fn install_extensions(
     texts: &ronoctua_i18n::Texts,
 ) -> Errand {
     let Some(places) = r.places.as_ref() else {
-        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES).into());
     };
     if r.extensions_running || r.extensions_missing.ids.is_empty() {
         return Errand::Nothing;
@@ -3162,7 +3172,7 @@ fn install_extensions(
     if let Some((at_s, offer)) = answering
         && let Err(said) = answer(places, at_s, offer, Said::Turning)
     {
-        return Errand::Say(texts.t(said));
+        return Errand::Say(texts.t(said).into());
     }
     Errand::Queue(Op::VscodeExtensions)
 }
@@ -3181,7 +3191,7 @@ fn in_the_way(r: &Readings, texts: &ronoctua_i18n::Texts) -> Option<String> {
 fn send_passphrase(r: &Readings, typed: &Typed, texts: &ronoctua_i18n::Texts) -> Errand {
     match write_secret(r, Places::passphrase, typed.expose()) {
         Ok(()) => Errand::Queue(Op::Prepare),
-        Err(said) => Errand::Say(texts.t(said)),
+        Err(said) => Errand::Say(texts.t(said).into()),
     }
 }
 
@@ -3259,7 +3269,7 @@ fn write_decisions_file(r: &Readings, decided: &Decisions) -> Result<(), &'stati
 fn write_decisions(r: &Readings, decided: &Decisions, texts: &ronoctua_i18n::Texts) -> Errand {
     match write_decisions_file(r, decided) {
         Ok(()) => Errand::Nothing,
-        Err(said) => Errand::Say(texts.t(said)),
+        Err(said) => Errand::Say(texts.t(said).into()),
     }
 }
 
@@ -3342,7 +3352,7 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
     ));
     if r.prefs_refused {
         e.push(Entry::Note(
-            t.t(key::BELONGINGS_PREFS_REFUSED),
+            t.t(key::BELONGINGS_PREFS_REFUSED).into(),
             tokens::color::STATE_WARNING,
         ));
     }
@@ -3409,7 +3419,7 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
                 false,
                 tokens::color::STATE_WARNING,
             ));
-            e.push(Entry::Note(said, tokens::color::STATE_WARNING));
+            e.push(Entry::Note(said.into(), tokens::color::STATE_WARNING));
             // AN HTTPS SERVER THAT CANNOT BE KEYED POST-QUANTUM refuses
             // every token (GitHub's, measured): the same repository's SSH
             // address is offered where the refusal is said.
@@ -3450,27 +3460,37 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
         {
             // WHAT AN OLD SYNC LEFT IN THE REPOSITORY that no machine may
             // take: a line each, with why, and that it is out now.
+            // Each file a name told (`Arg::Name`) — in a warning, which
+            // keeps its one ink (`chrome::quoted_ink`: danger is a colour).
             for (path, why) in dropped {
                 e.push(Entry::Note(
-                    t.t_with(
+                    t.t_args_marked(
                         key::BELONGINGS_DROPPED,
                         &[
-                            ("name", &shown_path(path, r.places.as_ref(), false)),
-                            ("reason", &t.t(&words::reason_key(why))),
+                            (
+                                "name",
+                                Arg::Name(&shown_path(path, r.places.as_ref(), false)),
+                            ),
+                            ("reason", Arg::Text(&t.t(&words::reason_key(why)))),
                         ],
-                    ),
+                    )
+                    .into(),
                     tokens::color::STATE_WARNING,
                 ));
             }
             for (path, bytes) in large {
                 e.push(Entry::Note(
-                    t.t_with(
+                    t.t_args_marked(
                         key::BELONGINGS_LARGE,
                         &[
-                            ("name", &shown_path(path, r.places.as_ref(), false)),
-                            ("size", &bytes_text(*bytes, t)),
+                            (
+                                "name",
+                                Arg::Name(&shown_path(path, r.places.as_ref(), false)),
+                            ),
+                            ("size", Arg::Text(&bytes_text(*bytes, t))),
                         ],
-                    ),
+                    )
+                    .into(),
                     tokens::color::STATE_WARNING,
                 ));
             }
@@ -3479,13 +3499,15 @@ fn status_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::when
                     t.t_args(
                         key::BELONGINGS_UNREADABLE,
                         &[("n", count(unreadable.len()))],
-                    ),
+                    )
+                    .into(),
                     tokens::color::STATE_WARNING,
                 ));
             }
             if !unwritten.is_empty() {
                 e.push(Entry::Note(
-                    t.t_args(key::BELONGINGS_UNWRITTEN, &[("n", count(unwritten.len()))]),
+                    t.t_args(key::BELONGINGS_UNWRITTEN, &[("n", count(unwritten.len()))])
+                        .into(),
                     tokens::color::STATE_WARNING,
                 ));
             }
@@ -3644,9 +3666,11 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
                 tokens::color::STATE_WARNING,
             )
         });
-        e.push(note(
-            t.t_with(key::BELONGINGS_GONE_QUESTION, &[("folder", &folder)]),
-        ));
+        // THE FOLDER IS A NAME the question quotes (`Arg::Name`).
+        e.push(note(t.t_args_marked(
+            key::BELONGINGS_GONE_QUESTION,
+            &[("folder", Arg::Name(&folder))],
+        )));
         for yes in [false, true] {
             e.push(indented(
                 t.t(if yes {
@@ -3704,18 +3728,24 @@ fn conflicts_section(b: &mut Builder<'_>, r: &Readings, zone: &ronoctua_files::w
         });
         // THE MACHINE THAT CHANGED IT, when one is known: a plain file's
         // commit names none, and a sentence never says "changed on" nobody.
+        // It is a name the note quotes (`Arg::Name`).
         let here = side_text(c.local.as_ref(), zone, t);
         let there = side_text(c.remote.as_ref(), zone, t);
         e.push(note(if c.machine.is_empty() {
-            t.t_with(
+            crate::chrome::Named::from(t.t_with(
                 key::BELONGINGS_SIDES_UNNAMED,
                 &[("here", &here), ("there", &there)],
-            )
+            ))
         } else {
-            t.t_with(
+            t.t_args_marked(
                 key::BELONGINGS_SIDES,
-                &[("here", &here), ("there", &there), ("machine", &c.machine)],
+                &[
+                    ("here", Arg::Text(&here)),
+                    ("there", Arg::Text(&there)),
+                    ("machine", Arg::Name(&c.machine)),
+                ],
             )
+            .into()
         }));
         // WHAT A MERGE REACHED: where the two still clash.
         if let Some(said) = merging_text(c, t) {
@@ -3848,11 +3878,15 @@ fn diff_page(b: &mut Builder<'_>, r: &Readings, path: &str, lines: &[String]) {
         })
         .collect();
     e.push(Entry::Lines(drawn));
+    // THE FILE IS A NAME the title quotes (`Arg::Name`), told as every name
+    // is; a title wears no quoted ink (`chrome::quoted_ink`: the name is
+    // what the section is about), so only the words go.
     b.section(
-        &t.t_with(
+        &t.t_args_marked(
             key::BELONGINGS_DIFF_TITLE,
-            &[("name", &shown_path(path, places, false))],
-        ),
+            &[("name", Arg::Name(&shown_path(path, places, false)))],
+        )
+        .text,
         e,
     );
 }
@@ -4395,35 +4429,49 @@ fn emacs_said(
     t: &ronoctua_i18n::Texts,
 ) -> Option<Entry> {
     let carried = shown_path(emacs::XDG, places, true);
+    // EVERY PATH IS A NAME the sentence quotes (`Arg::Name`) — in a warning,
+    // which keeps its one ink (`chrome::quoted_ink`).
     let text = match reads? {
-        emacs::Reads::Elsewhere(place) => t.t_with(
+        emacs::Reads::Elsewhere(place) => t.t_args_marked(
             key::BELONGINGS_EMACS_READS,
             &[
-                ("place", &shown_path(place, places, place == emacs::EMACS_D)),
-                ("carried", &carried),
+                (
+                    "place",
+                    Arg::Name(&shown_path(place, places, place == emacs::EMACS_D)),
+                ),
+                ("carried", Arg::Name(&carried)),
             ],
         ),
-        emacs::Reads::Hidden => t.t_with(
+        emacs::Reads::Hidden => t.t_args_marked(
             key::BELONGINGS_EMACS_HIDDEN,
             &[
-                ("place", &shown_path(emacs::EMACS_D, places, true)),
-                ("carried", &carried),
+                (
+                    "place",
+                    Arg::Name(&shown_path(emacs::EMACS_D, places, true)),
+                ),
+                ("carried", Arg::Name(&carried)),
             ],
         ),
-        emacs::Reads::NoFile => t.t_with(
+        emacs::Reads::NoFile => t.t_args_marked(
             key::BELONGINGS_EMACS_NO_FILE,
             &[
-                ("place", &shown_path(emacs::EMACS, places, true)),
-                ("folder", &shown_path(emacs::EMACS_D, places, true)),
-                ("carried", &carried),
+                ("place", Arg::Name(&shown_path(emacs::EMACS, places, true))),
+                (
+                    "folder",
+                    Arg::Name(&shown_path(emacs::EMACS_D, places, true)),
+                ),
+                ("carried", Arg::Name(&carried)),
             ],
         ),
-        emacs::Reads::Xdg(at) => t.t_with(
+        emacs::Reads::Xdg(at) => t.t_args_marked(
             key::BELONGINGS_EMACS_XDG,
-            &[("place", &shown_folder(&at, places)), ("carried", &carried)],
+            &[
+                ("place", Arg::Name(&shown_folder(&at, places))),
+                ("carried", Arg::Name(&carried)),
+            ],
         ),
     };
-    Some(Entry::Note(text, tokens::color::STATE_WARNING))
+    Some(Entry::Note(text.into(), tokens::color::STATE_WARNING))
 }
 
 /// A folder that is not a logical path (Emacs's own, where
@@ -4472,13 +4520,13 @@ fn decide_field(
     texts: &ronoctua_i18n::Texts,
 ) -> Errand {
     if !matches!(d, Decision::KeepLocal | Decision::TakeRemote) {
-        return Errand::Say(texts.t(key::BELONGINGS_FIELD_ONLY_TWO));
+        return Errand::Say(texts.t(key::BELONGINGS_FIELD_ONLY_TWO).into());
     }
     let Some(places) = r.places.as_ref() else {
-        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES).into());
     };
     if conflict_of(r, path).is_none() {
-        return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE));
+        return Errand::Say(texts.t(key::BELONGINGS_NO_CONFLICT_HERE).into());
     }
     let mut file = DecisionsFile::read(&places.decisions()).unwrap_or_default();
     file.paths.remove(path);
@@ -4496,17 +4544,24 @@ fn decide_field(
         });
     match written {
         Ok(()) => Errand::Nothing,
-        Err(said) => Errand::Say(texts.t(said)),
+        Err(said) => Errand::Say(texts.t(said).into()),
     }
 }
 
 /// "Write the fix" (`write`) or "leave it" of the file at `path`'s repairs.
 fn repair(r: &Readings, path: &str, write: bool, texts: &ronoctua_i18n::Texts) -> Errand {
     let Some(places) = r.places.as_ref() else {
-        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES));
+        return Errand::Say(texts.t(key::BELONGINGS_NO_PLACES).into());
     };
     let name = shown_path(path, Some(places), false);
-    let stale = || Errand::Say(texts.t_with(key::BELONGINGS_REPAIR_STALE, &[("file", &name)]));
+    // THE FILE IS A NAME both sentences quote (`Arg::Name`).
+    let stale = || {
+        Errand::Say(
+            texts
+                .t_args_marked(key::BELONGINGS_REPAIR_STALE, &[("file", Arg::Name(&name))])
+                .into(),
+        )
+    };
     let (Some(ledger), Some(file)) = (
         r.repairs.iter().find(|l| l.path == path),
         places.resolve(path),
@@ -4520,9 +4575,14 @@ fn repair(r: &Readings, path: &str, write: bool, texts: &ronoctua_i18n::Texts) -
         ronoctua_store::repair::dismiss(&dir, &file, ledger)
     };
     match done {
-        Ok(()) if write => {
-            Errand::Say(texts.t_with(key::BELONGINGS_REPAIR_WRITTEN, &[("file", &name)]))
-        }
+        Ok(()) if write => Errand::Say(
+            texts
+                .t_args_marked(
+                    key::BELONGINGS_REPAIR_WRITTEN,
+                    &[("file", Arg::Name(&name))],
+                )
+                .into(),
+        ),
         Ok(()) => Errand::Nothing,
         Err(ronoctua_store::repair::Stale) => stale(),
     }
@@ -4583,12 +4643,18 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
     }
     let mut e = Vec::new();
     for offer in offers {
-        let said = match offer {
-            Offer::SshSigning { key: public } => t.t_with(
-                key::BELONGINGS_OFFER_SSH_SIGNING,
-                &[("key", &shown_path(public, r.places.as_ref(), false))],
-            ),
-            Offer::PamU2f => t.t(key::BELONGINGS_OFFER_PAM_U2F),
+        // THE KEY'S FILE IS A NAME the question quotes (`Arg::Name`).
+        let said: crate::chrome::Named = match offer {
+            Offer::SshSigning { key: public } => t
+                .t_args_marked(
+                    key::BELONGINGS_OFFER_SSH_SIGNING,
+                    &[(
+                        "key",
+                        Arg::Name(&shown_path(public, r.places.as_ref(), false)),
+                    )],
+                )
+                .into(),
+            Offer::PamU2f => t.t(key::BELONGINGS_OFFER_PAM_U2F).into(),
             // ONLY WHERE VS CODE IS, AND WHILE SOME ARE MISSING: elsewhere
             // its yes could install nothing, and the list waits for a
             // machine that has it. Once answered, the page's own section
@@ -4600,13 +4666,15 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
             {
                 continue;
             }
-            Offer::VscodeExtensions { .. } => t.t_args(
-                key::BELONGINGS_OFFER_VSCODE_EXTENSIONS,
-                &[
-                    ("n", count(r.extensions_missing.ids.len())),
-                    ("hosts", count(r.extension_hosts.len())),
-                ],
-            ),
+            Offer::VscodeExtensions { .. } => t
+                .t_args(
+                    key::BELONGINGS_OFFER_VSCODE_EXTENSIONS,
+                    &[
+                        ("n", count(r.extensions_missing.ids.len())),
+                        ("hosts", count(r.extension_hosts.len())),
+                    ],
+                )
+                .into(),
         };
         match r.answer_of(offer) {
             None => {
@@ -4638,14 +4706,16 @@ fn offers_section(b: &mut Builder<'_>, r: &Readings) {
                 t.t_with(
                     key::BELONGINGS_OFFER_REFUSED,
                     &[("why", &t.t(words::refusal_key(*why)))],
-                ),
+                )
+                .into(),
                 tokens::color::STATE_WARNING,
             )),
             Some(Said::RootRefused { why }) => e.push(Entry::Note(
                 t.t_with(
                     key::BELONGINGS_OFFER_REFUSED,
                     &[("why", &t.t(crate::security_words::refusal(*why)))],
-                ),
+                )
+                .into(),
                 tokens::color::STATE_WARNING,
             )),
         }
@@ -4699,7 +4769,7 @@ fn extensions_section(b: &mut Builder<'_>, r: &Readings) {
         .any(|o| matches!(o, Offer::VscodeExtensions { .. }) && r.answer_of(o).is_none());
     let missing = r.extensions_missing.ids.len();
     let mut e = Vec::new();
-    let warn = |text: String| Entry::Note(text, tokens::color::STATE_WARNING);
+    let warn = |text: String| Entry::Note(text.into(), tokens::color::STATE_WARNING);
     if r.extensions_running {
         e.push(note(t.t(key::BELONGINGS_EXTENSIONS_INSTALLING)));
     } else if let Some(done) = record {
@@ -4853,11 +4923,13 @@ fn history_section(b: &mut Builder<'_>, r: &Readings) {
             t.t_with(
                 key::BELONGINGS_WEIGHT_HEAVY,
                 &[("history", &history), ("recommend", &recommend)],
-            ),
+            )
+            .into(),
             tokens::color::STATE_WARNING,
         )),
         kept::Weight::Compact => e.push(Entry::Note(
-            t.t_with(key::BELONGINGS_WEIGHT_COMPACT, &[("history", &history)]),
+            t.t_with(key::BELONGINGS_WEIGHT_COMPACT, &[("history", &history)])
+                .into(),
             tokens::color::STATE_WARNING,
         )),
     }
@@ -5057,7 +5129,10 @@ fn access_section(b: &mut Builder<'_>, r: &Readings) {
                     true,
                 ));
                 if let Some(public) = r.public_key.as_ref() {
-                    e.push(Entry::Note(public.clone(), tokens::color::TEXT_SECONDARY));
+                    e.push(Entry::Note(
+                        public.clone().into(),
+                        tokens::color::TEXT_SECONDARY,
+                    ));
                 }
                 e.push(note(t.t(key::BELONGINGS_DEPLOY_NOTE)));
             } else {
@@ -5496,7 +5571,7 @@ mod tests {
         );
         assert_eq!(
             v.press(Press::Decide(Decision::KeepBoth), &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_BOTH_ONLY_ADDED))
+            Errand::Say(t.t(key::BELONGINGS_BOTH_ONLY_ADDED).into())
         );
         // IN BULK, over what was decided.
         stand_on(&mut v, &r, &Target::All(Decision::KeepLocal), &t);
@@ -5649,7 +5724,7 @@ mod tests {
         let r = waiting(&places);
         let t = texts("en-GB");
         let mut v = View::fresh(&r, &zone(), 100, &t);
-        let waits = Errand::Say(t.t(key::BELONGINGS_PLAN_WAITS));
+        let waits = Errand::Say(t.t(key::BELONGINGS_PLAN_WAITS).into());
         assert_eq!(v.press(Press::Sync, &r, &zone(), 100, &t), waits);
         assert_eq!(v.command(SYNC_COMMAND, &r, &zone(), 100, &t), waits);
         let summary = Last {
@@ -5670,7 +5745,7 @@ mod tests {
         let held = ronoctua_belongings::running::hold(&places).unwrap();
         let r = Readings::read(Some(places.clone()), r.now_s);
         assert!(r.busy);
-        let busy = Errand::Say(t.t(words::refusal_key(Why::Busy)));
+        let busy = Errand::Say(t.t(words::refusal_key(Why::Busy)).into());
         let decided: Decisions = r.plan.as_ref().unwrap().all(Decision::KeepLocal);
         write_decisions_file(&r, &decided).unwrap();
         let r = Readings::read(Some(places.clone()), r.now_s);
@@ -5858,7 +5933,7 @@ mod tests {
         let r = Readings::read(Some(places.clone()), 1);
         assert_eq!(
             v.press(Press::Sync, &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_NEEDS_KEY)),
+            Errand::Say(t.t(key::BELONGINGS_NEEDS_KEY).into()),
             "a sync with no deploy key"
         );
         std::fs::create_dir_all(places.keys()).unwrap();
@@ -5870,7 +5945,7 @@ mod tests {
         assert_eq!(r.unlet.as_deref(), Some("example.org"));
         assert_eq!(
             v.press(Press::Sync, &r, &zone(), 100, &t),
-            Errand::Say(t.t(words::refusal_key(Why::NotLet))),
+            Errand::Say(t.t(words::refusal_key(Why::NotLet)).into()),
             "a sync to a host nobody let"
         );
         assert_eq!(v.press(Press::Allow, &r, &zone(), 100, &t), Errand::Nothing);
@@ -5895,7 +5970,7 @@ mod tests {
         assert_eq!(again.asks, Some(key::ASK_BELONGINGS_SYNC_AGAIN));
         assert_eq!(
             v.answered(again.id, "correct h0rse", &r, &t),
-            Errand::Say(t.t(key::BELONGINGS_FIRST_PASSPHRASES_DIFFER))
+            Errand::Say(t.t(key::BELONGINGS_FIRST_PASSPHRASES_DIFFER).into())
         );
         assert!(!places.passphrase().exists(), "written though they differ");
         let Errand::Ask(line) = v.press(Press::Sync, &r, &zone(), 100, &t) else {
@@ -5957,7 +6032,7 @@ mod tests {
         };
         assert_eq!(
             v.answered(third.id, "new 0ne", &r, &t),
-            Errand::Say(t.t(key::BELONGINGS_PASSPHRASES_DIFFER))
+            Errand::Say(t.t(key::BELONGINGS_PASSPHRASES_DIFFER).into())
         );
         assert!(!places.new_passphrase().exists());
         // AND AGAIN, THIS TIME ALIKE.
@@ -6071,6 +6146,17 @@ mod tests {
             keep_under(&places, &[places.keys()]).key,
             key::BELONGINGS_NEVER_KEPT
         );
+        // SEVERAL PATHS ARE A COUNT, said by a sentence of its own: the file
+        // manager tells every `name` as a name, and a count is not one.
+        let both = [places.home.join("a"), places.home.join("b")];
+        let e = keep_under(&places, &both);
+        assert_eq!(e.key, key::BELONGINGS_NOW_KEPT_MANY);
+        assert_eq!(e.args, [("n", "2".to_owned())]);
+        assert!(!t.t_with(e.key, &e.borrowed()).starts_with('['));
+        assert_eq!(
+            keep_under(&places, &both).key,
+            key::BELONGINGS_STOPPED_KEEPING_MANY
+        );
         let _ = std::fs::remove_dir_all(places.home.parent().unwrap());
     }
 
@@ -6135,7 +6221,7 @@ mod tests {
             let mut w = View::fresh(&r, &zone(), 100, &t);
             assert_eq!(
                 w.command("belongings-apply", &r, &zone(), 100, &t),
-                Errand::Say(t.t(words::refusal_key(Why::NotLet)))
+                Errand::Say(t.t(words::refusal_key(Why::NotLet)).into())
             );
             assert!(places.plan().is_file());
         }
@@ -6176,7 +6262,7 @@ mod tests {
         assert_eq!(r.unlet, None);
         assert_eq!(
             v.press(Press::Sync, &r, &zone(), 100, &t),
-            Errand::Say(t.t(words::invalid_key(prefs::Invalid::UnnamedHost)))
+            Errand::Say(t.t(words::invalid_key(prefs::Invalid::UnnamedHost)).into())
         );
         // `C-a` on a page with no row does nothing.
         assert_eq!(v.press(Press::Allow, &r, &zone(), 100, &t), Errand::Nothing);
@@ -6322,7 +6408,7 @@ mod tests {
         );
         assert_eq!(
             v.command("belongings-take-merged-ours", &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_NO_MERGE_HERE))
+            Errand::Say(t.t(key::BELONGINGS_NO_MERGE_HERE).into())
         );
         // A PLAIN PATH given to "keep" travels already.
         let explained = keep_under(&places, &[places.state.join("person/options.json")]);
@@ -6522,7 +6608,7 @@ mod tests {
         r.pin = Some(pin_of(&mine));
         assert_eq!(
             v.command("belongings-pin", &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_ALREADY))
+            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_ALREADY).into())
         );
         // A KEY NOBODY OPENED HERE: refused, never the repository's copy.
         let mut unknown = r.clone();
@@ -6531,7 +6617,7 @@ mod tests {
         unknown.pin = None;
         assert_eq!(
             v.command("belongings-pin", &unknown, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_SYNC_FIRST))
+            Errand::Say(t.t(key::BELONGINGS_SIGNATURE_SYNC_FIRST).into())
         );
         // HOW A PIN WENT, as the door's thread wrote it.
         r.pin = None;
@@ -6929,7 +7015,10 @@ mod tests {
         assert!(!r.decisions.contains_key("home/notes/a.md"));
         assert_eq!(
             v.command("belongings-apply", &r, &zone(), 100, &t),
-            Errand::Say(t.t_args(key::BELONGINGS_UNDECIDED_LEFT, &[("n", count(1))]))
+            Errand::Say(
+                t.t_args(key::BELONGINGS_UNDECIDED_LEFT, &[("n", count(1))])
+                    .into()
+            )
         );
         // "NO" decides every path of it: the repository's side.
         stand_on(&mut v, &r, &no, &t);
@@ -7946,7 +8035,7 @@ mod tests {
         );
         assert_eq!(
             v.press(Press::Decide(Decision::KeepBoth), &r, &zone(), 100, &t),
-            Errand::Say(t.t(key::BELONGINGS_FIELD_ONLY_TWO))
+            Errand::Say(t.t(key::BELONGINGS_FIELD_ONLY_TWO).into())
         );
         let file = DecisionsFile::read(&places.decisions()).unwrap();
         assert_eq!(file.field(&path, "/theme"), Some(Decision::TakeRemote));

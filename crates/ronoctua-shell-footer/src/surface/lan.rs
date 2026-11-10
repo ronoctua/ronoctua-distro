@@ -97,9 +97,10 @@ impl Footer {
             // and whoever is at the machine has to open it.
             ronoctua_tunnel::Event::Login(url) => {
                 self.open_foreign(crate::link_words::OPEN, std::slice::from_ref(&url), None);
-                let said = self
-                    .texts
-                    .t_with(crate::key::ECHO_NETWORK_LOGIN, &[("url", &url)]);
+                let said = self.texts.t_args_marked(
+                    crate::key::ECHO_NETWORK_LOGIN,
+                    &[("url", ronoctua_i18n::Arg::Name(&url))],
+                );
                 self.echo_message(said);
                 self.draw_and_paint();
             }

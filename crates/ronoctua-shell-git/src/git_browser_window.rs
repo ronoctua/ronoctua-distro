@@ -186,7 +186,15 @@ impl Content for GitWindow {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        texts.t_with(crate::key::FILES_GIT_TITLE, &[("name", &name)])
+        // THE REPOSITORY IS A NAME the title quotes (`Arg::Name`), told as
+        // every name is; a window's title is the compositor's plain text, so
+        // only the words go.
+        texts
+            .t_args_marked(
+                crate::key::FILES_GIT_TITLE,
+                &[("name", ronoctua_i18n::Arg::Name(&name))],
+            )
+            .text
     }
 
     fn default_size(&self) -> (u32, u32) {

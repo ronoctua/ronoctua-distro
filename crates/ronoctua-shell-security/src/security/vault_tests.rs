@@ -344,7 +344,7 @@ fn the_touch_is_asked_when_the_unit_starts() {
     assert!(matches!(&work, Page::Private(w) if w.op == Op::Open && w.touches()));
     // THE UNIT STARTED: now, and only now.
     let out = v.came(Came::Step(ronoctua_private::STARTED.to_owned()), &mut s, &t);
-    assert_eq!(out.say, Some(t.t(key::SECURITY_PRIVATE_TOUCH)));
+    assert_eq!(out.say, Some(t.t(key::SECURITY_PRIVATE_TOUCH).into()));
     assert!(busy(&v, &s).contains(&t.t(key::SECURITY_PRIVATE_TOUCH)));
     // A PASSPHRASE OPENING waits for nobody's touch.
     let mut v = crate::security::View::fresh();
@@ -409,7 +409,10 @@ fn the_units_reason_is_said() {
         &mut s,
         &t,
     );
-    assert_eq!(out.say, Some(t.t(key::PRIVATE_REFUSED_WRONG_PASSPHRASE)));
+    assert_eq!(
+        out.say,
+        Some(t.t(key::PRIVATE_REFUSED_WRONG_PASSPHRASE).into())
+    );
 }
 
 /// FAILS IF: a state of the section draws a key that has no words, in

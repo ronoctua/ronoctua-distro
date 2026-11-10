@@ -1045,7 +1045,9 @@ about-player-ranking-forever = Marca este vídeo para nunca ser apagado quando o
 about-player-ranking-hide = Oculta este vídeo do ranking, ou mostra nele de novo um oculto; ele fica no catálogo.
 about-player-ranking-delete = Apaga este vídeo do catálogo para sempre, depois de uma pergunta; ele não volta, nem numa varredura.
 # AND WHAT THE PAGE ROW OF A LIST DOES, said under the pointer.
-about-player-ranking-page = Qual página da lista está à vista: apertá-la vai para a seguinte, e da última de volta para a primeira.
+# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
+about-player-ranking-page = { $earlier } { $prior } voltam, { $later } { $next } avançam, { $first } { $last } vão à primeira e à última página. Apertá-la vai para a seguinte, e da última de volta para a primeira.
+about-player-ranking-per-page = Quantos vídeos uma página da lista mostra: apertá-la dá o próximo tamanho, e recomeça. Vale enquanto a vista está aberta.
 # THE RANKING'S KEYS.
 cmd-player-ranking-more = A página deste vídeo: tocar, pôr na fila, Chrome, Nyxt, baixar, avaliar, separar, manter, ocultar, apagar
 cmd-player-ranking-earlier = A página anterior do ranking

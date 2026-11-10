@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(
             way.owed.first(),
             Some(&region::Effect::Say(
-                said.clone(),
+                said.clone().into(),
                 crate::echo::Echo::Normal
             ))
         );

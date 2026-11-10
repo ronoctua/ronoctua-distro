@@ -461,10 +461,10 @@ impl Notifications {
             }
             Launch::Failed { program, error } => {
                 tracing::error!(error, program, "could not open");
-                ui.say(
-                    ui.texts
-                        .t_with(crate::key::ECHO_NO_OPENED, &[("program", program.as_str())]),
-                );
+                ui.say(ui.texts.t_args_marked(
+                    crate::key::ECHO_NO_OPENED,
+                    &[("program", ronoctua_i18n::Arg::Name(&program))],
+                ));
                 ui.ask_paint();
             }
         }
@@ -484,11 +484,14 @@ impl Notifications {
         };
         if let Err(e) = self.notes.save_preferences(&prefs) {
             tracing::warn!(error = %e, "could not write the preferences");
-            let said = way.texts().t_with(
+            let said = way.texts().t_args_marked(
                 crate::key::ECHO_PREFERENCE_NOT_WRITTEN,
                 &[
-                    ("file", ronoctua_notify::store::PREFERENCES_FILE),
-                    ("why", &e.to_string()),
+                    (
+                        "file",
+                        ronoctua_i18n::Arg::Name(ronoctua_notify::store::PREFERENCES_FILE),
+                    ),
+                    ("why", ronoctua_i18n::Arg::Text(&e.to_string())),
                 ],
             );
             way.say(said, crate::echo::Echo::Long);
@@ -767,11 +770,14 @@ impl Content for Notifications {
         // does nothing — so the two doors say the same sentence in the same
         // place.
         // THE ORDER'S MESSAGE, for line 0 — none with no header: the door
-        // says it at the window's foot then (`door::list::said_on_line_zero`).
-        let spoken = crate::door::list::said_on_line_zero(ui).map(str::to_owned);
+        // says it at the window's foot then
+        // (`door::list::said_named_on_line_zero`). With the names it quotes
+        // told, so the header's line draws them in a name's ink as the foot
+        // does; the note and the pointer's sentence quote none.
+        let spoken = crate::door::list::said_named_on_line_zero(ui).cloned();
         let message = spoken.is_some();
-        let said = spoken
-            .or_else(|| self.view.note(&ui.texts))
+        let said: Option<crate::chrome::Named> = spoken
+            .or_else(|| self.view.note(&ui.texts).map(Into::into))
             // AND WHAT THE ROW UNDER THE POINTER HAS TO ADD: when the
             // notification arrived, and the whole of a sentence the row had to
             // cut. The footer's own line takes it from the same method, so the
@@ -779,7 +785,9 @@ impl Content for Notifications {
             .or_else(|| {
                 let (row, cell) = self.pointed?;
                 let lists = crate::notifications::Lists::of(&self.records, &self.book);
-                self.view.about_at(&lists, ui.columns, row, cell, &ui.texts)
+                self.view
+                    .about_at(&lists, ui.columns, row, cell, &ui.texts)
+                    .map(Into::into)
             });
         // A QUESTION BEING TYPED OUTRANKS THEM ALL — it is what the keyboard
         // is typing into (`door::list::the_question`).
@@ -814,7 +822,10 @@ impl Content for Notifications {
                             crate::chrome::Carries::Keys,
                         )
                     },
-                    |text| (vec![crate::chrome::Piece::said(text)], words),
+                    // ITS NAMES IN A NAME'S INK (`door::list::said_pieces`,
+                    // the footer's echo's builder too); a sentence with none
+                    // is still the one piece it always was.
+                    |text| (crate::door::list::said_pieces(&text), words),
                 )
             });
         let (margin, columns) = (ui.margin, ui.columns);

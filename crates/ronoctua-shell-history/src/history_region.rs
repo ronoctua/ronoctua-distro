@@ -317,7 +317,7 @@ mod tests {
         let said = texts().t(crate::key::ATUIN_ABSENT);
         assert_eq!(
             way.owed,
-            vec![region::Effect::Say(said, crate::echo::Echo::Normal)]
+            vec![region::Effect::Say(said.into(), crate::echo::Echo::Normal)]
         );
         way.owed.clear();
         for gesture in GESTURES {
