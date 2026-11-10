@@ -7,9 +7,22 @@
 //! What the view asks of a door is carried out by the ONE function both doors
 //! call ([`crate::video_metrics_feed::carry_out`]): the region here, the window
 //! in `crate::video_metrics_window`. What is left to each door is what only
-//! it can do: the transfers' queue and the Chrome kiosk are the footer's —
-//! the window asks them down the footer's socket, and this region closes
-//! first, for the footer shows one view at a time.
+//! it can do (`video_metrics_feed::Leaving`): the transfers' queue, the
+//! Chrome kiosk, the brain's page and the player's window are the footer's —
+//! the window asks them down the footer's socket — and Nyxt is started by
+//! its entry in the launcher; this region closes first, for the footer shows
+//! one view at a time and a view left open keeps the keyboard.
+//!
+//! # What every row is, on the explanation line
+//!
+//! The footer has no foot: what the window's foot explains — the thing the
+//! pointer rests on, a video of a shelf, a glyph, or the cursor's thing —
+//! is said on its explanation line, joined into one sentence
+//! (`door::Explained::joined`): the row's own on its line (`Told::about`),
+//! a cell's and a glyph's at the cell under the pointer
+//! ([`Region::about_at`]), and the cursor's while the pointer rests on
+//! nothing of the region's, or after a key ([`Region::note`]) — the
+//! pointer outranks the cursor until a key, as in the window.
 //!
 //! # What outlives the region
 //!
@@ -24,7 +37,7 @@ use std::rc::Rc;
 
 use crate::region::{Closed, Doorway, Entry, Region, Residence, Residing, Row, Seen, Taken, Told};
 use crate::video_metrics::{Errand, Page, Press, Readings, Said, View};
-use crate::video_metrics_feed::{Arrived, Feed, Want};
+use crate::video_metrics_feed::{Arrived, Direct, Feed, Leaving, Want};
 
 /// The region's id, as the footer ranks it.
 pub const ID: &str = "video-metrics";
@@ -44,13 +57,26 @@ pub struct Kept {
     /// What the catalogue said, kept with the view closed.
     readings: Readings,
     /// The feed — one thread for the catalogue and the errands that leave the
-    /// view — while the view is open, or a scan asked with it closed waits
-    /// for its answer.
-    feed: Option<Feed>,
+    /// view, or the catalogue on the spot where no loop runs — while the view
+    /// is open, or a scan asked with it closed waits for its answer.
+    feed: Option<Reach>,
     /// Where the feed reads the catalogue: this machine's
     /// (`ronoctua_video_metrics::default_path`), found when the footer starts
     /// — `None` when there is no home, and every look is refused.
     catalogue: Option<std::path::PathBuf>,
+}
+
+/// Where the region's wants go.
+enum Reach {
+    /// Its thread, which wakes the footer's loop.
+    Thread(Feed),
+    /// ON THE SPOT, for a door that runs NO LOOP a thread could wake
+    /// (`Doorway::has_a_loop`: a photograph of the footer, a test's footer):
+    /// each want answered in the caller's turn, and what it brought held
+    /// here for the region to take at once — so a frame is never taken
+    /// before the reading it shows, as the window's photograph never is.
+    /// Boxed: it holds the catalogue's connections and the decoded pictures.
+    Here(Box<Direct>, Vec<Arrived>),
 }
 
 impl Kept {
@@ -58,24 +84,40 @@ impl Kept {
     /// door fills in the readings: the clock and how the queue is opened.
     fn awake(&mut self, way: &dyn Doorway) {
         if self.feed.is_none() {
-            let wake = way.wake();
-            self.feed = Some(Feed::start(self.catalogue.clone(), move || wake.call()));
+            self.feed = Some(if way.has_a_loop() {
+                let wake = way.wake();
+                Reach::Thread(Feed::start(self.catalogue.clone(), move || wake.call()))
+            } else {
+                Reach::Here(Box::new(Direct::of(self.catalogue.clone())), Vec::new())
+            });
         }
         self.readings.now_s = crate::video_metrics::now_s();
         self.readings.transfers_keys = crate::video_metrics::transfers_keys();
     }
 
-    /// `want`, asked of the feed.
-    fn want(&self, want: Want) {
-        if let Some(f) = self.feed.as_ref() {
-            f.want(want);
+    /// `want`, asked of the feed — or answered now, on the spot.
+    fn want(&mut self, want: Want) {
+        match self.feed.as_mut() {
+            Some(Reach::Thread(f)) => f.want(want),
+            Some(Reach::Here(d, held)) => held.extend(d.want(want)),
+            None => {}
         }
+    }
+
+    /// Whether wants are answered on the spot: what they bring is taken at
+    /// once, for no wake will come.
+    const fn here(&self) -> bool {
+        matches!(self.feed, Some(Reach::Here(..)))
     }
 
     /// What the feed brought, taken: readings merged, and the covers the
     /// region draws read again.
     fn take(&mut self) -> Vec<Arrived> {
-        let arrived = self.feed.as_ref().map(Feed::take).unwrap_or_default();
+        let arrived = match self.feed.as_mut() {
+            Some(Reach::Thread(f)) => f.take(),
+            Some(Reach::Here(_, held)) => std::mem::take(held),
+            None => Vec::new(),
+        };
         if arrived.is_empty() {
             return arrived;
         }
@@ -199,12 +241,18 @@ fn opening(command: &str, argument: Option<&str>, way: &mut dyn Doorway) -> Vide
     let kept = kept_of(way).unwrap_or_else(|| Rc::new(RefCell::new(fresh())));
     kept.borrow_mut().awake(&*way);
     let covers = kept.borrow().covers();
-    let (view, first) = View::fresh(page.unwrap_or(Page::Home));
+    let (mut view, first) = View::fresh(page.unwrap_or(Page::Home));
+    // THE FILE PICKER'S FOLDER, watched through the region's own wake — and
+    // not in a photograph, which reaches nothing of the machine.
+    if !way.photographing() {
+        view.watch_with(way.wake());
+    }
     VideoMetrics {
         kept,
         view,
         first: Some(first),
         covers,
+        pointed: None,
     }
 }
 
@@ -221,20 +269,33 @@ pub struct VideoMetrics {
     /// The thumbnails of the rows on screen, by the key their rows name —
     /// what the footer draws over them ([`Region::cover_picture`]).
     covers: HashMap<String, crate::player_find::Picture>,
+    /// The row the pointer rests on, and the cell across it (`Under::cell`):
+    /// what it is on is said, not the cursor's, until a key — the window's
+    /// foot's rule. On what explains nothing (a title, the air of a shelf
+    /// between two videos) the cursor's thing is said, as the foot says it.
+    pointed: Option<(usize, Option<u16>)>,
 }
 
 impl VideoMetrics {
     /// The view's rows as the region's lines: fields, the caret, the lines
     /// that continue a row, and each thumbnail over its lines as a COVER —
     /// with its picture's key and size, once it is decoded — and what the
-    /// pointer lights: a shelf of the grid the CELL under it, a line of a
-    /// picture or a title nothing, any other row its band. A line takes a
-    /// click where the view says one does (`View::takes`, the window's
-    /// answer too).
+    /// pointer lights: a shelf of the grid the CELL under it, a line of
+    /// glyphs the glyph under it (and a row's words beside its glyphs), a
+    /// line of a picture or a title nothing, any other row its band. A line
+    /// takes a click where the view says one does (`View::takes`, the
+    /// window's answer too).
+    ///
+    /// WHAT A LINE SAYS under the pointer is the window's foot, joined
+    /// (`View::explained_at`) — and nothing on a line of cells or glyphs:
+    /// the footer asks a row's sentence before the cell's
+    /// ([`Region::about_at`]), and one said for the line would hide the
+    /// video's, or the glyph's, under the pointer.
     fn told_whole(&self, seen: &Seen<'_>) -> Vec<Told> {
         let kept = self.kept.borrow();
         let rows = self.view.rows(&kept.readings, seen.columns, seen.texts);
         let takes = self.view.takes(&rows);
+        let (left, _) = crate::video_metrics::extent(seen.columns);
         rows.iter()
             .enumerate()
             .map(|(n, r)| {
@@ -257,7 +318,12 @@ impl VideoMetrics {
                 let lit = rows
                     .get(owner)
                     .map_or(crate::region::LineLights::Nothing, |o| {
-                        if !o.cells.is_empty() {
+                        if !r.controls.is_empty() {
+                            crate::region::LineLights::Glyphs {
+                                cells: r.lit_cells(left, o.has_words()),
+                                alone: r.controls.iter().map(|c| (c.from, c.width)).collect(),
+                            }
+                        } else if !o.cells.is_empty() {
                             crate::region::LineLights::UnderCell(
                                 o.cells.iter().map(|c| (c.from, c.width)).collect(),
                             )
@@ -267,12 +333,23 @@ impl VideoMetrics {
                             crate::region::LineLights::Row
                         }
                     });
+                let several = rows
+                    .get(owner)
+                    .is_some_and(|o| !o.cells.is_empty() || !o.controls.is_empty())
+                    || !r.controls.is_empty();
+                let about = if several {
+                    None
+                } else {
+                    self.view
+                        .explained_at(&rows, n, None, seen.texts)
+                        .and_then(|e| e.joined())
+                };
                 Told {
                     row: Row {
                         fields: r.fields.clone(),
                         takes: takes.get(n).copied().unwrap_or(false),
                     },
-                    about: View::about(&rows, n, seen.texts),
+                    about,
                     caret: r.caret,
                     covers,
                     continues: r.continues,
@@ -320,31 +397,62 @@ impl VideoMetrics {
     }
 
     /// Carries out what the view asked for: what every door does the same,
-    /// and the footer's own — the queue and the kiosk, which take the
-    /// region's place.
+    /// and the footer's own ([`Leaving`]) — the queue, Chrome, Nyxt, the
+    /// brain's page and the player's window, which take the region's place.
     fn errand(&mut self, errand: Errand, way: &mut dyn Doorway) {
         match crate::video_metrics_feed::carry_out(errand, way) {
-            Ok(Some(want)) => self.kept.borrow().want(want),
+            Ok(Some(want)) => {
+                let here = {
+                    let mut kept = self.kept.borrow_mut();
+                    kept.want(want);
+                    kept.here()
+                };
+                // ON THE SPOT, what it brought is taken now: no wake comes.
+                if here {
+                    self.woken(way);
+                }
+            }
             Ok(None) => {}
             // THE QUEUE (`LEADER t t`), where a download handed over is seen
             // going — the view closes first, so the region is free.
-            Err(Errand::Transfers) => {
+            Err(Leaving::Transfers) => {
                 way.close();
                 way.run("transfers-open", None);
             }
             // CLOSE BEFORE CHROME OPENS, the launcher's rule: a view left
             // open over the window that just opened keeps its keyboard.
-            Err(Errand::Kiosk(url)) => {
+            Err(Leaving::Kiosk(url)) => {
                 way.close();
                 way.run("kiosk-open", Some(url));
             }
-            Err(_) => {}
+            // AND BEFORE NYXT, by the same rule — started by its entry in the
+            // launcher, and a machine without it said (`door-nyxt-absent`).
+            Err(Leaving::Nyxt(url)) => {
+                way.close();
+                way.launch(crate::launch::in_nyxt(&url));
+            }
+            // AND BEFORE THE BRAIN'S WINDOW, on this catalogue's scan.
+            Err(Leaving::Brain) => {
+                way.close();
+                way.run(
+                    crate::video_metrics::BRAIN_OPEN,
+                    Some(ronoctua_brain::compiled::video_metrics::ID.to_owned()),
+                );
+            }
+            // AND BEFORE THE PLAYER'S WINDOW on one of its lists — a window
+            // of its own, which the player's command opens.
+            Err(Leaving::Player(word)) => {
+                way.close();
+                way.run(crate::video_metrics::PLAYER_WINDOW, Some(word.to_owned()));
+            }
         }
     }
 
     /// A key of the view — from the keyboard, the hint, or `RET` from a
-    /// second click (invariant 19).
+    /// second click (invariant 19) — and the cursor's thing is said again,
+    /// until the pointer moves.
     fn press(&mut self, press: Press, way: &mut dyn Doorway) {
+        self.pointed = None;
         let rows = self.view_rows(way.columns(), way.texts());
         let errand = self.view.press(press, &rows, &self.kept.borrow().readings);
         self.errand(errand, way);
@@ -407,6 +515,59 @@ impl Region for VideoMetrics {
         self.view.hint(&rows, seen.texts)
     }
 
+    /// What the pointer on row `row` says at cell `cell` — a video of a
+    /// shelf, a glyph — as the window's foot says it, joined into one
+    /// sentence; any other row says its own on its line (`Told::about`).
+    fn about_at(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> Option<String> {
+        let rows = self.view_rows(seen.columns, seen.texts);
+        let glyph = self.view.on_a_glyph(&rows, row, cell);
+        self.view
+            .explained_at(&rows, row, cell, seen.texts)
+            .and_then(|e| {
+                if glyph {
+                    e.joined_named(seen.texts)
+                } else {
+                    e.joined()
+                }
+            })
+    }
+
+    /// WHAT THE CURSOR IS ON, said on the explanation line — while the
+    /// pointer rests on nothing the window's foot would explain (a title,
+    /// the air of a shelf, the air between glyphs), or after a key: the
+    /// pointer outranks the cursor until the next key, as in the window's
+    /// foot. Asked by the footer BEFORE a row's own sentence and the cell's
+    /// (`about_at`), so it says nothing while the pointer is on a thing.
+    fn note(&self, seen: &Seen<'_>) -> Option<String> {
+        let rows = self.view_rows(seen.columns, seen.texts);
+        if self
+            .pointed
+            .is_some_and(|(n, cell)| self.view.thing_at(&rows, n, cell).is_some())
+        {
+            return None;
+        }
+        self.view
+            .explained_cursor(&rows, seen.texts)
+            .and_then(|e| e.joined())
+    }
+
+    /// The pointer moved: the row it rests on and the cell across it — what
+    /// the explanation line says then is the thing there, not the cursor's.
+    fn hovered(
+        &mut self,
+        under: &crate::region::Under,
+        _: &mut Option<Box<dyn std::any::Any>>,
+        _: &mut dyn Doorway,
+    ) -> bool {
+        let now = under.row.map(|n| (n, under.cell));
+        std::mem::replace(&mut self.pointed, now) != now
+    }
+
+    /// The pointer left: the cursor's thing is said again.
+    fn left(&mut self, _: &mut Option<Box<dyn std::any::Any>>, _: &mut dyn Doorway) {
+        self.pointed = None;
+    }
+
     /// Measured by its rows ([`Region::cursor_in`]): the caret's line while a
     /// text is edited.
     fn cursor(&self) -> Option<usize> {
@@ -424,11 +585,19 @@ impl Region for VideoMetrics {
     /// edited, else the view's by its whole notation.
     fn key(&mut self, key: ronoctua_keymap::Key, way: &mut dyn Doorway) -> Taken {
         if self.view.editing() {
+            self.pointed = None;
             let (_, room) = crate::video_metrics::extent(way.columns());
             let errand = self.view.text_key(key, room);
             self.errand(errand, way);
             way.follow();
             way.repaint();
+            return Taken::Yes;
+        }
+        // THE FILE PICKER, while it is up over the import page, takes what
+        // it reads — every letter, and its own keys — before the view's
+        // table (`Region::page_is` told it how many lines are shown).
+        if self.view.picker_takes(key) {
+            self.press(Press::Pick(key), way);
             return Taken::Yes;
         }
         match crate::video_metrics::press_of_key(key) {
@@ -500,6 +669,16 @@ impl Region for VideoMetrics {
             way.repaint();
             return;
         }
+        // A GLYPH ACTS ON THE FIRST CLICK, as the window's does.
+        let glyph = self
+            .view
+            .click_control(n, column, &rows, &self.kept.borrow().readings);
+        if let Some(errand) = glyph {
+            self.errand(errand, way);
+            way.follow();
+            way.repaint();
+            return;
+        }
         if let Some(errand) = self.view.click_answers(n, &rows) {
             self.errand(errand, way);
             way.repaint();
@@ -523,11 +702,18 @@ impl Region for VideoMetrics {
         way.repaint();
     }
 
-    /// The clipboard's text, read off the loop for `C-v` in the description.
+    /// The clipboard's text, read off the loop for `C-v` in the description
+    /// — or in the file picker, as what was typed there.
     fn pasted(&mut self, text: &str, way: &mut dyn Doorway) {
-        if self.view.text_pasted(text) {
+        if self.view.text_pasted(text) || self.view.picker_pasted(text) {
             way.repaint();
         }
+    }
+
+    /// How many lines the region shows, for the file picker's `PgUp` and
+    /// `PgDn`.
+    fn page_is(&self, lines: usize) {
+        self.view.page_is(lines);
     }
 
     /// What the feed brought: readings merged, what an errand came to said —
@@ -535,8 +721,14 @@ impl Region for VideoMetrics {
     /// question the view put there from an errand's answer is followed, as
     /// the key it answers would have been.
     fn woken(&mut self, way: &mut dyn Doorway) {
+        // THE FILE PICKER'S FOLDER MOVED, or its devices were read — the same
+        // wake as the feed's.
+        let picker = self.view.picker_woke();
         let arrived = self.kept.borrow_mut().take();
         if arrived.is_empty() {
+            if picker {
+                way.repaint();
+            }
             return;
         }
         let mut next = Vec::new();
@@ -616,6 +808,7 @@ mod tests {
             view,
             first: None,
             covers: HashMap::new(),
+            pointed: None,
         };
         if grid {
             let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
@@ -716,8 +909,9 @@ mod tests {
 
     /// FAILS IF: the two doors carry one errand out differently — the
     /// footer's region and the window say, ask, paste and close through the
-    /// one handler (`video_metrics_feed::carry_out`), and what is the
-    /// footer's alone (the queue, the kiosk) is handed back to each door.
+    /// one handler (`video_metrics_feed::carry_out`), and what leaves the
+    /// view (the transfers' queue, Chrome, Nyxt, the brain's page, the
+    /// player's window) is handed back to each door as a `Leaving`.
     #[test]
     fn both_doors_carry_an_errand_out_alike() {
         use crate::video_metrics::Errand;
@@ -756,9 +950,97 @@ mod tests {
         for errand in [
             Errand::Transfers,
             Errand::Kiosk("https://x.example".to_owned()),
+            Errand::Nyxt("https://x.example".to_owned()),
+            Errand::Brain,
+            Errand::Player(crate::player_seam::ranking::OPEN_RANKING),
         ] {
             assert!(crate::video_metrics_feed::carry_out(errand, &mut footer).is_err());
         }
+    }
+
+    /// FAILS IF: what leaves the view for another program — the brain's
+    /// page on the scan, the player's window on one of its lists, a
+    /// channel's videos in Nyxt — is not done by the footer's region, or is
+    /// done before the view closes: a view left open over the window that
+    /// just opened keeps its keyboard. Each from where the person asks it:
+    /// `RET` on the home page's rows, a click on a channel's glyph.
+    #[test]
+    fn errand_closes_before_going_elsewhere() {
+        use crate::player_seam::ranking::{OPEN_RANKING, OPEN_SET_ASIDE};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let gone = |w: &Recorder, effect: Effect| {
+            assert!(
+                w.owed.starts_with(&[Effect::Close, effect.clone()]),
+                "not closed, then {effect:?}: {:?}",
+                w.owed
+            );
+        };
+        for (spot, effect) in [
+            (
+                "in-the-brain",
+                Effect::Run(
+                    crate::video_metrics::BRAIN_OPEN,
+                    Some(ronoctua_brain::compiled::video_metrics::ID.to_owned()),
+                ),
+            ),
+            (
+                "in-the-player",
+                Effect::Run(
+                    crate::video_metrics::PLAYER_WINDOW,
+                    Some(OPEN_RANKING.to_owned()),
+                ),
+            ),
+            (
+                "set-aside-in-the-player",
+                Effect::Run(
+                    crate::video_metrics::PLAYER_WINDOW,
+                    Some(OPEN_SET_ASIDE.to_owned()),
+                ),
+            ),
+        ] {
+            let mut region = over(&Page::Home, false);
+            let mut w = way();
+            let rows = region.view_rows(COLUMNS, &texts);
+            let n = rows.iter().position(|r| r.spot == spot).expect(spot);
+            region.clicked(n, &mut w);
+            w.owed.clear();
+            region.clicked(n, &mut w);
+            gone(&w, effect);
+        }
+        let mut region = over(&Page::Channels, false);
+        let mut w = way();
+        let rows = region.view_rows(COLUMNS, &texts);
+        let (n, nyxt) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(n, r)| {
+                r.controls
+                    .iter()
+                    .find(|c| matches!(c.target, crate::video_metrics::Target::ChannelNyxt(_)))
+                    .map(|c| (n, c.from))
+            })
+            .expect("a channel's Nyxt");
+        let under = crate::region::Under {
+            at: (0.0, 0.0),
+            line: None,
+            row: Some(n),
+            cell: Some(nyxt),
+            base: 0,
+            ctrl: false,
+            shift: false,
+            frame: None,
+        };
+        region.clicked_under(n, &under, &mut w);
+        let channel = crate::video_metrics::tests::readings().channels[0]
+            .id
+            .clone();
+        gone(
+            &w,
+            Effect::Launch(crate::launch::in_nyxt(&format!(
+                "https://www.youtube.com/channel/{}/videos",
+                channel.0
+            ))),
+        );
     }
 
     /// FAILS IF: a resting pointer lights a row of the footer's region a
@@ -771,6 +1053,7 @@ mod tests {
     #[test]
     fn the_pointer_lights_what_the_click_takes() {
         let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut glyphs = 0;
         let zone = ronoctua_files::when::Zone::utc();
         let seen = Seen {
             texts: &texts,
@@ -786,6 +1069,7 @@ mod tests {
         for (page, grid) in [
             (Page::Home, false),
             (Page::Channels, false),
+            (Page::Import, false),
             (Page::Rules, false),
             (Page::Weights, false),
             (Page::Videos, false),
@@ -809,6 +1093,31 @@ mod tests {
                         // generic click has none — the air before the
                         // first cell, which takes nothing and lights
                         // nothing (`LineLights::UnderCell`).
+                        let click_at = |cell: u16| {
+                            let (mut r, mut w) = fresh();
+                            let before = witness(&r, &w);
+                            let under = crate::region::Under {
+                                at: (0.0, 0.0),
+                                line: None,
+                                row: Some(h.row),
+                                cell: Some(cell),
+                                base: 0,
+                                ctrl: false,
+                                shift: false,
+                                frame: None,
+                            };
+                            r.clicked_under(h.row, &under, &mut w);
+                            witness(&r, &w) != before
+                        };
+                        // A LINE OF GLYPHS IS CLICKED WHERE A GLYPH IS, as a
+                        // shelf is where a cell is: each acts on the first
+                        // click (`View::click_control`).
+                        let controls = rows.get(h.row).map(|r| r.controls.clone());
+                        if let Some(controls) = controls.filter(|c| !c.is_empty()) {
+                            glyphs += 1;
+                            h.did = controls.iter().all(|c| click_at(c.from));
+                            return h;
+                        }
                         let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
                         if let Some(cells) = cells.filter(|c| !c.is_empty()) {
                             shelves += 1;
@@ -842,6 +1151,236 @@ mod tests {
             assert!(unheld.is_empty(), "{what}: {unheld:?}");
         }
         assert!(shelves > 0, "the grid drew no shelf");
+        assert!(glyphs > 0, "no line of glyphs was clicked");
+    }
+
+    /// FAILS IF: the footer's explanation line says on a row anything but
+    /// what the window's foot says of it, joined (`Explained::joined`); a
+    /// line of a shelf says one thing for its several videos instead of the
+    /// one under the pointer; the cursor's thing is said while the pointer
+    /// rests on a thing the foot explains (it would hide that thing's), or is
+    /// not said where the foot says it — the pointer off the rows, on a
+    /// title or the air of a shelf, or after a key.
+    #[test]
+    fn the_line_says_the_pointer_then_the_cursor() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let under = |row: Option<usize>, cell: Option<u16>| crate::region::Under {
+            at: (0.0, 0.0),
+            line: None,
+            row,
+            cell,
+            base: 0,
+            ctrl: false,
+            shift: false,
+            frame: None,
+        };
+        let mut w = way();
+        let mut region = over(&Page::Home, false);
+        let rows = region.view_rows(COLUMNS, &texts);
+        let told = region.told_whole(&seen);
+        let channels = rows
+            .iter()
+            .position(|r| r.spot == "channels")
+            .expect("the channels' row");
+        let foot = region
+            .view
+            .explained_at(&rows, channels, None, &texts)
+            .expect("the row explained");
+        assert_eq!(
+            told[channels].about,
+            foot.joined(),
+            "the line and the foot differ"
+        );
+        assert!(
+            told[channels]
+                .about
+                .as_deref()
+                .is_some_and(|a| a.contains(&texts.t(crate::key::ABOUT_VIDEO_METRICS_CHANNELS))),
+            "{:?}",
+            told[channels].about
+        );
+        // NOTHING POINTED: the cursor's thing. On a row: that row's, alone.
+        let cursor = region.note(&seen).expect("the cursor's thing");
+        let mut hand = None;
+        assert!(region.hovered(&under(Some(channels), None), &mut hand, &mut w));
+        assert_eq!(
+            region.note(&seen),
+            None,
+            "the cursor hides the pointer's row"
+        );
+        // A TITLE under the pointer: the cursor's again.
+        let title = rows.iter().position(|r| r.heading).expect("a title");
+        region.hovered(&under(Some(title), None), &mut hand, &mut w);
+        assert_eq!(region.note(&seen).as_deref(), Some(cursor.as_str()));
+        // A KEY, the pointer still: the cursor's, which moved.
+        region.hovered(&under(Some(channels), None), &mut hand, &mut w);
+        region.press(Press::Down, &mut w);
+        let moved = region.note(&seen).expect("the cursor's thing after a key");
+        assert_ne!(moved, cursor, "the key's cursor is not what is said");
+        // AND A SHELF: nothing for the line, each video at its cell.
+        let mut region = over(&Page::Videos, true);
+        let rows = region.view_rows(COLUMNS, &texts);
+        let told = region.told_whole(&seen);
+        let shelf = rows
+            .iter()
+            .position(|r| !r.cells.is_empty())
+            .expect("a shelf");
+        assert_eq!(
+            told[shelf].about, None,
+            "a shelf said one thing for its videos"
+        );
+        let said: Vec<Option<String>> = rows[shelf]
+            .cells
+            .iter()
+            .map(|c| region.about_at(shelf, Some(c.from + 1), &seen))
+            .collect();
+        assert!(said.iter().all(Option::is_some), "{said:?}");
+        let gap = rows[shelf].cells[0].from + rows[shelf].cells[0].width;
+        assert_eq!(
+            region.about_at(shelf, Some(gap), &seen),
+            None,
+            "the air said a video"
+        );
+        // THE AIR OF A SHELF UNDER THE POINTER explains nothing: the line
+        // says the cursor's thing, as the window's foot does there — and a
+        // video under it hides the cursor's again.
+        let cursor = region
+            .view
+            .explained_cursor(&rows, &texts)
+            .and_then(|e| e.joined());
+        assert!(cursor.is_some(), "the grid's cursor explains nothing");
+        region.hovered(&under(Some(shelf), Some(gap)), &mut hand, &mut w);
+        assert_eq!(
+            region.note(&seen),
+            cursor,
+            "the air of a shelf said nothing"
+        );
+        let video = rows[shelf].cells[0].from + 1;
+        assert!(region.hovered(&under(Some(shelf), Some(video)), &mut hand, &mut w));
+        assert_eq!(
+            region.note(&seen),
+            None,
+            "the cursor hides the pointer's video"
+        );
+    }
+
+    /// FAILS IF: a line of glyphs says one sentence for the whole line — the
+    /// footer asks a row's before the thing's under the pointer
+    /// (`Region::about_at`), and it would hide every glyph's —; a glyph under
+    /// the pointer is not said by its own sentence, led by its name (a glyph
+    /// is a picture: which rating?), with what holds once it is off where it
+    /// says that (`Control::follows`); the air between two
+    /// glyphs says something; the line lights other boxes than
+    /// its words' and its glyphs' (`Row::lit_cells`), or lights a glyph over
+    /// the row's other lines (`LineLights::Glyphs`); or the cursor's thing
+    /// is said while the pointer rests on a glyph. On the list and the grid.
+    #[test]
+    fn a_glyph_says_its_own_sentence() {
+        use ronoctua_video_metrics::read::Forever;
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let (left, _) = crate::video_metrics::extent(COLUMNS);
+        let mut followed = 0;
+        for grid in [false, true] {
+            let mut region = over(&Page::Videos, grid);
+            // A VIDEO SET ASIDE AND ONE KEPT BY ITS OWN MARK: their bookmark
+            // and their ∞ say what holds once they are off.
+            if let Some(l) = region.kept.borrow_mut().readings.listed.as_mut() {
+                l.rows[0].set_aside_at_s = Some(l.rows[0].published_at_s.unwrap_or(0));
+                l.rows[1].forever = Forever::ByVideo;
+            }
+            let rows = region.view_rows(COLUMNS, &texts);
+            let told = region.told_whole(&seen);
+            let lines: Vec<usize> = (0..rows.len())
+                .filter(|&n| !rows[n].controls.is_empty())
+                .collect();
+            assert!(!lines.is_empty(), "grid {grid}: no line of glyphs");
+            for &n in &lines {
+                let row = &rows[n];
+                let owner = &rows[crate::video_metrics::Row::owner(&rows, n)];
+                assert_eq!(
+                    told[n].about, None,
+                    "grid {grid}: line {n} says one thing for its glyphs"
+                );
+                assert_eq!(
+                    told[n].lights,
+                    crate::region::LineLights::Glyphs {
+                        cells: row.lit_cells(left, owner.has_words()),
+                        alone: row.controls.iter().map(|c| (c.from, c.width)).collect(),
+                    },
+                    "grid {grid}: line {n} lights other boxes"
+                );
+                for (i, c) in row.controls.iter().enumerate() {
+                    let said = region.about_at(n, Some(c.from), &seen).unwrap_or_else(|| {
+                        panic!("grid {grid}: glyph {i} of line {n} says nothing")
+                    });
+                    assert!(
+                        said.contains(&texts.t(c.about)),
+                        "grid {grid}: glyph {i} of line {n} says `{said}`"
+                    );
+                    assert!(
+                        said.starts_with(&c.name),
+                        "grid {grid}: glyph {i} of line {n} does not say which: `{said}`"
+                    );
+                    if let Some(f) = &c.follows {
+                        followed += 1;
+                        assert!(
+                            said.contains(f.as_str()),
+                            "grid {grid}: `{said}` lacks `{f}`"
+                        );
+                    }
+                    if row.controls.get(i + 1).is_some() {
+                        assert_eq!(
+                            region.about_at(n, Some(c.from + c.width), &seen),
+                            None,
+                            "grid {grid}: the air after glyph {i} of line {n} says something"
+                        );
+                    }
+                }
+            }
+            // A GLYPH UNDER THE POINTER hides the cursor's thing.
+            let n = lines[0];
+            let c = rows[n].controls[0].clone();
+            let mut hand = None;
+            let mut w = way();
+            let under = crate::region::Under {
+                at: (0.0, 0.0),
+                line: None,
+                row: Some(n),
+                cell: Some(c.from),
+                base: 0,
+                ctrl: false,
+                shift: false,
+                frame: None,
+            };
+            region.hovered(&under, &mut hand, &mut w);
+            assert_eq!(
+                region.note(&seen),
+                None,
+                "grid {grid}: the cursor hides the pointer's glyph"
+            );
+        }
+        assert!(
+            followed >= 4,
+            "the bookmark and the ∞ of the marked videos said nothing more: {followed}"
+        );
     }
 
     /// FAILS IF: the region's rows stop naming the pictures the footer draws
@@ -866,6 +1405,7 @@ mod tests {
             view,
             first: None,
             covers: HashMap::new(),
+            pointed: None,
         };
         let rows = region.told_whole(&seen);
         assert!(!rows.is_empty());
@@ -880,6 +1420,223 @@ mod tests {
         assert_eq!(
             region.cursor_in(&seen),
             Some(region.view.drawn_cursor(&drawn))
+        );
+    }
+
+    /// A scratch folder of the test `tag`, with a list of TWO MADE-UP
+    /// CHANNELS in it (invariant 13): the folder, and the list.
+    fn scratch_list(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-region-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        let list = dir.join("subscriptions.csv");
+        let line = |c: char, title: &str| {
+            let id = ronoctua_video_metrics::ChannelId(format!("UC{}", c.to_string().repeat(22)));
+            format!(
+                "{},{},{title}\n",
+                id.0,
+                ronoctua_video_metrics::takeout::channel_url(&id)
+            )
+        };
+        std::fs::write(
+            &list,
+            format!(
+                "{}\n{}{}",
+                ronoctua_video_metrics::takeout::HEADER,
+                line('r', "One"),
+                line('s', "Two")
+            ),
+        )
+        .expect("a list");
+        (dir, list)
+    }
+
+    /// FAILS IF: a footer that runs no loop — a photograph's, whose frame is
+    /// taken right after its steps — draws the region before the catalogue
+    /// was read: its opening's look, and a list imported, are answered in
+    /// the region's own turn, the import said and its channels drawn to
+    /// decide with no wake to wait for.
+    #[test]
+    fn a_footer_with_no_loop_reads_on_the_spot() {
+        use ronoctua_keymap::{Key, Sym};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let (dir, list) = scratch_list("here");
+        let mut w = way();
+        w.has_a_loop = false;
+        // A SCRATCH CATALOGUE, never this machine's.
+        let residence = Residence::of(Kept {
+            catalogue: Some(dir.join("video-metrics").join("catalog.sqlite")),
+            ..fresh()
+        });
+        w.residence = Some(residence.clone());
+        let kept = residence.as_a::<Kept>().expect("the resident");
+        let opens = crate::video_metrics::OPEN_COMMAND;
+        let mut region = opening(opens, Some("import"), &mut w);
+        assert_eq!(region.command(opens, Some("import"), &mut w), Taken::Yes);
+        assert!(
+            kept.borrow().readings.catalogue.is_some(),
+            "the opening's look was not answered on the spot"
+        );
+        let rows = region.view_rows(COLUMNS, &texts);
+        let n = rows
+            .iter()
+            .position(|r| r.spot == "choose-list")
+            .expect("the row that chooses the list");
+        region.clicked(n, &mut w);
+        region.clicked(n, &mut w);
+        region.pasted(&list.to_string_lossy(), &mut w);
+        assert_eq!(region.key(Key::simple(Sym::Enter), &mut w), Taken::Yes);
+        let imported = texts.t_args(
+            crate::key::VIDEO_METRICS_IMPORTED,
+            &[
+                ("staged", ronoctua_i18n::Arg::Number(2)),
+                ("already", ronoctua_i18n::Arg::Number(0)),
+            ],
+        );
+        assert!(
+            w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(t, _) if *t == imported)),
+            "the import was not said in the region's turn: {:?}",
+            w.owed
+        );
+        let staged = region
+            .view_rows(COLUMNS, &texts)
+            .iter()
+            .filter(|r| r.spot.starts_with("staged:"))
+            .count();
+        assert_eq!(staged, 2, "the channels to decide are not drawn");
+        drop(region);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: the footer's region does not host the file picker over its
+    /// import page as the window does — the second click on choosing the
+    /// list brings it up, every key it claims is its, its rows are said on
+    /// the explanation line; going back puts the page back; a list pasted
+    /// into it and taken is staged by the region's feed and said — or
+    /// Google Takeout does not open in Chrome after the region closes.
+    #[test]
+    fn the_region_picks_a_list_and_imports_it() {
+        use ronoctua_keymap::{Key, Sym};
+        use std::time::{Duration, Instant};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let (dir, list) = scratch_list("import");
+        let (rang, heard) = std::sync::mpsc::channel::<()>();
+        let rang = std::sync::Mutex::new(rang);
+        let mut w = Recorder::new(
+            Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB")),
+            COLUMNS,
+            true,
+            crate::sudo::Gate::window(),
+            crate::wake::Wake::new(move || {
+                if let Ok(r) = rang.lock() {
+                    let _ = r.send(());
+                }
+            }),
+        );
+        // A SCRATCH CATALOGUE, never this machine's.
+        let residence = Residence::of(Kept {
+            catalogue: Some(dir.join("video-metrics").join("catalog.sqlite")),
+            ..fresh()
+        });
+        w.residence = Some(residence.clone());
+        let opens = crate::video_metrics::OPEN_COMMAND;
+        let mut region = opening(opens, Some("import"), &mut w);
+        assert_eq!(region.command(opens, Some("import"), &mut w), Taken::Yes);
+        assert_eq!(*region.view.page(), Page::Import);
+        let choose = |region: &mut VideoMetrics, w: &mut Recorder| {
+            let rows = region.view_rows(COLUMNS, &texts);
+            let n = rows
+                .iter()
+                .position(|r| r.spot == "choose-list")
+                .expect("the row that chooses the list");
+            region.clicked(n, w);
+            region.clicked(n, w);
+        };
+        choose(&mut region, &mut w);
+        assert!(
+            region.view.picking(),
+            "the second click brought no picker up"
+        );
+        assert_eq!(region.key(Key::simple(Sym::Char('n')), &mut w), Taken::Yes);
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let pick = texts.t(crate::key::ABOUT_VIDEO_METRICS_PICK);
+        assert!(
+            region
+                .told(&seen, 0, usize::MAX)
+                .iter()
+                .any(|t| t.about.as_deref().is_some_and(|a| a.contains(&pick))),
+            "no row of the picker is said on the explanation line"
+        );
+        assert_eq!(region.key(Key::simple(Sym::Esc), &mut w), Taken::Yes);
+        assert_eq!(region.key(Key::simple(Sym::Esc), &mut w), Taken::Yes);
+        assert!(!region.view.picking(), "the way back left the picker up");
+        choose(&mut region, &mut w);
+        region.pasted(&list.to_string_lossy(), &mut w);
+        assert_eq!(region.key(Key::simple(Sym::Enter), &mut w), Taken::Yes);
+        assert!(
+            !region.view.picking(),
+            "the picker stayed up after its answer"
+        );
+        // THE FEED'S ANSWER, said once it arrives.
+        let staged = texts.t_args(
+            crate::key::VIDEO_METRICS_IMPORTED,
+            &[
+                ("staged", ronoctua_i18n::Arg::Number(2)),
+                ("already", ronoctua_i18n::Arg::Number(0)),
+            ],
+        );
+        let said = |w: &Recorder| {
+            w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(t, _) if *t == staged))
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !said(&w) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(heard.recv_timeout(left).is_ok(), "the feed never answered");
+            region.woken(&mut w);
+        }
+        let kept = residence.as_a::<Kept>().expect("the resident");
+        assert!(
+            kept.borrow().readings.staged.len() == 2,
+            "the import was not read back"
+        );
+        drop(region);
+        let _ = std::fs::remove_dir_all(&dir);
+        // GOOGLE TAKEOUT, in Chrome — the region closed first.
+        let mut region = over(&Page::Import, false);
+        let mut w = way();
+        let rows = region.view_rows(COLUMNS, &texts);
+        let n = rows
+            .iter()
+            .position(|r| r.spot == "takeout")
+            .expect("takeout");
+        region.clicked(n, &mut w);
+        w.owed.clear();
+        region.clicked(n, &mut w);
+        assert!(
+            w.owed.starts_with(&[
+                Effect::Close,
+                Effect::Run(
+                    "kiosk-open",
+                    Some(ronoctua_video_metrics::takeout::TAKEOUT_PAGE.to_owned())
+                ),
+            ]),
+            "{:?}",
+            w.owed
         );
     }
 }

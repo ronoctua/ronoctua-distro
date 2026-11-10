@@ -216,6 +216,7 @@ fn a_first_scan_of_forty_old_videos_takes_ten_and_tombstones_the_rest() {
         &|_| false,
         &Settings::default(),
         false,
+        Keep::DEFAULT,
         NOW,
     );
     let taken: Vec<VideoId> = decided.take.iter().map(|c| c.id.clone()).collect();
@@ -231,7 +232,15 @@ fn a_first_scan_of_forty_old_videos_takes_ten_and_tombstones_the_rest() {
     let old: Vec<Candidate> = (0..40)
         .map(|k| candidate(k, Some(NOW - 15 * DAY_S - i64::from(k) * DAY_S)))
         .collect();
-    let decided = plan(None, old, &|_| false, &Settings::default(), false, NOW);
+    let decided = plan(
+        None,
+        old,
+        &|_| false,
+        &Settings::default(),
+        false,
+        Keep::DEFAULT,
+        NOW,
+    );
     assert!(decided.take.is_empty());
     assert_eq!(decided.skip.len(), 40);
 
@@ -247,6 +256,7 @@ fn a_first_scan_of_forty_old_videos_takes_ten_and_tombstones_the_rest() {
         &|id| *id == video(1),
         &Settings::default(),
         false,
+        Keep::DEFAULT,
         NOW,
     );
     assert_eq!(decided.take.len(), 1);
@@ -1300,6 +1310,304 @@ fn a_scan_running_is_its_lock_and_not_its_record() {
         "a scan holding the catalogue was not seen"
     );
     drop(held);
+}
+
+/// FAILS IF: a scan leaves what outlived its keep, takes it out without a
+/// tombstone that says why (so a feed brings it back), keeps its picture, or
+/// hides its going from the index — or the door's count of what the next
+/// scan takes out is not what the scan takes.
+#[test]
+fn a_scan_takes_out_what_outlived_its_keeping_and_it_never_comes_back() {
+    let scratch = Scratch::new("expire");
+    let a = channel(0);
+    let person = catalogue(&scratch, std::slice::from_ref(&a));
+    let entries = vec![
+        (video(1), NOW - DAY_S, false),
+        (video(2), NOW - 2 * DAY_S, false),
+    ];
+    let fake = Fake::default().feed(Which::Videos, &a, Ok(atom(&a, &entries)));
+    run_with(person.path(), &fake, &feeds_only(), NOW, None).unwrap();
+    assert_eq!(catalogued(&scratch), [video(1).0, video(2).0]);
+    // A PICTURE ON DISK for one of them, where the catalogue keeps its own.
+    let pictures = scratch.0.join(crate::thumbs::DIR);
+    std::fs::create_dir_all(&pictures).unwrap();
+    let picture = pictures.join(format!("{}.jpg", video(1).0));
+    std::fs::write(&picture, b"\xff\xd8").unwrap();
+    {
+        let conn = rusqlite::Connection::open(scratch.catalogue()).unwrap();
+        conn.execute(
+            "UPDATE videos SET thumb_file = ?1 WHERE id = ?2",
+            rusqlite::params![picture.to_string_lossy(), video(1).0],
+        )
+        .unwrap();
+    }
+    let reader = Catalog::open_ro(person.path()).unwrap();
+    let (_, before) = reader.all_since(0).unwrap();
+    let later = NOW + 100 * DAY_S;
+    assert_eq!(reader.expiring_at(NOW).unwrap(), 0, "nothing is old yet");
+    assert_eq!(reader.expiring_at(later).unwrap(), 2);
+    // A hundred days on, the feed still names both.
+    let fake = Fake::default().feed(Which::Videos, &a, Ok(atom(&a, &entries)));
+    let report = run_with(person.path(), &fake, &feeds_only(), later, None).unwrap();
+    assert_eq!((report.added, report.skipped), (0, 2));
+    assert!(catalogued(&scratch).is_empty());
+    let tombs = skipped(&scratch);
+    assert_eq!(
+        (tombs.get(&video(1).0), tombs.get(&video(2).0)),
+        (Some(&"expired".to_owned()), Some(&"expired".to_owned()))
+    );
+    assert!(!picture.exists(), "its picture went with it");
+    assert_eq!(reader.gone_since(before).unwrap(), [video(1), video(2)]);
+    let counts = reader.skipped().unwrap();
+    assert!(counts.contains(&(Skip::Expired, 2)));
+    assert_eq!(reader.last_scan().unwrap().unwrap().skipped, 2);
+    // AND NEVER AGAIN: the next scan meets them as tombstones.
+    let fake = Fake::default().feed(Which::Videos, &a, Ok(atom(&a, &entries)));
+    let report = run_with(person.path(), &fake, &feeds_only(), later + DAY_S, None).unwrap();
+    assert_eq!((report.added, report.skipped), (0, 0));
+    assert!(catalogued(&scratch).is_empty());
+}
+
+/// FAILS IF: a video set aside, marked to keep, of a channel that keeps for
+/// ever or keeps longer is taken out — or a hidden one is spared, or one
+/// taken off the set-aside list stays spared.
+#[test]
+fn set_aside_kept_and_forever_channels_stay_and_hidden_ones_go() {
+    let scratch = Scratch::new("expire-stays");
+    let (a, b, c) = (channel(0), channel(1), channel(2));
+    let person = catalogue(&scratch, &[a.clone(), b.clone(), c.clone()]);
+    let fake = Fake::default()
+        .feed(
+            Which::Videos,
+            &a,
+            Ok(atom(
+                &a,
+                &(1..=4)
+                    .map(|k| (video(k), NOW - DAY_S, false))
+                    .collect::<Vec<_>>(),
+            )),
+        )
+        .feed(
+            Which::Videos,
+            &b,
+            Ok(atom(&b, &[(video(5), NOW - DAY_S, false)])),
+        )
+        .feed(
+            Which::Videos,
+            &c,
+            Ok(atom(&c, &[(video(6), NOW - DAY_S, false)])),
+        );
+    run_with(person.path(), &fake, &feeds_only(), NOW, None).unwrap();
+    assert_eq!(catalogued(&scratch).len(), 6);
+    person.set_aside(&video(1), true).unwrap();
+    person.set_keep(&video(2), true).unwrap();
+    person.set_hidden(&video(3), true).unwrap();
+    person.set_channel_keep(&b, Some(Keep::Forever)).unwrap();
+    person.set_channel_keep(&c, Some(Keep::Days(200))).unwrap();
+    let later = NOW + 100 * DAY_S;
+    run_with(person.path(), &Fake::default(), &feeds_only(), later, None).unwrap();
+    assert_eq!(
+        catalogued(&scratch),
+        [video(1).0, video(2).0, video(5).0, video(6).0],
+        "the hidden one and the plain one went"
+    );
+    // Taken off the list, its time is up at the next scan.
+    person.set_aside(&video(1), false).unwrap();
+    run_with(
+        person.path(),
+        &Fake::default(),
+        &feeds_only(),
+        later + DAY_S,
+        None,
+    )
+    .unwrap();
+    assert_eq!(catalogued(&scratch), [video(2).0, video(5).0, video(6).0]);
+}
+
+/// FAILS IF: a global "never" spares a channel that keeps a time of its own,
+/// or a channel's days are read as the global keep.
+#[test]
+fn the_global_forever_keeps_all_but_a_channel_of_its_own_days() {
+    let scratch = Scratch::new("expire-global");
+    let (a, b) = (channel(0), channel(1));
+    let person = catalogue(&scratch, &[a.clone(), b.clone()]);
+    person
+        .set_settings(&Settings {
+            keep: Keep::Forever,
+            ..Settings::default()
+        })
+        .unwrap();
+    person.set_channel_keep(&b, Some(Keep::Days(30))).unwrap();
+    let fake = Fake::default()
+        .feed(
+            Which::Videos,
+            &a,
+            Ok(atom(&a, &[(video(1), NOW - DAY_S, false)])),
+        )
+        .feed(
+            Which::Videos,
+            &b,
+            Ok(atom(&b, &[(video(2), NOW - DAY_S, false)])),
+        );
+    run_with(person.path(), &fake, &feeds_only(), NOW, None).unwrap();
+    let later = NOW + 1000 * DAY_S;
+    let reader = Catalog::open_ro(person.path()).unwrap();
+    assert_eq!(reader.expiring_at(later).unwrap(), 1);
+    run_with(person.path(), &Fake::default(), &feeds_only(), later, None).unwrap();
+    assert_eq!(catalogued(&scratch), [video(1).0]);
+}
+
+/// FAILS IF: a video without a date is kept for ever, or counted from
+/// anything but when a scan first saw it — or a dated one is not counted from
+/// its date.
+#[test]
+fn a_video_without_a_date_counts_from_when_it_was_first_seen() {
+    let scratch = Scratch::new("expire-undated");
+    let a = channel(0);
+    let person = catalogue(&scratch, std::slice::from_ref(&a));
+    let entries = vec![
+        (video(1), NOW - DAY_S, false),
+        (video(2), NOW - DAY_S, false),
+    ];
+    let fake = Fake::default().feed(Which::Videos, &a, Ok(atom(&a, &entries)));
+    run_with(person.path(), &fake, &feeds_only(), NOW, None).unwrap();
+    {
+        let conn = rusqlite::Connection::open(scratch.catalogue()).unwrap();
+        conn.execute(
+            "UPDATE videos SET published_at = NULL WHERE id = ?1",
+            rusqlite::params![video(1).0],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE videos SET published_at = ?1 WHERE id = ?2",
+            rusqlite::params![NOW - 60 * DAY_S, video(2).0],
+        )
+        .unwrap();
+    }
+    // Fifty days after the first sighting: the dated one is a hundred and ten
+    // days old, the undated one fifty.
+    run_with(
+        person.path(),
+        &Fake::default(),
+        &feeds_only(),
+        NOW + 50 * DAY_S,
+        None,
+    )
+    .unwrap();
+    assert_eq!(catalogued(&scratch), [video(1).0]);
+    run_with(
+        person.path(),
+        &Fake::default(),
+        &feeds_only(),
+        NOW + 91 * DAY_S,
+        None,
+    )
+    .unwrap();
+    assert!(catalogued(&scratch).is_empty());
+}
+
+/// FAILS IF: a sighting already past its channel's keep is catalogued — its
+/// details and picture fetched for the next scan to delete — even alone,
+/// inside the first scan's window and under its most.
+#[test]
+fn a_sighting_already_past_its_keep_is_never_catalogued() {
+    let fresh = candidate(1, Some(NOW - 3 * DAY_S));
+    let stale = candidate(2, Some(NOW - 10 * DAY_S));
+    let first_scan = Settings {
+        first_scan_most: 1,
+        ..Settings::default()
+    };
+    assert!(
+        10 < first_scan.first_scan_days,
+        "the stale one is inside the window, so only its keep refuses it"
+    );
+    let decided = plan(
+        None,
+        vec![stale.clone(), fresh],
+        &|_| false,
+        &first_scan,
+        false,
+        Keep::Days(7),
+        NOW,
+    );
+    assert_eq!(
+        decided
+            .take
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>(),
+        [video(1)]
+    );
+    assert_eq!(decided.skip, [(video(2), Skip::Expired)]);
+    // ALONE, where the window and the most would take it.
+    let alone = plan(
+        None,
+        vec![stale],
+        &|_| false,
+        &first_scan,
+        false,
+        Keep::Days(7),
+        NOW,
+    );
+    assert!(alone.take.is_empty(), "{:?}", alone.take);
+    assert_eq!(alone.skip, [(video(2), Skip::Expired)]);
+
+    let scratch = Scratch::new("expire-sighting");
+    let a = channel(0);
+    let person = catalogue(&scratch, std::slice::from_ref(&a));
+    person.set_channel_keep(&a, Some(Keep::Days(7))).unwrap();
+    let entries = vec![
+        (video(1), NOW - 3 * DAY_S, false),
+        (video(2), NOW - 10 * DAY_S, false),
+    ];
+    let fake = Fake::default().feed(Which::Videos, &a, Ok(atom(&a, &entries)));
+    let report = run_with(person.path(), &fake, &Options::default(), NOW, None).unwrap();
+    assert_eq!((report.added, report.skipped), (1, 1));
+    assert_eq!(catalogued(&scratch), [video(1).0]);
+    assert_eq!(
+        skipped(&scratch).get(&video(2).0).map(String::as_str),
+        Some("expired")
+    );
+    assert_eq!(
+        fake.asked_details.borrow().as_slice(),
+        [url(&video(1))],
+        "no details asked for what would go"
+    );
+}
+
+/// FAILS IF: a channel of an imported list is scanned before the person
+/// registered it.
+#[test]
+fn a_staged_channel_is_never_scanned() {
+    let scratch = Scratch::new("staged-scan");
+    let (a, b) = (channel(0), channel(1));
+    let person = catalogue(&scratch, std::slice::from_ref(&a));
+    person
+        .stage(&[crate::takeout::Subscription {
+            id: b.clone(),
+            title: "Waiting".to_owned(),
+        }])
+        .unwrap();
+    let fake = || {
+        Fake::default()
+            .feed(Which::Videos, &a, Ok(atom(&a, &[(video(1), NOW, false)])))
+            .feed(Which::Videos, &b, Ok(atom(&b, &[(video(2), NOW, false)])))
+    };
+    let asked = fake();
+    let report = run_with(person.path(), &asked, &feeds_only(), NOW, None).unwrap();
+    assert_eq!(report.channels, 1);
+    assert!(
+        asked.asked_feeds.borrow().iter().all(|(_, c)| *c != b),
+        "the staged channel was asked for"
+    );
+    assert_eq!(catalogued(&scratch), [video(1).0]);
+    // Registered, it is scanned like any other.
+    person.decide(&b, crate::read::Decision::Keep).unwrap();
+    person.register_staged().unwrap();
+    let asked = fake();
+    run_with(person.path(), &asked, &feeds_only(), NOW + 60, None).unwrap();
+    assert!(asked.asked_feeds.borrow().iter().any(|(_, c)| *c == b));
+    assert_eq!(catalogued(&scratch), [video(1).0, video(2).0]);
 }
 
 /// THE DESIGN'S NUMBER: a rule change recomputes about fifty thousand videos

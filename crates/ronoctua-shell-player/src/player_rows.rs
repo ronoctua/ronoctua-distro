@@ -225,6 +225,15 @@ impl Row {
         !self.heading && !self.continues
     }
 
+    /// Whether `↑` and `↓` stand on it: a row the cursor stops on, or A
+    /// TITLE WITH CONTROLS at the end of its line — the Queue's, the Lyrics',
+    /// a list's layout — whose glyphs the arrows reach as the pointer does
+    /// (`View::walk`), `←`/`→` choosing among them.
+    #[must_use]
+    pub fn walked_onto(&self) -> bool {
+        self.stops() || (self.heading && self.cells.iter().any(|c| c.control))
+    }
+
     /// How many lines the row that begins at line `owner` of `rows` takes:
     /// itself and every line that continues it.
     #[must_use]
@@ -419,10 +428,11 @@ pub struct Cell {
 /// writes down for its pointer (the footer's `player_controls_placed`), the
 /// cells [`control_under`] reads.
 ///
-/// A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON — its row's first — and
-/// nowhere else of a row of several lines: a strip's `⋯`, on the first line
-/// of a tile six lines tall, was taken on all six (`View::clicked_at` reads
-/// the same).
+/// A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON — whichever line of its row
+/// that is — and nowhere else of a row of several lines: a strip's `⋯`, on
+/// the first line of a tile six lines tall, was taken on all six; the glyphs
+/// beside the words said under its title are each taken on their own line
+/// (`View::clicked_at` reads the same).
 #[must_use]
 pub fn controls_under(rows: &[Row], n: usize) -> Vec<(u16, u16, &'static str)> {
     rows.get(n).map_or_else(Vec::new, |row| {
@@ -546,6 +556,18 @@ pub struct Entry {
     pub moves: [Option<(char, Target)>; 2],
 }
 
+/// A CONTROL'S TONE: `tone`, and the cursor's colour while the arrows stand
+/// on it (`here`) — the cursor is a colour (`the-cursor-is-a-colour`). On a
+/// title it is the title's own tone and the cursor's, never a second, quieter
+/// text tone beside the heading (`a-heading-is-not-a-submenu`).
+fn cursor_or(tone: tokens::Color, here: bool) -> tokens::Color {
+    if here {
+        tokens::color::TEXT_HERE_ACTS
+    } else {
+        tone
+    }
+}
+
 /// `part` of `whole`, in per cent, for a bar.
 pub fn share(part: f64, whole: f64) -> u8 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -594,6 +616,11 @@ pub struct Builder<'a> {
     pub cursor: usize,
     /// Which entry of a grid row the cursor is on.
     pub cell: usize,
+    /// THE CURSOR IS DRAWN: `false` while the keyboard is on the door's
+    /// picture controls (`View::pane`) — no row wears the cursor's colour
+    /// or a grid's selection then, and every row still answers for the
+    /// cursor's place what it would ([`Builder::at_cursor`]).
+    pub cursor_shown: bool,
     /// The words.
     pub texts: &'a ronoctua_i18n::Texts,
     /// The page's own first cell and room, before any section is nested.
@@ -622,12 +649,26 @@ impl<'a> Builder<'a> {
         texts: &'a ronoctua_i18n::Texts,
         fill: impl Fn(&mut Self),
     ) -> Vec<Row> {
+        Self::build_shown(left, room, (cursor, cell), true, texts, fill)
+    }
+
+    /// [`Builder::build`], the cursor DRAWN or not (`shown`, [`Builder::cursor_shown`]):
+    /// the rows of a view whose keyboard is on its picture's controls.
+    pub fn build_shown(
+        left: u16,
+        room: u16,
+        (cursor, cell): (usize, usize),
+        shown: bool,
+        texts: &'a ronoctua_i18n::Texts,
+        fill: impl Fn(&mut Self),
+    ) -> Vec<Row> {
         let blank = |measured, columns| Self {
             out: Vec::new(),
             left,
             room,
             cursor,
             cell,
+            cursor_shown: shown,
             texts,
             origin: (left, room),
             section: 0,
@@ -646,6 +687,21 @@ impl<'a> Builder<'a> {
         let mut placed = blank(None, columns);
         fill(&mut placed);
         placed.out
+    }
+
+    /// Whether line `line` is where the cursor is — what a row answers for
+    /// the cursor's place (a grid's target is the entry the cursor is on),
+    /// drawn or not.
+    #[must_use]
+    pub const fn at_cursor(&self, line: usize) -> bool {
+        self.cursor == line
+    }
+
+    /// Whether line `line` WEARS the cursor — its colour, a grid's
+    /// selection: it is there, and drawn ([`Builder::cursor_shown`]).
+    #[must_use]
+    pub const fn lit_at(&self, line: usize) -> bool {
+        self.cursor_shown && self.cursor == line
     }
 
     /// Where the values of the section being written begin.
@@ -807,7 +863,7 @@ impl Builder<'_> {
         {
             pairs.push((at, wide(&label), wide(&value)));
         }
-        let focused = self.cursor == self.out.len();
+        let focused = self.lit_at(self.out.len());
         let acts = target.acts();
         let kind = crate::chrome::Kind::of(acts);
         let lines = crate::chrome::aligned_pair(
@@ -945,7 +1001,8 @@ impl Builder<'_> {
         let count = entries.len();
         let per = count.div_ceil(usize::from(columns));
         for r in 0..per {
-            let focused_row = self.cursor == self.out.len();
+            let on_row = self.at_cursor(self.out.len());
+            let focused_row = self.lit_at(self.out.len());
             let mut fields = Vec::new();
             let mut cells = Vec::new();
             for c in 0..columns {
@@ -980,7 +1037,7 @@ impl Builder<'_> {
                 });
             }
             let on = self.cell.min(cells.len().saturating_sub(1));
-            let target = if focused_row {
+            let target = if on_row {
                 cells.get(on).map_or(Target::Nothing, |c| c.target.clone())
             } else {
                 cells.first().map_or(Target::Nothing, |c| c.target.clone())
@@ -1117,19 +1174,36 @@ impl Builder<'_> {
         }
         self.room = room;
         let edge = self.left + self.room;
+        // THE ARROWS STAND ON THE TITLE'S CONTROLS (`Row::walked_onto`): the
+        // one chosen (`cell`) is what the row does then — a grid's row says
+        // the entry the cursor is on — and its glyph wears the cursor's
+        // colour while the cursor is drawn.
+        let chosen = self.cell.min(controls.len().saturating_sub(1));
+        let (on, lit) = (self.at_cursor(first), self.lit_at(first));
         let Some(row) = self.out.get_mut(first) else {
             return;
         };
+        // AN IDENTITY OF ITS OWN, by its first control, so the cursor on it
+        // stays there across a rebuild (`View::follow`): a title's line had
+        // none.
+        if let Some((_, _, about)) = controls.first() {
+            row.spot = format!("title-{about}");
+        }
+        if on && let Some((_, target, _)) = controls.get(chosen) {
+            row.target = target.clone();
+            row.focused = lit;
+        }
         for (k, (glyph, target, about)) in controls.iter().enumerate() {
             let from_edge = (n - u16::try_from(k).unwrap_or(0)).saturating_mul(step);
             let at = edge.saturating_sub(from_edge);
             // THE GLYPH WEARS ITS TITLE'S TONE, as the drawers' chevrons do
             // (`network::drawer`): a second, quieter text tone on a title
-            // line is the title read as body text.
+            // line is the title read as body text — and the CURSOR'S colour
+            // while the arrows stand on it.
             row.fields.push(Self::piece(
                 at,
                 glyph.to_string(),
-                tokens::color::TEXT_HEADING,
+                cursor_or(tokens::color::TEXT_HEADING, lit && k == chosen),
             ));
             row.cells.push(Cell {
                 from: at,
@@ -1602,7 +1676,7 @@ impl Builder<'_> {
                 .filter(|l| !l.is_empty())
                 .collect()
         };
-        let focused = self.cursor == first;
+        let focused = self.lit_at(first);
         self.pair(
             label,
             values.first().cloned().unwrap_or_default(),
@@ -1758,7 +1832,7 @@ impl Builder<'_> {
     /// A row of the queue's tree: set in by its depth, its number, a group's
     /// triangle — a control — and its name cut to what is left.
     pub fn entry(&mut self, e: Entry) {
-        let focused = self.cursor == self.out.len();
+        let focused = self.lit_at(self.out.len());
         let colour = match (focused, e.current) {
             (true, _) => tokens::color::TEXT_HERE_ACTS,
             (false, true) => tokens::color::STATE_ACCENT,
@@ -1875,7 +1949,7 @@ impl Builder<'_> {
             0,
         ));
         for line in 0..deck.lines.len() {
-            let focused = self.cursor == self.out.len();
+            let focused = self.lit_at(self.out.len());
             let fields = deck
                 .words(line, state, self.texts, None, focused)
                 .into_iter()

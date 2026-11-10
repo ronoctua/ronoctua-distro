@@ -1047,6 +1047,12 @@ mod tests {
             "player-nearer",
             "player-further",
             "player-world",
+            // `TAB` TO THE PICTURE'S CONTROLS and their keys there — the
+            // region's, by its open view's table.
+            "player-cross",
+            "player-pane-previous",
+            "player-pane-next",
+            "player-pane-press",
             "pointers-up",
             "pointers-down",
             "pointers-enter",
@@ -1384,9 +1390,15 @@ mod tests {
             "video-metrics-search",
             "video-metrics-player",
             "video-metrics-kiosk",
+            // A VIDEO, OR A CHANNEL'S VIDEOS, IN NYXT — the view's key.
+            "video-metrics-nyxt",
             "video-metrics-download",
             "video-metrics-hide",
             "video-metrics-delete",
+            // A VIDEO SET ASIDE, OR NEVER DELETED — the view's keys — and how
+            // long videos stay, typed.
+            "video-metrics-set-aside",
+            "video-metrics-keep",
             "video-metrics-add-channel",
             "video-metrics-channel-score",
             "video-metrics-points",
@@ -1395,6 +1407,7 @@ mod tests {
             "video-metrics-words",
             "video-metrics-second-tags",
             "video-metrics-weight",
+            "video-metrics-keep-days",
             "security-open",
             "security-window",
             "security-relax",
@@ -1479,6 +1492,18 @@ mod tests {
             "player-ranking-first",
             "player-ranking-last",
             "player-ranking-layout",
+            // ITS SET-ASIDE LIST, ITS SHORTS AND THE QUICK MARKS — the region's
+            // page and the ranking's keys, as the ones above.
+            "player-set-aside",
+            "player-ranking-shorts",
+            "player-ranked-set-aside",
+            "player-ranked-hide",
+            "player-ranked-delete",
+            "player-ranked-forever",
+            "player-ranked-rate-very-negative",
+            "player-ranked-rate-negative",
+            "player-ranked-rate-positive",
+            "player-ranked-rate-very-positive",
             "display-rise",
             "display-sink",
             "clipboard-window",

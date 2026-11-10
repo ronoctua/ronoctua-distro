@@ -167,11 +167,14 @@ pub fn volume_step(s: Option<&State>, up: bool, texts: &ronoctua_i18n::Texts) ->
 /// The button that is a KEY OF THE VIEW, by its command: the media in the
 /// file opens a page (`Press::Tracks`), which only the view can do — so a
 /// door hands it to its view's `key`, and every other button to
-/// [`button_errand`]. Asked first, by every door.
+/// [`button_errand`]. Asked first, by every door. AND THE FOLD at the end of
+/// the footer's time bar (`player_media::FOLD`), which is `z`: the view says
+/// whether there is a picture to fold, and the door folds it.
 #[must_use]
 pub fn button_press(id: &str) -> Option<Press> {
     match id {
         "player-tracks" => Some(Press::Tracks),
+        "player-picture-fold" => Some(Press::FoldPicture),
         _ => None,
     }
 }

@@ -23,13 +23,16 @@
 //!
 //! # The pages
 //!
-//! Home (the scan, the catalogue, what was left out), the channels, one
-//! channel (its facts, its score, every rule in its channel version, removing
-//! it), the global rules (recency, the Short penalty, blocking Shorts, the
+//! Home (the scan, the catalogue, the ways to it in other apps — the
+//! brain's page on the scan, the player's lists —, what was left out), the
+//! channels, one channel (its facts, its videos here and on YouTube, its
+//! score, every rule in its channel version, removing it), the global rules (recency, the Short penalty, blocking Shorts, the
 //! length bands, the preferred band, words), one rule, the rating weights,
 //! the videos (by score, as a list or a grid of thumbnails, with filters and
-//! pages) and one video (every field, the person's rating, tags and second
-//! description, and what can be done with it).
+//! pages), one video (every field, the person's rating, tags and second
+//! description, and what can be done with it) — and a list of subscriptions
+//! (Google Takeout's) imported, its channels decided one by one and
+//! registered, and the channels here exported as such a list.
 //!
 //! # A question is a row
 //!
@@ -50,12 +53,14 @@ use std::sync::Arc;
 use crate::key;
 use ronoctua_i18n::Arg;
 use ronoctua_tokens as tokens;
+use ronoctua_video_metrics::person::Registered;
 use ronoctua_video_metrics::read::{
-    Channel, Filter, Hidden, RankedVideo, ScanRecord, Shorts, Video,
+    Channel, Decision, Filter, Forever, Hidden, Order, RankedVideo, ScanRecord, SetAside, Shorts,
+    Staged, Video,
 };
 use ronoctua_video_metrics::{
-    ChannelId, Fields, Rating, Rule, RuleId, RuleKind, Settings, Skip, TermMatch, VideoId, Weights,
-    Why,
+    ChannelId, Fields, Keep, Rating, Rule, RuleId, RuleKind, Settings, Skip, TermMatch, VideoId,
+    Weights, Why, takeout,
 };
 
 use crate::chrome::Kind;
@@ -81,10 +86,13 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("L", "video-metrics-layout", Where::OnTheVideos),
     ("/", "video-metrics-search", Where::OnTheVideos),
     ("a", "video-metrics-player", Where::OnAVideo),
-    ("K", "video-metrics-kiosk", Where::OnAVideo),
+    ("K", "video-metrics-kiosk", Where::OnAnAddress),
+    ("n", "video-metrics-nyxt", Where::OnAnAddress),
     ("D", "video-metrics-download", Where::OnAVideo),
     ("h", "video-metrics-hide", Where::OnAVideo),
     ("d", "video-metrics-delete", Where::OnAVideo),
+    ("s", "video-metrics-set-aside", Where::OnAVideo),
+    ("f", "video-metrics-keep", Where::OnAVideo),
 ];
 
 /// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
@@ -103,6 +111,10 @@ pub enum Where {
     OnTheVideos,
     /// On a video: its page, or its row or cell on the videos' page.
     OnAVideo,
+    /// ON WHAT HAS A PAGE ON YOUTUBE, which a browser opens: a video, where
+    /// [`Where::OnAVideo`] is — or a channel, its page or its row on the
+    /// channels' list, whose videos' page opens.
+    OnAnAddress,
 }
 
 /// The command that opens the view in the footer's region.
@@ -111,6 +123,40 @@ pub const OPEN_COMMAND: &str = "video-metrics-open";
 pub const WINDOW_COMMAND: &str = "video-metrics-window";
 /// The command that asks for a scan now.
 pub const SCAN_COMMAND: &str = "video-metrics-scan";
+
+/// THE FOOTER'S COMMAND THAT OPENS THE BRAIN'S PAGE — on a module's, given
+/// its id: where the scan's schedule is read and changed
+/// ([`Errand::Brain`]).
+pub const BRAIN_OPEN: &str = "brain-open";
+
+/// THE PLAYER'S COMMAND THAT OPENS ITS WINDOW — on a page of the ranking,
+/// given its word (`player_seam::ranking::OPEN_RANKING`): a window of its
+/// own, even with one open ([`Errand::Player`]).
+pub const PLAYER_WINDOW: &str = "player-window";
+
+/// A LIST OF THE PLAYER'S that the home page opens in a window of the
+/// player's own: the catalogue's videos by score, or the ones set aside,
+/// newest first — the player's two pages of this catalogue
+/// (`player_ranking`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InThePlayer {
+    /// "Videos by score".
+    Ranking,
+    /// The videos set aside.
+    SetAside,
+}
+
+impl InThePlayer {
+    /// The word the player's window opens on it by
+    /// (`player_window::opening_of`).
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Ranking => crate::player_seam::ranking::OPEN_RANKING,
+            Self::SetAside => crate::player_seam::ranking::OPEN_SET_ASIDE,
+        }
+    }
+}
 
 /// A key, already reduced to what the view cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,14 +184,24 @@ pub enum Press {
     Search,
     /// The video in the player.
     Player,
-    /// The video in Chrome, as a kiosk.
+    /// The video in Chrome, as a kiosk — or a channel's videos.
     Kiosk,
+    /// The video in Nyxt — or a channel's videos.
+    Nyxt,
     /// The video downloaded, by the transfers' queue.
     Download,
     /// The video hidden, or shown again.
     Hide,
     /// The video deleted for good.
     Delete,
+    /// The video set aside for later, or taken out of the set-aside ones.
+    SetAside,
+    /// The video's own mark never to be deleted, put on or taken off.
+    Keep,
+    /// A key the file picker claims while it is up over the import page
+    /// ([`View::picker_takes`]) — every letter, and its own keys: the door
+    /// hands it as this before any other reading of the key.
+    Pick(ronoctua_keymap::Key),
 }
 
 /// A command of [`OF_THE_VIEW`] as the view's press — a click on the hint, or
@@ -164,9 +220,12 @@ pub fn press_of(id: &str) -> Option<Press> {
         "video-metrics-search" => Press::Search,
         "video-metrics-player" => Press::Player,
         "video-metrics-kiosk" => Press::Kiosk,
+        "video-metrics-nyxt" => Press::Nyxt,
         "video-metrics-download" => Press::Download,
         "video-metrics-hide" => Press::Hide,
         "video-metrics-delete" => Press::Delete,
+        "video-metrics-set-aside" => Press::SetAside,
+        "video-metrics-keep" => Press::Keep,
         _ => return None,
     })
 }
@@ -263,6 +322,10 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             label: crate::key::CMD_VIDEO_METRICS_KIOSK,
         },
         ronoctua_cmd::Command {
+            id: "video-metrics-nyxt",
+            label: crate::key::CMD_VIDEO_METRICS_NYXT,
+        },
+        ronoctua_cmd::Command {
             id: "video-metrics-download",
             label: crate::key::CMD_VIDEO_METRICS_DOWNLOAD,
         },
@@ -273,6 +336,14 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         ronoctua_cmd::Command {
             id: "video-metrics-delete",
             label: crate::key::CMD_VIDEO_METRICS_DELETE,
+        },
+        ronoctua_cmd::Command {
+            id: "video-metrics-set-aside",
+            label: crate::key::CMD_VIDEO_METRICS_SET_ASIDE,
+        },
+        ronoctua_cmd::Command {
+            id: "video-metrics-keep",
+            label: crate::key::CMD_VIDEO_METRICS_KEEP,
         },
         ronoctua_cmd::Command {
             id: "video-metrics-add-channel",
@@ -305,6 +376,10 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         ronoctua_cmd::Command {
             id: "video-metrics-weight",
             label: crate::key::CMD_VIDEO_METRICS_WEIGHT,
+        },
+        ronoctua_cmd::Command {
+            id: "video-metrics-keep-days",
+            label: crate::key::CMD_VIDEO_METRICS_KEEP_DAYS,
         },
     ],
     bindings: &[
@@ -348,11 +423,13 @@ pub enum Ask {
     SecondTags,
     /// A rating's weight.
     Weight,
+    /// After how many days videos are deleted — everywhere, or a channel's.
+    KeepDays,
 }
 
 impl Ask {
     /// Every one.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::AddChannel,
         Self::ChannelScore,
         Self::Points,
@@ -362,6 +439,7 @@ impl Ask {
         Self::Search,
         Self::SecondTags,
         Self::Weight,
+        Self::KeepDays,
     ];
 
     /// Its command — the id the line answers under.
@@ -377,6 +455,7 @@ impl Ask {
             Self::Search => "video-metrics-search",
             Self::SecondTags => "video-metrics-second-tags",
             Self::Weight => "video-metrics-weight",
+            Self::KeepDays => "video-metrics-keep-days",
         }
     }
 
@@ -472,8 +551,12 @@ pub enum Page {
     Home,
     /// Every channel.
     Channels,
-    /// One channel.
+    /// One channel — of the catalogue, or of a list imported and not
+    /// registered yet.
     Channel(ChannelId),
+    /// A list of subscriptions imported (Google Takeout's), its channels to
+    /// decide and register — and the channels here exported as one.
+    Import,
     /// The rules for everywhere.
     Rules,
     /// One rule, in a scope.
@@ -617,12 +700,18 @@ pub struct Reading {
     pub scanning: Option<bool>,
     /// How many videos are catalogued.
     pub videos_count: Option<u64>,
+    /// How many of them are set aside, hidden ones included.
+    pub set_aside_count: Option<u64>,
+    /// How many the next scan takes out for their time (`Catalog::expiring`).
+    pub expiring: Option<u64>,
     /// The tombstones, by reason.
     pub skipped: Option<Vec<(Skip, u64)>>,
     /// Whether the hosts a scan asks are let.
     pub consent: Option<bool>,
     /// Every channel.
     pub channels: Option<Vec<Channel>>,
+    /// The channels of a list imported, not registered yet.
+    pub staged: Option<Vec<Staged>>,
     /// The rules in force in a scope.
     pub rules: Option<(Scope, Vec<Rule>)>,
     /// The switches.
@@ -648,12 +737,22 @@ pub struct Readings {
     pub scanning: Option<bool>,
     /// How many videos are catalogued.
     pub videos_count: Option<u64>,
+    /// How many of them are set aside, hidden ones included.
+    pub set_aside_count: Option<u64>,
+    /// How many the next scan takes out for their time, under the keeps in
+    /// force when it was read.
+    pub expiring: Option<u64>,
     /// The tombstones, by reason.
     pub skipped: Vec<(Skip, u64)>,
     /// Whether YouTube's hosts are let.
     pub consent: Option<bool>,
     /// Every channel, by score.
     pub channels: Vec<Channel>,
+    /// THE CHANNELS OF A LIST IMPORTED and not registered yet, by title —
+    /// each with what registering does with it. Not channels of the
+    /// catalogue: no scan reads them, and the channels' list leaves them
+    /// out. Their pages are the channels' own ([`Readings::channel`]).
+    pub staged: Vec<Staged>,
     /// The rules in force in the scope last read.
     pub rules: Option<(Scope, Vec<Rule>)>,
     /// The switches.
@@ -690,6 +789,12 @@ impl Readings {
         if let Some(n) = r.videos_count {
             self.videos_count = Some(n);
         }
+        if let Some(n) = r.set_aside_count {
+            self.set_aside_count = Some(n);
+        }
+        if let Some(n) = r.expiring {
+            self.expiring = Some(n);
+        }
         if let Some(s) = r.skipped {
             self.skipped = s;
         }
@@ -698,6 +803,9 @@ impl Readings {
         }
         if let Some(c) = r.channels {
             self.channels = c;
+        }
+        if let Some(s) = r.staged {
+            self.staged = s;
         }
         if let Some(rules) = r.rules {
             self.rules = Some(rules);
@@ -719,9 +827,21 @@ impl Readings {
         }
     }
 
-    /// A channel, by id.
+    /// A channel, by id — of the catalogue, or a staged one: A CHANNEL OF A
+    /// LIST IMPORTED HAS THE PAGE EVERY CHANNEL HAS, and its rules' pages,
+    /// where everything a channel is given is given to it before it is
+    /// registered ([`Readings::staged_as`] says what it waits for).
     fn channel(&self, id: &ChannelId) -> Option<&Channel> {
-        self.channels.iter().find(|c| &c.id == id)
+        self.channels
+            .iter()
+            .find(|c| &c.id == id)
+            .or_else(|| self.staged_as(id).map(|s| &s.channel))
+    }
+
+    /// The staged channel by `id`, and what registering does with it —
+    /// `None` for a channel of the catalogue, or none.
+    fn staged_as(&self, id: &ChannelId) -> Option<&Staged> {
+        self.staged.iter().find(|s| &s.channel.id == id)
     }
 
     /// The rules in force in `scope`, when they were read for it.
@@ -743,6 +863,14 @@ impl Readings {
     /// A video of the list, by id.
     fn ranked(&self, id: &VideoId) -> Option<&RankedVideo> {
         self.listed.as_ref()?.rows.iter().find(|r| &r.id == id)
+    }
+
+    /// A video's title, from its page or the list, when either holds it.
+    fn title_of(&self, id: &VideoId) -> Option<String> {
+        self.video_of(id)
+            .map(|v| &v.row)
+            .or_else(|| self.ranked(id))
+            .map(|v| v.title.clone())
     }
 }
 
@@ -773,10 +901,27 @@ pub enum Edit {
     SecondTags(VideoId, Vec<String>),
     /// Hide a video, or show it again.
     Hidden(VideoId, bool),
+    /// Set a video aside for later, or take it out of the set-aside ones.
+    SetAside(VideoId, bool),
+    /// A video's own mark never to be deleted, on or off.
+    KeepVideo(VideoId, bool),
+    /// How long a channel's videos stay (`None`: as everywhere).
+    ChannelKeep(ChannelId, Option<Keep>),
     /// Delete a video for good.
     Delete(VideoId),
     /// Let YouTube's hosts be asked, or not.
     Consent(bool),
+    /// STAGE THE CHANNELS OF THE LIST IN THIS FILE — Google Takeout's
+    /// subscriptions: each waits for a decision, and nothing of it is scanned
+    /// until it is registered.
+    Import(PathBuf),
+    /// What registering does with one staged channel.
+    Decide(ChannelId, Decision),
+    /// The same decision, for every staged channel.
+    DecideAll(Decision),
+    /// What was decided, registered: the kept join the catalogue, the
+    /// discarded go, the undecided stay.
+    Register,
 }
 
 /// Which way the player is asked to take a video.
@@ -817,8 +962,18 @@ pub enum Errand {
     Scan,
     /// The video in the player.
     Play(ToPlay),
-    /// The video in Chrome, as a kiosk (`kiosk-open`, the footer's).
+    /// A page of YouTube — a video's, a channel's videos — in Chrome, as a
+    /// kiosk (`kiosk-open`, the footer's).
     Kiosk(String),
+    /// The same in Nyxt, started by its entry in the launcher
+    /// (`launch::in_nyxt`).
+    Nyxt(String),
+    /// The brain's page on this catalogue's scan — when it runs, what it
+    /// waits for, what it did ([`BRAIN_OPEN`], the footer's).
+    Brain,
+    /// A window of the player's, of its own, on the page this word opens
+    /// ([`InThePlayer::word`], [`PLAYER_WINDOW`]).
+    Player(&'static str),
     /// The video downloaded, by the transfers' queue.
     Download {
         /// Its address.
@@ -831,6 +986,13 @@ pub enum Errand {
     Transfers,
     /// Say this.
     Say(String),
+    /// THE REGISTERED CHANNELS WRITTEN as a list in Google's shape, here —
+    /// on the door's feed, off the loop.
+    Export(PathBuf),
+    /// A sentence of the file picker's — a typed path that names nothing, a
+    /// name it will not save under — worded by the door, which holds the
+    /// language.
+    Explain(ronoctua_files::mode::Explanation),
 }
 
 /// What came of an errand the feed carried out.
@@ -848,6 +1010,50 @@ pub enum Done {
     Queued(ToPlay, Result<(), Queued>),
     /// A download handed to the queue, or the queue not there.
     Downloading(String, bool),
+    /// A list imported — what staging it did — or why not.
+    Imported(Result<Imported, Unimported>),
+    /// What was decided, registered — and, when the consent to scan the
+    /// kept could not be kept, the key of why: the channels are in all the
+    /// same — or why nothing was registered.
+    Registered(Result<(Registered, Option<&'static str>), Why>),
+    /// The registered channels exported: how many, and where — or why not.
+    Exported(Result<(u32, PathBuf), Unexported>),
+}
+
+/// WHAT IMPORTING A LIST DID, as the import page says it while the view is
+/// open ([`View::imported`]): the channels it left waiting, the ones it
+/// found registered already, the lines it could not read as a channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Imported {
+    /// Channels now waiting for a decision.
+    pub staged: u32,
+    /// Channels of the list already in the catalogue — never staged: their
+    /// ids and the catalogue's titles.
+    pub already: Vec<(ChannelId, String)>,
+    /// Lines of the file whose first field is no channel's id.
+    pub left_out: u32,
+}
+
+/// Why a list was not imported, as the door can say it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unimported {
+    /// The file could not be opened or read.
+    Unreadable,
+    /// Past `takeout::MOST_BYTES`: something else than a list.
+    TooLarge,
+    /// Read, and not a list (`takeout::Unread`).
+    Unread(takeout::Unread),
+    /// The catalogue refused.
+    Refused(Why),
+}
+
+/// Why the channels were not exported, as the door can say it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unexported {
+    /// The catalogue refused to list them.
+    Refused(Why),
+    /// The file could not be written where it was asked.
+    NotWritten,
 }
 
 /// Why a channel was not added, as the door can say it.
@@ -904,6 +1110,12 @@ pub enum Pending {
     RemoveRule(RuleId),
     /// Add a video the queue already has.
     Again(ToPlay, String),
+    /// Register what was decided: how many are kept, how many discarded.
+    Register(u32, u32),
+    /// Give every staged channel this decision while theirs differ — what
+    /// each was given is lost, and no turn gives it back: how many channels
+    /// it changes.
+    DecideAll(Decision, u32),
 }
 
 /// A question, and where its cursor is.
@@ -936,6 +1148,8 @@ pub enum Target {
     ChannelScore(ChannelId, i32),
     /// A channel's Shorts, as they are now.
     ChannelShorts(ChannelId, Option<bool>),
+    /// How long a channel's videos stay, as it is now (`None`: as everywhere).
+    ChannelKeep(ChannelId, Option<Keep>),
     /// A channel's videos.
     ChannelVideos(ChannelId),
     /// Remove a channel.
@@ -946,6 +1160,8 @@ pub enum Target {
     AddTerm(Scope),
     /// Block Shorts everywhere, or not — as it is now.
     BlockShorts(bool),
+    /// How long videos stay everywhere, as it is now.
+    KeepEverywhere(Keep),
     /// A rule's points.
     Points(Rule),
     /// A recency rule's days.
@@ -972,18 +1188,31 @@ pub enum Target {
     FilterRating,
     /// The list's hidden videos.
     FilterHidden,
+    /// The list's set-aside videos.
+    FilterSetAside,
     /// The list's words.
     FilterText,
     /// How far back the list reaches.
     FilterSince,
     /// A list or a grid.
     Layout,
+    /// Whether the grid's thumbnails say their channel.
+    GridChannel,
     /// The page of the list.
     PageOf,
+    /// The set-aside videos: the list, only them, the last set aside first.
+    SetAsideVideos,
     /// A video: its page.
     Video(VideoId),
     /// A video's rating.
     Rating(VideoId, Option<Rating>),
+    /// A face of a video's rating beside its score: the rating it gives,
+    /// and whether it is the one the video has (a click takes that away).
+    Rate(VideoId, Rating, bool),
+    /// A video set aside, or not — as it is now.
+    SetAside(VideoId, bool),
+    /// A video's own mark never to be deleted — as it is now.
+    VideoKeep(VideoId, bool),
     /// A video's second tags.
     SecondTags(VideoId, String),
     /// A video's second description: edit it here.
@@ -992,6 +1221,35 @@ pub enum Target {
     Player(VideoId),
     /// The video in Chrome.
     Kiosk(VideoId),
+    /// The video in Nyxt.
+    Nyxt(VideoId),
+    /// A channel's videos — its `/videos` page on YouTube — in Chrome.
+    ChannelKiosk(ChannelId),
+    /// A channel's videos in Nyxt.
+    ChannelNyxt(ChannelId),
+    /// A CHANNEL OF A LIST IMPORTED, not registered yet, and what
+    /// registering does with it: the arrows turn that, `RET` opens its page.
+    Staged(ChannelId, Decision),
+    /// What registering does with the staged channel whose page is open.
+    Decide(ChannelId, Decision),
+    /// The same decision for every staged channel — `None` while theirs
+    /// differ.
+    DecideAll(Option<Decision>),
+    /// Google Takeout, where the list of subscriptions is exported, in
+    /// Chrome.
+    Takeout,
+    /// The list to import, chosen in the file picker.
+    PickImport,
+    /// Where the channels are saved as a list, chosen in the file picker.
+    PickExport,
+    /// What was decided, registered — asked first.
+    Register,
+    /// A row of the file picker, while it is up over the import page.
+    Pick(crate::file_picker::Target),
+    /// The brain's page on the scan.
+    Brain,
+    /// A list of the player's, in a window of its own.
+    InThePlayer(InThePlayer),
     /// The video downloaded.
     Download(VideoId),
     /// The video hidden, or shown — as it is now.
@@ -1036,6 +1294,97 @@ pub struct Cell {
     pub target: Target,
     /// Its identity.
     pub spot: String,
+    /// What it is called where it is explained — the tile's title: a shelf
+    /// is several things on one line, and the line has no name of its own.
+    pub name: String,
+    /// What the pointer resting on it says.
+    pub about: &'static str,
+}
+
+/// A GLYPH ON A ROW that acts on the FIRST click — a video's quick marks, a
+/// channel's ways out — and the box the hover lights: its own cells, never
+/// the row's ([`Row::lit_cells`]).
+///
+/// APART FROM A SHELF'S [`Cell`]s, which the cursor stops on: `cursor`,
+/// `settle`, `walk`, `sideways` and `press` read the cells as the cursor's
+/// stops, and a control among them would need every one of the five taught
+/// to step over it. A list of its own keeps the five as they are, and the
+/// arrows never land on a control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Control {
+    /// Its first cell, as a field's `at`.
+    pub from: u16,
+    /// How many cells it takes — the glyph's, and nothing of the air.
+    pub width: u16,
+    /// What is drawn.
+    pub glyph: char,
+    /// What the click does, at once.
+    pub target: Target,
+    /// What it is called where it is explained.
+    pub name: String,
+    /// What the pointer resting on it says.
+    pub about: &'static str,
+    /// WHAT HOLDS ONCE IT IS SWITCHED OFF — the ∞ of a video kept by its own
+    /// mark, the bookmark of a set-aside one: said under its sentence in the
+    /// quietest ink, as a row set "as everywhere" says what it follows
+    /// ([`Follows::said`]). Read off [`lasting`] without the mark, so it
+    /// never promises "it goes" of a video its channel, the catalogue or
+    /// its own mark still keeps.
+    pub follows: Option<String>,
+    /// Whether it says the video's state now — the rating it has, set
+    /// aside: drawn lit.
+    pub lit: bool,
+}
+
+/// WHAT THE POINTER IS ON, at a cell of a line ([`View::pointed`]).
+#[derive(Debug, Clone, Copy)]
+enum Pointed<'a> {
+    /// A glyph: its line, its place among the line's glyphs, and it.
+    Glyph(&'a Row, usize, &'a Control),
+    /// A video of a shelf.
+    Cell(&'a Cell),
+    /// A row: its first line's index, and it.
+    Row(usize, &'a Row),
+}
+
+impl Pointed<'_> {
+    /// Its identity — the foot's subject, and the pointer's rest's key.
+    fn subject(&self) -> String {
+        match self {
+            Pointed::Glyph(line, i, _) => format!("{}/{i}", line.spot),
+            Pointed::Cell(cell) => cell.spot.clone(),
+            Pointed::Row(_, row) => row.spot.clone(),
+        }
+    }
+}
+
+/// WHAT A ROW SET "AS EVERYWHERE" FOLLOWS NOW (the owner, 2026-11-09): the
+/// value everywhere, in the quietest ink, after the row's own — "as
+/// everywhere (blocked)" — so what "everywhere" is today is read on the row
+/// and not on another page; and, where the row is explained (the window's
+/// foot, the footer's line), the sentence that says so.
+///
+/// WORDED WHERE THE ROW IS BUILT, which knows what it follows — a switch
+/// everywhere, a rule of the page everywhere — and PLACED by [`lay_out`],
+/// after the value's tint: a state's colour never reaches it, nor does the
+/// cursor's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Follows {
+    /// After the value, a cell of air between: `(blocked)`.
+    pub beside: String,
+    /// Under the row's sentence where it is explained, in the same quiet ink.
+    pub said: String,
+}
+
+impl Follows {
+    /// What a choice "as everywhere" follows: the value everywhere, `now`,
+    /// in its own words.
+    fn now(now: &str, texts: &ronoctua_i18n::Texts) -> Self {
+        Self {
+            beside: texts.t_with(key::VIDEO_METRICS_DEFAULT_NOW, &[("value", now)]),
+            said: texts.t_with(key::VIDEO_METRICS_FOLLOWS_NOW, &[("value", now)]),
+        }
+    }
 }
 
 /// One drawn line.
@@ -1054,12 +1403,19 @@ pub struct Row {
     pub continues: bool,
     /// The cells of a grid's shelf, on its first line.
     pub cells: Vec<Cell>,
+    /// The glyphs on this line that act on the first click.
+    pub controls: Vec<Control>,
     /// The thumbnails drawn over this line.
     pub thumbs: Vec<Thumb>,
     /// The cell a text caret stands before, on a line being edited.
     pub caret: Option<u16>,
     /// What the pointer resting here says, when it is more than its label.
     pub about: Option<&'static str>,
+    /// What it is called where it is explained — its label, a video's
+    /// title, an answer's words — whole, where the row may have wrapped it.
+    pub name: String,
+    /// What the row follows, set "as everywhere" ([`Follows`]).
+    pub default: Option<Follows>,
 }
 
 impl Row {
@@ -1069,13 +1425,51 @@ impl Row {
         !self.heading && !self.continues
     }
 
+    /// WHETHER ITS WORDS ARE ITS OWN, beside the glyphs of a line of it
+    /// ([`Row::words_box`]): a row the cursor stops on — but a shelf of the
+    /// grid, whose words are its videos', each in its cell ([`Cell`]): a
+    /// line of its glyphs has only the glyphs.
+    #[must_use]
+    pub fn has_words(&self) -> bool {
+        self.stops() && self.cells.is_empty()
+    }
+
     /// Whether a click takes it — a row the cursor stops on, a line that
-    /// continues one, a shelf of the grid (by the cell under the pointer) —
-    /// and so whether a resting pointer lights it. Never a title, a note,
-    /// the air between sections or a line of a picture.
+    /// continues one, a shelf of the grid (by the cell under the pointer), a
+    /// line of controls (by the glyph under it) — and so whether a resting
+    /// pointer lights it. Never a title, a note, the air between sections or
+    /// a line of a picture.
     #[must_use]
     pub fn takes(&self) -> bool {
-        !self.heading || !self.cells.is_empty()
+        !self.heading || !self.cells.is_empty() || !self.controls.is_empty()
+    }
+
+    /// THE ROW'S WORDS on a line with controls, `(from, width)` as a field's
+    /// `at`: from `left` up to, and not over, the cell of air before the
+    /// first control — on a line whose ROW the cursor stops on
+    /// (`owner_stops`: the row's, [`Row::owner`], so a line that continues
+    /// one, a list entry's meta line, has words too). `None` on a line of
+    /// controls alone, and on one with no room before its first control.
+    ///
+    /// ONE BOX FOR THE LIGHT, THE FOOT AND THE CLICK: [`Row::lit_cells`]
+    /// lights it, and [`View::on_the_words`] reads it for what the foot
+    /// explains and what a click takes — the air before the first glyph,
+    /// and the margin before `left`, are nobody's in all three.
+    #[must_use]
+    pub fn words_box(&self, left: u16, owner_stops: bool) -> Option<(u16, u16)> {
+        let first = self.controls.iter().map(|c| c.from).min()?;
+        (owner_stops && first > left + 1).then(|| (left, first - 1 - left))
+    }
+
+    /// THE BOXES THE POINTER LIGHTS on a line with controls, `(from, width)`
+    /// as a field's `at`: the row's words ([`Row::words_box`]), then each
+    /// control's own. Nothing between: the air is nobody's.
+    #[must_use]
+    pub fn lit_cells(&self, left: u16, owner_stops: bool) -> Vec<(u16, u16)> {
+        self.words_box(left, owner_stops)
+            .into_iter()
+            .chain(self.controls.iter().map(|c| (c.from, c.width)))
+            .collect()
     }
 
     /// The row line `n` of `rows` belongs to.
@@ -1120,16 +1514,27 @@ pub const TILE: u16 = tokens::space::VIDEOMETRICS_THUMBCELLS + 2 * TILE_AIR;
 /// [`TILE`] wide — through `ronoctua_design::Grid`, the one grid arithmetic
 /// of the tree.
 #[must_use]
-pub fn grid_of(room: u16) -> ronoctua_design::grid::Grid {
-    ronoctua_design::grid::Grid::fitted(room, TILE, 0, u16::MAX, SHELF_LINES)
+pub fn grid_of(room: u16, channel: bool) -> ronoctua_design::grid::Grid {
+    ronoctua_design::grid::Grid::fitted(room, TILE, 0, u16::MAX, shelf_lines(channel))
 }
 
 /// How many lines a grid's shelf takes: the picture's, two for the title,
-/// one for what it scores, one for when it was published, one of air. The
-/// score and the age are a line EACH: "10 000 pontos · há 12 dias" is more
-/// than a tile is wide in either language, and a tile never cuts them.
-pub const SHELF_LINES: u16 =
-    tokens::space::VIDEOMETRICS_THUMBLINES + tokens::space::VIDEOMETRICS_TITLELINES + 3;
+/// one for its channel when the grid says it ([`View::grid_channel`]), one
+/// for what it scores and the faces of its rating, one for when it was
+/// published and its marks, one of air. The score and the age are a line
+/// EACH: each carries its glyphs, and a tile never cuts a score for them.
+#[must_use]
+pub const fn shelf_lines(channel: bool) -> u16 {
+    tokens::space::VIDEOMETRICS_THUMBLINES
+        + tokens::space::VIDEOMETRICS_TITLELINES
+        + channel as u16
+        + 3
+}
+
+/// The air between two glyphs of a strip, and between a strip and the
+/// words before it — the horizontal air beside anything (`ronoctua_design`):
+/// a Nerd glyph has no side bearing, and two side by side touch.
+pub const GLYPH_AIR: u16 = ronoctua_design::GAP;
 
 /// How many pictures a page of the grid may put on screen — never more than
 /// the renderer's frame keeps for the file manager's grid, which is the room
@@ -1185,6 +1590,10 @@ pub struct View {
     page: u32,
     /// A list or a grid.
     layout: Layout,
+    /// WHETHER THE GRID'S THUMBNAILS SAY THEIR CHANNEL, under the title —
+    /// off at first, and kept for the session as the layout is (the owner,
+    /// 2026-11-09): a list of one channel's videos has no use for it.
+    grid_channel: bool,
     /// A question on the page.
     confirm: Option<Confirm>,
     /// What the line's question is about — the row it was asked from.
@@ -1194,21 +1603,102 @@ pub struct View {
     /// The width the rows were last built at, in cells — STORED WHERE IT IS
     /// MEASURED, for a key that arrives without one (a click on the hint).
     width: std::cell::Cell<u16>,
+    /// Where the rows last built begin, as a field's `at` — stored where it
+    /// is measured too, for the words of a line with glyphs, which the
+    /// pointer's questions read without a width ([`View::on_the_words`]).
+    left: std::cell::Cell<u16>,
     /// The cursor moved without a key — a question the view put on the page
     /// from what an errand came to — and the door owes it a follow
     /// ([`View::follow_owed`]).
     follow_owed: bool,
+    /// THE FILE PICKER, while it is up over the import page — the list to
+    /// import, or where the channels are saved (`file_picker::Hosted`): its
+    /// rows are drawn in place of the page's, every key it claims is its,
+    /// and both doors host the same one.
+    picking: Option<crate::file_picker::Hosted<Picking>>,
+    /// The door's wake, for the picker's folder and devices
+    /// ([`View::watch_with`]): `None` in a photograph, which watches nothing.
+    wake: Option<crate::wake::Wake>,
+    /// The picker's cursor's line when its rows were last built — STORED
+    /// WHERE IT IS MEASURED, as [`View::width`] is: the picker keeps its
+    /// own cursor, and the doors ask the view's.
+    picked_at: std::cell::Cell<usize>,
+    /// WHAT THE LAST IMPORT DID — the lines it left out, the channels it
+    /// found registered already: the view's to say while it is open, on the
+    /// import page. What it staged is the catalogue's, and outlives it.
+    imported: Option<Imported>,
+}
+
+/// What the file picker is up for, over the import page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Picking {
+    /// The list of subscriptions to import.
+    Import,
+    /// Where the registered channels are saved as a list.
+    Export,
 }
 
 /// The id a text area of this view answers under.
 const DESCRIPTION: &str = "video-metrics-second-description";
 
+/// What every list of subscriptions ends in — Google's, and the one written.
+const LIST_EXTENSION: &str = "csv";
+
+/// WHAT THE PICKER OF A LIST SHOWS, a ring `TAB` turns: the lists of
+/// channels, then every file (`file_picker::Filter::ANY`, the last of every
+/// ring).
+const LISTS: &[crate::file_picker::Filter] = &[
+    crate::file_picker::Filter {
+        label: key::VIDEO_METRICS_FILTER_CSV,
+        keeps: a_list,
+    },
+    crate::file_picker::Filter::ANY,
+];
+
+/// A LIST OF CHANNELS, by its name or its type — what Takeout writes is a
+/// `.csv`, and a file a person renamed is still one when its type says so —
+/// drawn with the glyph of its type, as every file of the picker is.
+fn a_list(path: &std::path::Path, mime: Option<&'static str>) -> Option<char> {
+    let named = path
+        .extension()
+        .is_some_and(|x| x.to_string_lossy().eq_ignore_ascii_case(LIST_EXTENSION));
+    (named || mime == Some("text/csv"))
+        .then(|| mime.map_or(tokens::icon::FILE, ronoctua_files::mime::icon_of))
+}
+
+/// WHAT A PATH THE PICKER ANSWERED IS FOR: the list to import, staged on the
+/// door's feed; or the file the channels are written to. The first path —
+/// the picker takes one at a time for both (`Mode::Open { many: false }`,
+/// `Mode::Save`).
+fn picked(asked: Picking, paths: &[PathBuf]) -> Errand {
+    let Some(path) = paths.first().cloned() else {
+        return Errand::Nothing;
+    };
+    match asked {
+        Picking::Import => Errand::Edit(Edit::Import(path)),
+        Picking::Export => Errand::Export(path),
+    }
+}
+
+/// GOOGLE TAKEOUT'S PAGE as its row shows it: its host, which a person reads
+/// and could type — the address whole is what Chrome opens.
+fn takeout_shown() -> String {
+    takeout::TAKEOUT_PAGE
+        .split_once("://")
+        .map_or(takeout::TAKEOUT_PAGE, |(_, rest)| rest)
+        .trim_end_matches('/')
+        .to_owned()
+}
+
 impl View {
     /// WHETHER A PAGE BELOW THE FIRST IS OPEN — where the window's first
-    /// line says its way back, with no header (`door::corner`).
+    /// line says its way back, with no header (`door::corner`). The trail
+    /// always holds the home page at its foot ([`View::fresh`]), so a page
+    /// below it is a second step, as [`View::back`] counts it: an empty
+    /// trail is never what "home" looks like.
     #[must_use]
     pub fn below_the_first(&self) -> bool {
-        !self.trail.is_empty()
+        self.trail.len() > 1
     }
 
     /// Opens it on `page` — the whole trail back to the home page, so `Esc`
@@ -1269,9 +1759,121 @@ impl View {
         self.editing.is_some()
     }
 
-    /// The row the cursor is on, among `rows`.
+    /// WHETHER THE FILE PICKER IS UP over the import page — every key it
+    /// claims is its ([`View::picker_takes`]), and the window keeps none of
+    /// its letters from it.
+    #[must_use]
+    pub const fn picking(&self) -> bool {
+        self.picking.is_some()
+    }
+
+    /// The door's wake, for the file picker's folder and devices: a door
+    /// with a loop hands it once, and every picker this view opens after is
+    /// watched through it (`file_picker::FilePicker::watch_with`). A
+    /// photograph hands none, and its picker watches nothing.
+    pub fn watch_with(&mut self, wake: crate::wake::Wake) {
+        self.wake = Some(wake);
+    }
+
+    /// What the wake brought the file picker, taken — `true` when its rows
+    /// changed and the door draws again.
+    pub fn picker_woke(&mut self) -> bool {
+        self.picking
+            .as_mut()
+            .is_some_and(crate::file_picker::Hosted::look)
+    }
+
+    /// How many lines of rows the door shows, for the file picker's `PgUp`
+    /// and `PgDn` — told before a key is handed over.
+    pub fn page_is(&self, lines: usize) {
+        if let Some(h) = self.picking.as_ref() {
+            h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
+        }
+    }
+
+    /// Whether the file picker is up and takes `key` — the door hands it as
+    /// [`Press::Pick`] before anything else reads it.
+    #[must_use]
+    pub fn picker_takes(&self, key: ronoctua_keymap::Key) -> bool {
+        self.picking.as_ref().is_some_and(|h| h.picker.claims(key))
+    }
+
+    /// What was copied, for the file picker — as what was typed, a
+    /// `file://` address as the path it names. Answers whether a frame is
+    /// owed.
+    pub fn picker_pasted(&mut self, text: &str) -> bool {
+        let Some(h) = self.picking.as_mut() else {
+            return false;
+        };
+        let _ = h.pasted(text);
+        true
+    }
+
+    /// THE FILE PICKER, up over the import page for `asked`: a list of
+    /// channels to import, or the file they are saved to — Google's name
+    /// for it first (`takeout::FILE_NAME`). In the person's downloads, where
+    /// Takeout's list lands, or where this picker was left last time.
+    fn choose(&mut self, asked: Picking) {
+        use crate::file_picker::{Hosted, Mode, Request, Start, Xdg};
+        let (mode, title) = match asked {
+            Picking::Import => (Mode::Open { many: false }, key::VIDEO_METRICS_PICK_IMPORT),
+            Picking::Export => (
+                Mode::Save {
+                    name: takeout::FILE_NAME.to_owned(),
+                    extension: Some(LIST_EXTENSION),
+                },
+                key::VIDEO_METRICS_PICK_EXPORT,
+            ),
+        };
+        self.picking = Some(Hosted::open(
+            Request {
+                purpose: "video-metrics-list",
+                mode,
+                filters: LISTS,
+                start: Start::Place(Xdg::DOWNLOAD),
+                addresses: false,
+                extras: &[],
+                alternate: None,
+            },
+            asked,
+            title,
+            self.wake.as_ref(),
+        ));
+    }
+
+    /// A key for the file picker — and what it answered, as the view's
+    /// errand: a list to stage, a file to write the channels to. Going back
+    /// brings the page's rows back, the cursor on the row that opened it.
+    fn pick_key(&mut self, key: ronoctua_keymap::Key) -> Errand {
+        use crate::file_picker::{Hosting, Picked};
+        let Some(h) = self.picking.as_mut() else {
+            return Errand::Nothing;
+        };
+        match h.key(key) {
+            Hosting::Nothing => Errand::Nothing,
+            Hosting::Back => {
+                self.picking = None;
+                Errand::Nothing
+            }
+            Hosting::Say(e) => Errand::Explain(e),
+            Hosting::Paste => Errand::Paste,
+            Hosting::Picked(asked, Picked::Paths { paths, .. }) => {
+                self.picking = None;
+                picked(asked, &paths)
+            }
+            // NEITHER AN ADDRESS NOR AN EXTRA is asked for here
+            // (`Request::addresses`, `Request::extras`): none comes back.
+            Hosting::Picked(..) => Errand::Nothing,
+        }
+    }
+
+    /// The row the cursor is on, among `rows` — the file picker's own, while
+    /// it is up: the line it drew its cursor on.
     #[must_use]
     pub fn cursor(&self, rows: &[Row]) -> usize {
+        if self.picking.is_some() {
+            return self.picked_at.get().min(rows.len().saturating_sub(1));
+        }
         rows.iter()
             .position(|r| r.spot == self.at || r.cells.iter().any(|c| c.spot == self.at))
             .unwrap_or_else(|| self.nearest(rows))
@@ -1287,8 +1889,12 @@ impl View {
     }
 
     /// Puts the cursor's identity back in step with the rows drawn — after a
-    /// reading arrived. It never moves the page.
+    /// reading arrived. It never moves the page. Under the file picker the
+    /// page's cursor is kept where it was: the picker has its own.
     pub fn settle(&mut self, rows: &[Row]) {
+        if self.picking.is_some() {
+            return;
+        }
         let i = self.cursor(rows);
         if let Some(row) = rows.get(i) {
             if row.spot != self.at && !row.cells.iter().any(|c| c.spot == self.at) {
@@ -1308,6 +1914,9 @@ impl View {
     pub fn hint(&self, rows: &[Row], texts: &ronoctua_i18n::Texts) -> Vec<crate::chrome::Piece> {
         if self.editing.is_some() {
             return crate::text_area::hint(texts);
+        }
+        if let Some(h) = self.picking.as_ref() {
+            return h.picker.hint(texts);
         }
         let target = self.focused_target(rows);
         let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
@@ -1335,6 +1944,10 @@ impl View {
             Where::OnAValue => target.is_some_and(|t| turns(t) || self.on_the_grid(t)),
             Where::OnTheVideos => *self.page() == Page::Videos && self.confirm.is_none(),
             Where::OnAVideo => self.confirm.is_none() && self.video_here(target).is_some(),
+            Where::OnAnAddress => {
+                self.confirm.is_none()
+                    && (self.video_here(target).is_some() || self.channel_here(target).is_some())
+            }
         }
     }
 
@@ -1357,6 +1970,23 @@ impl View {
         }
     }
 
+    /// THE CHANNEL THE CURSOR IS ABOUT: the page's, or the row of the
+    /// channels' list it is on — whose videos' page on YouTube a browser
+    /// opens ([`View::on_a_channel`]).
+    fn channel_here(&self, target: Option<&Target>) -> Option<ChannelId> {
+        match (self.page(), target) {
+            (Page::Channel(id), _) => Some(id.clone()),
+            (Page::Channels, Some(Target::Go(Page::Channel(id)))) => Some(id.clone()),
+            // A CHANNEL OF THE LIST IMPORTED — staged, or found registered
+            // already — is looked at before it is decided: its videos'
+            // page, in either browser.
+            (Page::Import, Some(Target::Staged(id, _) | Target::Go(Page::Channel(id)))) => {
+                Some(id.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// What the focused row — or cell — does.
     fn focused_target(&self, rows: &[Row]) -> Option<Target> {
         let row = rows.get(self.cursor(rows))?;
@@ -1369,26 +1999,228 @@ impl View {
     }
 
     /// The sentence the pointer resting on row `n` reads: the row's own, or
-    /// what `RET` does there.
+    /// what its target is ([`about_of`]).
     #[must_use]
     pub fn about(rows: &[Row], n: usize, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        let row = rows.get(Row::owner(rows, n))?;
-        if let Some(k) = row.about {
-            return Some(texts.t(k));
+        sentence_of(rows.get(Row::owner(rows, n))?).map(|k| texts.t(k))
+    }
+
+    /// WHAT THE THING ON LINE `n` IS, as a door explains it — the window's
+    /// foot, the footer's explanation line (`door::Explained`): its name,
+    /// what the hand does to it ([`crate::door::foot::gesture`]) and its
+    /// sentence, with what a row set "as everywhere" follows now under it in
+    /// the quietest ink ([`Follows`]).
+    ///
+    /// `column` is where the pointer is across the line, as a field's `at`:
+    /// on a shelf it says WHICH video (`None` there is none — a shelf is
+    /// several things, and its line names none of them), and a glyph under
+    /// it ([`Control`]) acts at once. `None` for a line no click takes — a
+    /// title, a note, the air, a picture's line —, which explains nothing.
+    #[must_use]
+    pub fn explained_at(
+        &self,
+        rows: &[Row],
+        n: usize,
+        column: Option<u16>,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<crate::door::Explained> {
+        use crate::door::Gesture;
+        let pointed = self.pointed(rows, n, column)?;
+        Some(match pointed {
+            // A GLYPH acts on the first click — and says, quietly under its
+            // sentence, what holds once it is switched off.
+            Pointed::Glyph(_, _, c) => crate::door::Explained {
+                subject: pointed.subject(),
+                name: c.name.clone(),
+                gesture: self.gesture(&c.target, Gesture::AtOnce, texts),
+                said: std::iter::once((texts.t(c.about), tokens::color::TEXT_SECONDARY))
+                    .chain(
+                        c.follows
+                            .iter()
+                            .map(|f| (f.clone(), tokens::color::TEXT_DIM)),
+                    )
+                    .collect(),
+            },
+            Pointed::Cell(cell) => {
+                let how = if cell.spot == self.at {
+                    Gesture::Ret
+                } else {
+                    Gesture::Selects
+                };
+                self.explained_cell(cell, how, texts)
+            }
+            Pointed::Row(owner, row) => {
+                let how = if self.drawn_cursor(rows) == owner {
+                    Gesture::Ret
+                } else {
+                    Gesture::Selects
+                };
+                self.explained_row(row, how, texts)
+            }
+        })
+    }
+
+    /// WHAT THE THING AT CELL `column` OF LINE `n` IS, by the identity the
+    /// foot explains it under (`Explained::subject`) — a row, a video of a
+    /// shelf, a glyph; `None` on what explains nothing. What a door keys the
+    /// pointer's REST on: the thing, never the line — a shelf's line holds
+    /// several videos, and one video spans the shelf's lines.
+    #[must_use]
+    pub fn thing_at(&self, rows: &[Row], n: usize, column: Option<u16>) -> Option<String> {
+        self.pointed(rows, n, column).map(|p| p.subject())
+    }
+
+    /// Whether cell `column` of line `n` is a GLYPH — a picture, which the
+    /// footer's one line names before explaining (`Explained::joined_named`).
+    #[must_use]
+    pub fn on_a_glyph(&self, rows: &[Row], n: usize, column: Option<u16>) -> bool {
+        matches!(self.pointed(rows, n, column), Some(Pointed::Glyph(..)))
+    }
+
+    /// WHAT IS AT CELL `column` OF LINE `n` ([`View::explained_at`]'s
+    /// `column`) — the ONE answer the foot's explanation and the rest's key
+    /// ([`View::thing_at`]) read: a glyph under it; then the row's words,
+    /// only where [`View::on_the_words`] says (the box the pointer lights);
+    /// on a shelf, the cell under it; any other line, its row.
+    fn pointed<'a>(&self, rows: &'a [Row], n: usize, column: Option<u16>) -> Option<Pointed<'a>> {
+        let line = rows.get(n)?;
+        if !self.takes_one(rows, n) {
+            return None;
         }
-        let k = match &row.target {
-            Target::Scan => key::CMD_VIDEO_METRICS_SCAN,
-            Target::AddChannel => key::CMD_VIDEO_METRICS_ADD_CHANNEL,
-            Target::FilterText => key::CMD_VIDEO_METRICS_SEARCH,
-            Target::Player(_) => key::CMD_VIDEO_METRICS_PLAYER,
-            Target::Kiosk(_) => key::CMD_VIDEO_METRICS_KIOSK,
-            Target::Download(_) => key::CMD_VIDEO_METRICS_DOWNLOAD,
-            Target::Hide(..) => key::CMD_VIDEO_METRICS_HIDE,
-            Target::Delete(_) => key::CMD_VIDEO_METRICS_DELETE,
-            Target::Copy(_) => key::ABOUT_VIDEO_METRICS_COPY,
-            _ => return None,
+        if let Some(col) = column
+            && let Some((i, c)) = line
+                .controls
+                .iter()
+                .enumerate()
+                .find(|(_, c)| crate::chrome::in_cell(col, c.from, c.width))
+        {
+            return Some(Pointed::Glyph(line, i, c));
+        }
+        if !self.on_the_words(rows, n, column) {
+            return None;
+        }
+        let owner = Row::owner(rows, n);
+        let row = rows.get(owner)?;
+        if !row.cells.is_empty() {
+            let col = column?;
+            return row
+                .cells
+                .iter()
+                .find(|c| crate::chrome::in_cell(col, c.from, c.width))
+                .map(Pointed::Cell);
+        }
+        Some(Pointed::Row(owner, row))
+    }
+
+    /// WHETHER CELL `column` OF LINE `n` IS ITS ROW'S WORDS — what the
+    /// pointer lights there ([`Row::lit_cells`]), the foot explains and a
+    /// click takes ([`View::clicked`]): every cell of a line with no glyphs;
+    /// on one with glyphs, only its words' box ([`Row::words_box`]) — never
+    /// a glyph, which acts on its own, nor the air before it, the margin or
+    /// a line of glyphs alone. With no column (`None`), whether the line has
+    /// words at all.
+    #[must_use]
+    pub fn on_the_words(&self, rows: &[Row], n: usize, column: Option<u16>) -> bool {
+        let Some(line) = rows.get(n) else {
+            return false;
         };
-        Some(texts.t(k))
+        if line.controls.is_empty() {
+            return true;
+        }
+        let owner_stops = rows.get(Row::owner(rows, n)).is_some_and(Row::has_words);
+        line.words_box(self.left.get(), owner_stops)
+            .is_some_and(|(from, width)| {
+                column.is_none_or(|c| crate::chrome::in_cell(c, from, width))
+            })
+    }
+
+    /// WHAT THE CURSOR IS ON, as a door explains it ([`View::explained_at`]):
+    /// its row, or its cell of a shelf — which `RET` does, as a second
+    /// click on it would. The caret's line, or the answer, while a text is
+    /// edited. `None` where the cursor rests on nothing a key takes (a page
+    /// still being read).
+    #[must_use]
+    pub fn explained_cursor(
+        &self,
+        rows: &[Row],
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<crate::door::Explained> {
+        use crate::door::Gesture;
+        let n = self.drawn_cursor(rows);
+        let row = rows.get(n)?;
+        if self.editing.is_none()
+            && let Some(cell) = row.cells.iter().find(|c| c.spot == self.at)
+        {
+            return Some(self.explained_cell(cell, Gesture::Ret, texts));
+        }
+        if !self.takes_one(rows, n) {
+            return None;
+        }
+        Some(self.explained_row(row, Gesture::Ret, texts))
+    }
+
+    /// A row, explained: its name, the gesture `how` and its sentence — and
+    /// what it follows "as everywhere", under it.
+    fn explained_row(
+        &self,
+        row: &Row,
+        how: crate::door::Gesture,
+        texts: &ronoctua_i18n::Texts,
+    ) -> crate::door::Explained {
+        let mut said: Vec<(String, tokens::Color)> = sentence_of(row)
+            .map(|k| (texts.t(k), tokens::color::TEXT_SECONDARY))
+            .into_iter()
+            .collect();
+        if let Some(f) = &row.default {
+            said.push((f.said.clone(), tokens::color::TEXT_DIM));
+        }
+        crate::door::Explained {
+            subject: row.spot.clone(),
+            name: row.name.clone(),
+            gesture: self.gesture(&row.target, how, texts),
+            said,
+        }
+    }
+
+    /// A cell of a shelf, explained: its video.
+    fn explained_cell(
+        &self,
+        cell: &Cell,
+        how: crate::door::Gesture,
+        texts: &ronoctua_i18n::Texts,
+    ) -> crate::door::Explained {
+        crate::door::Explained {
+            subject: cell.spot.clone(),
+            name: cell.name.clone(),
+            gesture: self.gesture(&cell.target, how, texts),
+            said: vec![(texts.t(cell.about), tokens::color::TEXT_SECONDARY)],
+        }
+    }
+
+    /// WHAT THE HAND DOES to a thing whose target is `target`, taken `how`
+    /// — the door's words for the click or the key, and the view's for what
+    /// it does ([`does_of`]). None for a thing that does nothing but be
+    /// selected (a title of a fact, a line of the text being edited), and,
+    /// while a question is on the page, for everything but its answers: a
+    /// second click anywhere else gives the question the answer its cursor
+    /// is on (`View::confirm_press`), and promising the row's own would lie.
+    /// A GLYPH keeps its word under a question: its click lets the question
+    /// go — "no", which loses nothing — and does what it says
+    /// ([`View::click_control`]).
+    fn gesture(
+        &self,
+        target: &Target,
+        how: crate::door::Gesture,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<String> {
+        if self.confirm.is_some()
+            && how != crate::door::Gesture::AtOnce
+            && !matches!(target, Target::Answer(_))
+        {
+            return None;
+        }
+        let does = does_of(target)?;
+        Some(crate::door::foot::gesture(texts, how, &texts.t(does)))
     }
 
     /// WHICH OF `rows` A CLICK TAKES, row by row — and so the only rows a
@@ -1403,16 +2235,17 @@ impl View {
     /// row of several lines.
     #[must_use]
     pub fn takes(&self, rows: &[Row]) -> Vec<bool> {
-        rows.iter()
-            .enumerate()
-            .map(|(n, r)| {
-                if self.editing.is_some() {
-                    text_hit(rows, n, 0).is_some()
-                } else {
-                    r.takes()
-                }
-            })
-            .collect()
+        (0..rows.len()).map(|n| self.takes_one(rows, n)).collect()
+    }
+
+    /// [`View::takes`], for line `n` alone.
+    #[must_use]
+    pub fn takes_one(&self, rows: &[Row], n: usize) -> bool {
+        if self.editing.is_some() {
+            text_hit(rows, n, 0).is_some()
+        } else {
+            rows.get(n).is_some_and(Row::takes)
+        }
     }
 
     /// Puts the cursor where a click landed — on a row, or on the cell of a
@@ -1422,6 +2255,20 @@ impl View {
     /// A click on a line being edited places the caret.
     pub fn clicked(&mut self, n: usize, column: u16, rows: &[Row]) -> bool {
         if !rows.get(n).is_some_and(Row::takes) {
+            return false;
+        }
+        // A ROW OF THE FILE PICKER is chosen there: its cursor, and the
+        // second click its `RET`.
+        if let Some(h) = self.picking.as_mut() {
+            return match rows.get(n).map(|r| &r.target) {
+                Some(Target::Pick(t)) => h.clicked(t.clone()),
+                _ => false,
+            };
+        }
+        // ON A LINE WITH GLYPHS, only its words select the row — the box the
+        // pointer lights and the foot explains. A glyph acts on its own, and
+        // the air before it takes nothing.
+        if !self.on_the_words(rows, n, Some(column)) {
             return false;
         }
         let owner = Row::owner(rows, n);
@@ -1466,6 +2313,26 @@ impl View {
             }
             return Errand::Nothing;
         }
+        // THE FILE PICKER takes its own keys, and the view's that walk,
+        // answer and go back — a click on the hint, a second click's `RET`,
+        // the pointer's way back. The page's other keys have nothing to act
+        // on under it.
+        if self.picking.is_some() {
+            use ronoctua_keymap::{Key, Sym};
+            let key = match press {
+                Press::Pick(key) => key,
+                Press::Up => Key::simple(Sym::Up),
+                Press::Down => Key::simple(Sym::Down),
+                Press::Less => Key::simple(Sym::Left),
+                Press::More => Key::simple(Sym::Right),
+                Press::Enter => Key::simple(Sym::Enter),
+                Press::Escape => Key::simple(Sym::Esc),
+                Press::PageBack => Key::simple(Sym::PageUp),
+                Press::PageOn => Key::simple(Sym::PageDown),
+                _ => return Errand::Nothing,
+            };
+            return self.pick_key(key);
+        }
         let i = self.cursor(rows);
         if let Some(row) = rows.get(i) {
             self.last = i;
@@ -1505,12 +2372,26 @@ impl View {
                 self.filter.text.clone(),
                 Some(Target::FilterText),
             ),
-            Press::Player | Press::Kiosk | Press::Download | Press::Hide | Press::Delete => {
-                match self.video_here(Some(&target)) {
-                    Some(id) => self.on_a_video(press, &id, r),
-                    None => Errand::Nothing,
-                }
-            }
+            // A VIDEO'S KEYS on a video; a browser's on a channel too —
+            // its videos' page.
+            Press::Player
+            | Press::Kiosk
+            | Press::Nyxt
+            | Press::Download
+            | Press::Hide
+            | Press::Delete
+            | Press::SetAside
+            | Press::Keep => match (
+                self.video_here(Some(&target)),
+                self.channel_here(Some(&target)),
+            ) {
+                (Some(id), _) => self.on_a_video(press, &id, r),
+                (None, Some(id)) => on_a_channel(press, &id, r),
+                (None, None) => Errand::Nothing,
+            },
+            // A KEY OF THE PICKER'S with no picker up — it went while the key
+            // was on its way — is nobody's.
+            Press::Pick(_) => Errand::Nothing,
         }
     }
 
@@ -1637,6 +2518,7 @@ impl View {
         self.trail.truncate(1);
         self.confirm = None;
         self.editing = None;
+        self.picking = None;
         self.go(page)
     }
 
@@ -1726,9 +2608,76 @@ impl View {
             Target::RemoveRule(id) => self.asks(Pending::RemoveRule(*id)),
             Target::Player(id) => self.on_a_video(Press::Player, id, r),
             Target::Kiosk(id) => self.on_a_video(Press::Kiosk, id, r),
+            Target::Nyxt(id) => self.on_a_video(Press::Nyxt, id, r),
+            Target::ChannelKiosk(id) => on_a_channel(Press::Kiosk, id, r),
+            Target::ChannelNyxt(id) => on_a_channel(Press::Nyxt, id, r),
+            // OUT OF THE VIEW, to another program's door: the brain's page
+            // on the scan, a window of the player's on one of its lists.
+            Target::Brain => Errand::Brain,
+            Target::InThePlayer(list) => Errand::Player(list.word()),
             Target::Download(id) => self.on_a_video(Press::Download, id, r),
             Target::Hide(id, _) => self.on_a_video(Press::Hide, id, r),
             Target::Delete(id) => self.on_a_video(Press::Delete, id, r),
+            // THE SET-ASIDE VIDEOS, the last set aside first — the hidden
+            // ones among them too: set aside for later, a video is the
+            // person's to come back to, hidden or not.
+            Target::SetAsideVideos => {
+                self.filter = Filter {
+                    set_aside: SetAside::Only,
+                    hidden: Hidden::Any,
+                    order: Order::NewestSetAside,
+                    ..Filter::default()
+                };
+                self.since = Since::Any;
+                self.page = 0;
+                self.go(Page::Videos)
+            }
+            // A KEEP'S RING IS TYPED: any number of days, and not only the
+            // ring's — from the days in force, a channel's "as everywhere"
+            // from the ones everywhere.
+            Target::KeepEverywhere(now) => {
+                self.ask(Ask::KeepDays, days_of(Some(*now)), Some(target.clone()))
+            }
+            Target::ChannelKeep(_, now) => self.ask(
+                Ask::KeepDays,
+                days_of(now.or_else(|| r.settings.map(|s| s.keep))),
+                Some(target.clone()),
+            ),
+            // A FACE OF THE RATING gives it — and the one the video has
+            // takes it away.
+            Target::Rate(id, rating, lit) => {
+                Errand::Edit(Edit::Rating(id.clone(), (!*lit).then_some(*rating)))
+            }
+            // A STAGED CHANNEL'S PAGE, where everything a channel is given is
+            // given before it is registered; the arrows turn its decision
+            // (`View::turn`) — a score's precedent: the arrows step, `RET`
+            // does something else.
+            Target::Staged(id, _) => self.go(Page::Channel(id.clone())),
+            // WHERE THE LIST IS EXPORTED, in Chrome as a kiosk (the
+            // footer's `kiosk-open`).
+            Target::Takeout => Errand::Kiosk(takeout::TAKEOUT_PAGE.to_owned()),
+            Target::PickImport => {
+                self.choose(Picking::Import);
+                Errand::Nothing
+            }
+            Target::PickExport => {
+                self.choose(Picking::Export);
+                Errand::Nothing
+            }
+            // REGISTERING IS ASKED, "no" first: the discarded go with what
+            // was set on them, and the kept are scanned from then on.
+            Target::Register => {
+                let count = |d: Decision| {
+                    u32::try_from(r.staged.iter().filter(|s| s.decision == d).count())
+                        .unwrap_or(u32::MAX)
+                };
+                self.asks(Pending::Register(
+                    count(Decision::Keep),
+                    count(Decision::Discard),
+                ))
+            }
+            // A ROW OF THE PICKER is the picker's: its keys reach it first.
+            Target::Pick(_) => Errand::Nothing,
             // A RING OR A SWITCH: `RET` turns it on, as `→` does.
             other => self.turn(other, true, r),
         }
@@ -1771,6 +2720,49 @@ impl View {
                 Errand::Edit(Edit::Settings(s))
             }
             Target::Consent(now) => Errand::Edit(Edit::Consent(!now)),
+            // FROM THE SWITCHES READ, as the Shorts' switch: the others
+            // would be written back as the defaults.
+            Target::KeepEverywhere(_) => {
+                let Some(mut s) = r.settings else {
+                    return Errand::Nothing;
+                };
+                s.keep = ring_step(&keep_ring(Some(s.keep)), &s.keep, on);
+                Errand::Edit(Edit::Settings(s))
+            }
+            // "AS EVERYWHERE" FIRST, then the ring everywhere has.
+            Target::ChannelKeep(id, now) => {
+                let ring: Vec<Option<Keep>> = std::iter::once(None)
+                    .chain(keep_ring(*now).into_iter().map(Some))
+                    .collect();
+                Errand::Edit(Edit::ChannelKeep(id.clone(), ring_step(&ring, now, on)))
+            }
+            Target::SetAside(id, now) => Errand::Edit(Edit::SetAside(id.clone(), !now)),
+            Target::VideoKeep(id, now) => Errand::Edit(Edit::KeepVideo(id.clone(), !now)),
+            // WHAT REGISTERING DOES WITH A STAGED CHANNEL: undecided, kept,
+            // discarded — on its row of the list, and on its page.
+            Target::Staged(id, now) | Target::Decide(id, now) => {
+                Errand::Edit(Edit::Decide(id.clone(), ring_step(&Decision::ALL, now, on)))
+            }
+            // THE SAME FOR EVERY ONE. While theirs are alike the ring turns as
+            // any ring does: a turn back gives each what it had. While theirs
+            // differ, a turn would throw away what each one was given, and no
+            // turn gives that back — so it is ASKED, "no" first, saying how
+            // many it changes, from the first of the ring. `RET` reaches here
+            // too, and a double click is a `RET`.
+            Target::DecideAll(now) => {
+                let ring = Decision::ALL.map(Some);
+                match (ring_step(&ring, now, on), now) {
+                    (Some(d), Some(_)) => Errand::Edit(Edit::DecideAll(d)),
+                    (Some(d), None) => {
+                        let changed = r.staged.iter().filter(|s| s.decision != d).count();
+                        self.asks(Pending::DecideAll(
+                            d,
+                            u32::try_from(changed).unwrap_or(u32::MAX),
+                        ))
+                    }
+                    (None, _) => Errand::Nothing,
+                }
+            }
             Target::Points(rule) => {
                 let mut rule = rule.clone();
                 rule.points = rule.points.saturating_add(step);
@@ -1848,6 +2840,24 @@ impl View {
                 self.since_chosen(ring_step(&Since::ALL, &self.since, on));
                 self.refiltered()
             }
+            Target::FilterSetAside => {
+                let ring = [SetAside::Any, SetAside::Only, SetAside::Without];
+                self.filter.set_aside = ring_step(&ring, &self.filter.set_aside, on);
+                // ONLY THEM, THE LAST SET ASIDE FIRST: a list of what was put
+                // aside for later is read by when; any other, by score.
+                self.filter.order = if self.filter.set_aside == SetAside::Only {
+                    Order::NewestSetAside
+                } else {
+                    Order::Score
+                };
+                self.refiltered()
+            }
+            // THE SESSION'S, and nothing to read: the rows are the same
+            // videos, one line taller.
+            Target::GridChannel => {
+                self.grid_channel = !self.grid_channel;
+                Errand::Nothing
+            }
             Target::Layout => self.relayout(),
             Target::PageOf => self.turn_page(on, r),
             Target::Hide(id, _) => self.on_a_video(Press::Hide, id, r),
@@ -1895,10 +2905,21 @@ impl View {
 
     /// What a key for a video does to it.
     fn on_a_video(&mut self, press: Press, id: &VideoId, r: &Readings) -> Errand {
-        let (url, title, hidden) = match r.video_of(id).map(|v| &v.row).or_else(|| r.ranked(id)) {
-            Some(row) => (row.url.clone(), row.title.clone(), row.hidden),
-            None => return Errand::Nothing,
+        let Some(row) = r.video_of(id).map(|v| &v.row).or_else(|| r.ranked(id)) else {
+            return Errand::Nothing;
         };
+        let (url, title, hidden) = (row.url.clone(), row.title.clone(), row.hidden);
+        // SET ASIDE, AND ITS OWN MARK NEVER TO BE DELETED: switched at once,
+        // from the state READ — nothing is lost either way, so nothing is
+        // asked. The mark is the video's own, even where its channel keeps
+        // every video (Reconciliation 4): it holds if the channel changes.
+        let aside = row.set_aside_at_s.is_some();
+        let own = row.forever == Forever::ByVideo;
+        match press {
+            Press::SetAside => return Errand::Edit(Edit::SetAside(id.clone(), !aside)),
+            Press::Keep => return Errand::Edit(Edit::KeepVideo(id.clone(), !own)),
+            _ => {}
+        }
         match press {
             Press::Player => Errand::Play(ToPlay {
                 url,
@@ -1906,6 +2927,7 @@ impl View {
                 once: true,
             }),
             Press::Kiosk => Errand::Kiosk(url),
+            Press::Nyxt => Errand::Nyxt(url),
             Press::Download => Errand::Download { url, title },
             // SHOWN AGAIN AT ONCE: nothing is lost, so nothing is asked.
             Press::Hide if hidden => Errand::Edit(Edit::Hidden(id.clone(), false)),
@@ -1989,6 +3011,8 @@ impl View {
                 once: false,
                 ..play
             }),
+            Pending::Register(..) => Errand::Edit(Edit::Register),
+            Pending::DecideAll(decision, _) => Errand::Edit(Edit::DecideAll(decision)),
         }
     }
 
@@ -2016,6 +3040,56 @@ impl View {
         } else {
             Some(Errand::Nothing)
         }
+    }
+
+    /// A CLICK ON A GLYPH ACTS AT ONCE ([`Control`]) — the first click, and
+    /// not a second: a face of the rating gives it (the one the video has
+    /// takes it away), the bookmark and the ∞ switch, the eye and the bin
+    /// ask as their keys do, "no" first. The cursor goes to the video first
+    /// — the entry's, or the shelf's cell over `column` (a field's `at`) —
+    /// so what is asked is asked under it, and where the hand acted is where
+    /// the keys go on. A question already on the page is let go first, as
+    /// `Esc` lets it go: the hand moved on. `None` where no glyph is under
+    /// `column`: the door goes on to the row's click. The same call from
+    /// either door, before [`View::clicked`].
+    pub fn click_control(
+        &mut self,
+        n: usize,
+        column: u16,
+        rows: &[Row],
+        r: &Readings,
+    ) -> Option<Errand> {
+        if self.editing.is_some() {
+            return None;
+        }
+        let target = rows
+            .get(n)?
+            .controls
+            .iter()
+            .find(|c| crate::chrome::in_cell(column, c.from, c.width))?
+            .target
+            .clone();
+        let owner = Row::owner(rows, n);
+        let spot = rows.get(owner).and_then(|o| {
+            if o.cells.is_empty() {
+                o.stops().then(|| o.spot.clone())
+            } else {
+                o.cells
+                    .iter()
+                    .find(|c| crate::chrome::in_cell(column, c.from, c.width))
+                    .map(|c| c.spot.clone())
+            }
+        });
+        if self.confirm.is_some() {
+            let _ = self.answer(false);
+        }
+        if let Some(spot) = spot {
+            self.at = spot;
+            self.last = owner;
+        }
+        // WHAT `RET` DOES ON ITS TARGET, once: a glyph is the target's own
+        // row, a click away (`View::enter`).
+        Some(self.enter(&target, r))
     }
 
     /// What was typed on the line, for the question `id` asked — the same
@@ -2148,6 +3222,42 @@ impl View {
             (Ask::SecondTags, Some(Target::SecondTags(id, _))) => {
                 Errand::Edit(Edit::SecondTags(id, words::tags_of(text)))
             }
+            // A KEEP TYPED: one day to the most the catalogue keeps, and
+            // anything else refused with the ring's word for "for ever" —
+            // never clamped into a number the person did not type.
+            (
+                Ask::KeepDays,
+                Some(target @ (Target::KeepEverywhere(_) | Target::ChannelKeep(..))),
+            ) => {
+                let Some(days) = number()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| (1..=ronoctua_video_metrics::KEEP_DAYS_MOST).contains(n))
+                else {
+                    return Errand::Say(texts.t_args(
+                        key::VIDEO_METRICS_TYPED_NOT_KEEP_DAYS,
+                        &[
+                            (
+                                "most",
+                                Arg::Number(i64::from(ronoctua_video_metrics::KEEP_DAYS_MOST)),
+                            ),
+                            ("never", Arg::Text(&texts.t(key::VIDEO_METRICS_KEEP_NEVER))),
+                        ],
+                    ));
+                };
+                match target {
+                    Target::ChannelKeep(id, _) => {
+                        Errand::Edit(Edit::ChannelKeep(id, Some(Keep::Days(days))))
+                    }
+                    // FROM THE SWITCHES READ, or not at all.
+                    _ => match r.settings {
+                        Some(mut s) => {
+                            s.keep = Keep::Days(days);
+                            Errand::Edit(Edit::Settings(s))
+                        }
+                        None => say(key::VIDEO_METRICS_TYPED_NO_ROW),
+                    },
+                }
+            }
             // NO ROW TO TAKE IT: the question was asked by name with the
             // cursor on nothing it fits, or its row went away. Said, never
             // dropped in silence.
@@ -2228,6 +3338,36 @@ impl View {
                         Errand::Look(self.look()),
                     ),
                     Edit::RemoveRule(_) => (None, Errand::Look(self.look())),
+                    // WHETHER A VIDEO IS EVER DELETED CHANGED: said, by its
+                    // title, in the ranking's words for the same marks — the
+                    // ∞ of a video its channel keeps reads the same before
+                    // and after its own mark.
+                    Edit::SetAside(id, aside) => (
+                        r.title_of(&id).map(|title| {
+                            Said::Normal(texts.t_with(
+                                if aside {
+                                    key::PLAYER_RANKING_NOW_SET_ASIDE
+                                } else {
+                                    key::PLAYER_RANKING_NO_LONGER_SET_ASIDE
+                                },
+                                &[("title", &title)],
+                            ))
+                        }),
+                        Errand::Nothing,
+                    ),
+                    Edit::KeepVideo(id, keep) => (
+                        r.title_of(&id).map(|title| {
+                            Said::Normal(texts.t_with(
+                                if keep {
+                                    key::PLAYER_RANKING_NOW_FOREVER
+                                } else {
+                                    key::PLAYER_RANKING_NO_LONGER_FOREVER
+                                },
+                                &[("title", &title)],
+                            ))
+                        }),
+                        Errand::Nothing,
+                    ),
                     _ => (None, Errand::Nothing),
                 }
             }
@@ -2293,6 +3433,79 @@ impl View {
                 Errand::Transfers,
             ),
             Done::Downloading(_, false) => (long(texts.t(key::TRANSFERS_OFFLINE)), Errand::Nothing),
+            // A LIST STAGED: what it left waiting and what was here already —
+            // and the page says the rest, the lines left out among it, while
+            // the view is open. The feed reads the page again after every
+            // write, the channels staged with it.
+            Done::Imported(Ok(i)) => {
+                let said = texts.t_args(
+                    key::VIDEO_METRICS_IMPORTED,
+                    &[
+                        ("staged", Arg::Number(i64::from(i.staged))),
+                        (
+                            "already",
+                            Arg::Number(i64::try_from(i.already.len()).unwrap_or(i64::MAX)),
+                        ),
+                    ],
+                );
+                self.imported = Some(i);
+                (normal(said), Errand::Nothing)
+            }
+            Done::Imported(Err(e)) => (
+                long(match e {
+                    Unimported::Unreadable => texts.t(key::VIDEO_METRICS_IMPORT_UNREADABLE),
+                    Unimported::TooLarge => texts.t(key::VIDEO_METRICS_IMPORT_TOO_LARGE),
+                    Unimported::Unread(takeout::Unread::NotText) => {
+                        texts.t(key::VIDEO_METRICS_IMPORT_NOT_TEXT)
+                    }
+                    Unimported::Unread(takeout::Unread::NotAList) => {
+                        texts.t(key::VIDEO_METRICS_IMPORT_NOT_A_LIST)
+                    }
+                    Unimported::Unread(takeout::Unread::Unclosed { line }) => texts.t_args(
+                        key::VIDEO_METRICS_IMPORT_UNCLOSED,
+                        &[("line", Arg::Number(i64::from(line)))],
+                    ),
+                    Unimported::Refused(why) => texts.t(words::why_key(why)),
+                }),
+                Errand::Nothing,
+            ),
+            Done::Registered(Ok((done, unkept))) => {
+                let registered = texts.t_args(
+                    key::VIDEO_METRICS_REGISTERED,
+                    &[
+                        ("kept", Arg::Number(i64::from(done.kept))),
+                        ("discarded", Arg::Number(i64::from(done.discarded))),
+                    ],
+                );
+                match unkept {
+                    None => (normal(registered), Errand::Nothing),
+                    // REGISTERED, AND THE CONSENT TO SCAN THEM NOT KEPT: what
+                    // went in first — how many, never "the channel" — then
+                    // why a scan will not ask, as long as a trouble is said.
+                    Some(k) => (
+                        long(format!("{registered} {}", texts.t(k))),
+                        Errand::Nothing,
+                    ),
+                }
+            }
+            Done::Registered(Err(why)) => (long(texts.t(words::why_key(why))), Errand::Nothing),
+            Done::Exported(Ok((count, file))) => (
+                normal(texts.t_args(
+                    key::VIDEO_METRICS_EXPORTED,
+                    &[
+                        ("count", Arg::Number(i64::from(count))),
+                        ("file", Arg::Text(&file.to_string_lossy())),
+                    ],
+                )),
+                Errand::Nothing,
+            ),
+            Done::Exported(Err(Unexported::Refused(why))) => {
+                (long(texts.t(words::why_key(why))), Errand::Nothing)
+            }
+            Done::Exported(Err(Unexported::NotWritten)) => (
+                long(texts.t(key::VIDEO_METRICS_EXPORT_FAILED)),
+                Errand::Nothing,
+            ),
         }
     }
 
@@ -2301,14 +3514,19 @@ impl View {
     pub fn rows(&self, r: &Readings, columns: u16, texts: &ronoctua_i18n::Texts) -> Vec<Row> {
         let (left, room) = extent(columns);
         self.width.set(room);
+        self.left.set(left);
         if let Some((_, area)) = &self.editing {
             return text_rows(area, left, room, texts);
+        }
+        if let Some(h) = &self.picking {
+            return self.picker_rows(h, columns, texts);
         }
         let mut items: Vec<Item> = Vec::new();
         match self.page() {
             Page::Home => home(&mut items, r, texts),
             Page::Channels => channels(&mut items, r, texts),
             Page::Channel(id) => channel(&mut items, id, r, texts),
+            Page::Import => import(&mut items, self.imported.as_ref(), r, texts),
             Page::Rules => rules(&mut items, &None, r, texts),
             Page::Rule(scope, slot) => rule_page(&mut items, scope, slot, r, texts),
             Page::Weights => weights(&mut items, r, texts),
@@ -2345,6 +3563,66 @@ impl View {
             Some(spot) => lay_out(items, left, room, &spot),
             None => rows,
         }
+    }
+
+    /// THE FILE PICKER'S ROWS, as the view's own while it is up: under its
+    /// title, each a row a click takes but a title, a sentence and the air —
+    /// named for the foot by its words (the folder's, the file's, the
+    /// label of a row on top), and its cursor's line kept where the doors ask
+    /// it ([`View::cursor`]).
+    fn picker_rows(
+        &self,
+        h: &crate::file_picker::Hosted<Picking>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Vec<Row> {
+        let mut focused = 0;
+        let rows: Vec<Row> = h
+            .rows(columns, texts, |p| p)
+            .into_iter()
+            .enumerate()
+            .map(|(n, p)| {
+                if p.focused {
+                    focused = n;
+                }
+                let takes = !p.heading && p.target != crate::file_picker::Target::Nothing;
+                // ITS NAME: the first of its words that is more than a glyph
+                // — a file's name after its glyph, a row's label.
+                let name = p
+                    .fields
+                    .iter()
+                    .map(|f| f.text.trim())
+                    .find(|t| t.chars().count() > 1)
+                    .or_else(|| {
+                        p.fields
+                            .iter()
+                            .map(|f| f.text.trim())
+                            .find(|t| !t.is_empty())
+                    })
+                    .unwrap_or_default()
+                    .to_owned();
+                Row {
+                    fields: p.fields,
+                    heading: !takes,
+                    target: if takes {
+                        Target::Pick(p.target)
+                    } else {
+                        Target::Nothing
+                    },
+                    spot: p.spot,
+                    continues: p.continues && takes,
+                    cells: Vec::new(),
+                    controls: Vec::new(),
+                    thumbs: Vec::new(),
+                    caret: p.caret,
+                    about: None,
+                    name,
+                    default: None,
+                }
+            })
+            .collect();
+        self.picked_at.set(focused);
+        rows
     }
 
     /// The videos' page: its filters, its page, and the list or the grid.
@@ -2387,6 +3665,12 @@ impl View {
                 Target::FilterHidden,
             ),
             setting(
+                "filter-set-aside",
+                texts.t(key::VIDEO_METRICS_FILTER_SET_ASIDE),
+                texts.t(words::set_aside_key(self.filter.set_aside)),
+                Target::FilterSetAside,
+            ),
+            setting(
                 "filter-text",
                 texts.t(key::VIDEO_METRICS_FILTER_TEXT),
                 self.filter
@@ -2411,6 +3695,16 @@ impl View {
                 Target::Layout,
             ),
         ]);
+        // THE CHANNEL ON EVERY THUMBNAIL, or not — a row only where there are
+        // thumbnails.
+        if self.layout == Layout::Grid {
+            items.push(setting(
+                "grid-channel",
+                texts.t(key::VIDEO_METRICS_GRID_CHANNEL),
+                on_off(self.grid_channel, texts),
+                Target::GridChannel,
+            ));
+        }
         // THE PAGE ASKED, and no other: a reading of the filter before (or of
         // the page before) is not this list, and says "reading" until this
         // one arrives. The layout is not asked about — the rows are the same.
@@ -2439,7 +3733,10 @@ impl View {
             ),
             Target::PageOf,
         ));
-        items.push(Item::Heading(texts.t(key::VIDEO_METRICS_BY_SCORE)));
+        items.push(Item::Heading(texts.t(match self.filter.order {
+            Order::Score => key::VIDEO_METRICS_BY_SCORE,
+            Order::NewestSetAside => key::VIDEO_METRICS_BY_SET_ASIDE,
+        })));
         if listed.rows.is_empty() {
             items.push(Item::Note(
                 texts.t(key::VIDEO_METRICS_NO_VIDEOS),
@@ -2454,39 +3751,18 @@ impl View {
             // into three short lines beside a value that says little.
             Layout::List => {
                 for v in &listed.rows {
-                    items.push(Item::Entry(Tile {
-                        spot: video_spot(&v.id),
-                        title: v.title.clone(),
-                        meta: vec![texts.t_with(
-                            key::VIDEO_METRICS_VIDEO_ROW,
-                            &[
-                                ("score", &words::points(v.score, texts)),
-                                ("channel", &v.channel),
-                                ("age", &age_of(v, r, texts)),
-                            ],
-                        )],
-                        file: None,
-                        target: Target::Video(v.id.clone()),
-                        hidden: v.hidden,
-                    }));
+                    let mut tile = tile_of(v, r, texts);
+                    tile.file = None;
+                    items.push(Item::Entry(tile));
                 }
             }
             Layout::Grid => {
-                let grid = grid_of(room);
+                let grid = grid_of(room, self.grid_channel);
                 for shelf in listed.rows.chunks(usize::from(grid.across.max(1))) {
                     items.push(Item::Shelf(
-                        shelf
-                            .iter()
-                            .map(|v| Tile {
-                                spot: video_spot(&v.id),
-                                title: v.title.clone(),
-                                meta: vec![words::points(v.score, texts), age_of(v, r, texts)],
-                                file: v.thumb_file.clone(),
-                                target: Target::Video(v.id.clone()),
-                                hidden: v.hidden,
-                            })
-                            .collect(),
+                        shelf.iter().map(|v| tile_of(v, r, texts)).collect(),
                         grid,
+                        self.grid_channel,
                     ));
                 }
             }
@@ -2531,6 +3807,63 @@ fn ring_step<T: Clone + PartialEq>(ring: &[T], now: &T, on: bool) -> T {
     ring[to].clone()
 }
 
+/// THE DAYS A KEEP'S RING OFFERS, before "never deleted": a week to a year,
+/// the ninety the catalogue starts with among them (`Keep::DEFAULT`).
+const RING_DAYS: [u32; 7] = [7, 14, 30, 60, 90, 180, 365];
+
+/// A KEEP'S RING: the days every ring offers, then "never deleted" — and
+/// `now` among the days, in its order, when it is a number typed of its own:
+/// a turn from it goes to its neighbour, where `ring_step` would start again
+/// from the first for a value the ring does not hold.
+fn keep_ring(now: Option<Keep>) -> Vec<Keep> {
+    let mut days = RING_DAYS.to_vec();
+    if let Some(Keep::Days(n)) = now
+        && !days.contains(&n)
+    {
+        days.push(n);
+        days.sort_unstable();
+    }
+    days.into_iter()
+        .map(Keep::Days)
+        .chain(std::iter::once(Keep::Forever))
+        .collect()
+}
+
+/// What a keep's question starts with: its days — nothing for "never
+/// deleted", which is no number.
+fn days_of(keep: Option<Keep>) -> Option<String> {
+    match keep {
+        Some(Keep::Days(n)) => Some(n.to_string()),
+        Some(Keep::Forever) | None => None,
+    }
+}
+
+/// WHAT A KEY FOR A CHANNEL DOES — a browser's, the only ones a channel
+/// takes: its videos' page on YouTube, in Chrome as a kiosk or in Nyxt. Any
+/// other key does nothing to a channel.
+fn on_a_channel(press: Press, id: &ChannelId, r: &Readings) -> Errand {
+    let Some(url) = videos_address(id, r) else {
+        return Errand::Nothing;
+    };
+    match press {
+        Press::Kiosk => Errand::Kiosk(url),
+        Press::Nyxt => Errand::Nyxt(url),
+        _ => Errand::Nothing,
+    }
+}
+
+/// A CHANNEL'S VIDEOS ON YOUTUBE — its `/videos` tab, newest first — where
+/// a browser opens it: by its id, the address the scanner lists
+/// (`youtube::tab_address`); by the address it was added with only for an
+/// id YouTube would not take, which the catalogue keeps none of.
+fn videos_address(id: &ChannelId, r: &Readings) -> Option<String> {
+    use ronoctua_ytdlp::youtube::{Tab, tab_address};
+    tab_address(&id.0, Tab::Videos).ok().or_else(|| {
+        r.channel(id)
+            .map(|c| format!("{}/{}", c.url.trim_end_matches('/'), Tab::Videos.path()))
+    })
+}
+
 /// Whether `←`/`→` turn the row's value.
 const fn turns(t: &Target) -> bool {
     matches!(
@@ -2553,6 +3886,15 @@ const fn turns(t: &Target) -> bool {
             | Target::FilterSince
             | Target::Layout
             | Target::PageOf
+            | Target::ChannelKeep(..)
+            | Target::KeepEverywhere(_)
+            | Target::FilterSetAside
+            | Target::GridChannel
+            | Target::SetAside(..)
+            | Target::VideoKeep(..)
+            | Target::Staged(..)
+            | Target::Decide(..)
+            | Target::DecideAll(_)
     )
 }
 
@@ -2568,7 +3910,228 @@ const fn asks_of(t: &Target) -> Option<Ask> {
         Target::FilterText => Ask::Search,
         Target::SecondTags(..) => Ask::SecondTags,
         Target::Weight(_) => Ask::Weight,
+        Target::KeepEverywhere(_) | Target::ChannelKeep(..) => Ask::KeepDays,
         _ => return None,
+    })
+}
+
+/// The sentence a row says under the pointer: its own when it was given one
+/// where it was built — a fact, a rule of a kind, a switch with more to say
+/// — else its target's ([`about_of`]).
+fn sentence_of(row: &Row) -> Option<&'static str> {
+    row.about.or_else(|| about_of(&row.target))
+}
+
+/// WHAT A ROW IS, BY WHAT IT DOES — the sentence the pointer resting on it
+/// reads, and the door's foot under its name (the owner, 2026-11-09: "hover
+/// em toda opção").
+///
+/// EXHAUSTIVE, AND NO ARM FOR THE REST: a new [`Target`] does not compile
+/// until it says what it is, so no row of tomorrow is born mute. The two
+/// `None`s are rows that say theirs where they are built — `Nothing` is a
+/// fact with no value, a scan's figure, a reason videos were left out; a
+/// band's or words' page is opened by a row that knows its kind
+/// ([`about_of_kind`]) — and the home page, which no row opens (the way
+/// back does).
+const fn about_of(target: &Target) -> Option<&'static str> {
+    Some(match target {
+        Target::Nothing => return None,
+        Target::Copy(_) => key::ABOUT_VIDEO_METRICS_COPY,
+        Target::Go(page) => return about_of_page(page),
+        Target::Scan => key::CMD_VIDEO_METRICS_SCAN,
+        Target::Consent(_) => key::ABOUT_VIDEO_METRICS_ASK_YOUTUBE,
+        Target::AddChannel => key::CMD_VIDEO_METRICS_ADD_CHANNEL,
+        Target::ChannelScore(..) => key::ABOUT_VIDEO_METRICS_SCORE,
+        Target::ChannelShorts(..) => key::ABOUT_VIDEO_METRICS_CHANNEL_SHORTS,
+        Target::ChannelKeep(..) => key::ABOUT_VIDEO_METRICS_CHANNEL_KEEP,
+        Target::ChannelVideos(_) => key::ABOUT_VIDEO_METRICS_ITS_VIDEOS,
+        Target::RemoveChannel(..) => key::ABOUT_VIDEO_METRICS_REMOVE_CHANNEL,
+        Target::AddBand(_) => key::ABOUT_VIDEO_METRICS_ADD_BAND,
+        Target::AddTerm(_) => key::ABOUT_VIDEO_METRICS_ADD_TERM,
+        Target::BlockShorts(_) => key::ABOUT_VIDEO_METRICS_BLOCK_SHORTS,
+        Target::KeepEverywhere(_) => key::ABOUT_VIDEO_METRICS_KEEP_EVERYWHERE,
+        Target::Points(_) | Target::Weight(_) => key::ABOUT_VIDEO_METRICS_POINTS,
+        Target::Days(_) => key::ABOUT_VIDEO_METRICS_RECENCY_DAYS,
+        Target::Band(_) => key::ABOUT_VIDEO_METRICS_RULE_LENGTH,
+        Target::Words(_) => key::ABOUT_VIDEO_METRICS_TERM_WORDS,
+        Target::Match(_) => key::ABOUT_VIDEO_METRICS_TERM_MATCH,
+        Target::Field(..) => key::ABOUT_VIDEO_METRICS_TERM_FIELD,
+        Target::On(_) => key::ABOUT_VIDEO_METRICS_RULE_ON,
+        Target::RemoveRule(_) => key::ABOUT_VIDEO_METRICS_REMOVE_RULE,
+        Target::FilterChannel => key::ABOUT_VIDEO_METRICS_FILTER_CHANNEL,
+        Target::FilterShorts => key::ABOUT_VIDEO_METRICS_FILTER_SHORTS,
+        Target::FilterRating => key::ABOUT_VIDEO_METRICS_FILTER_RATING,
+        Target::FilterHidden => key::ABOUT_VIDEO_METRICS_FILTER_HIDDEN,
+        Target::FilterSetAside => key::ABOUT_VIDEO_METRICS_FILTER_SET_ASIDE,
+        Target::FilterText => key::CMD_VIDEO_METRICS_SEARCH,
+        Target::FilterSince => key::ABOUT_VIDEO_METRICS_FILTER_SINCE,
+        Target::Layout => key::CMD_VIDEO_METRICS_LAYOUT,
+        Target::GridChannel => key::ABOUT_VIDEO_METRICS_GRID_CHANNEL,
+        Target::PageOf => key::ABOUT_VIDEO_METRICS_PAGE,
+        Target::SetAsideVideos => key::ABOUT_VIDEO_METRICS_SET_ASIDE_VIDEOS,
+        Target::Video(_) => key::ABOUT_VIDEO_METRICS_VIDEO_ENTRY,
+        Target::Rating(..) => key::ABOUT_VIDEO_METRICS_RATING,
+        // A FACE OF THE RATING, A BOOKMARK, AN ∞ — what the glyph says of
+        // the video now; a row of the video's page says its own (`Pair::about`).
+        Target::Rate(_, _, false) => key::ABOUT_VIDEO_METRICS_GLYPH_RATE,
+        Target::Rate(_, _, true) => key::ABOUT_VIDEO_METRICS_GLYPH_RATED,
+        Target::SetAside(_, false) => key::ABOUT_VIDEO_METRICS_GLYPH_SET_ASIDE,
+        Target::SetAside(_, true) => key::ABOUT_VIDEO_METRICS_GLYPH_TAKE_OUT,
+        Target::VideoKeep(_, false) => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_NO,
+        Target::VideoKeep(_, true) => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_VIDEO,
+        Target::SecondTags(..) => key::ABOUT_VIDEO_METRICS_SECOND_TAGS,
+        Target::SecondDescription(..) => key::ABOUT_VIDEO_METRICS_SECOND_DESCRIPTION,
+        Target::Player(_) => key::ABOUT_VIDEO_METRICS_PLAYER_ROW,
+        Target::Kiosk(_) => key::ABOUT_VIDEO_METRICS_KIOSK_ROW,
+        Target::Nyxt(_) => key::ABOUT_VIDEO_METRICS_NYXT_ROW,
+        Target::ChannelKiosk(_) => key::ABOUT_VIDEO_METRICS_CHANNEL_IN_CHROME,
+        Target::ChannelNyxt(_) => key::ABOUT_VIDEO_METRICS_CHANNEL_IN_NYXT,
+        Target::Staged(..) => key::ABOUT_VIDEO_METRICS_STAGED,
+        Target::Decide(..) => key::ABOUT_VIDEO_METRICS_DECISION,
+        Target::DecideAll(_) => key::ABOUT_VIDEO_METRICS_DECIDE_ALL,
+        Target::Takeout => key::ABOUT_VIDEO_METRICS_TAKEOUT,
+        Target::PickImport => key::ABOUT_VIDEO_METRICS_CHOOSE_LIST,
+        Target::PickExport => key::ABOUT_VIDEO_METRICS_SAVE_LIST,
+        Target::Register => key::ABOUT_VIDEO_METRICS_REGISTER,
+        // ONE SENTENCE FOR EVERY ROW OF THE PICKER: what it is over the page.
+        // The row's own name says which folder, file or answer it is.
+        Target::Pick(_) => key::ABOUT_VIDEO_METRICS_PICK,
+        Target::Brain => key::ABOUT_VIDEO_METRICS_IN_THE_BRAIN,
+        Target::InThePlayer(InThePlayer::Ranking) => key::ABOUT_VIDEO_METRICS_IN_THE_PLAYER,
+        Target::InThePlayer(InThePlayer::SetAside) => {
+            key::ABOUT_VIDEO_METRICS_SET_ASIDE_IN_THE_PLAYER
+        }
+        Target::Download(_) => key::ABOUT_VIDEO_METRICS_DOWNLOAD_ROW,
+        Target::Hide(..) => key::ABOUT_VIDEO_METRICS_HIDE_ROW,
+        Target::Delete(_) => key::ABOUT_VIDEO_METRICS_DELETE_ROW,
+        Target::Answer(false) => key::ABOUT_VIDEO_METRICS_ANSWER_NO,
+        Target::Answer(true) => key::ABOUT_VIDEO_METRICS_ANSWER_YES,
+        Target::Text(_) => key::ABOUT_VIDEO_METRICS_TEXT_LINE,
+    })
+}
+
+/// What a page is, said on the row that opens it ([`about_of`]).
+const fn about_of_page(page: &Page) -> Option<&'static str> {
+    Some(match page {
+        Page::Home | Page::Rule(_, Slot::Id(_)) => return None,
+        Page::Channels => key::ABOUT_VIDEO_METRICS_CHANNELS,
+        Page::Channel(_) => key::ABOUT_VIDEO_METRICS_CHANNEL_ROW,
+        Page::Import => key::ABOUT_VIDEO_METRICS_IMPORT_EXPORT,
+        Page::Rules => key::ABOUT_VIDEO_METRICS_RULES,
+        Page::Rule(_, Slot::Single(single)) => match single {
+            Single::Recency => key::ABOUT_VIDEO_METRICS_RULE_RECENCY,
+            Single::Short => key::ABOUT_VIDEO_METRICS_RULE_SHORT,
+            Single::Preferred => key::ABOUT_VIDEO_METRICS_RULE_PREFERRED,
+            Single::Live => key::ABOUT_VIDEO_METRICS_RULE_LIVE,
+        },
+        Page::Weights => key::ABOUT_VIDEO_METRICS_WEIGHTS,
+        Page::Videos => key::ABOUT_VIDEO_METRICS_VIDEOS,
+        Page::Video(_) => key::ABOUT_VIDEO_METRICS_VIDEO_ENTRY,
+    })
+}
+
+/// What a rule of `kind` does — the row that opens its page says it.
+const fn about_of_kind(kind: &RuleKind) -> &'static str {
+    match kind {
+        RuleKind::Recency { .. } => key::ABOUT_VIDEO_METRICS_RULE_RECENCY,
+        RuleKind::Short => key::ABOUT_VIDEO_METRICS_RULE_SHORT,
+        RuleKind::Preferred { .. } => key::ABOUT_VIDEO_METRICS_RULE_PREFERRED,
+        RuleKind::Live => key::ABOUT_VIDEO_METRICS_RULE_LIVE,
+        RuleKind::Band { .. } => key::ABOUT_VIDEO_METRICS_RULE_BAND,
+        RuleKind::Term { .. } => key::ABOUT_VIDEO_METRICS_RULE_TERM,
+    }
+}
+
+/// WHAT `RET` — OR THE CLICK THAT IS ITS TWIN — DOES on a row whose target
+/// is `target`, in the words a door's gesture closes with
+/// (`door::foot::gesture`): read off [`View::enter`], arm for arm, so the
+/// foot promises what the key does. Exhaustive for the reason [`about_of`]
+/// is. `None` for a row that does nothing but be selected — a fact with no
+/// value, a line of the text being edited, where a click places the caret
+/// and its sentence says so.
+const fn does_of(target: &Target) -> Option<&'static str> {
+    Some(match target {
+        Target::Nothing | Target::Text(_) => return None,
+        Target::Copy(_) => key::VIDEO_METRICS_ACT_COPIES,
+        Target::Go(_)
+        | Target::Video(_)
+        | Target::ChannelVideos(_)
+        | Target::SetAsideVideos
+        | Target::Brain
+        | Target::InThePlayer(_)
+        | Target::Staged(..)
+        | Target::Takeout
+        | Target::PickImport
+        | Target::PickExport => key::VIDEO_METRICS_ACT_OPENS,
+        Target::Scan
+        | Target::Player(_)
+        | Target::Kiosk(_)
+        | Target::Nyxt(_)
+        | Target::ChannelKiosk(_)
+        | Target::ChannelNyxt(_)
+        | Target::Download(_) => key::VIDEO_METRICS_ACT_DOES,
+        // THE PICKER'S `RET`, by what it is on: a place or a folder opens, the
+        // ring turns, its question is answered, anything else is taken — a
+        // file, the folder that is open, what was typed, the name to save
+        // under.
+        Target::Pick(pick) => {
+            use crate::file_picker::Target as P;
+            match pick {
+                P::Nothing => return None,
+                P::Place(_) | P::Folder(_) | P::Up => key::VIDEO_METRICS_ACT_OPENS,
+                P::Filter => key::VIDEO_METRICS_ACT_TURNS,
+                P::Answer(_) => key::VIDEO_METRICS_ACT_ANSWERS,
+                P::Name | P::Typed | P::Extra(_) | P::Here | P::Take | P::File(_) => {
+                    key::VIDEO_METRICS_ACT_TAKES
+                }
+            }
+        }
+        Target::AddChannel
+        | Target::ChannelScore(..)
+        | Target::Weight(_)
+        | Target::Points(_)
+        | Target::Days(_)
+        | Target::Band(_)
+        | Target::Words(_)
+        | Target::AddBand(_)
+        | Target::AddTerm(_)
+        | Target::FilterText
+        | Target::SecondTags(..)
+        | Target::KeepEverywhere(_)
+        | Target::ChannelKeep(..) => key::VIDEO_METRICS_ACT_TYPES,
+        Target::SecondDescription(..) => key::VIDEO_METRICS_ACT_EDITS,
+        // A SWITCH, two ways — and a hidden video is shown again at once.
+        Target::Consent(_)
+        | Target::BlockShorts(_)
+        | Target::Field(..)
+        | Target::On(_)
+        | Target::Layout
+        | Target::GridChannel
+        | Target::SetAside(..)
+        | Target::VideoKeep(..)
+        | Target::Hide(_, true) => key::VIDEO_METRICS_ACT_SWITCHES,
+        Target::ChannelShorts(..)
+        | Target::Match(_)
+        | Target::Rating(..)
+        | Target::FilterChannel
+        | Target::FilterShorts
+        | Target::FilterRating
+        | Target::FilterHidden
+        | Target::FilterSetAside
+        | Target::FilterSince
+        | Target::PageOf
+        | Target::Decide(..)
+        | Target::DecideAll(Some(_)) => key::VIDEO_METRICS_ACT_TURNS,
+        Target::Rate(_, _, false) => key::VIDEO_METRICS_ACT_PICKS,
+        Target::Rate(_, _, true) => key::VIDEO_METRICS_ACT_UNPICKS,
+        Target::RemoveChannel(..)
+        | Target::RemoveRule(_)
+        | Target::Hide(_, false)
+        | Target::Delete(_)
+        | Target::Register
+        // ALL OF THEM WHILE THEIRS DIFFER: what each was given would go.
+        | Target::DecideAll(None) => key::VIDEO_METRICS_ACT_ASKS,
+        Target::Answer(_) => key::VIDEO_METRICS_ACT_ANSWERS,
     })
 }
 
@@ -2580,6 +4143,108 @@ fn video_spot(id: &VideoId) -> String {
 /// The spot of an answer of a question.
 const fn answer_spot(yes: bool) -> &'static str {
     if yes { "answer-yes" } else { "answer-no" }
+}
+
+/// WHEN A VIDEO GOES, OR WHY IT DOES NOT — decided in the catalogue's order
+/// (`edit::EXPIRED`): its own mark, then its channel's "for ever"; then
+/// being set aside, which keeps it only while it lasts and so lights no ∞
+/// (the owner, 2026-11-09); then the days in force, its channel's own or the
+/// ones everywhere, counted from when it was published — or first seen, for
+/// a video with no date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lasting {
+    /// Its time is up then, seconds since the epoch — `None` when that
+    /// cannot be told yet: what it follows was not read, or it has no date.
+    Goes(Option<i64>),
+    /// It stays while it is set aside.
+    SetAside,
+    /// Its own mark keeps it for ever.
+    ByVideo,
+    /// Its channel keeps every video for ever.
+    ByChannel,
+    /// Everywhere keeps videos for ever, and its channel follows everywhere
+    /// — a channel with days of its own still deletes, so this never says
+    /// that no video goes.
+    Everywhere,
+}
+
+impl Lasting {
+    /// Whether the ∞ beside the video is lit: only when it is never taken
+    /// out, by its own mark or its channel's — "for ever" everywhere marks
+    /// every video and so none, and set aside lasts only as long as it is.
+    #[must_use]
+    pub const fn forever(self) -> bool {
+        matches!(self, Self::ByVideo | Self::ByChannel)
+    }
+
+    /// The sentence of the ∞ beside a video in this state.
+    const fn glyph_about(self) -> &'static str {
+        match self {
+            Self::Goes(_) => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_NO,
+            Self::SetAside => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_ASIDE,
+            Self::ByVideo => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_VIDEO,
+            Self::ByChannel => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_CHANNEL,
+            Self::Everywhere => key::ABOUT_VIDEO_METRICS_GLYPH_FOREVER_EVERYWHERE,
+        }
+    }
+
+    /// Its words, as what a video follows without a mark of its own — its
+    /// "never delete", its being set aside: "goes on 9 Feb 2027", "its
+    /// channel keeps every video"…
+    fn words(self, r: &Readings, texts: &ronoctua_i18n::Texts) -> String {
+        match self {
+            Self::Goes(Some(at)) => {
+                let order = crate::when::prefs::current().order;
+                texts.t_with(
+                    key::VIDEO_METRICS_GOES_ON,
+                    &[("date", &crate::chrome::date_text(at, &r.zone, order, texts))],
+                )
+            }
+            Self::Goes(None) => texts.t(key::VIDEO_METRICS_GOES_UNKNOWN),
+            Self::SetAside => texts.t(key::VIDEO_METRICS_KEPT_SET_ASIDE),
+            Self::ByVideo => texts.t(key::VIDEO_METRICS_KEPT_FOR_EVER),
+            Self::ByChannel => texts.t(key::VIDEO_METRICS_KEPT_BY_CHANNEL),
+            Self::Everywhere => texts.t(key::VIDEO_METRICS_KEPT_EVERYWHERE),
+        }
+    }
+}
+
+/// [`Lasting`] for video `v`, first seen at `first_seen_s` when that is
+/// known (a video of the list does not say), from what `r` read: its
+/// channel, and the switches. NEVER FROM A DEFAULT NOBODY READ: a channel
+/// not read, or one "as everywhere" with the switches unread, goes at a
+/// moment that cannot be told.
+#[must_use]
+pub fn lasting(v: &RankedVideo, first_seen_s: Option<i64>, r: &Readings) -> Lasting {
+    match v.forever {
+        Forever::ByVideo => return Lasting::ByVideo,
+        Forever::ByChannel => return Lasting::ByChannel,
+        Forever::No => {}
+    }
+    let own = r.channel(&v.channel_id).map(|c| c.keep);
+    // ITS CHANNEL'S "FOR EVER", read after the video was: the row says what
+    // the channel says now.
+    if own == Some(Some(Keep::Forever)) {
+        return Lasting::ByChannel;
+    }
+    if v.set_aside_at_s.is_some() {
+        return Lasting::SetAside;
+    }
+    let days = match own {
+        Some(Some(Keep::Forever)) => return Lasting::ByChannel,
+        Some(Some(Keep::Days(n))) => n,
+        Some(None) => match r.settings.map(|s| s.keep) {
+            Some(Keep::Forever) => return Lasting::Everywhere,
+            Some(Keep::Days(n)) => n,
+            None => return Lasting::Goes(None),
+        },
+        None => return Lasting::Goes(None),
+    };
+    Lasting::Goes(
+        v.published_at_s
+            .or(first_seen_s)
+            .map(|from| from.saturating_add(i64::from(days) * 86_400)),
+    )
 }
 
 /// How long ago a video was published, or nothing when that is not known.
@@ -2604,6 +4269,13 @@ struct Pair {
     /// A colour its value says a state in — a failure, a warning.
     tone: Option<tokens::Color>,
     about: Option<&'static str>,
+    /// GLYPHS THAT ACT ON THE FIRST CLICK, not placed yet — a channel's ways
+    /// out to its videos on YouTube: at the right edge of the row's first
+    /// line, its words ending a cell of air before them ([`lay_out`]).
+    controls: Vec<Control>,
+    /// What it follows, set "as everywhere": drawn after its value, quiet
+    /// whatever the value's tone ([`Follows`]).
+    default: Option<Follows>,
 }
 
 /// A video of the list, or of the grid.
@@ -2611,12 +4283,221 @@ struct Pair {
 struct Tile {
     spot: String,
     title: String,
-    /// What it scores, and when: one sentence on the list (wrapped), two
-    /// lines on a tile — the score's and the age's.
-    meta: Vec<String>,
+    /// Its channel's title — data: under the title on a tile when the grid
+    /// says it ([`View::grid_channel`]).
+    channel: String,
+    /// Its channel, its age and its score, as the list says them before the
+    /// faces of its rating — and its age and score alone, for a line too
+    /// short for the channel ([`entry_line`]).
+    said: [String; 2],
+    /// How long ago it was published; empty when that is not known.
+    age: String,
+    /// What it scores, a bare number (`words::score_number`): the faces of
+    /// its rating follow it, and "points" on every line was in the way.
+    score: String,
+    /// The four faces of its rating, not placed yet.
+    ratings: Vec<Control>,
+    /// Its marks — set aside, hidden, deleted, never deleted — not placed
+    /// yet: at the right edge of their line.
+    marks: Vec<Control>,
     file: Option<PathBuf>,
     target: Target,
     hidden: bool,
+}
+
+/// A video of the list as the list and the grid say it: its words, and its
+/// glyphs ([`ratings_of`], [`marks_of`]).
+fn tile_of(v: &RankedVideo, r: &Readings, texts: &ronoctua_i18n::Texts) -> Tile {
+    let age = age_of(v, r, texts);
+    let score = words::score_number(v.score, texts);
+    // WITH NO AGE, the channel and the score — and the score alone.
+    let said = if age.is_empty() {
+        [
+            texts.t_with(
+                key::VIDEO_METRICS_VIDEO_ROW_UNDATED,
+                &[("channel", &v.channel), ("score", &score)],
+            ),
+            score.clone(),
+        ]
+    } else {
+        [
+            texts.t_with(
+                key::VIDEO_METRICS_VIDEO_ROW,
+                &[("channel", &v.channel), ("age", &age), ("score", &score)],
+            ),
+            texts.t_with(
+                key::VIDEO_METRICS_VIDEO_ROW_SHORT,
+                &[("age", &age), ("score", &score)],
+            ),
+        ]
+    };
+    Tile {
+        spot: video_spot(&v.id),
+        title: v.title.clone(),
+        channel: v.channel.clone(),
+        said,
+        age,
+        score,
+        ratings: ratings_of(v, texts),
+        marks: marks_of(v, r, texts),
+        file: v.thumb_file.clone(),
+        target: Target::Video(v.id.clone()),
+        hidden: v.hidden,
+    }
+}
+
+/// A glyph that acts on the first click, not placed yet: as wide as its
+/// glyph is, and named and explained as the foot says it.
+fn glyph(glyph: char, target: Target, name: String, about: &'static str, lit: bool) -> Control {
+    Control {
+        from: 0,
+        width: ronoctua_render::layout::width(&glyph.to_string()),
+        glyph,
+        target,
+        name,
+        about,
+        follows: None,
+        lit,
+    }
+}
+
+/// THE FOUR FACES OF A VIDEO'S RATING, from very negative to very positive
+/// (the owner, 2026-11-09) — the one it has lit, and a click on it takes the
+/// rating away; on another, it rates the video so. The ranking's faces
+/// (`player_ranking`), in the catalogue's words.
+fn ratings_of(v: &RankedVideo, texts: &ronoctua_i18n::Texts) -> Vec<Control> {
+    Rating::ALL
+        .into_iter()
+        .map(|x| {
+            let lit = v.rating == Some(x);
+            let target = Target::Rate(v.id.clone(), x, lit);
+            let about = about_of(&target).unwrap_or(key::ABOUT_VIDEO_METRICS_RATING);
+            glyph(
+                words::rating_glyph(x),
+                target,
+                texts.t(words::rating_key(x)),
+                about,
+                lit,
+            )
+        })
+        .collect()
+}
+
+/// A VIDEO'S MARKS, each acting on the first click: the bookmark — filled
+/// while it is set aside —, the eye that hides it or shows it again, the
+/// bin that deletes it after asking, and the ∞, lit while it is never
+/// deleted, by its own mark or its channel's. A set-aside video lights no
+/// ∞: being set aside keeps it only while it lasts ([`Lasting`]). Named as
+/// the rows of its own page are.
+///
+/// WHAT HOLDS ONCE A MARK OF ITS OWN IS OFF — the bookmark of a set-aside
+/// video, the ∞ of one kept by its own mark — is read off [`lasting`]
+/// WITHOUT that mark ([`Control::follows`]): taken out, a video whose
+/// channel keeps every video still stays, and so does one no video is
+/// deleted under, or one its own mark keeps; a sentence chosen without
+/// asking would promise "it goes" of it.
+fn marks_of(v: &RankedVideo, r: &Readings, texts: &ronoctua_i18n::Texts) -> Vec<Control> {
+    let id = &v.id;
+    let aside = v.set_aside_at_s.is_some();
+    let own = v.forever == Forever::ByVideo;
+    let lasting_now = lasting(v, None, r);
+    let aside_target = Target::SetAside(id.clone(), aside);
+    let aside_about = about_of(&aside_target).unwrap_or(key::ABOUT_VIDEO_METRICS_SET_ASIDE_ROW);
+    let once_out = aside.then(|| {
+        let out = RankedVideo {
+            set_aside_at_s: None,
+            ..v.clone()
+        };
+        let value = lasting(&out, None, r).words(r, texts);
+        texts.t_with(key::VIDEO_METRICS_ONCE_OUT, &[("value", &value)])
+    });
+    let unmarked = own.then(|| {
+        let unmarked = RankedVideo {
+            forever: Forever::No,
+            ..v.clone()
+        };
+        let value = lasting(&unmarked, None, r).words(r, texts);
+        texts.t_with(key::VIDEO_METRICS_WITHOUT_THE_MARK, &[("value", &value)])
+    });
+    vec![
+        Control {
+            follows: once_out,
+            ..glyph(
+                words::set_aside_glyph(aside),
+                aside_target,
+                texts.t(key::VIDEO_METRICS_SET_ASIDE_ROW),
+                aside_about,
+                aside,
+            )
+        },
+        glyph(
+            words::hidden_glyph(v.hidden),
+            Target::Hide(id.clone(), v.hidden),
+            texts.t(key::CMD_VIDEO_METRICS_HIDE),
+            key::ABOUT_VIDEO_METRICS_HIDE_ROW,
+            v.hidden,
+        ),
+        glyph(
+            tokens::icon::VIDEO_DELETE,
+            Target::Delete(id.clone()),
+            texts.t(key::CMD_VIDEO_METRICS_DELETE),
+            key::ABOUT_VIDEO_METRICS_DELETE_ROW,
+            false,
+        ),
+        Control {
+            follows: unmarked,
+            ..glyph(
+                tokens::icon::VIDEO_FOREVER,
+                Target::VideoKeep(id.clone(), own),
+                texts.t(key::VIDEO_METRICS_NEVER_DELETE),
+                lasting_now.glyph_about(),
+                lasting_now.forever(),
+            )
+        },
+    ]
+}
+
+/// How many cells a strip of glyphs takes: each glyph's, and a cell of air
+/// ([`GLYPH_AIR`]) between two.
+fn strip_cells(glyphs: &[Control]) -> u16 {
+    let airs = u16::try_from(glyphs.len().saturating_sub(1)).unwrap_or(u16::MAX);
+    glyphs
+        .iter()
+        .map(|c| c.width)
+        .fold(0u16, u16::saturating_add)
+        .saturating_add(airs.saturating_mul(GLYPH_AIR))
+}
+
+/// THE ROOM A ROW'S GLYPHS TAKE FROM ITS WORDS at its right edge: the strip
+/// and the cell of air before it — none for a row with none.
+fn glyphs_room(glyphs: &[Control]) -> u16 {
+    if glyphs.is_empty() {
+        0
+    } else {
+        strip_cells(glyphs).saturating_add(GLYPH_AIR)
+    }
+}
+
+/// THE GLYPHS OF A STRIP, placed from cell `from` (a field's `at`), a cell
+/// of air between two — on `row`, each its field and the box a click takes:
+/// lit in the accent while it says the video's state, else in the quietest
+/// ink, and never in a label's tone (`labels-say-what-they-are`).
+fn put_strip(row: &mut Row, glyphs: &[Control], from: u16) {
+    let mut at = from;
+    for c in glyphs {
+        let colour = if c.lit {
+            tokens::color::STATE_ACCENT
+        } else {
+            tokens::color::TEXT_DIM
+        };
+        row.fields
+            .push(piece(at, c.glyph.to_string(), colour, c.width));
+        row.controls.push(Control {
+            from: at,
+            ..c.clone()
+        });
+        at = at.saturating_add(c.width).saturating_add(GLYPH_AIR);
+    }
 }
 
 /// What a page says, before it is placed.
@@ -2631,8 +4512,8 @@ enum Item {
     /// A video of the list: its title on the whole width, and under it what
     /// it scores, its channel and its age.
     Entry(Tile),
-    /// A shelf of the grid.
-    Shelf(Vec<Tile>, ronoctua_design::grid::Grid),
+    /// A shelf of the grid, and whether its tiles say their channel.
+    Shelf(Vec<Tile>, ronoctua_design::grid::Grid, bool),
     /// A picture on its own, `thumbLines` tall.
     Figure(PathBuf),
     /// An answer of the question on the page.
@@ -2645,9 +4526,18 @@ impl Item {
         match self {
             Self::Pair(p) => p.spot == spot,
             Self::Entry(t) => t.spot == spot,
-            Self::Shelf(tiles, _) => tiles.iter().any(|t| t.spot == spot),
+            Self::Shelf(tiles, ..) => tiles.iter().any(|t| t.spot == spot),
             _ => false,
         }
+    }
+
+    /// The same row, saying `about` under the pointer — a fact whose label
+    /// alone does not say what it is, which its target cannot either.
+    fn about(mut self, about: &'static str) -> Self {
+        if let Self::Pair(p) = &mut self {
+            p.about = Some(about);
+        }
+        self
     }
 }
 
@@ -2665,6 +4555,8 @@ fn fact(spot: &str, label: String, value: String) -> Item {
         kind: Kind::Fact,
         tone: None,
         about: None,
+        controls: Vec::new(),
+        default: None,
     })
 }
 
@@ -2678,6 +4570,8 @@ fn setting(spot: &str, label: String, value: String, target: Target) -> Item {
         target,
         tone: None,
         about: None,
+        controls: Vec::new(),
+        default: None,
     })
 }
 
@@ -2745,6 +4639,25 @@ fn question(items: &mut Vec<Item>, c: &Confirm, texts: &ronoctua_i18n::Texts) {
             key::VIDEO_METRICS_NOT_AGAIN,
             key::VIDEO_METRICS_AGAIN,
         ),
+        Pending::Register(kept, discarded) => (
+            texts.t_args(
+                key::ASK_VIDEO_METRICS_REGISTER,
+                &[
+                    ("kept", Arg::Number(i64::from(*kept))),
+                    ("discarded", Arg::Number(i64::from(*discarded))),
+                ],
+            ),
+            key::VIDEO_METRICS_NOT_YET,
+            key::VIDEO_METRICS_REGISTER_THEM,
+        ),
+        Pending::DecideAll(decision, changed) => (
+            texts.t_args(
+                words::ask_decide_all_key(*decision),
+                &[("changed", Arg::Number(i64::from(*changed)))],
+            ),
+            key::VIDEO_METRICS_LEAVE_DECISIONS,
+            key::VIDEO_METRICS_DECIDE_THEM_ALL,
+        ),
     };
     items.push(Item::Note(asked, tokens::color::TEXT_SECONDARY));
     items.push(Item::Answer {
@@ -2800,15 +4713,20 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         kind: Kind::Fact,
         target: Target::Nothing,
         tone,
-        about: None,
+        about: Some(key::ABOUT_VIDEO_METRICS_LAST_SCAN),
+        controls: Vec::new(),
+        default: None,
     }));
     if let Some(s) = scan.filter(|s| s.ended_at_s.is_some()) {
         let all_failed = s.channels > 0 && s.channels_failed == s.channels;
-        items.push(fact(
-            "scan-added",
-            texts.t(key::VIDEO_METRICS_SCAN_ADDED),
-            s.added.to_string(),
-        ));
+        items.push(
+            fact(
+                "scan-added",
+                texts.t(key::VIDEO_METRICS_SCAN_ADDED),
+                s.added.to_string(),
+            )
+            .about(key::ABOUT_VIDEO_METRICS_SCAN_ADDED),
+        );
         items.push(Item::Pair(Pair {
             spot: "scan-failed".to_owned(),
             label: texts.t(key::VIDEO_METRICS_SCAN_FAILED),
@@ -2828,7 +4746,9 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
             } else {
                 None
             },
-            about: None,
+            about: Some(key::ABOUT_VIDEO_METRICS_SCAN_FAILED),
+            controls: Vec::new(),
+            default: None,
         }));
     }
     if let Some(stop) = scan.and_then(|s| s.stopped) {
@@ -2861,6 +4781,8 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
             target: Target::Consent(on),
             tone: (!on).then_some(tokens::color::STATE_WARNING),
             about: Some(key::ABOUT_VIDEO_METRICS_ASK_YOUTUBE),
+            controls: Vec::new(),
+            default: None,
         }));
         items.push(Item::Note(
             texts.t_with(
@@ -2877,6 +4799,14 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         texts.t(key::VIDEO_METRICS_VIDEOS),
         count(r.videos_count),
         Target::Go(Page::Videos),
+    ));
+    // WHAT WAS SET ASIDE FOR LATER, the last first — never deleted while it
+    // is (the owner, 2026-11-09).
+    items.push(setting(
+        "set-aside-videos",
+        texts.t(key::VIDEO_METRICS_SET_ASIDE_VIDEOS),
+        count(r.set_aside_count),
+        Target::SetAsideVideos,
     ));
     items.push(setting(
         "channels",
@@ -2896,6 +4826,28 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         String::new(),
         Target::Go(Page::Weights),
     ));
+    // THE SAME CATALOGUE, IN OTHER APPS (the owner, 2026-11-09): the brain's
+    // page on the scan — when it runs, and changing that —, and the
+    // player's two lists of it, each in a window of its own.
+    items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_ELSEWHERE)));
+    items.push(setting(
+        "in-the-brain",
+        texts.t(key::VIDEO_METRICS_IN_THE_BRAIN),
+        String::new(),
+        Target::Brain,
+    ));
+    items.push(setting(
+        "in-the-player",
+        texts.t(key::VIDEO_METRICS_IN_THE_PLAYER),
+        String::new(),
+        Target::InThePlayer(InThePlayer::Ranking),
+    ));
+    items.push(setting(
+        "set-aside-in-the-player",
+        texts.t(key::VIDEO_METRICS_SET_ASIDE_IN_THE_PLAYER),
+        String::new(),
+        Target::InThePlayer(InThePlayer::SetAside),
+    ));
     if r.skipped.iter().any(|(_, n)| *n > 0) {
         items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_LEFT_OUT)));
         for (skip, n) in &r.skipped {
@@ -2906,7 +4858,9 @@ fn home(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
                 kind: Kind::Fact,
                 target: Target::Nothing,
                 tone: None,
-                about: None,
+                about: Some(key::ABOUT_VIDEO_METRICS_LEFT_OUT),
+                controls: Vec::new(),
+                default: None,
             }));
         }
     }
@@ -2928,6 +4882,27 @@ fn channels(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
         texts.t(key::VIDEO_METRICS_ADD_A_CHANNEL),
         String::new(),
         Target::AddChannel,
+    ));
+    // A LIST OF SUBSCRIPTIONS, BROUGHT IN OR SAVED — and, while one waits,
+    // how many of its channels wait with it, decided or not: none is a
+    // channel here until the list is registered. WORDED AS WAITING TO BE
+    // REGISTERED, never "to decide": every one decided still waits.
+    let waiting = r.staged.len();
+    items.push(setting(
+        "import-export",
+        texts.t(key::VIDEO_METRICS_IMPORT_EXPORT),
+        if r.staged.is_empty() {
+            String::new()
+        } else {
+            texts.t_args(
+                key::VIDEO_METRICS_UNREGISTERED,
+                &[(
+                    "count",
+                    Arg::Number(i64::try_from(waiting).unwrap_or(i64::MAX)),
+                )],
+            )
+        },
+        Target::Go(Page::Import),
     ));
     if r.channels.is_empty() {
         items.push(Item::Note(
@@ -2956,19 +4931,67 @@ fn channels(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
             target: Target::Go(Page::Channel(c.id.clone())),
             tone: c.last_error.as_ref().map(|_| tokens::color::STATE_ERROR),
             about: None,
+            controls: ways_out(&c.id, texts),
+            default: None,
         }));
     }
 }
 
+/// A CHANNEL'S WAYS OUT, glyphs at its row's right edge on the channels'
+/// list: its videos' page on YouTube in Chrome, and in Nyxt — each acting on
+/// the first click, as the rows of its own page do on the second.
+///
+/// EACH GLYPH CARRIES ITS OWN SENTENCE, named beside it: a sentence looked
+/// up with another to fall back on would, on a miss, explain the glyph as
+/// the channel's row — a plausible wrong sentence, said without a word.
+fn ways_out(id: &ChannelId, texts: &ronoctua_i18n::Texts) -> Vec<Control> {
+    [
+        (
+            tokens::icon::OPEN_IN_CHROME,
+            Target::ChannelKiosk(id.clone()),
+            key::VIDEO_METRICS_CHANNEL_IN_CHROME,
+            key::ABOUT_VIDEO_METRICS_CHANNEL_IN_CHROME,
+        ),
+        (
+            tokens::icon::OPEN_IN_NYXT,
+            Target::ChannelNyxt(id.clone()),
+            key::VIDEO_METRICS_CHANNEL_IN_NYXT,
+            key::ABOUT_VIDEO_METRICS_CHANNEL_IN_NYXT,
+        ),
+    ]
+    .into_iter()
+    .map(|(drawn, target, name, about)| glyph(drawn, target, texts.t(name), about, false))
+    .collect()
+}
+
 /// One channel: its facts, its score, its Shorts, every rule in its channel
 /// version, and removing it.
+///
+/// A CHANNEL OF A LIST IMPORTED, not registered yet, has this page too — and
+/// what registering does with it, first; everything a channel is given is
+/// given to it here before it joins. When it was added (registering sets
+/// it), and what only a scan writes — when it was last tried, where the
+/// scans stand on it, its videos — it has none of yet, and is not said.
 fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua_i18n::Texts) {
     let Some(c) = r.channel(id) else {
         items.push(Item::Heading(id.0.clone()));
         refused_or_reading(items, r, texts);
         return;
     };
+    let staged = r.staged_as(id).map(|s| s.decision);
     items.push(Item::Heading(c.title.clone()));
+    if let Some(decision) = staged {
+        items.push(Item::Note(
+            texts.t(key::VIDEO_METRICS_STAGED_NOTE),
+            tokens::color::TEXT_DIM,
+        ));
+        items.push(setting(
+            "decision",
+            texts.t(key::VIDEO_METRICS_DECISION),
+            texts.t(words::decision_key(decision)),
+            Target::Decide(id.clone(), decision),
+        ));
+    }
     items.push(fact(
         "address",
         texts.t(key::VIDEO_METRICS_ADDRESS),
@@ -2981,24 +5004,29 @@ fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua
             h.clone(),
         ));
     }
-    items.push(fact(
-        "added",
-        texts.t(key::VIDEO_METRICS_ADDED),
-        date_or_never(Some(c.added_at_s), r, texts),
-    ));
-    items.push(fact(
-        "last-try",
-        texts.t(key::VIDEO_METRICS_LAST_SCAN),
-        date_or_never(c.last_try_at_s, r, texts),
-    ));
-    items.push(fact(
-        "reference",
-        texts.t(key::VIDEO_METRICS_REFERENCE),
-        c.reference_at_s.map_or_else(
-            || texts.t(key::VIDEO_METRICS_REFERENCE_NONE),
-            |s| crate::chrome::when_text(s, &r.zone, false, texts),
-        ),
-    ));
+    if staged.is_none() {
+        items.push(fact(
+            "added",
+            texts.t(key::VIDEO_METRICS_ADDED),
+            date_or_never(Some(c.added_at_s), r, texts),
+        ));
+        items.push(fact(
+            "last-try",
+            texts.t(key::VIDEO_METRICS_LAST_SCAN),
+            date_or_never(c.last_try_at_s, r, texts),
+        ));
+        items.push(
+            fact(
+                "reference",
+                texts.t(key::VIDEO_METRICS_REFERENCE),
+                c.reference_at_s.map_or_else(
+                    || texts.t(key::VIDEO_METRICS_REFERENCE_NONE),
+                    |s| crate::chrome::when_text(s, &r.zone, false, texts),
+                ),
+            )
+            .about(key::ABOUT_VIDEO_METRICS_REFERENCE),
+        );
+    }
     if let Some(e) = &c.last_error {
         items.push(Item::Pair(Pair {
             spot: "last-error".to_owned(),
@@ -3008,13 +5036,31 @@ fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua
             target: Target::Copy(e.clone()),
             tone: Some(tokens::color::STATE_ERROR),
             about: None,
+            controls: Vec::new(),
+            default: None,
         }));
     }
+    if staged.is_none() {
+        items.push(setting(
+            "its-videos",
+            texts.t(key::VIDEO_METRICS_ITS_VIDEOS),
+            c.videos.to_string(),
+            Target::ChannelVideos(id.clone()),
+        ));
+    }
+    // AND ITS VIDEOS ON YOUTUBE, its `/videos` page, in either browser —
+    // beside the list of them here.
     items.push(setting(
-        "its-videos",
-        texts.t(key::VIDEO_METRICS_ITS_VIDEOS),
-        c.videos.to_string(),
-        Target::ChannelVideos(id.clone()),
+        "channel-in-chrome",
+        texts.t(key::VIDEO_METRICS_CHANNEL_IN_CHROME),
+        String::new(),
+        Target::ChannelKiosk(id.clone()),
+    ));
+    items.push(setting(
+        "channel-in-nyxt",
+        texts.t(key::VIDEO_METRICS_CHANNEL_IN_NYXT),
+        String::new(),
+        Target::ChannelNyxt(id.clone()),
     ));
     items.push(Item::Pair(Pair {
         spot: "score".to_owned(),
@@ -3024,17 +5070,59 @@ fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua
         target: Target::ChannelScore(id.clone(), c.score),
         tone: None,
         about: Some(key::ABOUT_VIDEO_METRICS_SCORE),
+        controls: Vec::new(),
+        default: None,
     }));
-    items.push(setting(
-        "shorts",
-        texts.t(key::VIDEO_METRICS_ITS_SHORTS),
-        texts.t(match c.block_shorts {
-            None => key::VIDEO_METRICS_SHORTS_FOLLOW,
+    // "AS EVERYWHERE" SAYS WHAT EVERYWHERE IS NOW, quietly beside it — from
+    // the switches READ, never a default nobody read (`nothing_unread_…`).
+    let shorts_everywhere = r.settings.map(|s| {
+        texts.t(if s.block_shorts {
+            key::VIDEO_METRICS_SHORTS_BLOCKED
+        } else {
+            key::VIDEO_METRICS_SHORTS_ALLOWED
+        })
+    });
+    items.push(Item::Pair(Pair {
+        spot: "shorts".to_owned(),
+        label: texts.t(key::VIDEO_METRICS_ITS_SHORTS),
+        value: texts.t(match c.block_shorts {
+            None => key::VIDEO_METRICS_AS_EVERYWHERE,
             Some(true) => key::VIDEO_METRICS_SHORTS_BLOCKED,
             Some(false) => key::VIDEO_METRICS_SHORTS_ALLOWED,
         }),
-        Target::ChannelShorts(id.clone(), c.block_shorts),
-    ));
+        kind: Kind::Setting,
+        target: Target::ChannelShorts(id.clone(), c.block_shorts),
+        tone: None,
+        about: None,
+        controls: Vec::new(),
+        default: c
+            .block_shorts
+            .is_none()
+            .then(|| shorts_everywhere.map(|now| Follows::now(&now, texts)))
+            .flatten(),
+    }));
+    // HOW LONG ITS VIDEOS STAY: as everywhere — what that is now beside it,
+    // read and never a default — days of its own, or for ever.
+    let keep_everywhere = r.settings.map(|s| words::keep(s.keep, texts));
+    items.push(Item::Pair(Pair {
+        spot: "keep".to_owned(),
+        label: texts.t(key::VIDEO_METRICS_CHANNEL_KEEP),
+        value: c.keep.map_or_else(
+            || texts.t(key::VIDEO_METRICS_AS_EVERYWHERE),
+            |k| words::keep(k, texts),
+        ),
+        kind: Kind::Setting,
+        target: Target::ChannelKeep(id.clone(), c.keep),
+        tone: None,
+        about: None,
+        controls: Vec::new(),
+        default: c
+            .keep
+            .is_none()
+            .then(|| keep_everywhere.map(|now| Follows::now(&now, texts)))
+            .flatten(),
+    }));
+    expiring(items, r, texts);
     items.push(Item::Heading(texts.t(key::VIDEO_METRICS_ITS_RULES)));
     rule_rows(items, &Some(id.clone()), r, texts);
     items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_REMOVE)));
@@ -3044,6 +5132,149 @@ fn channel(items: &mut Vec<Item>, id: &ChannelId, r: &Readings, texts: &ronoctua
         String::new(),
         Target::RemoveChannel(id.clone(), c.title.clone()),
     ));
+}
+
+/// THE IMPORT PAGE: Google Takeout's list of the channels an account
+/// subscribes to — where it is exported, choosing it, the lines the last
+/// import left out and the channels it found here already —; the channels
+/// here saved as such a list; and the channels it staged — how many are
+/// decided, all of them at once, registering what was decided, then each,
+/// waiting to be kept or discarded.
+///
+/// THE SHORT ROWS BEFORE THE LONG LIST: an account follows hundreds of
+/// channels, and a row after them — what the import found here already,
+/// registering, exporting — would be hundreds of rows away, where nobody
+/// scrolls.
+fn import(
+    items: &mut Vec<Item>,
+    imported: Option<&Imported>,
+    r: &Readings,
+    texts: &ronoctua_i18n::Texts,
+) {
+    items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_IMPORT)));
+    if let Some(Err(why)) = r.catalogue
+        && why != Why::NotThere
+    {
+        items.push(Item::Note(
+            texts.t(words::why_key(why)),
+            tokens::color::STATE_ERROR,
+        ));
+    }
+    items.push(Item::Note(
+        texts.t(key::VIDEO_METRICS_IMPORT_NOTE),
+        tokens::color::TEXT_DIM,
+    ));
+    items.push(setting(
+        "takeout",
+        texts.t(key::VIDEO_METRICS_TAKEOUT),
+        takeout_shown(),
+        Target::Takeout,
+    ));
+    items.push(setting(
+        "choose-list",
+        texts.t(key::VIDEO_METRICS_CHOOSE_LIST),
+        String::new(),
+        Target::PickImport,
+    ));
+    // WHAT THE LAST IMPORT LEFT OUT — the view's memory: a list chosen
+    // again says it again.
+    if let Some(i) = imported {
+        items.push(
+            fact(
+                "left-out",
+                texts.t(key::VIDEO_METRICS_IMPORT_LEFT_OUT),
+                i.left_out.to_string(),
+            )
+            .about(key::ABOUT_VIDEO_METRICS_IMPORT_LEFT_OUT),
+        );
+    }
+    // THE CHANNELS OF THE LAST IMPORT THAT WERE HERE ALREADY, each a way to
+    // its page — never staged, and left as they are: beside what else that
+    // import found, and before the channels it staged, which run to
+    // hundreds — after them, nobody would scroll down to these.
+    if let Some(i) = imported.filter(|i| !i.already.is_empty()) {
+        items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_ALREADY)));
+        for (id, title) in &i.already {
+            items.push(Item::Pair(Pair {
+                spot: format!("already:{}", id.0),
+                label: title.clone(),
+                value: String::new(),
+                kind: Kind::ListedFact,
+                target: Target::Go(Page::Channel(id.clone())),
+                tone: None,
+                about: None,
+                controls: Vec::new(),
+                default: None,
+            }));
+        }
+    }
+    items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_EXPORT)));
+    items.push(setting(
+        "save-list",
+        texts.t(key::VIDEO_METRICS_SAVE_LIST),
+        String::new(),
+        Target::PickExport,
+    ));
+    // THE CHANNELS STAGED, by title — never grouped by decision, so a row
+    // the person turns stays under the cursor (`query::staged`).
+    if !r.staged.is_empty() {
+        items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_TO_DECIDE)));
+        let count = |d: Decision| {
+            let n = r.staged.iter().filter(|s| s.decision == d).count();
+            Arg::Number(i64::try_from(n).unwrap_or(i64::MAX))
+        };
+        items.push(
+            fact(
+                "decisions",
+                texts.t(key::VIDEO_METRICS_DECISIONS),
+                texts.t_args(
+                    key::VIDEO_METRICS_DECISIONS_VALUE,
+                    &[
+                        ("keep", count(Decision::Keep)),
+                        ("discard", count(Decision::Discard)),
+                        ("undecided", count(Decision::Undecided)),
+                    ],
+                ),
+            )
+            .about(key::ABOUT_VIDEO_METRICS_DECISIONS),
+        );
+        let alike = r
+            .staged
+            .first()
+            .map(|s| s.decision)
+            .filter(|d| r.staged.iter().all(|s| s.decision == *d));
+        items.push(setting(
+            "decide-all",
+            texts.t(key::VIDEO_METRICS_DECIDE_ALL),
+            texts.t(alike.map_or(key::VIDEO_METRICS_DECISION_MIXED, words::decision_key)),
+            Target::DecideAll(alike),
+        ));
+        // REGISTERING, once something is decided — the undecided stay.
+        if r.staged.iter().any(|s| s.decision != Decision::Undecided) {
+            items.push(setting(
+                "register",
+                texts.t(key::VIDEO_METRICS_REGISTER),
+                String::new(),
+                Target::Register,
+            ));
+        }
+        for s in &r.staged {
+            let id = &s.channel.id;
+            items.push(Item::Pair(Pair {
+                spot: format!("staged:{}", id.0),
+                label: s.channel.title.clone(),
+                value: texts.t(words::decision_key(s.decision)),
+                kind: Kind::ListedSetting,
+                target: Target::Staged(id.clone(), s.decision),
+                tone: None,
+                about: None,
+                // ITS VIDEOS ON YOUTUBE, in either browser, before it is
+                // decided — as a channel's row of the list has them.
+                controls: ways_out(id, texts),
+                default: None,
+            }));
+        }
+    }
 }
 
 /// The global rules.
@@ -3065,11 +5296,37 @@ fn rules(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctua_i1
                 texts.t(key::VIDEO_METRICS_BLOCK_SHORTS_NOTE),
                 tokens::color::TEXT_DIM,
             ));
+            // HOW LONG A VIDEO STAYS, everywhere a channel keeps no time of
+            // its own — a ring, and any number of days typed.
+            items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_KEEP)));
+            items.push(setting(
+                "keep",
+                texts.t(key::VIDEO_METRICS_KEEP_AFTER),
+                words::keep(settings.keep, texts),
+                Target::KeepEverywhere(settings.keep),
+            ));
+            expiring(items, r, texts);
         }
         None => refused_or_reading(items, r, texts),
     }
     items.push(Item::Heading(texts.t(key::VIDEO_METRICS_HEADING_SCORE)));
     rule_rows(items, scope, r, texts);
+}
+
+/// WHAT THE NEXT SCAN TAKES OUT FOR ITS TIME, under the keeps in force —
+/// quietly, under a keep's row, so a small number typed by mistake surprises
+/// nobody before the scan (Reconciliation 10). The catalogue's whole count,
+/// worded so; said only when there is one.
+fn expiring(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
+    if let Some(n) = r.expiring.filter(|n| *n > 0) {
+        items.push(Item::Note(
+            texts.t_args(
+                key::VIDEO_METRICS_EXPIRING,
+                &[("count", Arg::Number(i64::try_from(n).unwrap_or(i64::MAX)))],
+            ),
+            tokens::color::TEXT_DIM,
+        ));
+    }
 }
 
 /// The rule of a single kind in force in `scope`: the scope's own version
@@ -3084,7 +5341,10 @@ fn single_of<'a>(rules: &'a [Rule], single: Single, scope: &Scope) -> Option<&'a
 }
 
 /// The value a rule's row says: its points — or "off" — and, in a channel's
-/// scope, whether it is the channel's own or the one everywhere.
+/// scope, that it is the channel's own. The one everywhere says its points
+/// alone, and that it is everywhere's apart, quietly ([`everywhere_rule`]):
+/// "2 000 points (everywhere)" reads the value first and the scope as an
+/// aside, where "2 000 points · everywhere" read two values.
 fn rule_value(rule: &Rule, scope: &Scope, texts: &ronoctua_i18n::Texts) -> String {
     let points = if rule.enabled {
         match rule.kind {
@@ -3100,23 +5360,47 @@ fn rule_value(rule: &Rule, scope: &Scope, texts: &ronoctua_i18n::Texts) -> Strin
     } else {
         texts.t(key::VIDEO_METRICS_OFF)
     };
-    if scope.is_none() {
+    if scope.is_none() || rule.channel.is_none() {
         return points;
     }
     texts.t_with(
         key::VIDEO_METRICS_RULE_IN,
         &[
             ("value", &points),
-            (
-                "scope",
-                &texts.t(if rule.channel.is_some() {
-                    key::VIDEO_METRICS_SCOPE_OWN
-                } else {
-                    key::VIDEO_METRICS_SCOPE_EVERYWHERE
-                }),
-            ),
+            ("scope", &texts.t(key::VIDEO_METRICS_SCOPE_OWN)),
         ],
     )
+}
+
+/// A RULE FROM EVERYWHERE, on a channel's page: what it follows — the rule
+/// as it is everywhere now, its value the row's —, said apart from the
+/// value, quietly ([`Follows`]). Under the pointer it says what changing it
+/// does: a single rule's page makes the channel its own version
+/// (`rule_page`), and a band's or words' page is the one everywhere, which
+/// changes it on every channel (`rule_page_of`). `None` off a channel's
+/// page, and for the channel's own.
+fn everywhere_rule(
+    rule: &Rule,
+    scope: &Scope,
+    r: &Readings,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<Follows> {
+    let id = scope.as_ref().filter(|_| rule.channel.is_none())?;
+    let said = if rule.kind.is_single() {
+        let name = r
+            .channel(id)
+            .map_or_else(|| id.0.clone(), |c| c.title.clone());
+        texts.t_with(key::VIDEO_METRICS_RULE_INHERITED_NOTE, &[("name", &name)])
+    } else {
+        texts.t(key::VIDEO_METRICS_FOLLOWS_RULE_EVERYWHERE)
+    };
+    Some(Follows {
+        beside: texts.t_with(
+            key::VIDEO_METRICS_DEFAULT_NOW,
+            &[("value", &texts.t(key::VIDEO_METRICS_SCOPE_EVERYWHERE))],
+        ),
+        said,
+    })
 }
 
 /// The rows of every rule in force in a scope: the four single ones, the
@@ -3147,6 +5431,8 @@ fn rule_rows(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctu
             target: Target::Go(Page::Rule(scope.clone(), Slot::Single(single))),
             tone: None,
             about: None,
+            controls: Vec::new(),
+            default: found.and_then(|x| everywhere_rule(x, scope, r, texts)),
         }));
     }
     // THE BANDS: a channel with its own list has that list, and one without
@@ -3167,7 +5453,9 @@ fn rule_rows(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctu
             kind: Kind::Setting,
             target: rule_page_of(b, scope),
             tone: None,
-            about: None,
+            about: Some(about_of_kind(&b.kind)),
+            controls: Vec::new(),
+            default: everywhere_rule(b, scope, r, texts),
         }));
     }
     items.push(setting(
@@ -3200,7 +5488,9 @@ fn rule_rows(items: &mut Vec<Item>, scope: &Scope, r: &Readings, texts: &ronoctu
             kind: Kind::Setting,
             target: rule_page_of(t, scope),
             tone: None,
-            about: None,
+            about: Some(about_of_kind(&t.kind)),
+            controls: Vec::new(),
+            default: everywhere_rule(t, scope, r, texts),
         }));
     }
     items.push(setting(
@@ -3299,6 +5589,8 @@ fn rule_page(
             target: Target::Points(rule.clone()),
             tone: None,
             about: Some(key::ABOUT_VIDEO_METRICS_POINTS),
+            controls: Vec::new(),
+            default: None,
         })
     };
     match &rule.kind {
@@ -3389,6 +5681,8 @@ fn weights(items: &mut Vec<Item>, r: &Readings, texts: &ronoctua_i18n::Texts) {
             target: Target::Weight(rating),
             tone: None,
             about: Some(key::ABOUT_VIDEO_METRICS_POINTS),
+            controls: Vec::new(),
+            default: None,
         }));
     }
 }
@@ -3423,13 +5717,16 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
         row.channel.clone(),
         Target::Go(Page::Channel(row.channel_id.clone())),
     ));
-    items.push(fact(
-        "published",
-        texts.t(key::VIDEO_METRICS_PUBLISHED),
-        row.published_at_s
-            .map(|s| crate::chrome::when_text(s, &r.zone, false, texts))
-            .unwrap_or_default(),
-    ));
+    items.push(
+        fact(
+            "published",
+            texts.t(key::VIDEO_METRICS_PUBLISHED),
+            row.published_at_s
+                .map(|s| crate::chrome::when_text(s, &r.zone, false, texts))
+                .unwrap_or_default(),
+        )
+        .about(key::ABOUT_VIDEO_METRICS_PUBLISHED),
+    );
     if let Some(d) = row.duration_s {
         items.push(fact(
             "duration",
@@ -3453,11 +5750,14 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
         texts.t(key::VIDEO_METRICS_SCORE),
         words::points(row.score, texts),
     ));
-    items.push(fact(
-        "static",
-        texts.t(key::VIDEO_METRICS_ITS_POINTS),
-        words::points(v.static_points, texts),
-    ));
+    items.push(
+        fact(
+            "static",
+            texts.t(key::VIDEO_METRICS_ITS_POINTS),
+            words::points(v.static_points, texts),
+        )
+        .about(key::ABOUT_VIDEO_METRICS_ITS_POINTS),
+    );
     if let Some((w, h)) = v.size_px {
         items.push(fact(
             "size",
@@ -3547,6 +5847,40 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
                 .map_or(key::VIDEO_METRICS_RATING_NONE, words::rating_key)),
         Target::Rating(id.clone(), v.rating),
     ));
+    // SET ASIDE FOR LATER, AND NEVER DELETED: each a switch of its own, the
+    // second saying, quietly, what keeps the video — or when it goes —
+    // without its mark.
+    let aside = row.set_aside_at_s.is_some();
+    items.push(Item::Pair(Pair {
+        spot: "set-aside".to_owned(),
+        label: texts.t(key::VIDEO_METRICS_SET_ASIDE_ROW),
+        value: on_off(aside, texts),
+        kind: Kind::Setting,
+        target: Target::SetAside(id.clone(), aside),
+        tone: None,
+        about: Some(key::ABOUT_VIDEO_METRICS_SET_ASIDE_ROW),
+        controls: Vec::new(),
+        default: None,
+    }));
+    let own = row.forever == Forever::ByVideo;
+    let follows = (!own).then(|| {
+        let value = lasting(row, Some(v.first_seen_at_s), r).words(r, texts);
+        Follows {
+            beside: texts.t_with(key::VIDEO_METRICS_DEFAULT_NOW, &[("value", &value)]),
+            said: texts.t_with(key::VIDEO_METRICS_WITHOUT_THE_MARK, &[("value", &value)]),
+        }
+    });
+    items.push(Item::Pair(Pair {
+        spot: "never-delete".to_owned(),
+        label: texts.t(key::VIDEO_METRICS_NEVER_DELETE),
+        value: on_off(own, texts),
+        kind: Kind::Setting,
+        target: Target::VideoKeep(id.clone(), own),
+        tone: None,
+        about: Some(key::ABOUT_VIDEO_METRICS_NEVER_DELETE),
+        controls: Vec::new(),
+        default: follows,
+    }));
     let tags = v.second_tags.join(", ");
     items.push(setting(
         "second-tags",
@@ -3570,6 +5904,8 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
         target: Target::SecondDescription(id.clone(), v.second_description.clone()),
         tone: None,
         about: Some(key::ABOUT_VIDEO_METRICS_SECOND_DESCRIPTION),
+        controls: Vec::new(),
+        default: None,
     }));
     if !v.second_description.trim().is_empty() {
         items.push(Item::Note(
@@ -3589,6 +5925,12 @@ fn video(items: &mut Vec<Item>, id: &VideoId, r: &Readings, texts: &ronoctua_i18
         texts.t(key::CMD_VIDEO_METRICS_KIOSK),
         String::new(),
         Target::Kiosk(id.clone()),
+    ));
+    items.push(setting(
+        "nyxt",
+        texts.t(key::CMD_VIDEO_METRICS_NYXT),
+        String::new(),
+        Target::Nyxt(id.clone()),
     ));
     items.push(setting(
         "download",
@@ -3639,10 +5981,53 @@ fn plain(fields: Vec<Field>, heading: bool, spot: String) -> Row {
         spot,
         continues: false,
         cells: Vec::new(),
+        controls: Vec::new(),
         thumbs: Vec::new(),
         caret: None,
         about: None,
+        name: String::new(),
+        default: None,
     }
+}
+
+/// THE LINES OF A PAIR WITH WHAT IT FOLLOWS "AS EVERYWHERE" ([`Follows`]):
+/// `beside`, in the quietest ink, a cell of air after the LAST piece of the
+/// value — on its line when it fits before `end`, else under it in the
+/// value's column, wrapped there, never cut: on the lines a wrapped label
+/// still takes when it has them (their value column is free), and on lines
+/// of its own after them. Laid AFTER the value's tint (`chrome::tinted`
+/// recolours every field after a line's first, and a state's colour would
+/// have reached it), so it stays quiet whatever the value says and wherever
+/// the cursor is.
+fn with_beside(mut lines: Vec<Vec<Field>>, beside: &str, column: u16, end: u16) -> Vec<Vec<Field>> {
+    use ronoctua_render::layout::width;
+    let quiet = tokens::color::TEXT_DIM;
+    let wide = width(beside);
+    let last = lines.iter().enumerate().rev().find_map(|(k, fields)| {
+        fields
+            .iter()
+            .rfind(|f| f.at >= column)
+            .map(|f| (k, f.at + width(&f.text) + 1))
+    });
+    if let Some((k, at)) = last
+        && at + wide <= end
+    {
+        lines[k].push(piece(at, beside.to_owned(), quiet, wide));
+        return lines;
+    }
+    // UNDER THE VALUE: the line after its last piece holds a label's rest at
+    // most, which never reaches the column. With no value at all the label
+    // took the whole row, and only lines after it are free.
+    let first = last.map_or(lines.len(), |(k, _)| k + 1);
+    let parts = crate::chrome::note_lines(beside, end.saturating_sub(column).max(1));
+    for (k, part) in (first..).zip(parts) {
+        let field = piece(column, part, quiet, end.saturating_sub(column));
+        match lines.get_mut(k) {
+            Some(line) => line.push(field),
+            None => lines.push(vec![field]),
+        }
+    }
+    lines
 }
 
 /// The items, placed: the values of the whole page in one column after its
@@ -3650,17 +6035,24 @@ fn plain(fields: Vec<Field>, heading: bool, spot: String) -> Row {
 /// notes wrapped, air before every title but the first — and the cursor's
 /// row in the cursor's colour.
 fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
+    use ronoctua_render::layout::width;
     let end = left + room;
     // THE COLUMN IS MEASURED ON THE ROWS THAT HAVE A VALUE: a row that is
     // only a label — "Delete it for good: it never comes back" — has nothing
-    // to align, and would push every value on the page to the right.
+    // to align, and would push every value on the page to the right. A
+    // value that follows everywhere is measured WITH what it follows beside
+    // it, so the column leaves the room for both on one line where it can.
     let pairs: Vec<(u16, u16, u16)> = items
         .iter()
         .filter_map(|i| match i {
+            // AND WITH ITS GLYPHS, at the row's right edge: the column leaves
+            // the room for the value before them too.
             Item::Pair(p) if !p.value.is_empty() => Some((
                 left,
-                ronoctua_render::layout::width(&p.label),
-                ronoctua_render::layout::width(&p.value),
+                width(&p.label),
+                width(&p.value)
+                    + p.default.as_ref().map_or(0, |d| 1 + width(&d.beside))
+                    + glyphs_room(&p.controls),
             )),
             _ => None,
         })
@@ -3705,16 +6097,28 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
             }
             Item::Pair(p) => {
                 let focused = p.spot == at;
-                let lines = crate::chrome::aligned_pair(
-                    left, column, end, &p.label, &p.value, p.kind, focused,
-                );
-                for (k, fields) in lines.into_iter().enumerate() {
-                    let fields = if k == 0 {
+                // A ROW WITH GLYPHS ends its words a cell of air before them,
+                // and they stand at the row's right edge on its first line.
+                let words_end = end.saturating_sub(glyphs_room(&p.controls));
+                let lines: Vec<Vec<Field>> = crate::chrome::aligned_pair(
+                    left, column, words_end, &p.label, &p.value, p.kind, focused,
+                )
+                .into_iter()
+                .enumerate()
+                .map(|(k, fields)| {
+                    if k == 0 {
                         crate::chrome::tinted(fields, p.tone, focused)
                     } else {
                         fields
-                    };
-                    out.push(Row {
+                    }
+                })
+                .collect();
+                let lines = match &p.default {
+                    Some(d) => with_beside(lines, &d.beside, column, words_end),
+                    None => lines,
+                };
+                for (k, fields) in lines.into_iter().enumerate() {
+                    let mut row = Row {
                         fields,
                         heading: false,
                         target: if k == 0 {
@@ -3725,27 +6129,31 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                         spot: if k == 0 { p.spot.clone() } else { spot("rest") },
                         continues: k > 0,
                         cells: Vec::new(),
+                        controls: Vec::new(),
                         thumbs: Vec::new(),
                         caret: None,
                         about: p.about,
-                    });
+                        name: p.label.clone(),
+                        default: p.default.clone(),
+                    };
+                    if k == 0 && !p.controls.is_empty() {
+                        put_strip(
+                            &mut row,
+                            &p.controls,
+                            end.saturating_sub(strip_cells(&p.controls)),
+                        );
+                    }
+                    out.push(row);
                 }
             }
             Item::Answer { yes, label } => {
                 let spot = answer_spot(yes).to_owned();
                 let focused = spot == at;
                 let colour = Kind::Setting.tones(focused).0;
-                out.push(Row {
-                    fields: vec![piece(left, label, colour, room)],
-                    heading: false,
-                    target: Target::Answer(yes),
-                    spot,
-                    continues: false,
-                    cells: Vec::new(),
-                    thumbs: Vec::new(),
-                    caret: None,
-                    about: None,
-                });
+                let mut row = plain(vec![piece(left, label.clone(), colour, room)], false, spot);
+                row.target = Target::Answer(yes);
+                row.name = label;
+                out.push(row);
             }
             Item::Figure(file) => {
                 let lines = tokens::space::VIDEOMETRICS_THUMBLINES;
@@ -3769,18 +6177,12 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                 } else {
                     Kind::ListedSetting.tones(focused)
                 };
-                let lines = crate::chrome::note_lines(&t.title, room)
+                for (k, line) in crate::chrome::note_lines(&t.title, room)
                     .into_iter()
-                    .map(|l| (l, label))
-                    .chain(
-                        t.meta
-                            .iter()
-                            .flat_map(|m| crate::chrome::note_lines(m, room))
-                            .map(|l| (l, value)),
-                    );
-                for (k, (line, colour)) in lines.enumerate() {
+                    .enumerate()
+                {
                     let mut row = plain(
-                        vec![piece(left, line, colour, room)],
+                        vec![piece(left, line, label, room)],
                         false,
                         if k == 0 { t.spot.clone() } else { spot("rest") },
                     );
@@ -3789,25 +6191,77 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                     } else {
                         row.continues = true;
                     }
+                    row.name.clone_from(&t.title);
                     out.push(row);
                 }
+                let mut row = plain(Vec::new(), false, spot("rest"));
+                row.continues = true;
+                row.name.clone_from(&t.title);
+                entry_line(&mut row, &t, value, left, end);
+                out.push(row);
             }
-            Item::Shelf(tiles, grid) => shelf(&mut out, &tiles, grid, left, at, &mut spot),
+            Item::Shelf(tiles, grid, channel) => {
+                shelf(&mut out, &tiles, grid, channel, left, at, &mut spot);
+            }
         }
     }
     out
 }
 
-/// One shelf of the grid: the pictures' lines, the titles' two, the line
-/// that says what each scores, the one that says when, and a line of air.
-/// Each tile sits [`TILE_AIR`] inside its cell, so the hover that lights the
-/// cell has the same air on both sides of it. The FIRST line carries the
-/// cells a click takes — the box the hover lights, never the air between two
-/// — and every line after it continues it.
+/// THE LINE UNDER A LIST'S TITLE, from `left` to `end`: its channel, its
+/// age and its score — a bare number — and the four faces of its rating
+/// right after it, and its marks at the line's right edge. The words before
+/// the faces are the row's (`Row::words_box`): a click there takes the
+/// video, a click on a glyph does what it says. Where the line is too short
+/// the channel goes first, then the age; the score is never cut, and the
+/// glyphs go before it would be.
+fn entry_line(row: &mut Row, t: &Tile, colour: tokens::Color, left: u16, end: u16) {
+    use ronoctua_render::layout::width;
+    let room = end.saturating_sub(left);
+    let faces = strip_cells(&t.ratings);
+    let marks = strip_cells(&t.marks);
+    // WHAT THE WORDS BEFORE THE FACES MAY TAKE: the line less the faces, the
+    // marks and the air before each.
+    let before = room.saturating_sub(
+        GLYPH_AIR
+            .saturating_add(faces)
+            .saturating_add(GLYPH_AIR)
+            .saturating_add(marks),
+    );
+    let words = t
+        .said
+        .iter()
+        .map(String::as_str)
+        .find(|w| width(w) <= before)
+        .unwrap_or(t.score.as_str());
+    row.fields
+        .push(piece(left, words.to_owned(), colour, width(words)));
+    let at = left.saturating_add(width(words)).saturating_add(GLYPH_AIR);
+    // THE GLYPHS ONLY WHERE THEY FIT WHOLE — the marks against the edge,
+    // the faces after the score with a cell of air before the marks.
+    let marks_from = end.saturating_sub(marks);
+    if at.saturating_add(faces).saturating_add(GLYPH_AIR) <= marks_from {
+        put_strip(row, &t.ratings, at);
+    }
+    if at <= marks_from {
+        put_strip(row, &t.marks, marks_from);
+    }
+}
+
+/// One shelf of the grid: the pictures' lines, the titles' two, the
+/// channels' when `channel` says so, the line that says what each scores
+/// with the faces of its rating, the one that says when with its marks, and
+/// a line of air. Each tile sits [`TILE_AIR`] inside its cell, so the hover
+/// that lights the cell has the same air on both sides of it. The FIRST line
+/// carries the cells a click takes — the box the hover lights, never the air
+/// between two — and every line after it continues it: a click on a line of
+/// glyphs takes the glyph under it ([`View::click_control`]) and nothing
+/// else, for the shelf's words are its videos' ([`Row::has_words`]).
 fn shelf(
     out: &mut Vec<Row>,
     tiles: &[Tile],
     grid: ronoctua_design::grid::Grid,
+    channel: bool,
     left: u16,
     at: &str,
     spot: &mut impl FnMut(&str) -> String,
@@ -3823,7 +6277,12 @@ fn shelf(
         .filter_map(|(i, t)| grid.at(i).map(|(_, column)| (left + column, t)))
         .collect();
     let inside = |from: u16| from + TILE_AIR;
-    let total = SHELF_LINES;
+    let total = shelf_lines(channel);
+    // THE LINES UNDER THE TITLE: its channel, when the grid says it; the
+    // score with the faces of its rating; the age with its marks.
+    let channel_line = channel.then_some(lines + title_lines);
+    let score_line = lines + title_lines + u16::from(channel);
+    let age_line = score_line + 1;
     for line in 0..total {
         let mut row = plain(Vec::new(), false, spot("shelf"));
         row.continues = line > 0;
@@ -3867,14 +6326,41 @@ fn shelf(
                     };
                     row.fields.push(piece(inside(*from), text, label, width));
                 }
-            } else if let Some(meta) = t.meta.get(usize::from(line - lines - title_lines)) {
-                // THE SCORE, THEN THE AGE, a line each.
+            } else if channel_line == Some(line) {
                 row.fields.push(piece(
                     inside(*from),
-                    meta.clone(),
+                    t.channel.clone(),
                     Kind::ListedFact.tones(focused).1,
                     width,
                 ));
+            } else if line == score_line {
+                // THE SCORE, never cut for a glyph — and the faces of its
+                // rating a cell after it, where they fit whole.
+                let number = ronoctua_render::layout::width(&t.score);
+                row.fields.push(piece(
+                    inside(*from),
+                    t.score.clone(),
+                    Kind::ListedFact.tones(focused).1,
+                    width,
+                ));
+                let faces = inside(*from) + number + GLYPH_AIR;
+                if number + GLYPH_AIR + strip_cells(&t.ratings) <= width {
+                    put_strip(&mut row, &t.ratings, faces);
+                }
+            } else if line == age_line {
+                // ITS MARKS against the tile's right edge, and its age in
+                // the room they leave, cut there.
+                let marks = strip_cells(&t.marks).min(width);
+                let room = width.saturating_sub(marks + GLYPH_AIR);
+                if room > 0 && !t.age.is_empty() {
+                    row.fields.push(piece(
+                        inside(*from),
+                        t.age.clone(),
+                        Kind::ListedFact.tones(focused).1,
+                        room,
+                    ));
+                }
+                put_strip(&mut row, &t.marks, inside(*from) + width - marks);
             }
         }
         if line == 0 {
@@ -3885,6 +6371,8 @@ fn shelf(
                     width: TILE,
                     target: t.target.clone(),
                     spot: t.spot.clone(),
+                    name: t.title.clone(),
+                    about: about_of(&t.target).unwrap_or(key::ABOUT_VIDEO_METRICS_VIDEO_ENTRY),
                 })
                 .collect();
             row.spot = placed
@@ -3921,6 +6409,7 @@ fn text_rows(
     let lines: Vec<&str> = text.split('\n').collect();
     let (caret_at, caret_cell) = area.caret_drawn(room);
     let value = Kind::Setting.tones(false).1;
+    let name = texts.t(key::VIDEO_METRICS_YOUR_DESCRIPTION);
     for (n, d) in area.drawn(room).into_iter().enumerate() {
         let said = lines
             .get(d.line)
@@ -3934,6 +6423,7 @@ fn text_rows(
         );
         row.target = Target::Text(d);
         row.caret = (n == caret_at && area.asking().is_none()).then_some(left + caret_cell);
+        row.name.clone_from(&name);
         out.push(row);
     }
     if let Some(yes) = area.asking() {
@@ -3945,13 +6435,19 @@ fn text_rows(
                 "text-asked".to_owned(),
             ));
         }
+        // ITS ANSWERS ARE A QUESTION'S ANSWERS (`Target::Answer`) for what
+        // explains them; a click on one is read by its spot (`text_hit`),
+        // and never reaches the page's own question.
         for (answer, k) in [(false, key::TEXT_AREA_NO), (true, key::TEXT_AREA_YES)] {
             let colour = Kind::Setting.tones(answer == yes).0;
-            out.push(plain(
+            let mut row = plain(
                 vec![piece(left, texts.t(k), colour, room)],
                 false,
                 format!("text-answer-{answer}"),
-            ));
+            );
+            row.target = Target::Answer(answer);
+            row.name = texts.t(k);
+            out.push(row);
         }
     }
     out
@@ -4030,7 +6526,26 @@ pub(crate) mod tests {
             last_try_at_s: Some(NOW - 3600),
             last_error: None,
             block_shorts: None,
+            keep: None,
             videos: 10,
+        }
+    }
+
+    /// A CHANNEL OF A LIST IMPORTED, as staging leaves it: its address by
+    /// its id, never scanned, no video — and `decision`.
+    fn staged(n: u8, decision: Decision) -> Staged {
+        let id = ChannelId(format!("UC{n:022}"));
+        Staged {
+            channel: Channel {
+                handle: None,
+                url: format!("https://www.youtube.com/channel/{}", id.0),
+                reference_at_s: None,
+                last_try_at_s: None,
+                videos: 0,
+                id,
+                ..channel(n)
+            },
+            decision,
         }
     }
 
@@ -4047,6 +6562,9 @@ pub(crate) mod tests {
             published_at_s: Some(NOW - i64::from(n) * 86_400),
             is_short: false,
             hidden: false,
+            rating: None,
+            set_aside_at_s: None,
+            forever: ronoctua_video_metrics::read::Forever::No,
         }
     }
 
@@ -4136,6 +6654,7 @@ pub(crate) mod tests {
             skipped: Skip::ALL.iter().map(|s| (*s, 1)).collect(),
             consent: Some(true),
             channels: vec![a, b],
+            staged: vec![staged(3, Decision::Undecided), staged(4, Decision::Keep)],
             rules: Some((None, global_rules())),
             settings: Some(Settings::default()),
             weights: Some(Weights::default()),
@@ -4187,6 +6706,13 @@ pub(crate) mod tests {
             Page::Home,
             Page::Channels,
             Page::Channel(a.clone()),
+            Page::Import,
+            // A STAGED CHANNEL'S PAGE, and its rules' page.
+            Page::Channel(staged(3, Decision::Undecided).channel.id),
+            Page::Rule(
+                Some(staged(4, Decision::Keep).channel.id),
+                Slot::Single(Single::Recency),
+            ),
             Page::Rules,
             Page::Rule(None, Slot::Single(Single::Recency)),
             Page::Rule(None, Slot::Single(Single::Preferred)),
@@ -4702,6 +7228,28 @@ pub(crate) mod tests {
         assert_eq!(press(&mut v, &r, Press::Escape), Errand::Close);
     }
 
+    /// FAILS IF: the window's corner says its way back on the home page —
+    /// where it says the window's name — or not on a page below it, opened
+    /// as a person opens it (`RET` on the home page's row) or from outside;
+    /// or a step back home leaves it saying the way back.
+    #[test]
+    fn the_way_back_is_said_only_below_the_home_page() {
+        let r = readings();
+        let (mut v, _) = View::fresh(Page::Home);
+        assert!(!v.below_the_first(), "the home page says its way back");
+        onto(&mut v, &r, "channels");
+        assert!(matches!(press(&mut v, &r, Press::Enter), Errand::Look(_)));
+        assert_eq!(v.page(), &Page::Channels);
+        assert!(v.below_the_first(), "the channels say no way back");
+        assert!(matches!(press(&mut v, &r, Press::Escape), Errand::Look(_)));
+        assert!(
+            !v.below_the_first(),
+            "back home, it still says the way back"
+        );
+        let (v, _) = View::fresh(Page::Channels);
+        assert!(v.below_the_first(), "opened on the channels, no way back");
+    }
+
     /// FAILS IF: a single rule switched off on a channel's page comes back
     /// as the rule everywhere — "on", with no way to reach the channel's own
     /// — rather than as the channel's, off, with its Remove; or switching it
@@ -4924,7 +7472,7 @@ pub(crate) mod tests {
             .position(|x| !x.cells.is_empty())
             .expect("a shelf");
         let cells = rows[shelf].cells.clone();
-        for line in &rows[shelf..shelf + usize::from(SHELF_LINES)] {
+        for line in &rows[shelf..shelf + usize::from(shelf_lines(false))] {
             for f in &line.fields {
                 let cell = cells
                     .iter()
@@ -4949,6 +7497,1196 @@ pub(crate) mod tests {
         assert_eq!(v.at, at, "the air between two cells took the cursor");
     }
 
+    /// What a page is open with, for [`every_taking_row_is_explained`]: as
+    /// it opens, with a question on it, with the description being edited,
+    /// and with the edit's own question up.
+    #[derive(Debug, Clone, Copy)]
+    enum Open {
+        Plain,
+        Question,
+        Editing,
+        EditingAsked,
+    }
+
+    /// Every piece of what a door says of a thing, for a test to read:
+    /// its name, its gesture and its sentences.
+    fn pieces(e: &crate::door::Explained) -> Vec<&str> {
+        let mut out = vec![e.name.as_str()];
+        out.extend(e.gesture.as_deref());
+        out.extend(e.said.iter().map(|(s, _)| s.as_str()));
+        out
+    }
+
+    /// FAILS IF: a row a click takes — on any page, the list and the grid,
+    /// at a narrow, a middling and a wide door, in either language, with a
+    /// question on the page or the description being edited — has nothing
+    /// to say where it is explained (the window's foot, the footer's line):
+    /// no name, no sentence, a key with no words (`[key]`); or a video of a
+    /// shelf, or a glyph, is not explained at the cell under the pointer;
+    /// or a row no click takes says something; or, under a question, a row
+    /// that is not one of its answers promises what a second click does
+    /// there — it would give the question its answer instead.
+    ///
+    /// IN EVERY STATE A VIDEO, A CHANNEL OR THE CATALOGUE IS SAID IN: as the
+    /// fixture reads; then marked — a rating, set aside, kept by its own
+    /// mark or by its channel's, a channel keeping days of its own and one
+    /// keeping every video, a video with no date and one whose channel was
+    /// not read, the grid saying channels, the set-aside videos alone and
+    /// newest first —; then with no video deleted everywhere. So every face
+    /// lit or not, every bookmark, every ∞ ([`Lasting`]) and what holds once
+    /// it is off ([`Control::follows`]), and every quiet default of a video's
+    /// or a channel's page are said whole.
+    #[test]
+    fn every_taking_row_is_explained() {
+        let id = VideoId("video000000".to_owned());
+        let (a, b) = (channel(1), channel(2));
+        let mut pages = every_page();
+        pages.push(Page::Rule(Some(a.id), Slot::Id(RuleId(3))));
+        pages.push(Page::Channel(b.id.clone()));
+        pages.extend([2, 3, 5, 6, 7, 9].map(|n| Page::Video(VideoId(format!("video{n:06}")))));
+        let marked = {
+            let mut r = readings();
+            if let Some(l) = r.listed.as_mut() {
+                let rows = &mut l.rows;
+                rows[1].rating = Some(Rating::Positive);
+                rows[2].set_aside_at_s = Some(NOW - 60);
+                rows[3].forever = Forever::ByVideo;
+                rows[4].forever = Forever::ByChannel;
+                for x in &mut rows[5..8] {
+                    x.channel_id = b.id.clone();
+                    x.channel = b.title.clone();
+                }
+                rows[6].set_aside_at_s = Some(NOW - 120);
+                rows[7].forever = Forever::ByVideo;
+                rows[7].set_aside_at_s = Some(NOW - 180);
+                rows[8].published_at_s = None;
+                rows[9].channel_id = ChannelId("UCnot-read".to_owned());
+            }
+            r.channels[0].keep = Some(Keep::Days(7));
+            r.channels[1].keep = Some(Keep::Forever);
+            r.set_aside_count = Some(3);
+            r.expiring = Some(5);
+            r
+        };
+        let never = {
+            let mut r = marked.clone();
+            r.channels[0].keep = None;
+            r.settings = Some(Settings {
+                keep: Keep::Forever,
+                ..Settings::default()
+            });
+            r
+        };
+        let mut explained = 0usize;
+        let mut followed = 0usize;
+        for (fixture, mut r, varied) in [
+            ("as read", readings(), false),
+            ("marked", marked, true),
+            ("never deleted everywhere", never, true),
+        ] {
+            for language in ["en-GB", "pt-BR"] {
+                let t = texts(language);
+                for page in &pages {
+                    // A CHANNEL'S PAGE reads its own scope's rules — the ones
+                    // everywhere, which it follows.
+                    r.rules = Some(match page {
+                        Page::Channel(c) | Page::Rule(Some(c), _) => {
+                            (Some(c.clone()), global_rules())
+                        }
+                        _ => (None, global_rules()),
+                    });
+                    // A VIDEO'S PAGE reads that video.
+                    if let Page::Video(vid) = page {
+                        let row = r
+                            .listed
+                            .as_ref()
+                            .and_then(|l| l.rows.iter().find(|x| &x.id == vid))
+                            .cloned();
+                        r.video = row.map(|x| (vid.clone(), Some(whole(x))));
+                    }
+                    for layout in [Layout::List, Layout::Grid] {
+                        for open in [
+                            Open::Plain,
+                            Open::Question,
+                            Open::Editing,
+                            Open::EditingAsked,
+                        ] {
+                            let (mut v, _) = View::fresh(page.clone());
+                            v.layout = layout;
+                            // MARKED: the grid says channels, and the list is
+                            // the set-aside videos alone, newest first.
+                            if varied {
+                                v.grid_channel = true;
+                                if fixture == "marked" {
+                                    v.filter.set_aside = SetAside::Only;
+                                    v.filter.order = Order::NewestSetAside;
+                                }
+                                // AND A LIST IMPORTED, what it left out and
+                                // found here already said on its page.
+                                v.imported = Some(imported());
+                            }
+                            match open {
+                                Open::Plain => {}
+                                Open::Question => {
+                                    v.asks(Pending::Delete(id.clone(), "A video".to_owned()));
+                                }
+                                Open::Editing | Open::EditingAsked => {
+                                    v.editing = Some((
+                                        id.clone(),
+                                        crate::text_area::TextArea::new(
+                                            DESCRIPTION,
+                                            "Mine\nand more",
+                                        ),
+                                    ));
+                                    if matches!(open, Open::EditingAsked) {
+                                        v.text_key(Key::simple(Sym::Char('x')), 60);
+                                        v.text_key(Key::simple(Sym::Esc), 60);
+                                    }
+                                }
+                            }
+                            for columns in [44, 80, 200] {
+                                let rows = v.rows(&r, columns, &t);
+                                let takes = v.takes(&rows);
+                                let what = format!(
+                                    "{fixture}: {language} {page:?} {layout:?} {open:?} at {columns}"
+                                );
+                                for (n, row) in rows.iter().enumerate() {
+                                    for f in &row.fields {
+                                        assert!(!f.text.contains('['), "{what}: `{}`", f.text);
+                                    }
+                                    if !takes[n] {
+                                        assert_eq!(
+                                            v.explained_at(&rows, n, None, &t),
+                                            None,
+                                            "{what}: row {n} ({}) takes no click and says something",
+                                            row.spot
+                                        );
+                                        continue;
+                                    }
+                                    let owner = &rows[Row::owner(&rows, n)];
+                                    // WHERE THE POINTER IS ACROSS THE LINE says
+                                    // which thing: every glyph of a line — a
+                                    // shelf's lines of glyphs among them —, and
+                                    // every cell of a shelf's other lines.
+                                    let at: Vec<Option<u16>> = if !row.controls.is_empty() {
+                                        row.controls.iter().map(|c| Some(c.from)).collect()
+                                    } else if !owner.cells.is_empty() {
+                                        owner.cells.iter().map(|c| Some(c.from + 1)).collect()
+                                    } else {
+                                        assert!(
+                                            View::about(&rows, n, &t).is_some(),
+                                            "{what}: row {n} ({}) has no sentence",
+                                            row.spot
+                                        );
+                                        vec![None]
+                                    };
+                                    for column in at {
+                                        let e = v.explained_at(&rows, n, column, &t).unwrap_or_else(|| {
+                                        panic!("{what}: row {n} ({}) at {column:?} is not explained", row.spot)
+                                    });
+                                        assert!(
+                                            !e.name.is_empty(),
+                                            "{what}: row {n} ({}) has no name",
+                                            row.spot
+                                        );
+                                        assert!(
+                                            e.said.iter().any(|(s, _)| !s.is_empty()),
+                                            "{what}: row {n} ({}) says nothing",
+                                            row.spot
+                                        );
+                                        for p in pieces(&e) {
+                                            assert!(
+                                                !p.contains('[') && !p.contains('{'),
+                                                "{what}: row {n}: `{p}`"
+                                            );
+                                        }
+                                        // A GLYPH says its own sentence, and what
+                                        // holds once it is off where it says it.
+                                        if let Some(c) = column
+                                            .and_then(|x| row.controls.iter().find(|c| c.from == x))
+                                        {
+                                            let said: Vec<&str> =
+                                                e.said.iter().map(|(s, _)| s.as_str()).collect();
+                                            assert_eq!(said[0], t.t(c.about), "{what}: row {n}");
+                                            assert_eq!(
+                                                said.get(1).copied(),
+                                                c.follows.as_deref(),
+                                                "{what}: row {n}"
+                                            );
+                                            followed += usize::from(c.follows.is_some());
+                                        }
+                                        // UNDER A QUESTION only its answers
+                                        // promise a click — and a glyph, which
+                                        // lets the question go and acts.
+                                        if matches!(open, Open::Question) {
+                                            assert_eq!(
+                                                e.gesture.is_some(),
+                                                matches!(owner.target, Target::Answer(_))
+                                                    || !row.controls.is_empty(),
+                                                "{what}: row {n} ({}) under a question",
+                                                row.spot
+                                            );
+                                        }
+                                        explained += 1;
+                                    }
+                                }
+                                // AND THE CURSOR'S THING, whatever the pointer does.
+                                if let Some(e) = v.explained_cursor(&rows, &t) {
+                                    assert!(
+                                        !e.name.is_empty(),
+                                        "{what}: the cursor's thing has no name"
+                                    );
+                                    for p in pieces(&e) {
+                                        assert!(
+                                            !p.contains('[') && !p.contains('{'),
+                                            "{what}: the cursor's: `{p}`"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(explained > 1000, "only {explained} things explained");
+        assert!(followed > 0, "no glyph said what holds once it is off");
+    }
+
+    /// FAILS IF: on a line with glyphs, the cells the pointer lights, the
+    /// ones the foot explains and the ones a click takes differ anywhere —
+    /// the cell of air before the first glyph, the margin before the words,
+    /// the words of a line that continues a row (a list entry's meta line),
+    /// a line of glyphs alone; or a click on a glyph or the air selects the
+    /// row. ONE ANSWER FOR THE THREE, before any row carries glyphs.
+    #[test]
+    fn the_words_beside_glyphs_are_lit_explained_and_taken_alike() {
+        let r = readings();
+        let t = texts("en-GB");
+        let (v, _) = View::fresh(Page::Videos);
+        let mut rows = v.rows(&r, COLUMNS, &t);
+        let (left, _) = extent(COLUMNS);
+        let entry = rows
+            .iter()
+            .enumerate()
+            .position(|(n, row)| row.stops() && rows.get(n + 1).is_some_and(|r| r.continues))
+            .expect("a row of several lines");
+        let title = rows
+            .iter()
+            .position(|row| row.heading && !row.continues && row.cells.is_empty())
+            .expect("a title");
+        let glyph = |from: u16| Control {
+            from,
+            width: 1,
+            glyph: 'x',
+            target: Target::Nothing,
+            name: "a glyph".to_owned(),
+            about: key::ABOUT_VIDEO_METRICS_CHANNELS,
+            follows: None,
+            lit: false,
+        };
+        for n in [entry, entry + 1, title] {
+            rows[n].controls = vec![glyph(40), glyph(42)];
+        }
+        let mut words = 0;
+        for n in [entry, entry + 1, title] {
+            let owner_stops = rows[Row::owner(&rows, n)].stops();
+            let lit = rows[n].lit_cells(left, owner_stops);
+            for column in 0..COLUMNS {
+                let what = format!("line {n} ({}) at {column}", rows[n].spot);
+                let lights = lit
+                    .iter()
+                    .any(|&(from, width)| crate::chrome::in_cell(column, from, width));
+                let on_a_glyph = column == 40 || column == 42;
+                assert_eq!(
+                    v.explained_at(&rows, n, Some(column), &t).is_some(),
+                    lights,
+                    "{what}: lit and explained differ"
+                );
+                let mut clicked = v.clone();
+                clicked.at = "elsewhere".to_owned();
+                clicked.clicked(n, column, &rows);
+                assert_eq!(
+                    clicked.at != "elsewhere",
+                    lights && !on_a_glyph,
+                    "{what}: lit and taken differ"
+                );
+                if lights && !on_a_glyph {
+                    words += 1;
+                    assert!(column >= left && column < 39, "{what}: past the words");
+                }
+            }
+        }
+        // THE WORDS OF THE ROW AND OF THE LINE THAT CONTINUES IT, and none of
+        // the title's.
+        assert_eq!(words, 2 * (39 - left), "the words' cells");
+    }
+
+    /// FAILS IF: a row set "as everywhere" does not say, quietly after its
+    /// value, what everywhere is now — the channel's Shorts, a rule of a
+    /// channel's page that is the one everywhere —, says it in any ink but
+    /// the quietest (a state's tone, the cursor's), says it before the
+    /// value, reaches past a narrow door, or says one nobody read; or what
+    /// it follows is not said where the row is explained.
+    #[test]
+    fn as_everywhere_shows_what_it_is_now() {
+        let mut r = readings();
+        let a = channel(1).id;
+        r.rules = Some((Some(a.clone()), global_rules()));
+        r.settings = Some(Settings {
+            block_shorts: true,
+            ..Settings::default()
+        });
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let blocked = t.t_with(
+                key::VIDEO_METRICS_DEFAULT_NOW,
+                &[("value", &t.t(key::VIDEO_METRICS_SHORTS_BLOCKED))],
+            );
+            let everywhere = t.t_with(
+                key::VIDEO_METRICS_DEFAULT_NOW,
+                &[("value", &t.t(key::VIDEO_METRICS_SCOPE_EVERYWHERE))],
+            );
+            for focused in [false, true] {
+                let (mut v, _) = View::fresh(Page::Channel(a.clone()));
+                if focused {
+                    v.at = "shorts".to_owned();
+                }
+                for columns in [44, 80, 200] {
+                    let rows = v.rows(&r, columns, &t);
+                    let what = format!("{language} at {columns}, focused {focused}");
+                    let n = row_of(&rows, "shorts");
+                    let lines = &rows[n..n + Row::lines_of(&rows, n)];
+                    let fields: Vec<&Field> = lines.iter().flat_map(|l| &l.fields).collect();
+                    let value = fields
+                        .iter()
+                        .position(|f| f.text == t.t(key::VIDEO_METRICS_AS_EVERYWHERE))
+                        .unwrap_or_else(|| panic!("{what}: no “as everywhere”: {fields:?}"));
+                    let beside = fields
+                        .iter()
+                        .position(|f| f.text == blocked)
+                        .unwrap_or_else(|| {
+                            panic!("{what}: what everywhere is, unsaid: {fields:?}")
+                        });
+                    assert!(beside > value, "{what}: said before the value");
+                    assert_eq!(fields[beside].color, tokens::color::TEXT_DIM, "{what}");
+                    for f in &fields {
+                        let end = f.at + ronoctua_render::layout::width(&f.text);
+                        assert!(end <= columns, "{what}: `{}` ends at {end}", f.text);
+                    }
+                    // AND WHERE THE ROW IS EXPLAINED, quietly, under its sentence.
+                    let e = v
+                        .explained_at(&rows, n, None, &t)
+                        .expect("the row explained");
+                    let (said, ink) = e.said.last().expect("a sentence");
+                    assert!(
+                        said.contains(&t.t(key::VIDEO_METRICS_SHORTS_BLOCKED)),
+                        "{what}: {said}"
+                    );
+                    assert_eq!(*ink, tokens::color::TEXT_DIM, "{what}");
+                    // A RULE OF THE PAGE EVERYWHERE: its points, and apart
+                    // from them, quietly, that it is everywhere's.
+                    let n = row_of(&rows, "single:recency");
+                    let fields: Vec<&Field> = rows[n..n + Row::lines_of(&rows, n)]
+                        .iter()
+                        .flat_map(|l| &l.fields)
+                        .collect();
+                    let scope = fields
+                        .iter()
+                        .find(|f| f.text == everywhere)
+                        .unwrap_or_else(|| panic!("{what}: the rule's scope, unsaid: {fields:?}"));
+                    assert_eq!(scope.color, tokens::color::TEXT_DIM, "{what}");
+                    // AND RIGHT AFTER THE VALUE, nor two pieces on one cell:
+                    // under a wrapped label ("Penalidade de / Short" at 44)
+                    // it takes the label's free value column, and not a line
+                    // of its own below the label's rest.
+                    for spot in ["shorts", "single:recency", "single:short"] {
+                        let n = row_of(&rows, spot);
+                        let lines = &rows[n..n + Row::lines_of(&rows, n)];
+                        let column = lines[0].fields.get(1).map_or(0, |f| f.at);
+                        let value = lines.iter().rposition(|l| {
+                            l.fields
+                                .iter()
+                                .any(|f| f.at >= column && f.color != tokens::color::TEXT_DIM)
+                        });
+                        let quiet = lines.iter().position(|l| {
+                            l.fields.iter().any(|f| f.color == tokens::color::TEXT_DIM)
+                        });
+                        assert!(
+                            matches!((value, quiet), (Some(v), Some(q)) if q <= v + 1),
+                            "{what}: `{spot}` says what it follows away from its value: {lines:?}"
+                        );
+                        for line in lines {
+                            let mut cells: Vec<(u16, u16)> = line
+                                .fields
+                                .iter()
+                                .map(|f| (f.at, f.at + ronoctua_render::layout::width(&f.text)))
+                                .collect();
+                            cells.sort_unstable();
+                            assert!(
+                                cells.windows(2).all(|w| w[0].1 <= w[1].0),
+                                "{what}: `{spot}` draws two pieces on one cell: {cells:?}"
+                            );
+                        }
+                    }
+                }
+            }
+            // WHAT NOBODY READ IS NOT SAID: the switches unread, the row
+            // says "as everywhere" alone — and a channel with its own says
+            // its own, and follows nothing.
+            let mut unread = r.clone();
+            unread.settings = None;
+            let (v, _) = View::fresh(Page::Channel(a.clone()));
+            let rows = v.rows(&unread, COLUMNS, &t);
+            assert_eq!(rows[row_of(&rows, "shorts")].default, None, "{language}");
+            let mut own = r.clone();
+            own.channels[0].block_shorts = Some(false);
+            let rows = v.rows(&own, COLUMNS, &t);
+            assert_eq!(rows[row_of(&rows, "shorts")].default, None, "{language}");
+        }
+        // A STATE'S TONE NEVER REACHES IT: the value says the state, what it
+        // follows stays quiet — with the cursor on the row and without.
+        for focused in [false, true] {
+            let item = Item::Pair(Pair {
+                spot: "toned".to_owned(),
+                label: "Label".to_owned(),
+                value: "value".to_owned(),
+                kind: Kind::Setting,
+                target: Target::Nothing,
+                tone: Some(tokens::color::STATE_ERROR),
+                about: None,
+                controls: Vec::new(),
+                default: Some(Follows {
+                    beside: "(beside)".to_owned(),
+                    said: "said".to_owned(),
+                }),
+            });
+            let rows = lay_out(vec![item], 1, 42, if focused { "toned" } else { "" });
+            let fields: Vec<&Field> = rows.iter().flat_map(|l| &l.fields).collect();
+            let value = fields
+                .iter()
+                .find(|f| f.text == "value")
+                .expect("the value");
+            let beside = fields
+                .iter()
+                .find(|f| f.text == "(beside)")
+                .expect("beside");
+            assert_eq!(
+                value.color == tokens::color::STATE_ERROR,
+                !focused,
+                "the state's tone"
+            );
+            assert_eq!(beside.color, tokens::color::TEXT_DIM, "focused {focused}");
+            assert_eq!(beside.at, value.at + 6, "not a cell of air after the value");
+        }
+    }
+
+    /// Video `id` of the list's reading, changed by `change`.
+    fn with_video(r: &mut Readings, id: &VideoId, change: impl FnOnce(&mut RankedVideo)) {
+        let v = r
+            .listed
+            .as_mut()
+            .and_then(|l| l.rows.iter_mut().find(|v| &v.id == id))
+            .expect("the video in the list");
+        change(v);
+    }
+
+    /// The line, and the glyph on it, whose target `is` says.
+    fn glyph_at(rows: &[Row], is: &dyn Fn(&Target) -> bool) -> (usize, Control) {
+        rows.iter()
+            .enumerate()
+            .find_map(|(n, r)| {
+                r.controls
+                    .iter()
+                    .find(|c| is(&c.target))
+                    .map(|c| (n, c.clone()))
+            })
+            .unwrap_or_else(|| panic!("no such glyph among {:?}", spots(rows)))
+    }
+
+    /// The glyph `is` says clicked once, on the rows as drawn.
+    fn click_glyph(v: &mut View, r: &Readings, is: &dyn Fn(&Target) -> bool) -> Errand {
+        let rows = v.rows(r, COLUMNS, &texts("en-GB"));
+        let (n, c) = glyph_at(&rows, is);
+        v.click_control(n, c.from, &rows, r)
+            .expect("a click on a glyph does what it says")
+    }
+
+    /// FAILS IF: a glyph beside a video — a face of its rating, its
+    /// bookmark, its ∞, its eye, its bin — waits for a second click, does
+    /// anything but what its key does, leaves the cursor away from the video
+    /// it acted on, or takes the air beside it; the face a video has does
+    /// not take the rating away; the ∞ switches anything but the video's own
+    /// mark (Reconciliation 4: also where its channel keeps it); or the bin
+    /// and the eye do not ask first, "no" first, under the video — on the
+    /// list and on the grid.
+    #[test]
+    fn a_glyph_acts_on_the_first_click() {
+        let t = texts("en-GB");
+        let id = VideoId("video000002".to_owned());
+        for layout in [Layout::List, Layout::Grid] {
+            let fresh = || {
+                let (mut v, _) = View::fresh(Page::Videos);
+                v.layout = layout;
+                v
+            };
+            let mine = |x: &VideoId| *x == id;
+            let mut r = readings();
+            // A FACE GIVES ITS RATING at once — and the cursor is on the
+            // video it rated.
+            let mut v = fresh();
+            assert_eq!(
+                click_glyph(
+                    &mut v,
+                    &r,
+                    &|x| matches!(x, Target::Rate(v, Rating::Positive, _) if mine(v))
+                ),
+                Errand::Edit(Edit::Rating(id.clone(), Some(Rating::Positive))),
+                "{layout:?}"
+            );
+            assert_eq!(v.at, video_spot(&id), "{layout:?}: the cursor stayed away");
+            // THE ONE IT HAS takes it away.
+            with_video(&mut r, &id, |x| x.rating = Some(Rating::Positive));
+            assert_eq!(
+                click_glyph(
+                    &mut fresh(),
+                    &r,
+                    &|x| matches!(x, Target::Rate(v, Rating::Positive, true) if mine(v))
+                ),
+                Errand::Edit(Edit::Rating(id.clone(), None)),
+                "{layout:?}"
+            );
+            // THE BOOKMARK AND THE ∞ switch, each its own.
+            for (aside, then) in [(None, true), (Some(NOW), false)] {
+                with_video(&mut r, &id, |x| x.set_aside_at_s = aside);
+                assert_eq!(
+                    click_glyph(
+                        &mut fresh(),
+                        &r,
+                        &|x| matches!(x, Target::SetAside(v, _) if mine(v))
+                    ),
+                    Errand::Edit(Edit::SetAside(id.clone(), then)),
+                    "{layout:?}"
+                );
+            }
+            for (forever, then) in [
+                (Forever::No, true),
+                (Forever::ByChannel, true),
+                (Forever::ByVideo, false),
+            ] {
+                with_video(&mut r, &id, |x| x.forever = forever);
+                assert_eq!(
+                    click_glyph(
+                        &mut fresh(),
+                        &r,
+                        &|x| matches!(x, Target::VideoKeep(v, _) if mine(v))
+                    ),
+                    Errand::Edit(Edit::KeepVideo(id.clone(), then)),
+                    "{layout:?} {forever:?}"
+                );
+            }
+            // THE BIN AND THE EYE ASK, "no" first, under the video.
+            for is_bin in [true, false] {
+                let mut v = fresh();
+                let asked = click_glyph(&mut v, &r, &|x| match x {
+                    Target::Delete(v) => is_bin && mine(v),
+                    Target::Hide(v, _) => !is_bin && mine(v),
+                    _ => false,
+                });
+                assert_eq!(asked, Errand::Nothing, "{layout:?}");
+                let c = v.confirm.clone().expect("a question");
+                assert_eq!(
+                    c.under,
+                    video_spot(&id),
+                    "{layout:?}: asked away from the video"
+                );
+                assert!(
+                    matches!(c.what, Pending::Delete(..) | Pending::Hide(..)),
+                    "{:?}",
+                    c.what
+                );
+                let rows = v.rows(&r, COLUMNS, &t);
+                let no = row_of(&rows, "answer-no");
+                assert_eq!(
+                    v.cursor(&rows),
+                    no,
+                    "{layout:?}: the cursor is not on the no"
+                );
+                assert!(no < row_of(&rows, "answer-yes"));
+                // A GLYPH UNDER THE QUESTION lets it go, and acts.
+                let rated = click_glyph(
+                    &mut v,
+                    &r,
+                    &|x| matches!(x, Target::Rate(v, Rating::Negative, _) if mine(v)),
+                );
+                assert_eq!(
+                    rated,
+                    Errand::Edit(Edit::Rating(id.clone(), Some(Rating::Negative)))
+                );
+                assert!(v.confirm.is_none(), "{layout:?}: the question stayed");
+            }
+            // THE AIR BESIDE A GLYPH is nobody's.
+            let mut v = fresh();
+            let rows = v.rows(&r, COLUMNS, &t);
+            let (n, c) = glyph_at(&rows, &|x| matches!(x, Target::Delete(v) if mine(v)));
+            assert_eq!(v.click_control(n, c.from + c.width, &rows, &r), None);
+            assert_eq!(v.click_control(n, c.from - 1, &rows, &r), None);
+        }
+    }
+
+    /// FAILS IF: a tile's two lines of glyphs leave the tile's box, draw two
+    /// things on one cell, cut the score, lose a glyph, or do not end at the
+    /// box's right edge — for a score of any length and an age of any — or
+    /// a list's line under its title reaches past the door, cuts its score,
+    /// or does not end its marks at the door's right edge.
+    #[test]
+    fn a_tile_holds_its_glyphs() {
+        use ronoctua_render::layout::width;
+        let box_cells = tokens::space::VIDEOMETRICS_THUMBCELLS;
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for score in [-99_999, 10_000, 123_456] {
+                for days in [0, 1, 365, 1000] {
+                    let mut r = readings();
+                    if let Some(l) = r.listed.as_mut() {
+                        for v in &mut l.rows {
+                            v.score = score;
+                            v.published_at_s = Some(NOW - days * 86_400);
+                        }
+                    }
+                    let number = words::score_number(score, &t);
+                    let what = format!("{language}, {score}, {days} days");
+                    // THE GRID.
+                    let (mut v, _) = View::fresh(Page::Videos);
+                    v.layout = Layout::Grid;
+                    let rows = v.rows(&r, 100, &t);
+                    let shelf = rows
+                        .iter()
+                        .position(|x| !x.cells.is_empty())
+                        .expect("a shelf");
+                    let lines = &rows[shelf..shelf + usize::from(shelf_lines(false))];
+                    let glyphs: Vec<&Row> =
+                        lines.iter().filter(|l| !l.controls.is_empty()).collect();
+                    assert_eq!(glyphs.len(), 2, "{what}: the score's line and the age's");
+                    for (k, line) in glyphs.iter().enumerate() {
+                        for cell in &rows[shelf].cells {
+                            let inside = cell.from + TILE_AIR;
+                            let end = inside + box_cells;
+                            let mut drawn: Vec<(u16, u16)> = line
+                                .fields
+                                .iter()
+                                .filter(|f| crate::chrome::in_cell(f.at, cell.from, cell.width))
+                                .map(|f| (f.at, f.at + width(&f.text)))
+                                .collect();
+                            drawn.sort_unstable();
+                            for &(a, b) in &drawn {
+                                assert!(
+                                    a >= inside && b <= end,
+                                    "{what}: {a}..{b} out of {inside}..{end}"
+                                );
+                            }
+                            assert!(
+                                drawn.windows(2).all(|w| w[0].1 <= w[1].0),
+                                "{what}: two things on one cell: {drawn:?}"
+                            );
+                            let mine: Vec<&Control> = line
+                                .controls
+                                .iter()
+                                .filter(|c| crate::chrome::in_cell(c.from, cell.from, cell.width))
+                                .collect();
+                            assert_eq!(mine.len(), 4, "{what}: a glyph lost on line {k}");
+                            if k == 0 {
+                                assert!(
+                                    line.fields
+                                        .iter()
+                                        .any(|f| f.at == inside && f.text == number),
+                                    "{what}: the score cut"
+                                );
+                            } else {
+                                let last = mine.iter().map(|c| c.from + c.width).max();
+                                assert_eq!(last, Some(end), "{what}: the marks end inside the box");
+                            }
+                        }
+                    }
+                    // THE LIST, at a narrow door and a wide one.
+                    for columns in [44, COLUMNS] {
+                        let (v, _) = View::fresh(Page::Videos);
+                        let rows = v.rows(&r, columns, &t);
+                        let (left, room) = extent(columns);
+                        let entry = row_of(&rows, "video:video000001");
+                        let line = &rows[entry + Row::lines_of(&rows, entry) - 1];
+                        assert_eq!(line.controls.len(), 8, "{what} at {columns}: glyphs lost");
+                        assert!(
+                            line.fields
+                                .iter()
+                                .any(|f| f.at == left && f.text.ends_with(&number)),
+                            "{what}: the score cut"
+                        );
+                        for f in &line.fields {
+                            assert!(
+                                f.at >= left && f.at + width(&f.text) <= left + room,
+                                "{what} at {columns}: `{}`",
+                                f.text
+                            );
+                        }
+                        let last = line.controls.iter().map(|c| c.from + c.width).max();
+                        assert_eq!(
+                            last,
+                            Some(left + room),
+                            "{what} at {columns}: the marks are not at the edge"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: what keeps a video, or when it goes, is decided in another
+    /// order than the catalogue's — its own mark, its channel's "for ever",
+    /// being set aside, the days of its channel and then everywhere's,
+    /// counted from when it was published, or first seen — or from what
+    /// nobody read; the ∞ is lit for anything but the two "for ever"s (a
+    /// set-aside video, everywhere's "never"); or the video's page does not
+    /// say, quietly beside "Never delete it", what keeps it or when it goes
+    /// without the mark.
+    #[test]
+    fn lasting_follows_the_video_then_the_channel_then_everywhere() {
+        let t = texts("en-GB");
+        let day = 86_400;
+        let mut r = readings();
+        let a = r.channels[0].clone();
+        let mut v = ranked(3, &a);
+        let published = NOW - 3 * day;
+        // EVERYWHERE'S DAYS, from when it was published.
+        assert_eq!(
+            lasting(&v, None, &r),
+            Lasting::Goes(Some(published + 90 * day))
+        );
+        // ITS CHANNEL'S OWN DAYS before them, and the first sighting for a
+        // video with no date.
+        r.channels[0].keep = Some(Keep::Days(7));
+        assert_eq!(
+            lasting(&v, None, &r),
+            Lasting::Goes(Some(published + 7 * day))
+        );
+        v.published_at_s = None;
+        assert_eq!(
+            lasting(&v, Some(NOW), &r),
+            Lasting::Goes(Some(NOW + 7 * day))
+        );
+        assert_eq!(lasting(&v, None, &r), Lasting::Goes(None));
+        v.published_at_s = Some(published);
+        // SET ASIDE keeps it while it is — before any days.
+        v.set_aside_at_s = Some(NOW);
+        assert_eq!(lasting(&v, None, &r), Lasting::SetAside);
+        // ITS CHANNEL'S "FOR EVER", then its own mark, before being set aside.
+        r.channels[0].keep = Some(Keep::Forever);
+        assert_eq!(lasting(&v, None, &r), Lasting::ByChannel);
+        v.forever = Forever::ByChannel;
+        assert_eq!(lasting(&v, None, &r), Lasting::ByChannel);
+        v.forever = Forever::ByVideo;
+        assert_eq!(lasting(&v, None, &r), Lasting::ByVideo);
+        // EVERYWHERE'S "NEVER", for a channel as everywhere.
+        let mut w = ranked(4, &a);
+        r.channels[0].keep = None;
+        r.settings = Some(Settings {
+            keep: Keep::Forever,
+            ..Settings::default()
+        });
+        assert_eq!(lasting(&w, None, &r), Lasting::Everywhere);
+        // NOTHING UNREAD IS TAKEN FOR A DEFAULT: the switches, the channel.
+        r.settings = None;
+        assert_eq!(lasting(&w, None, &r), Lasting::Goes(None));
+        r.settings = Some(Settings::default());
+        r.channels.clear();
+        assert_eq!(lasting(&w, None, &r), Lasting::Goes(None));
+        // THE ∞ IS LIT for the two "for ever"s only.
+        let mut r = readings();
+        for (forever, aside, keep, lit) in [
+            (Forever::No, None, Keep::DEFAULT, false),
+            (Forever::No, Some(NOW), Keep::DEFAULT, false),
+            (Forever::No, None, Keep::Forever, false),
+            (Forever::ByVideo, None, Keep::DEFAULT, true),
+            (Forever::ByChannel, Some(NOW), Keep::DEFAULT, true),
+        ] {
+            w.forever = forever;
+            w.set_aside_at_s = aside;
+            r.settings = Some(Settings {
+                keep,
+                ..Settings::default()
+            });
+            let marks = marks_of(&w, &r, &t);
+            let infinity = marks
+                .iter()
+                .find(|c| matches!(c.target, Target::VideoKeep(..)))
+                .expect("the ∞");
+            assert_eq!(
+                infinity.lit, lit,
+                "{forever:?}, set aside {aside:?}, {keep:?}"
+            );
+        }
+        // THE VIDEO'S PAGE: off, and quietly beside it when it goes.
+        let r = readings();
+        let id = VideoId("video000000".to_owned());
+        let (v, _) = View::fresh(Page::Video(id));
+        let rows = v.rows(&r, COLUMNS, &t);
+        let n = row_of(&rows, "never-delete");
+        let goes = Lasting::Goes(Some(NOW + 90 * day)).words(&r, &t);
+        let beside = t.t_with(key::VIDEO_METRICS_DEFAULT_NOW, &[("value", &goes)]);
+        let fields: Vec<&Field> = rows[n..n + Row::lines_of(&rows, n)]
+            .iter()
+            .flat_map(|l| &l.fields)
+            .collect();
+        let quiet = fields
+            .iter()
+            .find(|f| f.text == beside)
+            .unwrap_or_else(|| panic!("when it goes, unsaid: {fields:?}"));
+        assert_eq!(quiet.color, tokens::color::TEXT_DIM);
+        assert_eq!(
+            rows[n].target,
+            Target::VideoKeep(VideoId("video000000".to_owned()), false)
+        );
+        row_of(&rows, "set-aside");
+    }
+
+    /// FAILS IF: the bookmark of a set-aside video, or the ∞ of one kept by
+    /// its own mark, says what holds once it is off without asking
+    /// [`lasting`] WITHOUT that mark — "it goes" of a video its channel, the
+    /// catalogue, its being set aside or its other mark still keeps (the
+    /// set-aside video whose channel keeps every video, photographed); or a
+    /// glyph that is no mark of the video's own says anything more.
+    #[test]
+    fn what_holds_once_a_mark_is_off_is_read_without_it() {
+        fn follows(
+            v: &RankedVideo,
+            r: &Readings,
+            t: &ronoctua_i18n::Texts,
+            aside: bool,
+        ) -> Option<String> {
+            marks_of(v, r, t)
+                .into_iter()
+                .find(|c| {
+                    if aside {
+                        matches!(c.target, Target::SetAside(..))
+                    } else {
+                        matches!(c.target, Target::VideoKeep(..))
+                    }
+                })
+                .expect("the glyph")
+                .follows
+        }
+        let t = texts("en-GB");
+        let day = 86_400;
+        let mut r = readings();
+        let a = r.channels[0].clone();
+        let mut v = ranked(3, &a);
+        let goes = Lasting::Goes(Some(NOW - 3 * day + 90 * day));
+        let out = |l: Lasting, r: &Readings| {
+            Some(t.t_with(key::VIDEO_METRICS_ONCE_OUT, &[("value", &l.words(r, &t))]))
+        };
+        let unmarked = |l: Lasting, r: &Readings| {
+            Some(t.t_with(
+                key::VIDEO_METRICS_WITHOUT_THE_MARK,
+                &[("value", &l.words(r, &t))],
+            ))
+        };
+        // NO MARK OF ITS OWN: nothing more.
+        assert_eq!(follows(&v, &r, &t, true), None);
+        assert_eq!(follows(&v, &r, &t, false), None);
+        // SET ASIDE: taken out, it goes when its time is up — unless its
+        // channel keeps every video, or its own mark keeps it.
+        v.set_aside_at_s = Some(NOW);
+        assert_eq!(follows(&v, &r, &t, true), out(goes, &r));
+        assert_eq!(follows(&v, &r, &t, false), None);
+        r.channels[0].keep = Some(Keep::Forever);
+        assert_eq!(follows(&v, &r, &t, true), out(Lasting::ByChannel, &r));
+        r.channels[0].keep = None;
+        v.forever = Forever::ByVideo;
+        assert_eq!(follows(&v, &r, &t, true), out(Lasting::ByVideo, &r));
+        // KEPT BY ITS OWN MARK: without it, set aside keeps it while it is…
+        assert_eq!(follows(&v, &r, &t, false), unmarked(Lasting::SetAside, &r));
+        // …its time, its channel's "for ever", everywhere's "never".
+        v.set_aside_at_s = None;
+        assert_eq!(follows(&v, &r, &t, false), unmarked(goes, &r));
+        r.channels[0].keep = Some(Keep::Forever);
+        assert_eq!(follows(&v, &r, &t, false), unmarked(Lasting::ByChannel, &r));
+        r.channels[0].keep = None;
+        r.settings = Some(Settings {
+            keep: Keep::Forever,
+            ..Settings::default()
+        });
+        assert_eq!(
+            follows(&v, &r, &t, false),
+            unmarked(Lasting::Everywhere, &r)
+        );
+    }
+
+    /// FAILS IF: how long videos stay does not turn round its ring — the
+    /// days, then "never deleted", a channel's "as everywhere" first and what
+    /// everywhere is now beside it, quietly —, a number typed of its own is
+    /// left out of the ring (a turn would jump back to its start), a keep is
+    /// written from switches nobody read, a number typed out of the days the
+    /// catalogue keeps is clamped instead of refused, or what the next scan
+    /// takes out is not said under it when it takes any.
+    #[test]
+    fn lasting_follows_the_ring_typed_or_turned() {
+        let t = texts("en-GB");
+        let mut r = readings();
+        let keep_of = |e: Errand| match e {
+            Errand::Edit(Edit::Settings(s)) => s.keep,
+            other => panic!("not the switches: {other:?}"),
+        };
+        // EVERYWHERE: a ring of days, then "never deleted", and round.
+        let (mut v, _) = View::fresh(Page::Rules);
+        let rows = onto(&mut v, &r, "keep");
+        assert!(
+            rows[row_of(&rows, "keep")]
+                .fields
+                .iter()
+                .any(|f| f.text == words::days(90, &t)),
+            "the keep everywhere unsaid"
+        );
+        assert_eq!(keep_of(press(&mut v, &r, Press::More)), Keep::Days(180));
+        assert_eq!(keep_of(press(&mut v, &r, Press::Less)), Keep::Days(60));
+        r.settings = Some(Settings {
+            keep: Keep::Forever,
+            ..Settings::default()
+        });
+        assert_eq!(keep_of(press(&mut v, &r, Press::More)), Keep::Days(7));
+        r.settings = Some(Settings {
+            keep: Keep::Days(45),
+            ..Settings::default()
+        });
+        assert_eq!(keep_of(press(&mut v, &r, Press::More)), Keep::Days(60));
+        assert_eq!(keep_of(press(&mut v, &r, Press::Less)), Keep::Days(30));
+        // TYPED: any number of days, and nothing else.
+        let asked = press(&mut v, &r, Press::Enter);
+        assert!(
+            matches!(&asked, Errand::Ask { ask: Ask::KeepDays, initial: Some(n) } if n == "45"),
+            "{asked:?}"
+        );
+        assert_eq!(
+            keep_of(v.typed(Ask::KeepDays.command(), "120", &r, &t)),
+            Keep::Days(120)
+        );
+        for refused in ["0", "lots", "40000"] {
+            press(&mut v, &r, Press::Enter);
+            assert!(
+                matches!(
+                    v.typed(Ask::KeepDays.command(), refused, &r, &t),
+                    Errand::Say(_)
+                ),
+                "`{refused}` was taken"
+            );
+        }
+        // FROM THE SWITCHES READ, or not at all.
+        let mut unread = r.clone();
+        unread.settings = None;
+        assert_eq!(
+            v.turn(&Target::KeepEverywhere(Keep::DEFAULT), true, &unread),
+            Errand::Nothing
+        );
+        // WHAT THE NEXT SCAN TAKES OUT, quietly, only when it takes any.
+        let said = |r: &Readings, page: Page| -> bool {
+            let (v, _) = View::fresh(page);
+            let expiring = t.t_args(key::VIDEO_METRICS_EXPIRING, &[("count", Arg::Number(3))]);
+            v.rows(r, COLUMNS, &t)
+                .iter()
+                .flat_map(|x| &x.fields)
+                .any(|f| f.text == expiring && f.color == tokens::color::TEXT_DIM)
+        };
+        let a = channel(1).id;
+        let mut counted = readings();
+        counted.rules = Some((Some(a.clone()), global_rules()));
+        counted.expiring = Some(3);
+        assert!(said(&counted, Page::Rules), "the rules' page");
+        assert!(said(&counted, Page::Channel(a.clone())), "a channel's page");
+        counted.expiring = Some(0);
+        assert!(!said(&counted, Page::Rules));
+        // A CHANNEL: as everywhere first — what that is now beside it —, then
+        // the ring, then "never deleted", and round.
+        let mut r = readings();
+        r.rules = Some((Some(a.clone()), global_rules()));
+        let (mut v, _) = View::fresh(Page::Channel(a.clone()));
+        let rows = onto(&mut v, &r, "keep");
+        let n = row_of(&rows, "keep");
+        let everywhere = t.t_with(
+            key::VIDEO_METRICS_DEFAULT_NOW,
+            &[("value", &words::days(90, &t))],
+        );
+        assert!(
+            rows[n..n + Row::lines_of(&rows, n)]
+                .iter()
+                .flat_map(|l| &l.fields)
+                .any(|f| f.text == everywhere && f.color == tokens::color::TEXT_DIM),
+            "what everywhere keeps, unsaid beside “as everywhere”"
+        );
+        let channel_keep = |e: Errand| match e {
+            Errand::Edit(Edit::ChannelKeep(id, keep)) => {
+                assert_eq!(id, a);
+                keep
+            }
+            other => panic!("not the channel's keep: {other:?}"),
+        };
+        assert_eq!(
+            channel_keep(press(&mut v, &r, Press::More)),
+            Some(Keep::Days(7))
+        );
+        assert_eq!(
+            channel_keep(press(&mut v, &r, Press::Less)),
+            Some(Keep::Forever)
+        );
+        r.channels[0].keep = Some(Keep::Forever);
+        assert_eq!(channel_keep(press(&mut v, &r, Press::More)), None);
+        let asked = press(&mut v, &r, Press::Enter);
+        assert!(
+            matches!(
+                asked,
+                Errand::Ask {
+                    ask: Ask::KeepDays,
+                    initial: None
+                }
+            ),
+            "{asked:?}"
+        );
+        assert_eq!(
+            channel_keep(v.typed(Ask::KeepDays.command(), "45", &r, &t)),
+            Some(Keep::Days(45))
+        );
+    }
+
+    /// FAILS IF: the set-aside videos are not a filter of the list — any,
+    /// only them with the last set aside first, none of them — the list by
+    /// score when they are not only them, the home page's way to them does
+    /// not open only them, hidden ones included, the last first; or the keys
+    /// on a video do not set it aside or mark it never to be deleted.
+    #[test]
+    fn the_set_aside_videos_are_a_filter_and_a_way_from_home() {
+        let t = texts("en-GB");
+        let r = readings();
+        let (mut v, _) = View::fresh(Page::Videos);
+        onto(&mut v, &r, "filter-set-aside");
+        v.page = 1;
+        press(&mut v, &r, Press::More);
+        assert_eq!(
+            (v.filter.set_aside, v.filter.order, v.page),
+            (SetAside::Only, Order::NewestSetAside, 0)
+        );
+        // THE LIST READ FOR IT says by what it is ordered.
+        let mut read = r.clone();
+        if let Some(l) = read.listed.as_mut() {
+            l.query.filter = v.filter.clone();
+        }
+        let rows = v.rows(&read, COLUMNS, &t);
+        assert!(
+            rows.iter()
+                .flat_map(|x| &x.fields)
+                .any(|f| f.text == t.t(key::VIDEO_METRICS_BY_SET_ASIDE)),
+            "the list's title says it is by score"
+        );
+        press(&mut v, &r, Press::More);
+        assert_eq!(
+            (v.filter.set_aside, v.filter.order),
+            (SetAside::Without, Order::Score)
+        );
+        // FROM HOME.
+        let (mut home, _) = View::fresh(Page::Home);
+        let mut counted = readings();
+        counted.set_aside_count = Some(4);
+        let rows = onto(&mut home, &counted, "set-aside-videos");
+        assert!(
+            rows[row_of(&rows, "set-aside-videos")]
+                .fields
+                .iter()
+                .any(|f| f.text == "4"),
+            "the home page does not say how many"
+        );
+        assert!(matches!(
+            press(&mut home, &counted, Press::Enter),
+            Errand::Look(Look {
+                page: Page::Videos,
+                ..
+            })
+        ));
+        assert_eq!(
+            home.filter,
+            Filter {
+                set_aside: SetAside::Only,
+                hidden: Hidden::Any,
+                order: Order::NewestSetAside,
+                ..Filter::default()
+            }
+        );
+        // THE KEYS ON A VIDEO, from the state read.
+        let id = VideoId("video000000".to_owned());
+        let (mut v, _) = View::fresh(Page::Video(id.clone()));
+        assert_eq!(
+            press(&mut v, &r, Press::SetAside),
+            Errand::Edit(Edit::SetAside(id.clone(), true))
+        );
+        assert_eq!(
+            press(&mut v, &r, Press::Keep),
+            Errand::Edit(Edit::KeepVideo(id.clone(), true))
+        );
+        assert_eq!(
+            press_of_key(Key::parse("s").expect("a key")),
+            Some(Press::SetAside)
+        );
+        assert_eq!(
+            press_of_key(Key::parse("f").expect("a key")),
+            Some(Press::Keep)
+        );
+        // SAID, by its title.
+        let (said, _) = v.took(Done::Edited(Edit::SetAside(id, true), Ok(())), &r, &t);
+        assert!(
+            matches!(&said, Some(Said::Normal(s)) if s.contains("A video, number 0")),
+            "{said:?}"
+        );
+    }
+
+    /// FAILS IF: the grid's thumbnails say their channel before the person
+    /// asks, the switch is a row anywhere but the grid, or switched on, a
+    /// shelf does not put the channel under each title, a line taller — or
+    /// the list reads anything again for it.
+    #[test]
+    fn the_grid_says_the_channel_only_when_asked() {
+        let t = texts("en-GB");
+        let r = readings();
+        let (mut v, _) = View::fresh(Page::Videos);
+        let rows = v.rows(&r, 100, &t);
+        assert!(
+            !spots(&rows).contains(&"grid-channel"),
+            "a switch on the list"
+        );
+        v.layout = Layout::Grid;
+        let said = |v: &View| -> (usize, usize) {
+            let rows = v.rows(&r, 100, &t);
+            let shelf = rows
+                .iter()
+                .position(|x| !x.cells.is_empty())
+                .expect("a shelf");
+            let channel = rows
+                .iter()
+                .flat_map(|x| &x.fields)
+                .filter(|f| f.text == "Channel 1")
+                .count();
+            (Row::lines_of(&rows, shelf), channel)
+        };
+        let (lines, channel) = said(&v);
+        assert_eq!(lines, usize::from(shelf_lines(false)));
+        assert_eq!(channel, 0, "the channel said unasked");
+        onto(&mut v, &r, "grid-channel");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Nothing,
+            "read again for a switch"
+        );
+        assert!(v.grid_channel);
+        let (lines, channel) = said(&v);
+        assert_eq!(lines, usize::from(shelf_lines(true)));
+        assert_eq!(channel, 10, "not every tile says its channel");
+    }
+
     /// FAILS IF: what every door fills the download's sentence with teaches
     /// the queue's keys without the leader's label — `t t` where the other
     /// doors say `SUPER t t` (`keys-are-never-text`) — or the sentence does
@@ -4962,5 +8700,570 @@ pub(crate) mod tests {
             &[("title", "A film"), ("keys", &keys)],
         );
         assert!(said.contains(&keys), "{said}");
+    }
+
+    /// FAILS IF: the home page stops linking out — the brain's page on the
+    /// scan, the player's two lists in a window of its own — under its own
+    /// heading, after the catalogue; `RET` on one of them does anything but
+    /// hand its door the errand that leaves the view (and leaves the view
+    /// where it was), or one of them is not explained as what it opens.
+    #[test]
+    fn the_home_page_links_out() {
+        use crate::player_seam::ranking::{OPEN_RANKING, OPEN_SET_ASIDE};
+        let r = readings();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let (v, _) = View::fresh(Page::Home);
+            let rows = v.rows(&r, COLUMNS, &t);
+            let heading = rows
+                .iter()
+                .position(|x| {
+                    x.heading
+                        && x.fields.first().map(|f| f.text.as_str())
+                            == Some(t.t(key::VIDEO_METRICS_HEADING_ELSEWHERE).as_str())
+                })
+                .expect("the heading of the other apps");
+            assert!(
+                row_of(&rows, "weights") < heading,
+                "{language}: the other apps before the catalogue"
+            );
+            let links = [
+                ("in-the-brain", Errand::Brain),
+                ("in-the-player", Errand::Player(OPEN_RANKING)),
+                ("set-aside-in-the-player", Errand::Player(OPEN_SET_ASIDE)),
+            ];
+            let mut last = heading;
+            for (spot, errand) in links {
+                let n = row_of(&rows, spot);
+                assert!(n > last, "{language}: `{spot}` out of its place");
+                last = n;
+                let (mut v, _) = View::fresh(Page::Home);
+                onto(&mut v, &r, spot);
+                let rows = v.rows(&r, COLUMNS, &t);
+                let e = v.explained_cursor(&rows, &t).expect("explained");
+                assert_eq!(e.name, rows[n].name, "{language}: `{spot}`");
+                assert!(
+                    e.gesture
+                        .as_deref()
+                        .is_some_and(|g| g.contains(&t.t(key::VIDEO_METRICS_ACT_OPENS))),
+                    "{language}: `{spot}` does not say it opens: {e:?}"
+                );
+                assert_eq!(press(&mut v, &r, Press::Enter), errand, "`{spot}`");
+                assert_eq!(v.page(), &Page::Home, "`{spot}` moved the view");
+            }
+        }
+    }
+
+    /// FAILS IF: a video, or a channel's videos, do not open in either
+    /// browser from every place they are offered — a video's rows and keys
+    /// (`K`, `n`), a channel's page (its rows, and the keys on any row of
+    /// it), a channel's row on the list (its keys and its two glyphs, which
+    /// act on the first click, put the cursor on the channel and each say
+    /// its own sentence under the pointer) —, or a channel opens on anything
+    /// but its `/videos` page; or the browsers' keys are taught, or act,
+    /// where nothing has an address.
+    #[test]
+    fn a_video_or_a_channel_opens_in_either_browser() {
+        let r = readings();
+        let t = texts("en-GB");
+        let video = r.listed.as_ref().expect("listed").rows[0].clone();
+        let a = channel(1);
+        let videos = format!("https://www.youtube.com/channel/{}/videos", a.id.0);
+        let taught = |v: &View| -> Vec<&'static str> {
+            let rows = v.rows(&r, COLUMNS, &t);
+            v.hint(&rows, &t).iter().filter_map(|p| p.id).collect()
+        };
+        // A VIDEO'S PAGE: its rows, and its keys.
+        let (mut v, _) = View::fresh(Page::Video(video.id.clone()));
+        onto(&mut v, &r, "nyxt");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Nyxt(video.url.clone())
+        );
+        assert_eq!(press(&mut v, &r, Press::Kiosk), Errand::Kiosk(video.url));
+        assert!(taught(&v).contains(&"video-metrics-nyxt"));
+        // A CHANNEL'S PAGE: its two rows, and the keys on any row of it.
+        let (mut v, _) = View::fresh(Page::Channel(a.id.clone()));
+        onto(&mut v, &r, "channel-in-chrome");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Kiosk(videos.clone())
+        );
+        onto(&mut v, &r, "channel-in-nyxt");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Nyxt(videos.clone())
+        );
+        onto(&mut v, &r, "score");
+        assert_eq!(press(&mut v, &r, Press::Nyxt), Errand::Nyxt(videos.clone()));
+        let here = taught(&v);
+        assert!(here.contains(&"video-metrics-kiosk") && here.contains(&"video-metrics-nyxt"));
+        assert!(
+            !here.contains(&"video-metrics-player"),
+            "a video's key on a channel"
+        );
+        // A CHANNEL'S ROW ON THE LIST: its keys, and its glyphs at its edge.
+        let spot = format!("channel:{}", a.id.0);
+        let (left, room) = extent(COLUMNS);
+        let (mut v, _) = View::fresh(Page::Channels);
+        let rows = v.rows(&r, COLUMNS, &t);
+        let n = row_of(&rows, &spot);
+        v.clicked(n, left, &rows);
+        assert_eq!(
+            press(&mut v, &r, Press::Kiosk),
+            Errand::Kiosk(videos.clone())
+        );
+        assert_eq!(press(&mut v, &r, Press::Nyxt), Errand::Nyxt(videos.clone()));
+        assert_eq!(press(&mut v, &r, Press::Player), Errand::Nothing);
+        let glyphs = rows[n].controls.clone();
+        assert_eq!(glyphs.len(), 2, "a channel's row has no ways out");
+        let ends = glyphs.last().map(|c| c.from + c.width);
+        assert_eq!(ends, Some(left + room), "the glyphs are not at the edge");
+        for ((c, errand), about) in glyphs
+            .iter()
+            .zip([Errand::Kiosk(videos.clone()), Errand::Nyxt(videos)])
+            .zip([
+                key::ABOUT_VIDEO_METRICS_CHANNEL_IN_CHROME,
+                key::ABOUT_VIDEO_METRICS_CHANNEL_IN_NYXT,
+            ])
+        {
+            assert_eq!(c.about, about, "a glyph explained as another thing");
+            let (mut v, _) = View::fresh(Page::Channels);
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(v.click_control(n, c.from, &rows, &r), Some(errand));
+            assert_eq!(v.cursor(&rows), n, "the cursor is not on the channel");
+        }
+        // NOTHING WITH AN ADDRESS: the home page, the list's first row.
+        let (mut v, _) = View::fresh(Page::Home);
+        assert_eq!(press(&mut v, &r, Press::Nyxt), Errand::Nothing);
+        assert!(!taught(&v).contains(&"video-metrics-nyxt"));
+        let (mut v, _) = View::fresh(Page::Channels);
+        onto(&mut v, &r, "add-channel");
+        assert_eq!(press(&mut v, &r, Press::Kiosk), Errand::Nothing);
+        assert!(!taught(&v).contains(&"video-metrics-kiosk"));
+    }
+
+    /// What importing a list left, as the import page says it: two channels
+    /// staged, one found here already, a line that named no channel.
+    fn imported() -> Imported {
+        let here = channel(1);
+        Imported {
+            staged: 2,
+            already: vec![(here.id, here.title)],
+            left_out: 1,
+        }
+    }
+
+    /// A scratch folder of this test's own.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-view-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        dir
+    }
+
+    /// FAILS IF: the channels' list leads nowhere to import a list, or says
+    /// nothing of the channels that wait, or lists a staged channel as one
+    /// of its own; the import page misses a row of its own, in its order —
+    /// Takeout, choosing the list, exporting, the decisions so far, all of
+    /// them, registering once something is decided, then each staged
+    /// channel by what registering does with it: the short rows before the
+    /// long list —, or says what the last import left out and found here
+    /// already when there was none, or elsewhere than beside the list
+    /// chosen and after the channels to decide; a staged row's arrows do
+    /// not turn its decision, its `RET` does not open its page, or the
+    /// browsers' keys and glyphs do not reach its videos; or a staged
+    /// channel's page does not say its decision, or says when it was added
+    /// or what only a scan writes (when it was tried, where the scans
+    /// stand, its videos).
+    #[test]
+    fn a_list_imported_waits_on_its_page_to_be_decided() {
+        let mut r = readings();
+        let t = texts("en-GB");
+        let three = staged(3, Decision::Undecided).channel.id;
+        let (spot3, spot4) = (
+            format!("staged:{}", three.0),
+            format!("staged:{}", staged(4, Decision::Keep).channel.id.0),
+        );
+        let videos = format!("https://www.youtube.com/channel/{}/videos", three.0);
+        // THE CHANNELS' LIST: its way to the page, saying how many wait — and
+        // none of them among its channels.
+        let (mut v, _) = View::fresh(Page::Channels);
+        let rows = v.rows(&r, COLUMNS, &t);
+        let n = row_of(&rows, "import-export");
+        // DECIDED OR NOT, both wait: one of the two is kept already.
+        let waiting = t.t_args(
+            key::VIDEO_METRICS_UNREGISTERED,
+            &[("count", Arg::Number(2))],
+        );
+        assert!(
+            rows[n].fields.iter().any(|f| f.text == waiting),
+            "{:?}",
+            rows[n].fields
+        );
+        assert!(!spots(&rows).contains(&format!("channel:{}", three.0).as_str()));
+        onto(&mut v, &r, "import-export");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Look(Look {
+                page: Page::Import,
+                query: None
+            })
+        );
+        // THE PAGE, in its order; nothing of an import before there was one.
+        let rows = v.rows(&r, COLUMNS, &t);
+        let order: Vec<usize> = [
+            "takeout",
+            "choose-list",
+            "save-list",
+            "decisions",
+            "decide-all",
+            "register",
+            spot3.as_str(),
+            spot4.as_str(),
+        ]
+        .iter()
+        .map(|s| row_of(&rows, s))
+        .collect();
+        assert!(order.is_sorted(), "out of order: {:?}", spots(&rows));
+        assert!(!spots(&rows).contains(&"left-out"));
+        // WHAT THE LAST IMPORT FOUND, beside the list chosen: what it left
+        // out, then the channels here already — before the export and the
+        // channels to decide, which run to hundreds.
+        v.imported = Some(imported());
+        let rows = v.rows(&r, COLUMNS, &t);
+        let already = format!("already:{}", channel(1).id.0);
+        let order: Vec<usize> = ["choose-list", "left-out", already.as_str(), "save-list"]
+            .iter()
+            .map(|s| row_of(&rows, s))
+            .collect();
+        assert!(order.is_sorted(), "out of order: {:?}", spots(&rows));
+        // TAKEOUT, in Chrome.
+        onto(&mut v, &r, "takeout");
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Kiosk(takeout::TAKEOUT_PAGE.to_owned())
+        );
+        // A STAGED ROW: its arrows turn its decision, the browsers reach its
+        // videos — by key and by its two glyphs. Clicked on its words, which
+        // end before its glyphs.
+        let (left, _) = extent(COLUMNS);
+        let on_its_words = |v: &mut View, spot: &str| {
+            let rows = v.rows(&r, COLUMNS, &t);
+            v.clicked(row_of(&rows, spot), left, &rows);
+            v.rows(&r, COLUMNS, &t)
+        };
+        let rows = on_its_words(&mut v, &spot3);
+        assert_eq!(
+            press(&mut v, &r, Press::More),
+            Errand::Edit(Edit::Decide(three.clone(), Decision::Keep))
+        );
+        assert_eq!(
+            press(&mut v, &r, Press::Less),
+            Errand::Edit(Edit::Decide(three.clone(), Decision::Discard))
+        );
+        assert_eq!(
+            press(&mut v, &r, Press::Kiosk),
+            Errand::Kiosk(videos.clone())
+        );
+        assert_eq!(press(&mut v, &r, Press::Nyxt), Errand::Nyxt(videos.clone()));
+        let taught: Vec<&str> = v.hint(&rows, &t).iter().filter_map(|p| p.id).collect();
+        assert!(taught.contains(&"video-metrics-more") && taught.contains(&"video-metrics-nyxt"));
+        let n = row_of(&rows, &spot3);
+        let glyphs = rows[n].controls.clone();
+        assert_eq!(glyphs.len(), 2, "a staged row has no ways out");
+        for (c, errand) in glyphs
+            .iter()
+            .zip([Errand::Kiosk(videos.clone()), Errand::Nyxt(videos)])
+        {
+            let (mut v, _) = View::fresh(Page::Import);
+            v.imported = Some(imported());
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(v.click_control(n, c.from, &rows, &r), Some(errand));
+            assert_eq!(v.cursor(&rows), n, "the cursor is not on the channel");
+        }
+        // ITS PAGE: what registering does with it, and nothing a scan writes.
+        on_its_words(&mut v, &spot3);
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Look(Look {
+                page: Page::Channel(three.clone()),
+                query: None
+            })
+        );
+        let rows = v.rows(&r, COLUMNS, &t);
+        let here = spots(&rows);
+        for kept in [
+            "decision",
+            "score",
+            "shorts",
+            "keep",
+            "channel-in-nyxt",
+            "remove-channel",
+        ] {
+            assert!(
+                here.contains(&kept),
+                "the staged page has no `{kept}`: {here:?}"
+            );
+        }
+        for gone in ["added", "its-videos", "last-try", "reference"] {
+            assert!(!here.contains(&gone), "the staged page says `{gone}`");
+        }
+        assert!(row_of(&rows, "decision") < row_of(&rows, "address"));
+        onto(&mut v, &r, "decision");
+        assert_eq!(
+            press(&mut v, &r, Press::More),
+            Errand::Edit(Edit::Decide(three, Decision::Keep))
+        );
+        // A CHANNEL OF THE CATALOGUE says what a scan wrote, and no decision.
+        let (v, _) = View::fresh(Page::Channel(channel(1).id));
+        let here = v.rows(&r, COLUMNS, &t);
+        assert!(!spots(&here).contains(&"decision") && spots(&here).contains(&"its-videos"));
+        // NOTHING DECIDED: nothing to register.
+        for s in &mut r.staged {
+            s.decision = Decision::Undecided;
+        }
+        let (v, _) = View::fresh(Page::Import);
+        assert!(!spots(&v.rows(&r, COLUMNS, &t)).contains(&"register"));
+    }
+
+    /// FAILS IF: registering what was decided is not asked first — under
+    /// its row, with the "no" first and the cursor born on it, saying how
+    /// many are kept and how many dropped —, the "no" does anything, or the
+    /// "yes" does anything but register; or a registering whose consent to
+    /// scan could not be kept is said without how many channels went in and
+    /// were dropped, or in the words of one channel added.
+    #[test]
+    fn registering_is_asked_with_no_first() {
+        let r = readings();
+        let t = texts("en-GB");
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "register");
+        assert_eq!(press(&mut v, &r, Press::Enter), Errand::Nothing);
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(rows[v.cursor(&rows)].spot, "answer-no");
+        let (register, no, yes) = (
+            row_of(&rows, "register"),
+            row_of(&rows, "answer-no"),
+            row_of(&rows, "answer-yes"),
+        );
+        assert!(register < no && no < yes, "{:?}", spots(&rows));
+        let asked = t.t_args(
+            key::ASK_VIDEO_METRICS_REGISTER,
+            &[("kept", Arg::Number(1)), ("discarded", Arg::Number(0))],
+        );
+        let said: Vec<&str> = rows[register + 1..no]
+            .iter()
+            .flat_map(|x| x.fields.iter().map(|f| f.text.as_str()))
+            .collect();
+        assert_eq!(said.join(" "), asked);
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Nothing,
+            "the no did something"
+        );
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(rows[v.cursor(&rows)].spot, "register");
+        press(&mut v, &r, Press::Enter);
+        press(&mut v, &r, Press::Down);
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Edit(Edit::Register)
+        );
+        // WHAT REGISTERING DID — and, the consent to scan them not kept, how
+        // many went in and were dropped all the same, before why a scan will
+        // not ask: never the one channel a person added.
+        let done = Registered {
+            kept: 12,
+            discarded: 1,
+            left: 0,
+        };
+        let registered = t.t_args(
+            key::VIDEO_METRICS_REGISTERED,
+            &[("kept", Arg::Number(12)), ("discarded", Arg::Number(1))],
+        );
+        let (said, _) = v.took(Done::Registered(Ok((done, None))), &r, &t);
+        assert_eq!(said, Some(Said::Normal(registered.clone())));
+        let why = words::unkept_alone_key(ronoctua_consent::Unkept::Unwritable);
+        let (said, _) = v.took(Done::Registered(Ok((done, Some(why)))), &r, &t);
+        let Some(Said::Long(said)) = said else {
+            panic!("an unkept consent was not said as a trouble: {said:?}");
+        };
+        assert!(
+            said.starts_with(&registered) && said.ends_with(&t.t(why)),
+            "{said:?}"
+        );
+        assert!(!said.contains(&t.t(key::VIDEO_METRICS_NOT_LET_UNWRITABLE)));
+    }
+
+    /// FAILS IF: giving every staged channel one decision while theirs
+    /// differ — by an arrow, `RET` or a double click, each a turn — throws
+    /// away what each was given without asking first: under its row, "no"
+    /// first and the cursor born on it, saying how many channels it changes
+    /// and to what; or the "no" does anything, or the "yes" anything but
+    /// give them all that decision; or the row says a turn goes on while it
+    /// asks. Theirs alike, the ring turns at once — a turn back gives each
+    /// what it had — and says so.
+    #[test]
+    fn deciding_all_of_them_is_asked_while_theirs_differ() {
+        let mut r = readings();
+        let t = texts("en-GB");
+        let act = |v: &View, r: &Readings| {
+            let rows = v.rows(r, COLUMNS, &t);
+            does_of(&rows[v.cursor(&rows)].target)
+        };
+        // THEIRS DIFFER: one undecided, one kept.
+        for press_it in [Press::More, Press::Less, Press::Enter] {
+            let (mut v, _) = View::fresh(Page::Import);
+            onto(&mut v, &r, "decide-all");
+            assert_eq!(act(&v, &r), Some(key::VIDEO_METRICS_ACT_ASKS));
+            assert_eq!(
+                press(&mut v, &r, press_it),
+                Errand::Nothing,
+                "{press_it:?} gave them all one decision unasked"
+            );
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(rows[v.cursor(&rows)].spot, "answer-no");
+            let (all, no) = (row_of(&rows, "decide-all"), row_of(&rows, "answer-no"));
+            assert!(all < no, "{:?}", spots(&rows));
+            let asked = t.t_args(
+                key::ASK_VIDEO_METRICS_DECIDE_ALL_UNDECIDED,
+                &[("changed", Arg::Number(1))],
+            );
+            let said: Vec<&str> = rows[all + 1..no]
+                .iter()
+                .flat_map(|x| x.fields.iter().map(|f| f.text.as_str()))
+                .collect();
+            assert_eq!(said.join(" "), asked);
+            assert_eq!(
+                press(&mut v, &r, Press::Enter),
+                Errand::Nothing,
+                "the no did something"
+            );
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(rows[v.cursor(&rows)].spot, "decide-all");
+        }
+        // AND THE YES GIVES THEM ALL ONE.
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "decide-all");
+        assert_eq!(press(&mut v, &r, Press::More), Errand::Nothing);
+        press(&mut v, &r, Press::Down);
+        assert_eq!(
+            press(&mut v, &r, Press::Enter),
+            Errand::Edit(Edit::DecideAll(Decision::Undecided))
+        );
+        // THEIRS ALIKE: the ring turns, unasked.
+        for s in &mut r.staged {
+            s.decision = Decision::Keep;
+        }
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "decide-all");
+        assert_eq!(act(&v, &r), Some(key::VIDEO_METRICS_ACT_TURNS));
+        assert_eq!(
+            press(&mut v, &r, Press::More),
+            Errand::Edit(Edit::DecideAll(Decision::Discard))
+        );
+        assert_eq!(
+            press(&mut v, &r, Press::Less),
+            Errand::Edit(Edit::DecideAll(Decision::Undecided))
+        );
+    }
+
+    /// FAILS IF: choosing the list, or where the channels go, does not bring
+    /// up the file picker over the import page — under its title, its rows
+    /// the view's own and each explained, its keys and hint its own —; going
+    /// back does not bring the page back with the cursor where it was; a
+    /// file it answers is not imported, a name it answers not exported to;
+    /// or its ring keeps something besides lists, or a list besides a
+    /// `.csv` its type says is one.
+    #[test]
+    fn the_picker_chooses_the_list_and_where_it_goes() {
+        use ronoctua_keymap::{Key, Sym};
+        use std::path::Path;
+        let somewhere = PathBuf::from("/nowhere/list.csv");
+        assert_eq!(
+            picked(Picking::Import, std::slice::from_ref(&somewhere)),
+            Errand::Edit(Edit::Import(somewhere.clone()))
+        );
+        assert_eq!(
+            picked(Picking::Export, std::slice::from_ref(&somewhere)),
+            Errand::Export(somewhere)
+        );
+        assert_eq!(picked(Picking::Import, &[]), Errand::Nothing);
+        assert!(a_list(Path::new("/x/subscriptions.CSV"), None).is_some());
+        assert!(a_list(Path::new("/x/renamed"), Some("text/csv")).is_some());
+        assert!(a_list(Path::new("/x/notes.txt"), Some("text/plain")).is_none());
+        let r = readings();
+        let t = texts("en-GB");
+        let dir = scratch("picker");
+        let list = dir.join("list.csv");
+        std::fs::write(&list, format!("{}\n", takeout::HEADER)).expect("a list");
+        // UP OVER THE PAGE, under its title.
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "choose-list");
+        assert_eq!(press(&mut v, &r, Press::Enter), Errand::Nothing);
+        assert!(v.picking(), "no picker for the list");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(
+            rows[0].fields.first().map(|f| f.text.clone()),
+            Some(t.t(key::VIDEO_METRICS_PICK_IMPORT))
+        );
+        let takes = v.takes(&rows);
+        let mut explained = 0;
+        for (n, row) in rows.iter().enumerate().filter(|(n, _)| takes[*n]) {
+            let e = v
+                .explained_at(&rows, n, None, &t)
+                .unwrap_or_else(|| panic!("row {n} ({}) is not explained", row.spot));
+            assert!(!e.name.is_empty(), "row {n} ({}) has no name", row.spot);
+            assert_eq!(e.said[0].0, t.t(key::ABOUT_VIDEO_METRICS_PICK));
+            explained += 1;
+        }
+        assert!(explained > 0, "no row of the picker takes a click");
+        assert!(v.explained_cursor(&rows, &t).is_some());
+        let taught: Vec<&str> = v.hint(&rows, &t).iter().filter_map(|p| p.id).collect();
+        assert!(taught.contains(&"file-picker-enter"), "{taught:?}");
+        assert!(
+            v.picker_takes(Key::simple(Sym::Char('n'))),
+            "a letter is not the picker's"
+        );
+        // BACK, the cursor where it was.
+        assert_eq!(press(&mut v, &r, Press::Escape), Errand::Nothing);
+        assert!(!v.picking(), "the way back left the picker up");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(rows[v.cursor(&rows)].spot, "choose-list");
+        // A LIST TYPED — pasted — and taken: imported.
+        press(&mut v, &r, Press::Enter);
+        assert!(v.picker_pasted(&list.to_string_lossy()));
+        let Errand::Edit(Edit::Import(got)) = press(&mut v, &r, Press::Enter) else {
+            panic!("the list was not taken");
+        };
+        assert_eq!(got.canonicalize().ok(), list.canonicalize().ok());
+        assert!(!v.picking(), "the picker stayed up after its answer");
+        // AND WHERE THE CHANNELS GO: a name, in the folder typed, `.csv` added.
+        let (mut v, _) = View::fresh(Page::Import);
+        onto(&mut v, &r, "save-list");
+        press(&mut v, &r, Press::Enter);
+        assert!(v.picking(), "no picker for the export");
+        let rows = v.rows(&r, COLUMNS, &t);
+        assert_eq!(
+            rows[0].fields.first().map(|f| f.text.clone()),
+            Some(t.t(key::VIDEO_METRICS_PICK_EXPORT))
+        );
+        assert!(v.picker_pasted(&dir.join("exported").to_string_lossy()));
+        let Errand::Export(to) = press(&mut v, &r, Press::Enter) else {
+            panic!("no place to export to was taken");
+        };
+        assert_eq!(
+            to.file_name().and_then(|n| n.to_str()),
+            Some("exported.csv")
+        );
+        assert_eq!(
+            to.parent().and_then(|p| p.canonicalize().ok()),
+            dir.canonicalize().ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

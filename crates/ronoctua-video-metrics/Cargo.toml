@@ -27,6 +27,12 @@ publish.workspace = true
 default = [ ]
 db = [ "dep:rusqlite", "dep:ronoctua-xml", "dep:ronoctua-ytdlp" ]
 net = [ "db", "dep:ronoctua-http", "ronoctua-http/tls", "dep:ronoctua-consent" ]
+# A TEST'S VIDEO (`Person::plant`), for `[dev-dependencies]` ONLY: a door
+# that writes the person's marks reads them back off a video of a scratch
+# catalogue — and outside this crate no test may drive a scan to catch one
+# (`video-metrics-readers-are-read-only`). It writes a video no scan found,
+# so a product must not have it.
+test-support = [ "db" ]
 
 [[bin]]
 name = "ronoctua-video-metrics"

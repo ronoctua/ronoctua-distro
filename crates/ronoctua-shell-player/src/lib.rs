@@ -30,8 +30,8 @@
 use ronoctua_shell_door::{column, door, file_picker, launch, region, right_column};
 use ronoctua_shell_inspect::{globe, tag_words};
 use ronoctua_shell_kit::{
-    bars, bindings, chrome, daemon, echo, fields, foreign, line, partly_read, security_words,
-    sizes, text_select, wake, watchdog, wheel, when,
+    bars, bindings, chrome, daemon, echo, fields, foreign, line, partly_read, section_ring,
+    security_words, sizes, text_select, wake, watchdog, wheel, when,
 };
 // The tests hand a root gesture to a fake gate.
 #[cfg(test)]
@@ -86,9 +86,9 @@ pub mod player_window;
 pub mod text_area;
 
 /// THE PLAYER'S DOORS the binary runs by name: the player in a window
-/// (`ronoctua-shell player [only|maximized|pip|listing]`, and `player
-/// maximized --screen <connector>`), and what the `.desktop` entry runs to
-/// play files and show the column (`play <file>…`).
+/// (`ronoctua-shell player [only|maximized|pip|listing|ranking|set-aside]`,
+/// and `player maximized --screen <connector>`), and what the `.desktop`
+/// entry runs to play files and show the column (`play <file>…`).
 pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[
     ronoctua_shell_kit::doors::Door {
         name: "player",
@@ -109,9 +109,23 @@ pub const DOORS: &[ronoctua_shell_kit::doors::Door] = &[
 /// `player maximized --screen <connector>` is one of the windows "show on
 /// every screen" opens: whole-screen on THAT output, showing what is routed
 /// there (`player_stage::everywhere`).
+///
+/// `player ranking` and `player set-aside` open it on that page of the
+/// video catalogue's ranking, over its home (`player_window::OPENINGS`) — a
+/// window of its own, with nothing after the word.
 fn player_door(words: &ronoctua_shell_kit::doors::Words) -> anyhow::Result<()> {
     use anyhow::Context as _;
     let words = words.all();
+    if let Some(page) = words.first().and_then(|w| player_window::opening_of(w)) {
+        anyhow::ensure!(
+            words.len() == 1,
+            "`player {}` takes nothing after it, not `{}`",
+            words[0],
+            words[1..].join(" ")
+        );
+        return player_window::host_window(player_window::Stage::Off, None, Some(page))
+            .context("the player's window");
+    }
     let stage = match words.first().map(String::as_str) {
         Some("only") => player_window::Stage::Only,
         Some("maximized") => player_window::Stage::Maximized,
@@ -135,7 +149,7 @@ fn player_door(words: &ronoctua_shell_kit::doors::Words) -> anyhow::Result<()> {
         screen.is_none() || stage == player_window::Stage::Maximized,
         "a screen of its own is for `player maximized` alone"
     );
-    player_window::host_window(stage, screen).context("the player's window")
+    player_window::host_window(stage, screen, None).context("the player's window")
 }
 
 /// WHAT THE `.desktop` ENTRY RUNS: play these, and show the column — a file

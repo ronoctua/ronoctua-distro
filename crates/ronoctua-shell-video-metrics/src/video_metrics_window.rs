@@ -14,9 +14,21 @@
 //! It types — an address, a score, a band, words, tags on the header's line
 //! (`Ui::ask`, `C-v` pastes there), and the second description on the rows
 //! themselves (`text_area`). It answers the page's questions with the "no"
-//! first. It opens a video in Chrome through the footer's `kiosk-open`
-//! (`Ui::tell_the_footer`, off the loop), and what went wrong anywhere is
+//! first. It opens a video — or a channel's videos — in Chrome through the
+//! footer's `kiosk-open`, the brain's page and the player's window through
+//! the footer's commands (`Ui::tell_the_footer`, off the loop), and in Nyxt
+//! by its entry in the launcher, started here; what went wrong anywhere is
 //! said on THIS window's line.
+//!
+//! # A foot that explains (the owner, 2026-11-09)
+//!
+//! Every row says what it is, in the foot the window keeps
+//! (`Content::foot_lines`, the update window's): the thing the pointer rests
+//! on — its name, what a click does to it, its sentence and what it follows
+//! "as everywhere" — until a key comes, and then the cursor's thing, which
+//! `RET` does (`View::explained_at`, `View::explained_cursor`). Nothing of
+//! it goes to the footer's minibuffer: line 0 carries the keys, a message
+//! and a question, never a row's sentence.
 
 use anyhow::Result;
 use smithay_client_toolkit::reexports::calloop::channel;
@@ -25,14 +37,14 @@ use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind};
 
 use crate::door::{Canvas, Content, Door, Hand, Ui};
 use crate::video_metrics::{Errand, Page, Readings, Row, Said, View};
-use crate::video_metrics_feed::{Arrived, Direct, Feed, Want};
+use crate::video_metrics_feed::{Arrived, Direct, Feed, Leaving, Want};
 
 /// The window's `app_id`.
 pub const APP_ID: &str = "br.ronoctua.video-metrics";
 
 /// The words `ronoctua-shell video-metrics <word>` opens on — the command
 /// line's, so English.
-pub const OPENINGS: [&str; 5] = ["home", "videos", "channels", "rules", "weights"];
+pub const OPENINGS: [&str; 6] = ["home", "videos", "channels", "rules", "weights", "import"];
 
 /// The page a word of the command line opens on; `None` for a word that
 /// names none.
@@ -44,6 +56,7 @@ pub fn opening_of(word: &str) -> Option<Page> {
         "channels" => Page::Channels,
         "rules" => Page::Rules,
         "weights" => Page::Weights,
+        "import" => Page::Import,
         _ => return None,
     })
 }
@@ -75,13 +88,20 @@ pub fn host_it(opening: Page) -> Result<()> {
                 let _ = s.send(());
             }
         });
-        let (view, errand) = View::fresh(opening);
+        let (mut view, errand) = View::fresh(opening);
+        // THE FILE PICKER'S FOLDER, watched through the door's wake
+        // (`Content::woken`).
+        view.watch_with(w.wake());
         let mut me = VideoMetricsWindow {
             view,
             readings,
             reach: Reach::Feed(feed),
             pointer_x: None,
             pointed: None,
+            keyed: false,
+            since_ms: 0,
+            rested: None,
+            in_the_foot: false,
             cursor_row: std::cell::Cell::new(None),
         };
         me.first(errand);
@@ -99,6 +119,28 @@ pub fn readings_for(transfers_keys: String) -> Readings {
         transfers_keys,
         ..Readings::default()
     }
+}
+
+/// WHERE THE POINTER RESTS, AND WHAT IS THERE — the update window's `Spot`:
+/// the rest the foot keeps is the THING's, never the line's. A shelf's line
+/// holds several videos, and one video spans the shelf's lines: keyed by the
+/// line, a video slid past along its line was taken for the one rested on,
+/// and a move down the same video was a move off it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Spot {
+    /// Its line and the cell across it, as a field's `at` — where the foot
+    /// asks what it explains (`View::explained_at`).
+    at: (usize, u16),
+    /// What is there, by the identity the foot explains it under
+    /// (`View::thing_at`) — a row, a video of a shelf, a glyph; `None` on a
+    /// title, a note, the air, which explain nothing and are never rested
+    /// on.
+    thing: Option<String>,
+}
+
+/// The thing a spot is on, if any.
+fn thing_of(spot: Option<&Spot>) -> Option<&str> {
+    spot.and_then(|s| s.thing.as_deref())
 }
 
 /// Where the window's wants go.
@@ -120,9 +162,22 @@ pub struct VideoMetricsWindow {
     /// grid's cell a click takes is read from it, by the arithmetic the rows
     /// were drawn with.
     pointer_x: Option<f64>,
-    /// The row under the pointer, whose sentence line 0 says — what the
-    /// footer says on its message line under the pointer.
-    pointed: Option<usize>,
+    /// WHAT THE POINTER RESTS ON — the foot's subject while no key came
+    /// after it.
+    pointed: Option<Spot>,
+    /// A key came after the pointer last moved: the foot explains the
+    /// cursor's thing until the pointer moves again.
+    keyed: bool,
+    /// When the pointer came onto the THING it is on, by the compositor's
+    /// clock (a motion's `time`, in milliseconds).
+    since_ms: u32,
+    /// THE LAST THING THE POINTER RESTED ON — `space.window.footRestTenths`
+    /// or longer — since the last key: what the foot explains once the
+    /// pointer is in it, and not the things it crossed to get there.
+    rested: Option<Spot>,
+    /// The pointer is in the foot, which hears its motions: the next one the
+    /// window hears is the pointer coming back.
+    in_the_foot: bool,
     /// The cursor's row when the rows were last built — STORED WHERE IT IS
     /// MEASURED, for the door, which asks without a width.
     cursor_row: std::cell::Cell<Option<usize>>,
@@ -140,6 +195,10 @@ impl VideoMetricsWindow {
             reach: Reach::Direct(Box::new(Direct::at(catalogue))),
             pointer_x: None,
             pointed: None,
+            keyed: false,
+            since_ms: 0,
+            rested: None,
+            in_the_foot: false,
             cursor_row: std::cell::Cell::new(None),
         };
         me.first(errand);
@@ -157,21 +216,9 @@ impl VideoMetricsWindow {
     fn want(&mut self, ui: Option<&mut Ui>, want: Want) {
         match &mut self.reach {
             Reach::Feed(f) => f.want(want),
+            // WHAT A PHOTOGRAPH WOULD HAVE DONE past the catalogue is
+            // printed by the feed on the spot, never done.
             Reach::Direct(d) => {
-                // WHAT A PHOTOGRAPH WOULD HAVE DONE past the catalogue is
-                // printed, never done: its door reaches nothing.
-                match &want {
-                    Want::Scan => println!("would have asked the brain for a scan"),
-                    Want::Play(p) => println!("asked the player: put {} ({})", p.url, p.title),
-                    Want::Download { url, .. } => println!("would have downloaded {url}"),
-                    Want::Edit(crate::video_metrics::Edit::AddChannel(input)) => {
-                        println!("would have asked yt-dlp who {input} is, and added it");
-                    }
-                    Want::Edit(crate::video_metrics::Edit::Consent(on)) => {
-                        println!("kept in memory, not in this machine's file: ask YouTube = {on}");
-                    }
-                    Want::Look(_) | Want::Edit(_) => {}
-                }
                 let arrived = d.want(want);
                 match ui {
                     Some(ui) => self.took(ui, arrived),
@@ -251,9 +298,12 @@ impl VideoMetricsWindow {
     }
 
     /// A key of the view — from the keyboard, the hint, or `RET` from a
-    /// second click (invariant 19).
+    /// second click (invariant 19) — and the foot explains the cursor's
+    /// thing again, until the pointer moves.
     fn pressed(&mut self, ui: &mut Ui, press: crate::video_metrics::Press) {
         ui.message = None;
+        self.keyed = true;
+        self.rested = None;
         let rows = self.view_rows(ui);
         let errand = self.view.press(press, &rows, &self.readings);
         self.apply(ui, errand);
@@ -262,8 +312,9 @@ impl VideoMetricsWindow {
     }
 
     /// Carries out what the view asked for — through the ONE handler both
-    /// doors call (`video_metrics_feed::carry_out`), and what is this door's:
-    /// the queue and the kiosk, the footer's, asked down its socket.
+    /// doors call (`video_metrics_feed::carry_out`), and what is this door's
+    /// ([`Leaving`]): the queue, the kiosk, the brain's page and the player's
+    /// window, the footer's, asked down its socket; Nyxt, started here.
     fn apply(&mut self, ui: &mut Ui, errand: Errand) {
         match crate::video_metrics_feed::carry_out(errand, ui) {
             Ok(Some(want)) => self.want(Some(ui), want),
@@ -271,7 +322,7 @@ impl VideoMetricsWindow {
             // THE QUEUE IS THE FOOTER'S (`LEADER t t`): asked down its socket,
             // off the loop; a footer whose region holds other work says so
             // there, and one that is not there is said here.
-            Err(Errand::Transfers) => {
+            Err(Leaving::Transfers) => {
                 if matches!(self.reach, Reach::Direct(_)) {
                     println!("would have told the footer: transfers-open");
                 } else {
@@ -281,14 +332,67 @@ impl VideoMetricsWindow {
             // THE KIOSK IS THE FOOTER'S: it holds the bridge and the tabs.
             // The order goes down its socket off the loop, and a footer that
             // is not there is said here (`door-no-footer`).
-            Err(Errand::Kiosk(url)) => {
+            Err(Leaving::Kiosk(url)) => {
                 if matches!(self.reach, Reach::Direct(_)) {
                     println!("would have told the footer: kiosk-open {url}");
                 } else {
                     ui.tell_the_footer("kiosk-open", Some(&url));
                 }
             }
-            Err(_) => {}
+            // NYXT, started by this window itself through its entry in the
+            // launcher (`launch::in_nyxt`): off the loop, and a machine
+            // without it said here (`door-nyxt-absent`).
+            Err(Leaving::Nyxt(url)) => {
+                if matches!(self.reach, Reach::Direct(_)) {
+                    println!("would have opened in Nyxt: {url}");
+                } else {
+                    crate::region::Doorway::launch(ui, crate::launch::in_nyxt(&url));
+                }
+            }
+            // THE BRAIN'S PAGE IS THE FOOTER'S: it opens the brain's window,
+            // on this catalogue's scan.
+            Err(Leaving::Brain) => {
+                let module = ronoctua_brain::compiled::video_metrics::ID;
+                if matches!(self.reach, Reach::Direct(_)) {
+                    println!(
+                        "would have told the footer: {} {module}",
+                        crate::video_metrics::BRAIN_OPEN
+                    );
+                } else {
+                    ui.tell_the_footer(crate::video_metrics::BRAIN_OPEN, Some(module));
+                }
+            }
+            // A WINDOW OF THE PLAYER'S, of its own even with one open — the
+            // player's command, which the footer runs.
+            Err(Leaving::Player(word)) => {
+                if matches!(self.reach, Reach::Direct(_)) {
+                    println!(
+                        "would have told the footer: {} {word}",
+                        crate::video_metrics::PLAYER_WINDOW
+                    );
+                } else {
+                    ui.tell_the_footer(crate::video_metrics::PLAYER_WINDOW, Some(word));
+                }
+            }
+        }
+    }
+
+    /// The pointer left the thing it was on at `time` (`None`: a moment the
+    /// compositor did not stamp): kept as what it rested on when it stayed
+    /// there `space.window.footRestTenths` or longer — the update window's
+    /// rule, for the foot to keep explaining it once the pointer is there.
+    /// What explains nothing (a title, the air) is never kept: it would take
+    /// the place of the thing rested on before it.
+    fn moved_on(&mut self, time: Option<u32>) {
+        let rest_ms = u32::from(ronoctua_tokens::space::WINDOW_FOOTRESTTENTHS) * 100;
+        if let (Some(t), Some(left)) = (time, &self.pointed)
+            && left.thing.is_some()
+            && t.wrapping_sub(self.since_ms) >= rest_ms
+        {
+            self.rested = Some(left.clone());
+        }
+        if let Some(t) = time {
+            self.since_ms = t;
         }
     }
 
@@ -397,6 +501,8 @@ impl Content for VideoMetricsWindow {
             return;
         };
         if self.view.editing() {
+            self.keyed = true;
+            self.rested = None;
             let (_, room) = crate::video_metrics::extent(ui.columns);
             let errand = self.view.text_key(key, room);
             self.apply(ui, errand);
@@ -404,9 +510,64 @@ impl Content for VideoMetricsWindow {
             ui.ask_paint();
             return;
         }
+        // THE FILE PICKER, while it is up over the import page, takes what
+        // it reads — every letter, and its own keys — before the view's
+        // table: told first how many lines the window shows, for its
+        // `PgUp` and `PgDn`.
+        if self.view.picker_takes(key) {
+            self.view.page_is(ui.room_for_rows());
+            self.pressed(ui, crate::video_metrics::Press::Pick(key));
+            return;
+        }
         if let Some(press) = crate::video_metrics::press_of_key(key) {
             self.pressed(ui, press);
         }
+    }
+
+    /// THE FILE PICKER'S FOLDER MOVED, or its devices were read — through
+    /// the door's wake: its rows again, when they changed. The catalogue's
+    /// feed rings a channel of its own (`host_it`).
+    fn woken(&mut self, ui: &mut Ui) {
+        if self.view.picker_woke() {
+            ui.ask_paint();
+        }
+    }
+
+    /// THE FOOT THIS WINDOW KEEPS (the owner, 2026-11-09, the update
+    /// window's): always this tall, so nothing above it moves — what is
+    /// explained there changes, the rows do not.
+    fn foot_lines(&self, _: &Ui) -> u16 {
+        ronoctua_tokens::space::WINDOW_FOOTLINES
+    }
+
+    /// WHAT THE FOOT EXPLAINS: the thing the pointer rests on — a row, a
+    /// video of a shelf, a glyph — as a click takes it, until a key comes;
+    /// then, and with the pointer on nothing a click takes (a title, the
+    /// air), the cursor's thing, which `RET` does.
+    fn explained(&self, ui: &Ui) -> Option<crate::door::Explained> {
+        let rows = self.view_rows(ui);
+        if !self.keyed
+            && let Some(p) = &self.pointed
+            && let Some(e) = self.view.explained_at(&rows, p.at.0, Some(p.at.1), &ui.texts)
+            // IN THE FOOT, THE THING RESTED ON, by its identity: a reading
+            // that moved the rows under its old place gives the foot back
+            // to the cursor's thing, and never explains another there.
+            && (!self.in_the_foot || p.thing.as_deref() == Some(e.subject.as_str()))
+        {
+            return Some(e);
+        }
+        self.view.explained_cursor(&rows, &ui.texts)
+    }
+
+    /// THE POINTER WENT INTO THE FOOT: what the foot explains is what the
+    /// pointer last rested on — not the rows it crossed on its way down —,
+    /// held while the pointer is there, and the cursor's thing when it
+    /// rested on none since the last key.
+    fn pointer_went_to_the_foot(&mut self, ui: &mut Ui, _: &mut Hand<()>, time: Option<u32>) {
+        self.moved_on(time);
+        self.pointed.clone_from(&self.rested);
+        self.in_the_foot = true;
+        ui.ask_paint();
     }
 
     /// WHAT WAS TYPED ON THE HEADER'S LINE, to the same view call the
@@ -422,9 +583,10 @@ impl Content for VideoMetricsWindow {
         ui.ask_paint();
     }
 
-    /// The clipboard's text, read off the loop for `C-v` in the description.
+    /// The clipboard's text, read off the loop for `C-v` in the description
+    /// — or in the file picker, as what was typed there.
     fn pasted(&mut self, ui: &mut Ui, text: &str) {
-        if self.view.text_pasted(text) {
+        if self.view.text_pasted(text) || self.view.picker_pasted(text) {
             ui.ask_paint();
         }
     }
@@ -442,9 +604,10 @@ impl Content for VideoMetricsWindow {
 
     /// THE WHOLE TABLE, kept from the keyboard: the view reads a key on every
     /// row while the line teaches it only where it does something. Not while
-    /// the second description is edited — every letter is its text.
+    /// the second description is edited, nor while the file picker is up —
+    /// every letter is its text, or the name the picker looks for.
     fn barred_keys(&self, ui: &Ui) -> Vec<ronoctua_keymap::Key> {
-        if self.view.editing() {
+        if self.view.editing() || self.view.picking() {
             return crate::chrome::shortcut_keys(&self.hint(ui), self.leader_alt_keys());
         }
         crate::chrome::table_keys(crate::video_metrics::OF_THE_VIEW.iter().map(|r| r.0))
@@ -492,6 +655,16 @@ impl Content for VideoMetricsWindow {
             ui.ask_paint();
             return;
         }
+        // A GLYPH ACTS ON THE FIRST CLICK — and what it asks is asked under
+        // its video, which the door keeps in sight, as after a key. The foot
+        // goes on explaining the glyph under the pointer, in its new state.
+        if let Some(errand) = self.view.click_control(row, column, &rows, &self.readings) {
+            ui.message = None;
+            self.apply(ui, errand);
+            self.follow(ui);
+            ui.ask_paint();
+            return;
+        }
         if let Some(errand) = self.view.click_answers(row, &rows) {
             self.apply(ui, errand);
             ui.ask_paint();
@@ -505,22 +678,67 @@ impl Content for VideoMetricsWindow {
     }
 
     /// The pointer: where it is across the window is kept for the grid's
-    /// cells, and the rest is the standard list's.
+    /// cells, and the rest is the standard list's — and what it rests on is
+    /// the foot's subject until a key.
     fn pointer(&mut self, ui: &mut Ui, hand: &mut Hand<Self::Hand>, events: &[PointerEvent]) {
+        let was = (self.pointed.clone(), self.keyed);
+        // THE ROWS, built once for every motion of the frame: what is under
+        // the pointer is asked of them.
+        let moved = events.iter().any(|e| {
+            matches!(
+                e.kind,
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. }
+            )
+        });
+        let rows = if moved {
+            self.view_rows(ui)
+        } else {
+            Vec::new()
+        };
         for e in events {
             match e.kind {
-                PointerEventKind::Enter { .. }
-                | PointerEventKind::Motion { .. }
-                | PointerEventKind::Press { .. } => self.pointer_x = Some(e.position.0),
-                PointerEventKind::Leave { .. } => self.pointer_x = None,
+                // THE POINTER MOVED: what it rests on is the foot's again —
+                // and the THING it left, when it rested there long enough to
+                // be read, is what the foot keeps explaining once the pointer
+                // is in it. In the order the events came: a click after the
+                // motion is a key's, and gives the foot back to the cursor.
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.pointer_x = Some(e.position.0);
+                    let time = match e.kind {
+                        PointerEventKind::Motion { time } => Some(time),
+                        _ => None,
+                    };
+                    let now = ui.row_at(e.position.0, e.position.1).map(|n| {
+                        let column = self.column_at(ui);
+                        Spot {
+                            at: (n, column),
+                            thing: self.view.thing_at(&rows, n, Some(column)),
+                        }
+                    });
+                    self.keyed = false;
+                    if std::mem::take(&mut self.in_the_foot) {
+                        // BACK FROM THE FOOT: what it is on starts now.
+                        if let Some(t) = time {
+                            self.since_ms = t;
+                        }
+                    } else if thing_of(now.as_ref()) != thing_of(self.pointed.as_ref()) {
+                        self.moved_on(time);
+                    }
+                    self.pointed = now;
+                }
+                PointerEventKind::Press { .. } => self.pointer_x = Some(e.position.0),
+                PointerEventKind::Leave { .. } => {
+                    self.pointer_x = None;
+                    self.pointed = None;
+                    self.rested = None;
+                    self.in_the_foot = false;
+                }
                 _ => {}
             }
         }
         let before = self.pointer_x;
         crate::door::list::pointer(self, ui, hand, events);
-        // THE ROW UNDER THE POINTER says its sentence on line 0.
-        if self.pointed != hand.row_under_pointer {
-            self.pointed = hand.row_under_pointer;
+        if self.pointed != was.0 || self.keyed != was.1 {
             ui.ask_paint();
         }
         // A POINTER MOVING ALONG A SHELF lights another cell on the same row.
@@ -540,12 +758,11 @@ impl Content for VideoMetricsWindow {
     /// and on the grid a hover that is the CELL, never a band across a shelf.
     fn paint(&mut self, ui: &mut Ui, canvas: &mut Canvas<'_>) {
         let rows = self.view_rows(ui);
-        // LINE 0: the question, a message, the pointed row's sentence — or
-        // the keys (`list::line_zero`'s order, the footer's own).
-        let about = self
-            .pointed
-            .and_then(|n| crate::video_metrics::View::about(&rows, n, &ui.texts));
-        crate::door::list::header_about(ui, canvas, None, about, |ui| self.hint(ui));
+        // LINE 0: the question, a message — or the keys (`list::line_zero`'s
+        // order, the footer's own). Never what the row under the pointer
+        // is: the foot says that (`Content::explained`), and with no header
+        // a row's sentence on line 0 went to the footer's minibuffer.
+        crate::door::list::header_of(ui, canvas, None, |ui| self.hint(ui));
         // FOLLOW THE CURSOR once the width is known: the door asked
         // `cursor()` without one.
         let fields: Vec<Vec<crate::fields::Field>> =
@@ -662,51 +879,60 @@ fn body(
     // lines — a band across it would light seven videos to say the pointer
     // is on one.
     let mut plain: Vec<(ronoctua_tokens::Color, Option<usize>)> = Vec::new();
+    // THE CELL OF A ROW THE POINTER IS OVER: the arithmetic the rows are
+    // drawn with, the click's (`VideoMetricsWindow::column_at`).
+    let column = pointer_x.map_or(0, |x| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let c = (x / f64::from(cell)).floor().max(0.0) as u16;
+        c.saturating_sub(ui.margin)
+    });
+    let (left, _) = crate::video_metrics::extent(ui.columns);
+    // THE BOXES LIT ON ONE LINE, `(colour, line, from, width)`: a glyph, or
+    // a row's words beside its glyphs.
+    let mut boxes: Vec<(ronoctua_tokens::Color, usize, u16, u16)> = Vec::new();
     for &(colour, at) in canvas.lit {
         let Some(n) = at.filter(|n| takes.get(*n).copied().unwrap_or(false)) else {
             continue;
         };
-        let owner = Row::owner(rows, n);
-        let Some(row) = rows.get(owner) else {
-            continue;
-        };
-        if !row.cells.is_empty() {
-            let column = pointer_x.map_or(0, |x| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let c = (x / f64::from(cell)).floor().max(0.0) as u16;
-                c.saturating_sub(ui.margin)
-            });
-            if let Some(c) = row
-                .cells
-                .iter()
-                .find(|c| crate::chrome::in_cell(column, c.from, c.width))
-            {
-                let lines = Row::lines_of(rows, owner);
-                let top = owner.max(ui.offset);
-                let bottom = (owner + lines).min(ui.offset + room);
-                if bottom > top {
-                    let y = f32::from(first) * tall + (top - ui.offset) as f32 * tall;
-                    let x = f32::from(ui.margin + c.from) * cell;
-                    let wide = (f32::from(c.width) * cell).min(ui.room.band_width() - x);
-                    canvas.under.push(ronoctua_render::quad::Quad {
-                        x,
-                        y,
-                        width: wide.max(0.0),
-                        height: (bottom - top) as f32 * tall,
-                        color: colour,
-                    });
-                }
+        let lights = lights_at(rows, n, column, left);
+        plain.extend(lights.bands.into_iter().map(|k| (colour, Some(k))));
+        boxes.extend(
+            lights
+                .boxes
+                .into_iter()
+                .map(|(k, from, wide)| (colour, k, from, wide)),
+        );
+        if let Some((owner, lines, from, wide)) = lights.cell {
+            let top = owner.max(ui.offset);
+            let bottom = (owner + lines).min(ui.offset + room);
+            if bottom > top {
+                let y = f32::from(first) * tall + (top - ui.offset) as f32 * tall;
+                let x = f32::from(ui.margin + from) * cell;
+                let wide = (f32::from(wide) * cell).min(ui.room.band_width() - x);
+                canvas.under.push(ronoctua_render::quad::Quad {
+                    x,
+                    y,
+                    width: wide.max(0.0),
+                    height: (bottom - top) as f32 * tall,
+                    color: colour,
+                });
             }
+        }
+    }
+    for (colour, n, from, wide) in boxes {
+        if n < ui.offset || n >= ui.offset + room {
             continue;
         }
-        if !rows[n].thumbs.is_empty() {
-            continue;
-        }
-        // A ROW OF SEVERAL LINES LIGHTS WHOLE — a wrapped label, a video's
-        // title and what is said under it — as a click on any of its lines
-        // takes it whole (`Row::owner`), and as the footer lights it.
-        let lines = Row::lines_of(rows, owner);
-        plain.extend((owner..owner + lines).map(|line| (colour, Some(line))));
+        let y = f32::from(first) * tall + (n - ui.offset) as f32 * tall;
+        let x = f32::from(ui.margin + from) * cell;
+        let wide = (f32::from(wide) * cell).min(ui.room.band_width() - x);
+        canvas.under.push(ronoctua_render::quad::Quad {
+            x,
+            y,
+            width: wide.max(0.0),
+            height: tall,
+            color: colour,
+        });
     }
     canvas.under.extend(crate::chrome::hover_bands(
         plain.into_iter(),
@@ -720,6 +946,73 @@ fn body(
         .under
         .extend(crate::chrome::list_bar(scroll, first, w, h));
     canvas.bar(crate::chrome::list_track(scroll, first, w, h));
+}
+
+/// WHAT ONE POINTER LIGHTS, over the rows of the window ([`lights_at`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Lights {
+    /// Lines lit across, as a band.
+    bands: Vec<usize>,
+    /// Boxes lit on one line, `(line, from, width)` as a field's `at`.
+    boxes: Vec<(usize, u16, u16)>,
+    /// A shelf's cell, lit over the shelf's lines: `(first line, lines,
+    /// from, width)`.
+    cell: Option<(usize, usize, u16, u16)>,
+}
+
+/// WHAT THE POINTER AT CELL `column` OF LINE `n` LIGHTS — a line a click
+/// takes (`View::takes`), `left` the rows' first cell. A line of glyphs
+/// lights the ONE box under the pointer: a glyph, on its own line — a click
+/// there takes no more, and the air between two takes nothing
+/// (the-pointer-lights-what-the-click-takes) —, or the row's words beside
+/// them, which light the row whole, as its title does: a click on either
+/// takes the same video. A line of a shelf lights the CELL under the
+/// pointer, over the shelf's lines — a band across it would light seven
+/// videos to say the pointer is on one. A line of a picture, nothing.
+///
+/// A ROW OF SEVERAL LINES LIGHTS WHOLE — a wrapped label, a video's title
+/// and what is said under it — as a click on any of its words takes it
+/// whole (`Row::owner`), from whichever of its lines the pointer is on: a
+/// line of words its band, a line with glyphs only its words' box
+/// (`Row::words_box`) — the glyphs beside them act on their own, and a band
+/// over them would say the click takes them.
+fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
+    let mut lights = Lights::default();
+    let owner = Row::owner(rows, n);
+    let (Some(row), Some(line)) = (rows.get(owner), rows.get(n)) else {
+        return lights;
+    };
+    let whole = |lights: &mut Lights| {
+        let lines = Row::lines_of(rows, owner);
+        for (k, l) in rows.iter().enumerate().skip(owner).take(lines) {
+            if l.controls.is_empty() {
+                lights.bands.push(k);
+            } else if let Some((from, wide)) = l.words_box(left, row.has_words()) {
+                lights.boxes.push((k, from, wide));
+            }
+        }
+    };
+    if !line.controls.is_empty() {
+        let words = line.words_box(left, row.has_words());
+        match line
+            .lit_cells(left, row.has_words())
+            .into_iter()
+            .find(|&(from, wide)| crate::chrome::in_cell(column, from, wide))
+        {
+            Some(b) if Some(b) == words => whole(&mut lights),
+            Some((from, wide)) => lights.boxes.push((n, from, wide)),
+            None => {}
+        }
+    } else if !row.cells.is_empty() {
+        lights.cell = row
+            .cells
+            .iter()
+            .find(|c| crate::chrome::in_cell(column, c.from, c.width))
+            .map(|c| (owner, Row::lines_of(rows, owner), c.from, c.width));
+    } else if line.thumbs.is_empty() {
+        whole(&mut lights);
+    }
+    lights
 }
 
 #[cfg(test)]
@@ -776,10 +1069,12 @@ mod tests {
             (crate::door::seen(w, ui), w.cursor_of(&w.view_rows(ui)))
         };
         let mut shelves = 0;
+        let mut glyphs = 0;
         let mut every = Vec::new();
         for (page, grid) in [
             (Page::Home, false),
             (Page::Channels, false),
+            (Page::Import, false),
             (Page::Rules, false),
             (Page::Weights, false),
             (Page::Videos, false),
@@ -801,6 +1096,22 @@ mod tests {
                     // it — and the generic click has no pointer: the air
                     // before the first cell, which takes nothing and lights
                     // nothing.
+                    // A LINE OF GLYPHS IS CLICKED WHERE A GLYPH IS, as a
+                    // shelf is where a cell is: each acts on the first click
+                    // (`View::click_control`).
+                    let controls = rows.get(h.row).map(|r| r.controls.clone());
+                    if let Some(controls) = controls.filter(|c| !c.is_empty()) {
+                        glyphs += 1;
+                        h.did = controls.iter().all(|c| {
+                            let (mut w, mut ui) = fresh();
+                            let cell = f64::from(crate::chrome::cell_width());
+                            w.pointer_x = Some(cell * (f64::from(ui.margin + c.from) + 0.5));
+                            let before = witness(&w, &ui);
+                            w.clicked(&mut ui, h.row);
+                            witness(&w, &ui) != before
+                        });
+                        return h;
+                    }
                     let cells = rows.get(owner(h.row)).map(|o| o.cells.clone());
                     if let Some(cells) = cells.filter(|c| !c.is_empty()) {
                         shelves += 1;
@@ -829,6 +1140,318 @@ mod tests {
             assert!(unheld.is_empty(), "{what}: {unheld:?}");
         }
         assert!(shelves > 0, "the grid drew no shelf");
+        assert!(glyphs > 0, "no line of glyphs was clicked");
+    }
+
+    /// A pointer's event at `at`, on the window's surface.
+    fn event(ui: &Ui, at: (f64, f64), kind: PointerEventKind) -> PointerEvent {
+        PointerEvent {
+            surface: ui.surface.clone(),
+            position: at,
+            kind,
+        }
+    }
+
+    /// The pointer moved, at `time`, to the middle of the first cell of the
+    /// row `spot` — wherever the window draws it.
+    fn over(w: &mut VideoMetricsWindow, ui: &mut Ui, hand: &mut Hand<()>, spot: &str, time: u32) {
+        let rows = w.view_rows(ui);
+        let n = rows
+            .iter()
+            .position(|r| r.spot == spot)
+            .unwrap_or_else(|| panic!("no row `{spot}`"));
+        over_at(w, ui, hand, (n, 2), time);
+    }
+
+    /// The pointer moved, at `time`, to the middle of cell `at.1` (a field's
+    /// `at`) of line `at.0`.
+    fn over_at(
+        w: &mut VideoMetricsWindow,
+        ui: &mut Ui,
+        hand: &mut Hand<()>,
+        at: (usize, u16),
+        time: u32,
+    ) {
+        let px = ronoctua_tokens::text::size();
+        let line = usize::from(ui.first_of_list()) + at.0 - ui.offset;
+        #[allow(clippy::cast_precision_loss)]
+        let at = (
+            (f64::from(ui.margin + at.1) + 0.5)
+                * f64::from(ronoctua_tokens::metrics::cell_width(px)),
+            (line as f64 + 0.5) * f64::from(ronoctua_tokens::metrics::line_height(px)),
+        );
+        let e = event(ui, at, PointerEventKind::Motion { time });
+        w.pointer(ui, hand, &[e]);
+    }
+
+    /// FAILS IF: the window keeps no foot; the foot does not explain the
+    /// thing the pointer rests on — its name, and that a first click
+    /// selects it — over the cursor's; a key does not give it back to the
+    /// cursor's thing, which `RET` does, until the pointer moves again; the
+    /// pointer going down into the foot makes it explain the last row it
+    /// crossed rather than the one it rested on; or the pointer gone leaves
+    /// anything but the cursor's thing.
+    #[test]
+    fn the_foot_explains_the_pointer_then_the_cursor() {
+        use crate::door::Gesture;
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-window-foot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+        let (mut w, mut ui) = a_window(&blocked, &Page::Home, false);
+        let _ = std::fs::remove_file(&blocked);
+        let mut hand = Hand::<()>::default();
+        let t = ui.texts.clone();
+        let gesture = |how, does| Some(crate::door::foot::gesture(&t, how, &t.t(does)));
+        assert_eq!(w.foot_lines(&ui), ronoctua_tokens::space::WINDOW_FOOTLINES);
+        // THE CURSOR'S THING, with nothing under the pointer.
+        let rows = w.view_rows(&ui);
+        let cursor = rows[w.view.drawn_cursor(&rows)].spot.clone();
+        let said = w.explained(&ui).expect("the cursor's thing");
+        assert_eq!(said.subject, cursor);
+        // THE POINTER ON ANOTHER ROW: its thing, which a click selects.
+        over(&mut w, &mut ui, &mut hand, "channels", 0);
+        let said = w.explained(&ui).expect("the pointer's thing");
+        assert_eq!(said.subject, "channels");
+        assert_eq!(said.name, t.t(crate::key::VIDEO_METRICS_CHANNELS));
+        assert_eq!(
+            said.gesture,
+            gesture(Gesture::Selects, crate::key::VIDEO_METRICS_ACT_OPENS)
+        );
+        assert!(!said.said.is_empty(), "the row says nothing");
+        // A KEY gives the foot back to the cursor's thing, `RET`'s.
+        let (down, mods) =
+            crate::door::keys::event_of(ronoctua_keymap::Key::parse("<down>").expect("a key"));
+        w.typed(&mut ui, &down, mods);
+        let rows = w.view_rows(&ui);
+        let cursor = rows[w.view.drawn_cursor(&rows)].spot.clone();
+        assert_ne!(cursor, "channels");
+        let said = w.explained(&ui).expect("the cursor's thing");
+        assert_eq!(said.subject, cursor, "a key did not give the foot back");
+        assert!(
+            said.gesture
+                .as_deref()
+                .is_none_or(|g| g.contains(&crate::chrome::key_text(
+                    &ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Enter)
+                ))),
+            "the cursor's thing does not say its key: {said:?}"
+        );
+        // …until the pointer moves again.
+        over(&mut w, &mut ui, &mut hand, "channels", 10);
+        assert_eq!(w.explained(&ui).expect("the pointer's").subject, "channels");
+        // RESTED ON IT, then two rows crossed on the way down to the foot:
+        // the foot explains what was rested on.
+        let rest_ms = u32::from(ronoctua_tokens::space::WINDOW_FOOTRESTTENTHS) * 100;
+        over(&mut w, &mut ui, &mut hand, "rules", 10 + rest_ms);
+        over(&mut w, &mut ui, &mut hand, "weights", 20 + rest_ms);
+        w.pointer_went_to_the_foot(&mut ui, &mut hand, Some(30 + rest_ms));
+        assert_eq!(w.explained(&ui).expect("the rested").subject, "channels");
+        // AND THE POINTER GONE: the cursor's thing again.
+        let e = event(&ui, (0.0, 0.0), PointerEventKind::Leave { serial: 0 });
+        w.pointer(&mut ui, &mut hand, &[e]);
+        assert_eq!(w.explained(&ui).expect("the cursor's").subject, cursor);
+    }
+
+    /// FAILS IF: the rest the foot keeps is the LINE's and not the thing's,
+    /// on the grid, where a line holds several videos and a video spans its
+    /// shelf's lines: a pointer that rested on one video, went down its
+    /// lines and slid along one onto the next before dropping into the foot
+    /// has the foot explain the video it only crossed — or none, the move
+    /// down the video taken for a move off it.
+    #[test]
+    fn the_rest_is_the_videos_and_not_its_lines() {
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-window-rest-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+        let (mut w, mut ui) = a_window(&blocked, &Page::Videos, true);
+        let _ = std::fs::remove_file(&blocked);
+        let mut hand = Hand::<()>::default();
+        let rows = w.view_rows(&ui);
+        let shelf = rows
+            .iter()
+            .position(|r| r.cells.len() > 2)
+            .expect("a shelf of three videos");
+        assert!(Row::lines_of(&rows, shelf) > 1, "a shelf of one line");
+        // TWO VIDEOS SIDE BY SIDE, neither the cursor's: the cursor's thing
+        // is what the foot says when it keeps no rest.
+        let cursor = w.explained(&ui).expect("the cursor's thing").subject;
+        let mut others = rows[shelf].cells.iter().filter(|c| c.spot != cursor);
+        let (rested, crossed) = (
+            others.next().expect("a video").clone(),
+            others.next().expect("another").clone(),
+        );
+        let rest_ms = u32::from(ronoctua_tokens::space::WINDOW_FOOTRESTTENTHS) * 100;
+        // ON ONE VIDEO, down its lines, then along the second line onto the
+        // next — the rest is the first video's — and into the foot.
+        over_at(&mut w, &mut ui, &mut hand, (shelf, rested.from + 1), 1000);
+        assert_eq!(w.explained(&ui).expect("the video").subject, rested.spot);
+        over_at(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            (shelf + 1, rested.from + 1),
+            1000 + rest_ms / 2,
+        );
+        over_at(
+            &mut w,
+            &mut ui,
+            &mut hand,
+            (shelf + 1, crossed.from + 1),
+            1000 + rest_ms + 10,
+        );
+        assert_eq!(w.explained(&ui).expect("the next").subject, crossed.spot);
+        w.pointer_went_to_the_foot(&mut ui, &mut hand, Some(1000 + rest_ms + 20));
+        assert_eq!(
+            w.explained(&ui).expect("the rested").subject,
+            rested.spot,
+            "the foot does not explain the video rested on"
+        );
+    }
+
+    /// FAILS IF: a video of the list lights one way from its title and
+    /// another from the words under it — channel, age, score —, which a
+    /// click takes as the same video; or a band crosses the glyphs beside
+    /// those words, which act on their own; or a glyph lights more than its
+    /// own box, or the air between two lights anything. And on the grid, a
+    /// glyph of a tile lights itself alone, a tile's cell its cell.
+    #[test]
+    fn a_video_lights_alike_from_its_title_and_its_words() {
+        let r = crate::video_metrics::tests::readings();
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let (left, _) = crate::video_metrics::extent(COLUMNS);
+        let (v, _) = View::fresh(Page::Videos);
+        let rows = v.rows(&r, COLUMNS, &texts);
+        let meta = rows
+            .iter()
+            .position(|row| row.continues && !row.controls.is_empty())
+            .expect("a video's line of words and glyphs");
+        let title = Row::owner(&rows, meta);
+        assert!(title < meta, "the line of glyphs continues no title");
+        let (from, wide) = rows[meta]
+            .words_box(left, rows[title].has_words())
+            .expect("the words beside the glyphs");
+        let from_the_title = lights_at(&rows, title, left + 1, left);
+        let from_the_words = lights_at(&rows, meta, from + wide - 1, left);
+        assert_eq!(
+            from_the_title, from_the_words,
+            "the title and the words under it light different things"
+        );
+        assert!(
+            !from_the_title.bands.contains(&meta),
+            "a band crosses the glyphs: {from_the_title:?}"
+        );
+        assert_eq!(from_the_title.boxes, vec![(meta, from, wide)]);
+        assert!(from_the_title.bands.contains(&title));
+        for (i, c) in rows[meta].controls.iter().enumerate() {
+            assert_eq!(
+                lights_at(&rows, meta, c.from, left),
+                Lights {
+                    boxes: vec![(meta, c.from, c.width)],
+                    ..Lights::default()
+                },
+                "the glyph {i} lights more than itself"
+            );
+            if rows[meta].controls.get(i + 1).is_some() {
+                assert_eq!(
+                    lights_at(&rows, meta, c.from + c.width, left),
+                    Lights::default(),
+                    "the air after glyph {i} lights something"
+                );
+            }
+        }
+        // THE GRID: a tile's glyph, and its cell.
+        let (mut v, _) = View::fresh(Page::Videos);
+        let _ = v.press(crate::video_metrics::Press::Layout, &rows, &r);
+        let rows = v.rows(&r, COLUMNS, &texts);
+        let shelf = rows
+            .iter()
+            .position(|row| !row.cells.is_empty())
+            .expect("a shelf");
+        let glyphs = (shelf..rows.len())
+            .find(|&k| Row::owner(&rows, k) == shelf && !rows[k].controls.is_empty())
+            .expect("a line of a tile's glyphs");
+        let c = &rows[glyphs].controls[0];
+        assert_eq!(
+            lights_at(&rows, glyphs, c.from, left),
+            Lights {
+                boxes: vec![(glyphs, c.from, c.width)],
+                ..Lights::default()
+            }
+        );
+        let tile = &rows[shelf].cells[0];
+        assert_eq!(
+            lights_at(&rows, shelf, tile.from + 1, left).cell,
+            Some((shelf, Row::lines_of(&rows, shelf), tile.from, tile.width))
+        );
+    }
+
+    /// FAILS IF: what leaves the view for another program is not carried
+    /// out by the window as the footer's region carries it out — Nyxt
+    /// started here, by its entry in the launcher; the brain's page and the
+    /// player's window asked of the footer, by the commands that open them —
+    /// or a photograph's window (`Direct`) reaches any of them.
+    #[test]
+    fn a_window_sends_what_leaves_the_view_where_it_goes() {
+        use crate::player_seam::ranking::OPEN_SET_ASIDE;
+        let url = "https://www.youtube.com/watch?v=video000001".to_owned();
+        let leaving = || {
+            [
+                Errand::Nyxt(url.clone()),
+                Errand::Brain,
+                Errand::Player(OPEN_SET_ASIDE),
+            ]
+        };
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        let (view, _) = View::fresh(Page::Home);
+        let mut w = VideoMetricsWindow {
+            view,
+            readings: crate::video_metrics::tests::readings(),
+            reach: Reach::Feed(Feed::start(None, || {})),
+            pointer_x: None,
+            pointed: None,
+            keyed: false,
+            since_ms: 0,
+            rested: None,
+            in_the_foot: false,
+            cursor_row: std::cell::Cell::new(None),
+        };
+        for errand in leaving() {
+            w.apply(&mut ui, errand);
+        }
+        assert_eq!(ui.launches(), [crate::launch::in_nyxt(&url)]);
+        assert_eq!(
+            ui.orders(),
+            [
+                format!(
+                    "command {} {}",
+                    crate::video_metrics::BRAIN_OPEN,
+                    ronoctua_brain::compiled::video_metrics::ID
+                ),
+                format!(
+                    "command {} {OPEN_SET_ASIDE}",
+                    crate::video_metrics::PLAYER_WINDOW
+                ),
+            ]
+        );
+        assert!(!ui.quit, "the window closed for another program");
+        // A PHOTOGRAPH'S WINDOW prints what it would have done, and does none.
+        let blocked = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-leaving-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+        let (mut w, mut ui) = a_window(&blocked, &Page::Home, false);
+        for errand in leaving() {
+            w.apply(&mut ui, errand);
+        }
+        let _ = std::fs::remove_file(&blocked);
+        assert!(ui.launches().is_empty() && ui.orders().is_empty());
     }
 
     /// FAILS IF: a key the window teaches has no one key after `LEADER Alt`,
@@ -848,5 +1471,98 @@ mod tests {
         ) {
             panic!("the window offers what is not one key after LEADER Alt:\n{wrong}");
         }
+    }
+
+    /// FAILS IF: the window does not host the file picker over its import
+    /// page as the footer's region does — the second click on choosing the
+    /// list brings it up; the window keeps none of the letters it looks for
+    /// from it; going back puts the page back; a list pasted into it and
+    /// taken is imported, said on this window's line and its channels drawn
+    /// to decide.
+    #[test]
+    fn the_window_picks_a_list_and_imports_it() {
+        use ronoctua_keymap::{Key, Sym};
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-window-import-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch folder");
+        // TWO CHANNELS, made up (invariant 13).
+        let list = dir.join("subscriptions.csv");
+        let line = |c: char, title: &str| {
+            let id = ronoctua_video_metrics::ChannelId(format!("UC{}", c.to_string().repeat(22)));
+            format!(
+                "{},{},{title}\n",
+                id.0,
+                ronoctua_video_metrics::takeout::channel_url(&id)
+            )
+        };
+        std::fs::write(
+            &list,
+            format!(
+                "{}\n{}{}",
+                ronoctua_video_metrics::takeout::HEADER,
+                line('p', "One"),
+                line('q', "Two")
+            ),
+        )
+        .expect("a list");
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        ui.columns = COLUMNS;
+        let mut w =
+            VideoMetricsWindow::detached(dir.join("catalog.sqlite"), Page::Import, String::new());
+        let key = |w: &mut VideoMetricsWindow, ui: &mut Ui, k: Key| {
+            let (event, mods) = crate::door::keys::event_of(k);
+            w.typed(ui, &event, mods);
+        };
+        let choose = |w: &mut VideoMetricsWindow, ui: &mut Ui| {
+            let rows = w.view_rows(ui);
+            let n = rows
+                .iter()
+                .position(|r| r.spot == "choose-list")
+                .expect("the row that chooses the list");
+            w.clicked(ui, n);
+            w.clicked(ui, n);
+        };
+        choose(&mut w, &mut ui);
+        assert!(w.view.picking(), "the second click brought no picker up");
+        let letter = Key::simple(Sym::Char('n'));
+        assert!(
+            !crate::chrome::barred(&letter, &w.barred_keys(&ui)),
+            "the window keeps a letter from the picker"
+        );
+        key(&mut w, &mut ui, Key::simple(Sym::Esc));
+        assert!(!w.view.picking(), "the way back left the picker up");
+        choose(&mut w, &mut ui);
+        w.pasted(&mut ui, &list.to_string_lossy());
+        key(&mut w, &mut ui, Key::simple(Sym::Enter));
+        assert!(!w.view.picking(), "the picker stayed up after its answer");
+        assert_eq!(
+            w.readings.staged.len(),
+            2,
+            "the list was not staged and read"
+        );
+        let imported = ui.texts.t_args(
+            crate::key::VIDEO_METRICS_IMPORTED,
+            &[
+                ("staged", ronoctua_i18n::Arg::Number(2)),
+                ("already", ronoctua_i18n::Arg::Number(0)),
+            ],
+        );
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(imported.as_str()),
+            "the import was not said"
+        );
+        let rows = w.view_rows(&ui);
+        assert!(
+            rows.iter()
+                .filter(|r| r.spot.starts_with("staged:"))
+                .count()
+                == 2,
+            "the channels to decide are not drawn"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

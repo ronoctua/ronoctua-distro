@@ -182,6 +182,13 @@ fn every_window_shortcut_is_one_key() {
         &[&rows!(player::OF_THE_VIEW)],
         &[player::LEADER_ALT_KEYS],
     );
+    // THE PICTURE'S CONTROLS WITH THE KEYBOARD (`TAB`): their own hint, in
+    // the view's place while they have it.
+    window(
+        "the player's picture controls",
+        &[&rows!(player::OF_THE_PANE)],
+        none,
+    );
     // A TEXT BEING EDITED, in the player and in the video metrics: its two
     // keys alone (the player's exceptions give its `C-s` another one key).
     window("a text being edited", &[text_area::OF_THE_TEXT_AREA], none);

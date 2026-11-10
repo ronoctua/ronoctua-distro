@@ -31,6 +31,15 @@
 //! What was read is catalogued, and the reference does not move: the next
 //! scan asks again from the same point, so a feed that failed for a day
 //! loses nothing.
+//!
+//! # Time runs out at every scan
+//!
+//! Before any channel is read — a rehearsal (`feeds_only`) too, since it
+//! touches no network — every video that outlived its keep is taken out as a
+//! tombstone (`expired`; [`crate::Keep`]), and a sighting already past it is
+//! never catalogued: fetching its details and its thumbnail for the next
+//! scan to delete would be work for nothing. A channel of an imported list
+//! not registered yet is never scanned.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,7 +53,7 @@ use crate::edit::{self, NewVideo, evidence};
 use crate::feed::{self, FEED_LEN, Which};
 use crate::read::{Filter, Page};
 use crate::thumbs::Thumbs;
-use crate::{ChannelId, Refusal, Settings, Skip, VideoId, Why};
+use crate::{ChannelId, Keep, Refusal, Settings, Skip, VideoId, Why};
 
 pub use crate::Stop;
 
@@ -86,7 +95,7 @@ pub struct Report {
     /// Videos catalogued.
     pub added: u32,
     /// Videos tombstoned (first scan, before the reference, blocked Shorts,
-    /// unavailable).
+    /// unavailable, past their time).
     pub skipped: u32,
     /// Details fetched.
     pub detailed: u32,
@@ -269,7 +278,10 @@ pub struct Plan {
 
 /// Decides what a channel's sightings become. Pure: `known` says whether an
 /// id is in the catalogue or among its tombstones (those are never decided
-/// again — a deleted video never comes back).
+/// again — a deleted video never comes back); `block_shorts` and `keep` are
+/// the channel's, resolved. A dated sighting already past `keep` is a
+/// tombstone (`expired`) and never taken, whatever the first scan's window
+/// would have let in.
 #[must_use]
 pub fn plan(
     reference_at_s: Option<i64>,
@@ -277,6 +289,7 @@ pub fn plan(
     known: &dyn Fn(&VideoId) -> bool,
     settings: &Settings,
     block_shorts: bool,
+    keep: Keep,
     now_s: i64,
 ) -> Plan {
     // ONE SIGHTING PER ID, in the order first seen.
@@ -307,7 +320,18 @@ pub fn plan(
             continue;
         }
         // NO DATE, NO DECISION: a scan that knows the date decides.
-        if candidate.published_at_s.is_some() {
+        let Some(published) = candidate.published_at_s else {
+            continue;
+        };
+        // PAST ITS TIME ALREADY, by the clause the scan's sweep reads
+        // (`edit::EXPIRED`): a video it would take out next time.
+        let outlived = match keep {
+            Keep::Days(days) => published < now_s - i64::from(days) * DAY_S,
+            Keep::Forever => false,
+        };
+        if outlived {
+            plan.skip.push((candidate.id, Skip::Expired));
+        } else {
             dated.push(candidate);
         }
     }
@@ -405,6 +429,18 @@ fn run_held(
         .map_err(sql)?;
     began();
     let mut report = Report::default();
+    // TIME RUNS OUT FIRST, in a transaction of its own (`edit::expire` chooses
+    // and takes out under one lock), and the pictures go once it committed.
+    let (expired, pictures) = {
+        let tx = db::immediate(&conn)?;
+        let taken = edit::expire(&tx, &settings, now_s)?;
+        tx.commit().map_err(sql)?;
+        taken
+    };
+    for picture in &pictures {
+        crate::thumbs::forget(Some(picture));
+    }
+    report.skipped += expired;
     let mut added = Vec::new();
     for (channel, reference) in channels_to_scan(&conn)? {
         report.channels += 1;
@@ -537,11 +573,13 @@ fn hold(path: &Path) -> Result<std::fs::File, Refusal> {
 }
 
 /// Every channel and its reference, the one tried longest ago first — so a
-/// run a bot check cuts short leaves the others first in line next time.
+/// run a bot check cuts short leaves the others first in line next time. A
+/// channel of an imported list (`staged`) is none of them until it is
+/// registered: the person has not said yes to it yet.
 fn channels_to_scan(conn: &Connection) -> Result<Vec<(ChannelId, Option<i64>)>, Refusal> {
     let mut statement = conn
         .prepare(
-            "SELECT id, reference_at FROM channels
+            "SELECT id, reference_at FROM channels WHERE staged IS NULL
              ORDER BY last_try_at IS NOT NULL, last_try_at, added_at, id",
         )
         .map_err(sql)?;
@@ -588,6 +626,7 @@ fn scan_channel(
     now_s: i64,
 ) -> Result<Done, Halt> {
     let block = edit::blocks_shorts(conn, channel, settings)?;
+    let keep = edit::keep_of(conn, channel, settings)?;
     let known_ids = |id: &VideoId| edit::known(conn, id).unwrap_or(true);
     let floor = reference.map(|r| r - DAY_S);
     let mut candidates = Vec::new();
@@ -645,7 +684,9 @@ fn scan_channel(
         read(Which::Shorts, Tab::Shorts, &mut candidates, &mut errors)?;
     }
 
-    let decided = plan(reference, candidates, &known_ids, settings, block, now_s);
+    let decided = plan(
+        reference, candidates, &known_ids, settings, block, keep, now_s,
+    );
     let tx = db::immediate(conn)?;
     let generation = db::bump(&tx)?;
     let mut done = Done::default();

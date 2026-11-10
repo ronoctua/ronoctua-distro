@@ -115,6 +115,49 @@ pub struct Explained {
     pub said: Vec<(String, tokens::Color)>,
 }
 
+impl Explained {
+    /// What the foot explains, as ONE line — for a footer's region, which
+    /// has no foot and says it on its explanation line, cut at its width:
+    /// what the hand does to the thing first (the line's whole question
+    /// under the pointer), then its sentences, each without its tone.
+    /// `None` when there is nothing to say.
+    ///
+    /// ONE ANSWER FOR EVERY REGION that explains as its window's foot does
+    /// (the update's, the video catalogue's): it was the update region's
+    /// own, and a second view would have written it again.
+    #[must_use]
+    pub fn joined(&self) -> Option<String> {
+        let said: Vec<&str> = self
+            .said
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let said = said.join(" ");
+        match self.gesture.as_deref().filter(|g| !g.is_empty()) {
+            Some(g) if said.is_empty() => Some(g.to_owned()),
+            Some(g) => Some(format!("{g}. {said}")),
+            None => (!said.is_empty()).then_some(said),
+        }
+    }
+
+    /// [`Explained::joined`] led by the thing's NAME — for a thing the line
+    /// does not name beside it: a glyph is a picture, and the region's line
+    /// said "a click: gives it this rating" without saying which one.
+    /// `None` when there is nothing to say.
+    #[must_use]
+    pub fn joined_named(&self, texts: &ronoctua_i18n::Texts) -> Option<String> {
+        let rest = self.joined()?;
+        if self.name.is_empty() {
+            return Some(rest);
+        }
+        Some(texts.t_with(
+            crate::key::DOOR_FOOT_NAMED,
+            &[("name", &self.name), ("rest", &rest)],
+        ))
+    }
+}
+
 /// HOW THE THING A FOOT EXPLAINS IS TAKEN — the three ways a window's row
 /// answers the hand, each said with what it will do ([`gesture`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -777,6 +820,47 @@ mod tests {
             gesture: Some("click: it happens".to_owned()),
             said: vec![(sentence.to_owned(), tokens::color::TEXT_SECONDARY)],
         }
+    }
+
+    /// FAILS IF: the one line a footer's region says loses the gesture or a
+    /// sentence, puts the gesture after the sentences, says an empty
+    /// sentence as a gap, or says something about a thing that has nothing.
+    #[test]
+    fn what_a_foot_explains_joins_into_one_line() {
+        let mut e = explained("row", "It does a thing.");
+        e.said.push((String::new(), tokens::color::TEXT_DIM));
+        e.said
+            .push(("And another.".to_owned(), tokens::color::TEXT_DIM));
+        assert_eq!(
+            e.joined().as_deref(),
+            Some("click: it happens. It does a thing. And another.")
+        );
+        e.gesture = None;
+        assert_eq!(e.joined().as_deref(), Some("It does a thing. And another."));
+        e.said.clear();
+        assert_eq!(e.joined(), None, "nothing to say");
+        e.gesture = Some("click: it happens".to_owned());
+        assert_eq!(e.joined().as_deref(), Some("click: it happens"));
+        e.gesture = Some(String::new());
+        assert_eq!(e.joined(), None, "an empty gesture is no gesture");
+    }
+
+    /// FAILS IF: the one line a glyph is said on leaves out which glyph it
+    /// is — or names a thing that has no name, or says something when
+    /// there is nothing to say.
+    #[test]
+    fn a_line_led_by_its_name_says_which_thing() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let mut e = explained("row", "It does a thing.");
+        e.name = "Very positive".to_owned();
+        let said = e.joined_named(&texts).expect("a line");
+        assert!(said.starts_with("Very positive"), "{said}");
+        assert!(said.ends_with(&e.joined().expect("joined")), "{said}");
+        e.name.clear();
+        assert_eq!(e.joined_named(&texts), e.joined(), "no name to lead with");
+        e.said.clear();
+        e.gesture = None;
+        assert_eq!(e.joined_named(&texts), None, "nothing to say");
     }
 
     /// FAILS IF: a window with no header that says something through the

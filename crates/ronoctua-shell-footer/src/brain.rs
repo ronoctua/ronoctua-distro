@@ -1402,6 +1402,25 @@ pub fn action_named(mind: Option<&Mind>, command: &str) -> Option<Acting> {
 pub enum Opening {
     /// The whole journal, followed live in a terminal of its own.
     TheJournal,
+    /// The video catalogue, in its window — the app whose scan a module
+    /// schedules, from that module's page.
+    VideoMetrics,
+}
+
+impl Opening {
+    /// THE WINDOW AN OPENING IS, as `ronoctua-shell <words>` opens it — the
+    /// words a region's own `open_window` hands the footer — or `None` for
+    /// one the footer does itself (the journal). Opened by those words, a
+    /// leaf: asked of the region that answers the window's command, the
+    /// action's ring (`run_with` → the action → the region → `run_with`)
+    /// closed through the footer (`the-footer-does-not-ask-itself`).
+    #[must_use]
+    pub fn window(self) -> Option<&'static [&'static str]> {
+        match self {
+            Opening::TheJournal => None,
+            Opening::VideoMetrics => Some(&["video-metrics"]),
+        }
+    }
 }
 
 /// What `opens` names, or `None` for a name nothing here opens.
@@ -1409,6 +1428,7 @@ pub enum Opening {
 pub fn opening(opens: &str) -> Option<Opening> {
     match opens {
         "journal-follow" => Some(Opening::TheJournal),
+        "video-metrics-window" => Some(Opening::VideoMetrics),
         _ => None,
     }
 }
@@ -2894,6 +2914,18 @@ mod tests {
             );
         }
         assert_eq!(super::opening("monitor-btop"), None);
+    }
+
+    /// FAILS IF: the video catalogue's action opens anything but the window
+    /// its region opens (`ronoctua-shell video-metrics`), or the journal,
+    /// which the footer follows itself, is given a window's words.
+    #[test]
+    fn an_opening_that_is_a_window_names_its_words() {
+        assert_eq!(
+            super::opening("video-metrics-window").and_then(super::Opening::window),
+            Some(&["video-metrics"][..])
+        );
+        assert_eq!(super::Opening::TheJournal.window(), None);
     }
 
     /// FAILS IF: `brain-act <module> <action>` before the footer's first mind

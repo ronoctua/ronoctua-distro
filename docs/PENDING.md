@@ -73,7 +73,8 @@ resto. Faltam fotos, com asserção, de:
   pergunta secreta, a barra de alerta máximo, as horas no minibuffer, a gaveta que cresce sob o
   ponteiro, e o seletor de arquivos como região;
 - **do player**: a coluna de mídia no rodapé (vários tamanhos, mp3 com e sem capa, fluxo sem
-  duração), a linha do tempo do miniplayer arrastada, o deck no "Agora", o roteamento por tela com
+  duração; os dois painéis: o chão `surface.shelf`, a faixa que para no vão, o `TAB` até o
+  recolher), a linha do tempo do miniplayer arrastada, o deck no "Agora", o roteamento por tela com
   duas saídas, os metadados com a capa, a listagem e a grade do catálogo, o par da modeline (com o
   ambiente só), e o filme recolhido;
 - **outras**: o localizador numa saída em escala 2 e um buffer com `Command::Svg`; oito janelas sem
@@ -211,4 +212,9 @@ Nada disso muda o que a pessoa vê; faça quando mexer na área.
   - o vigia do `.#dev` de pé depois de cada ramo de recarga;
   - `brain-daemon-halves-reexport`;
   - o `chrome-icons-match-the-text` estendido aos glifos do catálogo do brain;
-  - o `our-crates-are-built-unit-by-unit` reconhecendo a vendorização pelo conteúdo do `Cargo.lock`.
+  - o `our-crates-are-built-unit-by-unit` reconhecendo a vendorização pelo conteúdo do `Cargo.lock`;
+  - um PARSED que só deixe o `player_ranking.rs` escrever o catálogo por
+    `video_metrics_feed::mark`, `hide` e `delete` (outro caminho de escrita no ranking);
+  - um PARSED que `channels_to_scan` e `query::channels` filtrem `staged IS NULL` (um canal em
+    espera varrido, ou listado entre os do catálogo);
+  - a ida e volta de `import`/`export` no `video-metrics-vm` (a CLI que fixture, foto e VM usam).

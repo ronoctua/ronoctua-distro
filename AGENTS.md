@@ -588,9 +588,9 @@ OSC 7501, que o guardião lê.
   (`Carries::About`; num buffer, `Screen::point`) vai para o minibuffer do rodapé
   (`door::pointed_order`, ordem `pointed`).
 - Emenda do dono (2026-11-08): uma janela com pé próprio (`Content::foot_lines`,
-  `space.window.footLines`; hoje a da atualização) o mantém sempre, na mesma altura — a mensagem e
-  a pergunta da porta usam essas linhas, e nada acima se move — e diz nele o que está sob o
-  ponteiro e, sem ele, o que o cursor é (`Content::explained`), nunca no minibuffer.
+  `space.window.footLines`; hoje a da atualização e a do video metrics) o mantém sempre, na mesma
+  altura — a mensagem e a pergunta da porta usam essas linhas, e nada acima se move — e diz nele o
+  que está sob o ponteiro e, sem ele, o que o cursor é (`Content::explained`), nunca no minibuffer.
 - Tecla nunca é texto no `.ftl`: sai do código (`bindings::taught`) + `bindings::label()`, num
   `{ $keys }` (cobra `keys-are-never-text`). "LEADER" em produção é `SUPER`, no `.#dev` `CTRL ALT SPC`.
 
@@ -598,9 +598,11 @@ OSC 7501, que o guardião lê.
 
 - Os tons de uma linha vêm do tipo, nunca de argumento de cor (`chrome::Kind`; no WASM
   `Role::LabelFact`/`LabelSetting`/`ValueFact`/`ValueSetting`; cobra `labels-say-what-they-are`).
-- O cursor é uma cor (`text.here.*`), não `Row::focused` (cobra `the-cursor-is-a-colour`). Exceção: o
-  gerenciador de arquivos, cursor na faixa `surface.selection` numa grade, célula sob o ponteiro lida
-  pela pintura e pelo clique (cobra `a-grid-cell-is-lit-alone`).
+- O cursor é uma cor (`text.here.*`), não `Row::focused` (cobra `the-cursor-is-a-colour`). Exceções:
+  o gerenciador de arquivos, cursor na faixa `surface.selection` numa grade, célula sob o ponteiro
+  lida pela pintura e pelo clique (cobra `a-grid-cell-is-lit-alone`); e os controles da imagem do
+  player que o `TAB` alcança (o painel do vídeo no rodapé, o transporte da janela), cursor num chão
+  `surface.selection` sob o controle (decisão do dono, 2026-11-09).
 - Rótulo e valor têm uma aritmética só (`chrome::field_pair`, valor em `space.view.labelCells`;
   `chrome::aligned_pair` alinha a seção inteira).
 - Título de seção usa `text.heading`; `text.group` é só o submenu da leader (cobra

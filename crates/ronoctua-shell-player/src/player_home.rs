@@ -95,7 +95,10 @@ impl View {
     /// The "Now" title — with the glyph that FOLDS THE PICTURE away, or
     /// back, while the door shows one ([`View::picture_foldable`]), and the
     /// swap's glyph at its edge in the footer while no media panel stands
-    /// beside the rows to carry it in its transport.
+    /// beside the rows to carry it in its transport. THE FOOTER'S PANEL
+    /// CARRIES THE FOLD TOO, at the end of its time bar
+    /// (`player_media::FOLD`): the picture's control in the picture's pane,
+    /// and "Now" bare beside it.
     fn now_heading(&self, b: &mut Builder<'_>) {
         // THE FOLD'S GLYPH IS DRAWN AS WHAT A PRESS DOES: fold, or unfold.
         let fold = self.picture_fold.map(|folded| {
@@ -109,12 +112,13 @@ impl View {
         // PICTURE TO FOLD stands in a panel, and the footer's panel carries
         // the swap in its transport: the title never draws both.
         match (fold, self.swap && !self.panel) {
-            (Some(glyph), _) => b.heading_with(
+            (Some(glyph), _) if !self.panel => b.heading_with(
                 key::PLAYER_HEADING_NOW,
                 glyph,
                 Target::FoldPicture,
                 "player-picture-fold",
             ),
+            (Some(_), _) => b.heading(key::PLAYER_HEADING_NOW),
             (None, true) => b.heading_with(
                 key::PLAYER_HEADING_NOW,
                 tokens::icon::PLAYER_WINDOW,
@@ -580,8 +584,10 @@ fn listen_and_watch(b: &mut Builder<'_>, s: Option<&State>) {
         opens(b, page, String::new());
     }
     // THE RANKING of the video catalogue: the person's channels' videos,
-    // best first (`ronoctua_shell_video_metrics::player_ranking`).
+    // best first (`ronoctua_shell_video_metrics::player_ranking`) — and,
+    // beside it, the ones the person set aside for later.
     opens(b, PageId::Ranking, String::new());
+    opens(b, PageId::SetAside, String::new());
     if let Some(s) = s {
         opens(
             b,
@@ -766,6 +772,104 @@ mod tests {
             .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// FAILS IF: a title's controls stop being reached by the arrows — `↑`
+    /// from the first row under the Lyrics' title stands on its glyph, drawn
+    /// in the cursor's colour, and `RET` presses it as its click does; on
+    /// the Queue's, `←` and `→` choose between saving again and clearing —
+    /// or a rebuild of the rows takes the cursor off the title, or a page
+    /// opens on one, or `↓` stops leaving it for the row under it.
+    #[test]
+    fn a_title_s_controls_are_reached_by_the_arrows() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let s = playing();
+        let mut v = View::blank(None);
+        v.settle_in(Some(&s), 80, &t);
+        let rows = v.rows(Some(&s), 80, &t);
+        assert!(!rows[v.cursor()].heading, "the page opened on a title");
+        let title = rows
+            .iter()
+            .position(|r| {
+                r.cells
+                    .iter()
+                    .any(|c| c.about == Some("player-lyrics-translate"))
+            })
+            .expect("the lyrics' title");
+        let below = (title + 1..rows.len())
+            .find(|&i| rows[i].stops())
+            .expect("a row under the lyrics' title");
+        v.clicked(below, &rows);
+        v.key(Press::Up, Some(&s), 80, &t);
+        assert_eq!(v.cursor(), title, "`↑` did not stand on the title's glyph");
+        let rows = v.rows(Some(&s), 80, &t);
+        let row = &rows[title];
+        assert!(row.focused);
+        assert_eq!(row.target, Target::Translate);
+        let glyph = row
+            .fields
+            .iter()
+            .find(|f| f.at == row.cells[0].from)
+            .expect("the glyph");
+        assert_eq!(glyph.color, tokens::color::TEXT_HERE_ACTS);
+        // ON A TITLE `←` AND `→` CHOOSE, and teach no value turned.
+        let ids: Vec<&str> = v
+            .hint(Some(&s), 80, &t)
+            .iter()
+            .filter_map(|p| p.id)
+            .collect();
+        assert!(!ids.contains(&"player-less"), "{ids:?}");
+        // A REBUILD — a state — keeps it there, as a door follows it by its
+        // spot.
+        v.settle_in(Some(&s), 80, &t);
+        let spot = v.rows(Some(&s), 80, &t)[title].spot.clone();
+        v.follow(&spot, Some(&s), 80, &t);
+        assert_eq!(v.cursor(), title);
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 80, &t),
+            Errand::Tell(ronoctua_player::wire::Ask::LyricsTranslation { on: true, to: None })
+        );
+        v.key(Press::Down, Some(&s), 80, &t);
+        assert_eq!(v.cursor(), below);
+        // THE QUEUE'S TWO: saving again and clearing, chosen by the arrows,
+        // each pressed as its click presses it.
+        let mut s = s;
+        s.queue_file = ronoctua_player::queue::QueueKept::Changed {
+            path: "/q/a.rqueue".into(),
+            name: "a".into(),
+        };
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(crate::player::fixture::outline(vec![
+            ronoctua_player::queue::Name::Titled("One".into()),
+        ])));
+        v.push(PageId::Queue, None);
+        v.settle_in(Some(&s), 80, &t);
+        let rows = v.rows(Some(&s), 80, &t);
+        let title = rows
+            .iter()
+            .position(|r| r.heading && r.cells.len() == 2)
+            .expect("the queue's title");
+        v.key(Press::Up, Some(&s), 80, &t);
+        assert_eq!(v.cursor(), title);
+        let target = |v: &View| v.rows(Some(&s), 80, &t)[title].target.clone();
+        assert_eq!(target(&v), Target::SaveQueueAgain);
+        v.key(Press::More, Some(&s), 80, &t);
+        assert_eq!(target(&v), Target::ClearQueue);
+        v.key(Press::More, Some(&s), 80, &t);
+        assert_eq!(target(&v), Target::ClearQueue, "past the last control");
+        v.key(Press::Less, Some(&s), 80, &t);
+        assert_eq!(target(&v), Target::SaveQueueAgain);
+        // RET IS THE CLICK: the same errand, on a twin clicked there.
+        let pressed = v.key(Press::Enter, Some(&s), 80, &t);
+        let mut twin = View::blank(None);
+        twin.outline_arrived(Some(crate::player::fixture::outline(vec![
+            ronoctua_player::queue::Name::Titled("One".into()),
+        ])));
+        twin.push(PageId::Queue, None);
+        twin.settle_in(Some(&s), 80, &t);
+        let rows = twin.rows(Some(&s), 80, &t);
+        assert!(twin.clicked_at(title, rows[title].cells[0].from, &rows));
+        assert_eq!(twin.key(Press::Enter, Some(&s), 80, &t), pressed);
     }
 
     /// FAILS IF: a queued address refused because its host is not let says
@@ -1228,7 +1332,8 @@ mod tests {
             );
         }
         // THE FOOTER as it stands: the panel beside the rows carries the swap
-        // in its transport, and "Now" only the fold; with no panel, no
+        // in its transport and the fold at the end of its time bar
+        // (`player_media::FOLD`), and "Now" neither; with no panel, no
         // picture folds, and "Now" carries the swap.
         let abouts = |v: &View| -> Vec<&'static str> {
             now_title(v).cells.iter().filter_map(|c| c.about).collect()
@@ -1236,7 +1341,12 @@ mod tests {
         let mut footer = View::blank(None).in_the_footer();
         footer.beside_the_panel(true);
         footer.picture_foldable(Some(false));
-        assert_eq!(abouts(&footer), ["player-picture-fold"]);
+        assert_eq!(abouts(&footer), Vec::<&str>::new());
+        assert_eq!(
+            footer.key(Press::FoldPicture, Some(&s), 80, &t),
+            Errand::FoldPicture,
+            "`z` no longer folds the footer's picture"
+        );
         footer.beside_the_panel(false);
         footer.picture_foldable(None);
         assert_eq!(abouts(&footer), ["player-swap"]);

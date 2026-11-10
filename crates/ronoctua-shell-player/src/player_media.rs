@@ -40,6 +40,17 @@
 //! screen's connector) — placed in the panel as every door places them. The
 //! footer keeps one picture a lane for all of them: every lane routed to one
 //! of its screens ([`lanes_shown`]), asked once and drawn wherever it goes.
+//!
+//! # Two panes, and air between them
+//!
+//! Beside the rows the panel is a PANE of its own (the owner, 2026-11-09):
+//! the rows end `space.player.paneGap` cells before it ([`rows_end`]) — the
+//! band under the pointer and the cursor stay in theirs — and the pane wears
+//! a ground of its own (`surface.shelf`). Air and a ground, never a rule
+//! (invariant 15). Its controls are reached by the keyboard too: `TAB`
+//! crosses to them, in reading order ([`stops`]), and the fold that was on
+//! the "Now" title stands at the end of its time bar's line, where the
+//! window has its mute.
 
 use crate::player_transport::{BUTTONS, shown};
 use ronoctua_player::wire::State;
@@ -65,7 +76,8 @@ pub const STEPS: [u16; 3] = [
 /// The footer's picture: beside the rows, or the whole region.
 ///
 /// Beside the rows it is the widest of [`STEPS`] that leaves them at least
-/// its own width, at the region's right end, and the region's own bar keeps
+/// its own width AND THE AIR BETWEEN THE TWO PANES (`space.player.paneGap`,
+/// [`rows_end`]), at the region's right end, and the region's own bar keeps
 /// its last cell. Only the picture (`o`) takes the whole region, the window's
 /// `Only` in this door. `None` when not even the narrowest fits: the rows
 /// whole, and a line saying why.
@@ -80,11 +92,25 @@ pub fn footer_panel(columns: u16, only: bool) -> Option<Panel> {
     }
     STEPS
         .into_iter()
-        .find(|&cells| usable >= cells.saturating_mul(2))
+        .find(|&cells| {
+            usable
+                >= cells
+                    .saturating_mul(2)
+                    .saturating_add(tokens::space::PLAYER_PANEGAP)
+        })
         .map(|cells| Panel {
             from: usable - cells,
             cells,
         })
+}
+
+/// Where THE ROWS' PANE ends beside `panel`: its first column, less the air
+/// between the two (`space.player.paneGap`) — the width the rows are laid
+/// out at, and where the band under the pointer stops. The air is nobody's:
+/// no band, no click, and the picture's ground starts after it.
+#[must_use]
+pub const fn rows_end(panel: Panel) -> u16 {
+    panel.from.saturating_sub(tokens::space::PLAYER_PANEGAP)
 }
 
 /// How many lines the region keeps while the panel stands beside the rows:
@@ -432,11 +458,24 @@ pub struct Drawn {
     pub clock: Option<(u16, u16)>,
     /// The time bar.
     pub track: Option<Track>,
+    /// THE FOLD, placed at the end of the time bar's line among the
+    /// [`Drawn::buttons`] (`player-picture-fold`): whether the picture is
+    /// folded away — its glyph says what a press does — and `None` where no
+    /// fold is drawn (Only, a globe in the picture's place, a region with no
+    /// line for the bar).
+    pub fold: Option<bool>,
 }
+
+/// The id the fold is placed under among a panel's buttons
+/// ([`Drawn::fold`]): the command `z` runs, whose sentence it says.
+pub const FOLD: &str = "player-picture-fold";
 
 /// The panel laid out in a region whose first line is `first` and which is
 /// `lines` tall: [`shape`]'s lines, the [`buttons`] on the transport's and the
-/// [`Track`] on the bar's.
+/// [`Track`] on the bar's — and, `fold` given, THE FOLD at the end of the
+/// bar's line, a deck's glyph and its air from the panel's right end (the
+/// window's mute at the end of its time bar, `player_timeline`), the track
+/// stopping a cell of air before it.
 ///
 /// THE TRANSPORT KEEPS THE TEXT'S INSET where the panel begins at the
 /// region's first column (Only, `o`): a button's glyph sits on its first
@@ -446,7 +485,13 @@ pub struct Drawn {
 /// the window places its own after its `MARGIN`. The picture and the time
 /// bar still take the whole region.
 #[must_use]
-pub fn drawn(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Drawn {
+pub fn drawn(
+    panel: Panel,
+    first: u16,
+    lines: u16,
+    state: Option<&State>,
+    fold: Option<bool>,
+) -> Drawn {
     let s = shape(first, lines);
     let transport = if panel.from == 0 {
         Panel {
@@ -456,16 +501,37 @@ pub fn drawn(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Dra
     } else {
         panel
     };
-    let (buttons, clock) = s
+    let (mut buttons, clock) = s
         .transport
         .map(|line| self::transport(transport, line, state))
         .unwrap_or_default();
+    let end = panel.from + panel.cells;
+    let (track, fold) = match (s.bar, fold) {
+        (Some(line), Some(folded)) => {
+            let at = end.saturating_sub(tokens::space::PLAYER_DECKGLYPH);
+            buttons.push((line, at, end, FOLD));
+            let to = at
+                .saturating_sub(tokens::space::PLAYER_DECKAIR)
+                .max(panel.from);
+            (
+                Some(Track {
+                    line,
+                    from: panel.from,
+                    to,
+                }),
+                Some(folded),
+            )
+        }
+        (Some(line), None) => (Some(Track::of(panel, line)), None),
+        (None, _) => (None, None),
+    };
     Drawn {
         panel: Some(panel),
         picture: s.picture,
         buttons,
         clock,
-        track: s.bar.map(|line| Track::of(panel, line)),
+        track,
+        fold,
     }
 }
 
@@ -473,9 +539,57 @@ pub fn drawn(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Dra
 /// transport and the time bar on the region's last two lines, and no
 /// picture — the panel keeps its width, and the rows beside it their room.
 #[must_use]
-pub fn drawn_folded(panel: Panel, first: u16, lines: u16, state: Option<&State>) -> Drawn {
+pub fn drawn_folded(
+    panel: Panel,
+    first: u16,
+    lines: u16,
+    state: Option<&State>,
+    fold: Option<bool>,
+) -> Drawn {
     let foot = lines.min(FOLDED_LINES);
-    drawn(panel, first + lines - foot, foot, state)
+    drawn(panel, first + lines - foot, foot, state, fold)
+}
+
+/// A place the keyboard stands on among a picture's controls (`TAB`, the
+/// view's `View::pane`): a button by its command, or the time bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// A button of the transport — the seeks and the fold among them.
+    Button(&'static str),
+    /// The time bar: the arrows seek on it.
+    Track,
+}
+
+/// THE STOPS OF A PICTURE'S CONTROLS IN READING ORDER — by line, then by
+/// first cell: the transport, the seeks around its clock, then the time
+/// bar's line, the track and the fold after it. `track` is the bar's line
+/// and first cell, when one is drawn. One answer for every door, out of
+/// what its frame PLACED: the keyboard walks what the pointer takes.
+#[must_use]
+pub fn stops(buttons: &[Placed], track: Option<(u16, u16)>) -> Vec<Stop> {
+    let mut placed: Vec<((u16, u16), Stop)> = buttons
+        .iter()
+        .map(|&(line, at, _, id)| ((line, at), Stop::Button(id)))
+        .collect();
+    if let Some(at) = track {
+        placed.push((at, Stop::Track));
+    }
+    placed.sort_by_key(|(at, _)| *at);
+    placed.into_iter().map(|(_, stop)| stop).collect()
+}
+
+/// Where stop `stop` was placed — its line, its first cell and the cell
+/// after it — among `buttons` and on `track`: what the keyboard's stop is
+/// painted over, the very box the pointer takes it in.
+#[must_use]
+pub fn stop_place(stop: Stop, buttons: &[Placed], track: Option<Track>) -> Option<(u16, u16, u16)> {
+    match stop {
+        Stop::Button(id) => buttons
+            .iter()
+            .find(|placed| placed.3 == id)
+            .map(|&(line, at, to, _)| (line, at, to)),
+        Stop::Track => track.map(|t| (t.line, t.from, t.to)),
+    }
 }
 
 /// The lines the panel keeps with the picture folded away: the transport
@@ -610,13 +724,15 @@ mod tests {
     #[test]
     fn the_panel_steps_through_the_columns_widths() {
         let edge = tokens::space::FILES_EDGERIGHT;
+        let gap = tokens::space::PLAYER_PANEGAP;
         for cells in STEPS {
-            // EXACTLY THE WIDTH that leaves the rows as much as it takes…
-            let columns = 2 * cells + edge;
+            // EXACTLY THE WIDTH that leaves the rows as much as it takes, and
+            // the air between the two panes…
+            let columns = 2 * cells + gap + edge;
             let p = footer_panel(columns, false).expect("room for the picture");
             assert_eq!(p.cells, cells, "at {columns} columns");
             assert_eq!(p.from + p.cells, columns - edge, "the bar's cell is taken");
-            assert_eq!(p.from, cells, "the rows keep less than the panel");
+            assert_eq!(rows_end(p), cells, "the rows keep less than the panel");
             // …AND ONE CELL LESS takes the next step down.
             let narrower = footer_panel(columns - 1, false);
             assert!(
@@ -627,7 +743,7 @@ mod tests {
         }
         // BELOW THE NARROWEST, no panel — the home says why.
         let least = STEPS[STEPS.len() - 1];
-        assert_eq!(footer_panel(2 * least + edge - 1, false), None);
+        assert_eq!(footer_panel(2 * least + gap + edge - 1, false), None);
         // A 1024 PX SCREEN at the text's size is the small step, a 1500 PX
         // one the medium, and 1920 the large.
         let at = |px: f32| {
@@ -650,11 +766,11 @@ mod tests {
     #[test]
     fn the_stage_transport_keeps_the_inset() {
         let only = footer_panel(94, true).expect("the whole region");
-        let d = drawn(only, 0, 20, None);
+        let d = drawn(only, 0, 20, None, None);
         assert_eq!(d.buttons.first().map(|b| b.1), Some(crate::chrome::INSET));
         assert_eq!(d.track.map(|t| (t.from, t.to)), Some((0, only.cells)));
         let side = footer_panel(94, false).expect("beside the rows");
-        let d = drawn(side, 0, 20, None);
+        let d = drawn(side, 0, 20, None, None);
         assert_eq!(d.buttons.first().map(|b| b.1), Some(side.from));
     }
 
@@ -861,11 +977,109 @@ mod tests {
     fn a_folded_picture_leaves_the_transport_and_the_bar() {
         let panel = footer_panel(200, false).expect("beside the rows");
         let s = playing(vec![audio(1)]);
-        let d = drawn_folded(panel, 4, 15, Some(&s));
+        let d = drawn_folded(panel, 4, 15, Some(&s), Some(true));
         assert_eq!(d.picture, None);
         assert_eq!(d.buttons.first().map(|b| b.0), Some(4 + 15 - 2));
         assert_eq!(d.track.map(|t| t.line), Some(4 + 15 - 1));
         assert!(d.clock.is_some_and(|(line, _)| line == 4 + 15 - 2));
+    }
+
+    /// FAILS IF: the keyboard's stops among the pane's controls stop being
+    /// read in reading order — the transport's buttons as drawn, the seeks
+    /// around the clock, then the time bar's line: the track, and the fold
+    /// after it — folded or not; or the media's glyph coming and going
+    /// reorders the rest.
+    #[test]
+    fn the_pane_s_stops_are_read_in_reading_order() {
+        let panel = Panel {
+            from: 40,
+            cells: tokens::space::COLUMN_LARGE,
+        };
+        let plain = playing(vec![audio(1)]);
+        let chosen = playing(vec![audio(1), audio(2)]);
+        for s in [&plain, &chosen] {
+            for (folded, d) in [
+                (false, drawn(panel, 4, 15, Some(s), Some(false))),
+                (true, drawn_folded(panel, 4, 15, Some(s), Some(true))),
+            ] {
+                let read = stops(&d.buttons, d.track.map(|t| (t.line, t.from)));
+                let want: Vec<Stop> = BUTTONS
+                    .into_iter()
+                    .filter(|id| shown(id, Some(s)))
+                    .chain(["player-rewind", "player-forward"])
+                    .map(Stop::Button)
+                    .chain([Stop::Track, Stop::Button(FOLD)])
+                    .collect();
+                assert_eq!(read, want, "folded: {folded}");
+                // EVERY STOP HAS A PLACE, the box its click is taken in.
+                for stop in read {
+                    let place = stop_place(stop, &d.buttons, d.track).expect("a place");
+                    if let Stop::Button(id) = stop {
+                        assert_eq!(button_at(&d.buttons, place.0, place.1), Some(id));
+                    }
+                }
+            }
+        }
+        // NO BAR'S LINE, no track and no fold to stand on.
+        let one = drawn(panel, 4, 1, Some(&plain), Some(false));
+        let read = stops(&one.buttons, one.track.map(|t| (t.line, t.from)));
+        assert!(!read.contains(&Stop::Track) && !read.contains(&Stop::Button(FOLD)));
+        assert_eq!(one.fold, None);
+    }
+
+    /// FAILS IF: the fold stops standing at the end of the time bar's line —
+    /// a deck's glyph and its air, flush with the panel's right end — or the
+    /// track runs under it instead of stopping a cell of air before it; or
+    /// with no fold the track stops being the panel's whole width.
+    #[test]
+    fn the_fold_stands_at_the_bar_s_end_and_the_track_stops_before_it() {
+        let panel = Panel {
+            from: 40,
+            cells: tokens::space::COLUMN_MEDIUM,
+        };
+        let s = playing(vec![audio(1)]);
+        let d = drawn(panel, 4, 15, Some(&s), Some(false));
+        let track = d.track.expect("a time bar");
+        let (line, at, to, _) = d
+            .buttons
+            .iter()
+            .copied()
+            .find(|b| b.3 == FOLD)
+            .expect("the fold");
+        assert_eq!(line, track.line, "the fold is on the bar's line");
+        assert_eq!(to, panel.from + panel.cells, "the fold's air is the edge");
+        assert_eq!(to - at, tokens::space::PLAYER_DECKGLYPH);
+        assert_eq!(track.to + tokens::space::PLAYER_DECKAIR, at);
+        assert_eq!(track.from, panel.from);
+        assert_eq!(d.fold, Some(false));
+        // THE PRESS ON IT IS ITS OWN, never the track's.
+        assert_eq!(button_at(&d.buttons, line, at), Some(FOLD));
+        // NO FOLD: the whole width, as it always was.
+        let whole = drawn(panel, 4, 15, Some(&s), None);
+        assert_eq!(whole.track, Some(Track::of(panel, track.line)));
+        assert!(!whole.buttons.iter().any(|b| b.3 == FOLD));
+    }
+
+    /// FAILS IF: the rows' pane stops ending the air's cells before the
+    /// picture's, or is left narrower than the picture — or a panel stands
+    /// where the two panes and the air between them do not fit.
+    #[test]
+    fn the_panel_leaves_the_rows_their_gap() {
+        let edge = tokens::space::FILES_EDGERIGHT;
+        let gap = tokens::space::PLAYER_PANEGAP;
+        for columns in 40..400 {
+            let usable = columns - edge;
+            match footer_panel(columns, false) {
+                Some(p) => {
+                    assert_eq!(rows_end(p) + gap, p.from, "at {columns}");
+                    assert!(rows_end(p) >= p.cells, "the rows narrower, at {columns}");
+                }
+                None => assert!(
+                    usable < 2 * tokens::space::COLUMN_SMALL + gap,
+                    "no panel at {columns}"
+                ),
+            }
+        }
     }
 
     /// FAILS IF: the time bar is taken anywhere but where it is drawn, or a

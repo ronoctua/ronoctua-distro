@@ -1,7 +1,8 @@
 //! Every write to the catalogue: the person's edits (channels, rules,
-//! weights, ratings, the second fields, hiding and deleting), the scanner's
-//! (videos, details, tombstones, what a channel's scan ended in), and the
-//! recompute that follows either.
+//! weights, ratings, the second fields, hiding, setting aside, keeping and
+//! deleting; an imported list staged, decided and registered), the scanner's
+//! (videos, details, tombstones, what a channel's scan ended in, what
+//! outlived its keep), and the recompute that follows either.
 //!
 //! # One transaction per gesture
 //!
@@ -19,17 +20,19 @@
 //! ([`refresh_fts`]), keyed by the video's `num` — an `INTEGER PRIMARY KEY`,
 //! which a `VACUUM` never renumbers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use ronoctua_ytdlp::youtube::{Details, is_channel_id};
-use rusqlite::{Connection, OptionalExtension as _, Transaction, params};
+use ronoctua_ytdlp::youtube::{Details, channel_address, is_channel_id};
+use rusqlite::{Connection, OptionalExtension as _, Transaction, named_params, params};
 
 use crate::db::{self, sql};
-use crate::person::NewChannel;
+use crate::person::{NewChannel, Registered, Staging};
+use crate::read::Decision;
 use crate::score::{self, Facts};
+use crate::takeout::Subscription;
 use crate::{
-    CHANNEL_SCORE, CHANNEL_SCORE_MOST, ChannelId, Fields, Rating, Refusal, Rule, RuleId, RuleKind,
-    Settings, Skip, TermMatch, VideoId, Why,
+    CHANNEL_SCORE, CHANNEL_SCORE_MOST, ChannelId, Fields, KEEP_DAYS_MOST, Keep, Rating, Refusal,
+    Rule, RuleId, RuleKind, Settings, Skip, TermMatch, VideoId, Why,
 };
 
 /// How a video came to be called a Short, strongest first. The feed of
@@ -362,7 +365,9 @@ fn channel_exists(conn: &Connection, id: &ChannelId) -> Result<(), Refusal> {
 }
 
 /// Adds a channel at [`CHANNEL_SCORE`]; one already there keeps its score
-/// and its reference, and takes the new name, handle and address.
+/// and its reference, and takes the new name, handle and address. A channel
+/// of an imported list that is added by hand is REGISTERED — what was set on
+/// it while it waited stays, and it is added now.
 pub(crate) fn add_channel(
     conn: &Connection,
     channel: &NewChannel,
@@ -372,12 +377,16 @@ pub(crate) fn add_channel(
         return Err(Refusal::of(Why::Invalid));
     }
     let tx = db::immediate(conn)?;
+    // EVERY `SET` READS THE ROW AS IT WAS: `added_at` asks `staged` before the
+    // same statement clears it.
     tx.execute(
         "INSERT INTO channels (id, handle, title, url, avatar_url, score, added_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (id) DO UPDATE SET
            handle = excluded.handle, title = excluded.title, url = excluded.url,
-           avatar_url = coalesce(excluded.avatar_url, avatar_url)",
+           avatar_url = coalesce(excluded.avatar_url, avatar_url),
+           added_at = CASE WHEN staged IS NULL THEN added_at ELSE excluded.added_at END,
+           staged = NULL",
         params![
             channel.id.0,
             channel.handle,
@@ -433,6 +442,39 @@ pub(crate) fn set_channel_block_shorts(
     let generation = db::bump(&tx)?;
     apply_blocking(&tx, Some(id), generation, now)?;
     tx.commit().map_err(sql)
+}
+
+/// Sets how long a channel's videos stay (`None`: as everywhere). No video
+/// moves now: the next scan takes out what outlived it ([`expire`]). A
+/// channel of an imported list takes it too, before it is registered.
+pub(crate) fn set_channel_keep(
+    conn: &Connection,
+    id: &ChannelId,
+    keep: Option<Keep>,
+) -> Result<(), Refusal> {
+    if let Some(keep) = keep {
+        valid_keep(keep)?;
+    }
+    let changed = conn
+        .execute(
+            "UPDATE channels SET keep_days = ?1 WHERE id = ?2",
+            params![keep.map(Keep::number), id.0],
+        )
+        .map_err(sql)?;
+    if changed == 0 {
+        return Err(Refusal::of(Why::NotFound));
+    }
+    Ok(())
+}
+
+/// Refuses a keep the catalogue cannot hold: no days at all — "never" is
+/// [`Keep::Forever`], and zero days would take everything out at the next
+/// scan — or more than [`KEEP_DAYS_MOST`].
+pub(crate) fn valid_keep(keep: Keep) -> Result<(), Refusal> {
+    match keep {
+        Keep::Days(days) if days == 0 || days > KEEP_DAYS_MOST => Err(Refusal::of(Why::Invalid)),
+        Keep::Days(_) | Keep::Forever => Ok(()),
+    }
 }
 
 /// Removes a channel, its rules and its videos; every video id stays as a
@@ -555,12 +597,14 @@ pub(crate) fn apply_blocking(
 }
 
 /// Keeps the switches; blocking Shorts hides the ones already in, and
-/// unblocking brings back what blocking hid.
+/// unblocking brings back what blocking hid. A keep that cannot be is
+/// refused before anything is kept ([`valid_keep`]).
 pub(crate) fn set_settings(
     conn: &Connection,
     settings: &Settings,
     now: i64,
 ) -> Result<(), Refusal> {
+    valid_keep(settings.keep)?;
     let tx = db::immediate(conn)?;
     db::put_settings(&tx, settings)?;
     let generation = db::bump(&tx)?;
@@ -671,8 +715,8 @@ fn keep_views(
 }
 
 /// Leaves a tombstone for an id that is not (or no longer) catalogued. The
-/// first reason stays, except that a deletion or an unavailability
-/// overwrites: they are what the id IS now.
+/// first reason stays, except that a deletion, an unavailability or an
+/// expiry overwrites: they are what the id IS now.
 pub(crate) fn tombstone(
     tx: &Transaction<'_>,
     id: &VideoId,
@@ -681,7 +725,7 @@ pub(crate) fn tombstone(
     generation: i64,
     now: i64,
 ) -> Result<(), Refusal> {
-    let overwrite = matches!(reason, Skip::Deleted | Skip::Unavailable);
+    let overwrite = matches!(reason, Skip::Deleted | Skip::Unavailable | Skip::Expired);
     tx.execute(
         if overwrite {
             "INSERT INTO skipped (video, channel, reason, at, generation)
@@ -770,6 +814,51 @@ pub(crate) fn set_hidden(
         )
     }
     .map_err(sql)?;
+    if changed == 0 {
+        return Err(Refusal::of(Why::NotFound));
+    }
+    tx.commit().map_err(sql)
+}
+
+/// Sets a video aside for later (`true`) or takes it off that list
+/// (`false`). Set aside again, it keeps the moment it first was: the list's
+/// order is when the person set it aside, not when they last said so. No
+/// rescore: being set aside is no point of the score.
+pub(crate) fn set_aside(
+    conn: &Connection,
+    id: &VideoId,
+    aside: bool,
+    now: i64,
+) -> Result<(), Refusal> {
+    let tx = db::immediate(conn)?;
+    let generation = db::bump(&tx)?;
+    let changed = tx
+        .execute(
+            "UPDATE videos SET
+               set_aside_at = CASE WHEN ?1 THEN coalesce(set_aside_at, ?2) ELSE NULL END,
+               generation = ?3
+             WHERE id = ?4",
+            params![aside, now, generation, id.0],
+        )
+        .map_err(sql)?;
+    if changed == 0 {
+        return Err(Refusal::of(Why::NotFound));
+    }
+    tx.commit().map_err(sql)
+}
+
+/// Marks a video to keep for ever (`true`), whatever its channel keeps, or
+/// takes the mark off (`false`) — then its channel's keep, or the global one,
+/// says when it goes.
+pub(crate) fn set_keep(conn: &Connection, id: &VideoId, keep: bool) -> Result<(), Refusal> {
+    let tx = db::immediate(conn)?;
+    let generation = db::bump(&tx)?;
+    let changed = tx
+        .execute(
+            "UPDATE videos SET keep = ?1, generation = ?2 WHERE id = ?3",
+            params![keep, generation, id.0],
+        )
+        .map_err(sql)?;
     if changed == 0 {
         return Err(Refusal::of(Why::NotFound));
     }
@@ -1073,6 +1162,224 @@ pub(crate) fn details_failed(tx: &Transaction<'_>, id: &VideoId) -> Result<(), R
     .map_err(sql)
 }
 
+// ----------------------------------------------------------------- keeping
+
+/// Which videos have outlived their keep, with `:days` the global keep's
+/// number ([`Keep::number`]: `0` for ever) and `:now` the moment asked: the
+/// ones the person marked to keep, the ones set aside and the ones of a
+/// channel not registered are never among them; a channel's own number wins
+/// over the global one, and `0` there is for ever; a video without a date
+/// counts from when a scan first saw it. Hidden videos are among them like
+/// any other. ONE CLAUSE for the scan that takes them out ([`expire`]) and
+/// the door that says how many it will (`query::expiring`).
+pub(crate) const EXPIRED: &str = "v.keep = 0 AND v.set_aside_at IS NULL AND c.staged IS NULL
+  AND coalesce(c.keep_days, :days) > 0
+  AND coalesce(v.published_at, v.first_seen_at) < :now - coalesce(c.keep_days, :days) * 86400";
+
+/// The keep in force for `channel`: its own, else the global one.
+pub(crate) fn keep_of(
+    conn: &Connection,
+    channel: &ChannelId,
+    settings: &Settings,
+) -> Result<Keep, Refusal> {
+    let own: Option<Option<i64>> = conn
+        .query_row(
+            "SELECT keep_days FROM channels WHERE id = ?1",
+            params![channel.0],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql)?;
+    match own.flatten() {
+        None => Ok(settings.keep),
+        Some(n) => Keep::of_number(n).ok_or(Refusal::of(Why::Unreadable)),
+    }
+}
+
+/// Takes out every video that outlived its keep ([`EXPIRED`]), each as a
+/// tombstone (`expired`), INSIDE THE CALLER'S TRANSACTION — so a video set
+/// aside between choosing them and taking them out cannot be lost. Answers
+/// how many, and their thumbnails' files for the caller to remove once the
+/// transaction is committed. Nothing to take out moves no generation.
+pub(crate) fn expire(
+    tx: &Transaction<'_>,
+    settings: &Settings,
+    now: i64,
+) -> Result<(u32, Vec<String>), Refusal> {
+    let ids: Vec<String> = {
+        let mut statement = tx
+            .prepare(&format!(
+                "SELECT v.id FROM videos v JOIN channels c ON c.id = v.channel
+                 WHERE {EXPIRED} ORDER BY v.num"
+            ))
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(
+                named_params! { ":days": settings.keep.number(), ":now": now },
+                |r| r.get(0),
+            )
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    if ids.is_empty() {
+        return Ok((0, Vec::new()));
+    }
+    let generation = db::bump(tx)?;
+    let mut thumbs = Vec::new();
+    for id in &ids {
+        thumbs.extend(take_out(
+            tx,
+            &VideoId(id.clone()),
+            Skip::Expired,
+            now,
+            generation,
+        )?);
+    }
+    Ok((u32::try_from(ids.len()).unwrap_or(u32::MAX), thumbs))
+}
+
+// ---------------------------------------------------------- imported lists
+
+/// Stages the channels of an imported list, in one transaction: a channel of
+/// the catalogue is answered as `already` (with the catalogue's title) and
+/// never staged; one staged before takes the list's title and keeps its
+/// decision; a new one waits `undecided`, at [`CHANNEL_SCORE`]. A discarded
+/// channel that comes back in a list is staged again: no memory of discards
+/// is kept. An id that is not a channel's refuses the whole list.
+pub(crate) fn stage(
+    conn: &Connection,
+    list: &[Subscription],
+    now: i64,
+) -> Result<Staging, Refusal> {
+    if list.iter().any(|s| !is_channel_id(&s.id.0)) {
+        return Err(Refusal::of(Why::Invalid));
+    }
+    let tx = db::immediate(conn)?;
+    let mut staging = Staging::default();
+    let mut seen = HashSet::new();
+    for subscription in list.iter().filter(|s| seen.insert(&s.id)) {
+        let id = &subscription.id;
+        let there: Option<(Option<String>, String)> = tx
+            .query_row(
+                "SELECT staged, title FROM channels WHERE id = ?1",
+                params![id.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(sql)?;
+        match there {
+            Some((None, title)) => staging.already.push((id.clone(), title)),
+            Some((Some(_), _)) => {
+                tx.execute(
+                    "UPDATE channels SET title = ?1 WHERE id = ?2",
+                    params![subscription.title, id.0],
+                )
+                .map_err(sql)?;
+                staging.staged += 1;
+            }
+            None => {
+                // THE ADDRESS AS EVERY CHANNEL'S IS SPELLED — the ids were
+                // proved above, so this never refuses.
+                let url = channel_address(&id.0).map_err(|_| Refusal::of(Why::Invalid))?;
+                tx.execute(
+                    "INSERT INTO channels (id, title, url, score, added_at, staged)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        id.0,
+                        subscription.title,
+                        url,
+                        CHANNEL_SCORE,
+                        now,
+                        Decision::Undecided.id(),
+                    ],
+                )
+                .map_err(sql)?;
+                staging.staged += 1;
+            }
+        }
+    }
+    tx.commit().map_err(sql)?;
+    Ok(staging)
+}
+
+/// Decides what registering does with one staged channel; a channel of the
+/// catalogue, or none, is [`Why::NotFound`].
+pub(crate) fn decide(conn: &Connection, id: &ChannelId, decision: Decision) -> Result<(), Refusal> {
+    let changed = conn
+        .execute(
+            "UPDATE channels SET staged = ?1 WHERE id = ?2 AND staged IS NOT NULL",
+            params![decision.id(), id.0],
+        )
+        .map_err(sql)?;
+    if changed == 0 {
+        return Err(Refusal::of(Why::NotFound));
+    }
+    Ok(())
+}
+
+/// Gives every staged channel the same decision; answers how many.
+pub(crate) fn decide_all(conn: &Connection, decision: Decision) -> Result<u32, Refusal> {
+    let changed = conn
+        .execute(
+            "UPDATE channels SET staged = ?1 WHERE staged IS NOT NULL",
+            params![decision.id()],
+        )
+        .map_err(sql)?;
+    Ok(u32::try_from(changed).unwrap_or(u32::MAX))
+}
+
+/// Registers what was decided, in one transaction: the kept channels join the
+/// catalogue, added NOW (their first scan follows the safeguard) and scored
+/// with the rules set on them while they waited; the discarded ones go with
+/// their rules, and no tombstone — a staged channel was never scanned, so it
+/// has no videos; the undecided stay to decide. Consent is the caller's:
+/// registering a channel is the consent to scan it ([`crate::HOSTS`]).
+pub(crate) fn register_staged(conn: &Connection, now: i64) -> Result<Registered, Refusal> {
+    let tx = db::immediate(conn)?;
+    let kept: Vec<String> = {
+        let mut statement = tx
+            .prepare(
+                "UPDATE channels SET staged = NULL, added_at = ?1 WHERE staged = ?2 RETURNING id",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![now, Decision::Keep.id()], |r| r.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    if !kept.is_empty() {
+        let generation = db::bump(&tx)?;
+        for id in &kept {
+            rescore(&tx, Scope::Channel(&ChannelId(id.clone())), generation)?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM rules WHERE channel IN (SELECT id FROM channels WHERE staged = ?1)",
+        params![Decision::Discard.id()],
+    )
+    .map_err(sql)?;
+    let discarded = tx
+        .execute(
+            "DELETE FROM channels WHERE staged = ?1",
+            params![Decision::Discard.id()],
+        )
+        .map_err(sql)?;
+    let left: i64 = tx
+        .query_row(
+            "SELECT count(*) FROM channels WHERE staged IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(sql)?;
+    tx.commit().map_err(sql)?;
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Ok(Registered {
+        kept: count(kept.len()),
+        discarded: count(discarded),
+        left: u32::try_from(left).unwrap_or(0),
+    })
+}
+
 // ---------------------------------------------------------------- scoring
 
 /// What a recompute reaches.
@@ -1241,3 +1548,6 @@ pub(crate) fn rescore_all(conn: &Connection) -> Result<u64, Refusal> {
     tx.commit().map_err(sql)?;
     Ok(changed)
 }
+
+#[cfg(test)]
+mod tests;

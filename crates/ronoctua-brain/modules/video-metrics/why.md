@@ -43,4 +43,6 @@ não da modeline. Em repouso não há marca (inv. 14).
 
 A última varredura como o catálogo a registrou: quando começou e terminou, quantos canais foram
 perguntados, quantos falharam (vermelho quando foram todos) e quantos vídeos entraram. Nada varrido
-ainda é uma frase, não uma página de zeros.
+ainda é uma frase, não uma página de zeros. A página leva de volta ao catálogo: a ação `catalogue`
+abre a janela do Métricas de vídeo, como a página inicial do app leva a esta — quem agenda a
+varredura e quem mostra o que ela trouxe ficam a um gesto um do outro.

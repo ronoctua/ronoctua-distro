@@ -19628,7 +19628,10 @@ let
     # into. Without this the check goes green on a tree where the whole
     # thing was deleted, and MODIFY creeping back in is a hose: it fires on
     # every write, so one log being appended to would re-read the directory
-    # without pause.
+    # without pause. ONE constructor asks for it, and only it: `on_log`, for
+    # a file its writer never closes (a SQLite `-wal`, which the video
+    # scanner holds open for the whole scan) — narrowed by braces, so a
+    # MODIFY anywhere else in the file is still the hose.
     notice = crates / "ronoctua-files" / "src" / "notice.rs"
     if not notice.is_file():
         print("ERROR: crates/ronoctua-files/src/notice.rs is gone.", file=sys.stderr)
@@ -19639,10 +19642,15 @@ let
         if f"WatchFlags::{flag}" not in mask:
             print(f"ERROR: the watch no longer asks for {flag}.", file=sys.stderr)
             raise SystemExit(1)
-    if "WatchFlags::MODIFY" in mask:
-        print("ERROR: the watch asks for MODIFY, which fires on every write.", file=sys.stderr)
-        print("       A log being appended to would re-read the directory in a", file=sys.stderr)
-        print("       loop. CLOSE_WRITE is the moment a listing cares about.", file=sys.stderr)
+    log = body_of(mask, "on_log") or ""
+    if "WatchFlags::MODIFY" not in log:
+        print("ERROR: Notice::on_log no longer asks for MODIFY: a file its writer", file=sys.stderr)
+        print("       never closes (a catalogue's -wal) is heard only once it is.", file=sys.stderr)
+        raise SystemExit(1)
+    if mask.count("WatchFlags::MODIFY") != log.count("WatchFlags::MODIFY"):
+        print("ERROR: the watch asks for MODIFY outside Notice::on_log, and it fires", file=sys.stderr)
+        print("       on every write. A log being appended to would re-read the", file=sys.stderr)
+        print("       directory in a loop. CLOSE_WRITE is the moment a listing cares about.", file=sys.stderr)
         raise SystemExit(1)
     print(f"OK: {len(doors)} doors watch what they show, and answer the nudge with a re-read")
     END
@@ -21138,8 +21146,11 @@ let
         footer = code_of(shell_source("surface.rs"))
         floor(len(footer), 100000, "characters of the footer's module")
         under = must(body_of(footer, "takes_under_pointer"), "Footer::takes_under_pointer")
+        # THE REGION'S ANSWER AT THE CELL is `hosted_lit` (`Region::lit`), the
+        # one `hosted_band` places its band by too: asked straight, with no
+        # pixels to place.
         for needle, why in [("line.click.is_some()", "the row's click"),
-                            ("hosted_band(", "the region's answer at the cell")]:
+                            ("hosted_lit(", "the region's answer at the cell")]:
             if needle not in under:
                 bad.append(f"Footer::takes_under_pointer no longer asks {why}")
         if not re.search(r"let on_this_row = [^;]*takes_under_pointer", footer):
@@ -23749,6 +23760,18 @@ let
           # with the workspace numbers right beside it: play or pause, and
           # next. Two drawings side by side at two sizes read as two things.
           "player", "pause", "player-next",
+          # AND A VIDEO'S FOUR RATINGS, side by side right after its score's
+          # number — on the player's ranking and the video catalogue's lists.
+          "video-rating-very-negative", "video-rating-negative",
+          "video-rating-positive", "video-rating-very-positive",
+          # AND ITS MARKS after the age's digits on the same lists — set aside
+          # or not, hide or show, delete, the ∞ — four in a row, so one
+          # drawn small reads as another kind of thing.
+          "video-set-aside", "video-set-aside-off", "video-hide", "video-show",
+          "video-delete", "video-forever",
+          # AND THE TWO BROWSERS side by side at a row's end, which the token
+          # file promises read as one set.
+          "open-in-chrome", "open-in-nyxt",
       ]
 
       face = "${fonts.corrected}/TTF-nerdfonts/NoctuaIosevkaNerdFontMono-Regular.ttf"
@@ -23805,6 +23828,8 @@ let
       WIDE = {
           "bluetooth-device-keyboard": "a keyboard is drawn wide and flat; nothing square in the font means keyboard",
           "tailscale": "four dots, three across and one under the middle: three cells wide by two tall, and a dot has to stay round",
+          "video-hide": "an eye is drawn wide and flat; no family in the font has an open eye and a struck one at the digit's height",
+          "video-show": "the open eye of the same pair, and as wide",
       }
       FLOOR = 0.60
 

@@ -23,18 +23,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, Transaction, TransactionBehavior, params};
 
-use crate::{Refusal, Rule, RuleKind, Settings, Weights, Why};
+use crate::{Keep, Refusal, Rule, RuleKind, Settings, Weights, Why};
 
 /// How long a connection waits for another's lock, `busy_timeout`.
 pub(crate) const BUSY: Duration = Duration::from_millis(5000);
 
 /// The schema this build writes and reads.
-pub(crate) const SCHEMA: i64 = 1;
+pub(crate) const SCHEMA: i64 = 2;
 
 /// The migrations, the first bringing an empty file to schema 1. Each runs
 /// in the same transaction as the `meta.schema` it raises; a new schema is a
 /// new entry, never an edit of one that shipped.
-const MIGRATIONS: [&str; SCHEMA as usize] = [V1];
+const MIGRATIONS: [&str; SCHEMA as usize] = [V1, V2];
 
 const V1: &str = "
 CREATE TABLE meta (
@@ -165,6 +165,39 @@ CREATE VIRTUAL TABLE videos_fts USING fts5 (
   content = '', contentless_delete = 1,
   tokenize = 'unicode61 remove_diacritics 2'
 );
+";
+
+/// KEEPING, SETTING ASIDE AND A LIST TO DECIDE.
+///
+/// - `videos.set_aside_at`: when the person set a video aside for later
+///   (NULL: not set aside) — the set-aside list's order, newest first.
+/// - `videos.keep`: the person's "never delete" on one video (`1`), and
+///   nothing but `0` or `1` — the clause that spares it
+///   ([`crate::edit::EXPIRED`]) and the column that shows its ∞ read the
+///   same number, so no stray value is a video that never goes and never
+///   says so.
+/// - `channels.keep_days`: how long the channel's videos stay — NULL as
+///   everywhere (the `keep_days` setting), `0` for ever, `N` days
+///   ([`crate::Keep::number`]).
+/// - `channels.staged`: a channel of an imported list, not registered yet,
+///   and what registering will do with it (`undecided`, `keep`, `discard`);
+///   NULL is a channel of the catalogue. In this table and not one of its
+///   own, so a staged channel takes a score, a keep and rules on the same
+///   pages as any other before it is registered — and is never scanned.
+///
+/// What was catalogued keeps nothing and is set aside nowhere: the catalogue
+/// of schema 1 was a test's (the person's decision, 2026-11-09), so nothing is
+/// protected on the way up.
+const V2: &str = "
+ALTER TABLE videos ADD COLUMN set_aside_at INTEGER;
+ALTER TABLE videos ADD COLUMN keep INTEGER NOT NULL DEFAULT 0
+  CHECK (keep IN (0, 1));
+ALTER TABLE channels ADD COLUMN keep_days INTEGER
+  CHECK (keep_days IS NULL OR keep_days >= 0);
+ALTER TABLE channels ADD COLUMN staged TEXT
+  CHECK (staged IS NULL OR staged IN ('undecided', 'keep', 'discard'));
+CREATE INDEX videos_by_set_aside ON videos (set_aside_at) WHERE set_aside_at IS NOT NULL;
+CREATE INDEX channels_by_staged ON channels (staged) WHERE staged IS NOT NULL;
 ";
 
 /// The rules a new catalogue starts with, editable like any other: recency
@@ -399,6 +432,11 @@ pub(crate) fn settings(conn: &Connection) -> Result<Settings, Refusal> {
         first_scan_most: number(conn, "first_scan_most", defaults.first_scan_most)?,
         views_snapshots: number::<u8>(conn, "views_snapshots", u8::from(defaults.views_snapshots))?
             != 0,
+        // A NUMBER THAT SAYS NO KEEP (below zero, past a hundred years) is
+        // refused like a word where a number is: never a plausible keep that
+        // would take out what the person meant to stay.
+        keep: Keep::of_number(number(conn, "keep_days", defaults.keep.number())?)
+            .ok_or(Refusal::of(Why::Unreadable))?,
     })
 }
 
@@ -415,7 +453,8 @@ pub(crate) fn put_settings(tx: &Transaction<'_>, settings: &Settings) -> Result<
         tx,
         "views_snapshots",
         &u8::from(settings.views_snapshots).to_string(),
-    )
+    )?;
+    put(tx, "keep_days", &settings.keep.number().to_string())
 }
 
 /// The rating weights.
@@ -565,6 +604,132 @@ pub(crate) mod tests {
             10,
             "absent is the default"
         );
+    }
+
+    /// FAILS IF: a catalogue of schema 1 — the shape every catalogue had
+    /// before keeping — is not brought to schema 2 with its rows, by a writer
+    /// and by a reader alike, or comes up with something kept, set aside or
+    /// staged that nobody chose, or without the ninety days, or takes a keep
+    /// that is neither 0 nor 1.
+    #[test]
+    fn a_catalogue_of_schema_one_is_brought_to_two_with_its_rows() {
+        let scratch = Scratch::new("schema-one");
+        // A FILE AS SCHEMA 1 LEFT IT: V1 and its seed, with no `keep_days` —
+        // that setting did not exist yet.
+        let at_one = |path: &Path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let conn = Connection::open(path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            let tx = immediate(&conn).unwrap();
+            seed(&tx).unwrap();
+            tx.execute("DELETE FROM settings WHERE key = 'keep_days'", [])
+                .unwrap();
+            tx.execute("UPDATE meta SET schema = 1 WHERE one = 1", [])
+                .unwrap();
+            tx.execute(
+                "INSERT INTO channels (id, title, url, score, added_at)
+                 VALUES ('UCaaaaaaaaaaaaaaaaaaaaaa', 'One', 'https://example.org/', 5000, 1)",
+                [],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO videos (id, channel, url, first_seen_at, updated_at)
+                 VALUES ('v0000000001', 'UCaaaaaaaaaaaaaaaaaaaaaa', 'https://example.org/v', 1, 1)",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            assert_eq!(schema_of(&conn).unwrap(), 1);
+        };
+        let path = scratch.catalogue();
+        at_one(&path);
+        let conn = open_rw(&path).unwrap();
+        assert_eq!(schema_of(&conn).unwrap(), 2);
+        let (keep, set_aside): (i64, Option<i64>) = conn
+            .query_row("SELECT keep, set_aside_at FROM videos", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((keep, set_aside), (0, None), "nothing kept or set aside");
+        assert!(
+            conn.execute("UPDATE videos SET keep = 2", []).is_err(),
+            "a keep is 0 or 1, never a number both readers would take apart"
+        );
+        let (keep_days, staged): (Option<i64>, Option<String>) = conn
+            .query_row("SELECT keep_days, staged FROM channels", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (keep_days, staged),
+            (None, None),
+            "a channel of the catalogue, as everywhere"
+        );
+        assert_eq!(settings(&conn).unwrap().keep, Keep::Days(90));
+        // A READER MIGRATES TOO, through its short writer.
+        let other = scratch.0.join("other").join("catalog.sqlite");
+        at_one(&other);
+        let reader = open_ro(&other).unwrap();
+        assert_eq!(schema_of(&reader).unwrap(), 2);
+        let videos: i64 = reader
+            .query_row("SELECT count(*) FROM videos WHERE keep = 0", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(videos, 1, "its row came up with it");
+    }
+
+    /// FAILS IF: "for ever" is not kept as the `0` a channel's column also
+    /// says, or a kept number that says no keep is read as one.
+    #[test]
+    fn keep_days_round_trips_and_a_negative_is_unreadable() {
+        let scratch = Scratch::new("keep-days");
+        let conn = open_rw(&scratch.catalogue()).unwrap();
+        for keep in [Keep::Forever, Keep::Days(7)] {
+            let tx = immediate(&conn).unwrap();
+            put_settings(
+                &tx,
+                &Settings {
+                    keep,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            assert_eq!(settings(&conn).unwrap().keep, keep);
+        }
+        let kept: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'keep_days'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, "7");
+        let tx = immediate(&conn).unwrap();
+        put_settings(
+            &tx,
+            &Settings {
+                keep: Keep::Forever,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let kept: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'keep_days'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, "0", "for ever is the channel's zero");
+        conn.execute(
+            "UPDATE settings SET value = '-3' WHERE key = 'keep_days'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(settings(&conn).unwrap_err().why, Why::Unreadable);
     }
 
     #[test]

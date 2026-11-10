@@ -147,7 +147,10 @@ let
   # `ronoctua-shell-footer`). A name outside it would be an option that says
   # "no module offers that" at both, so it is refused here, where it is
   # written; one more is a word here and a case there.
-  openable = [ "journal-follow" ];
+  openable = [
+    "journal-follow"
+    "video-metrics-window"
+  ];
 
   # THE BASE LANGUAGE, whose `.ftl` names a person's fragment's keys
   # (`textNames`, the reader every fragment's names come from).

@@ -16,7 +16,7 @@
 
 // THE KIT, THE DOOR AND THE PLAYER, by the names these modules already use
 // (`crate::chrome::…`, `crate::door::…`, `crate::player_rows::…`).
-use ronoctua_shell_door::{door, region};
+use ronoctua_shell_door::{door, file_picker, launch, region};
 use ronoctua_shell_kit::{bindings, chrome, echo, fields, line, wake, when};
 use ronoctua_shell_player::{
     player, player_find, player_metadata, player_posters, player_rows, player_seam, player_window,

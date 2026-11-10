@@ -39,7 +39,7 @@ usage: ronoctua-shell photograph --door video-metrics --catalog <file> [options]
 
   --catalog <file>      the catalogue it opens — a copy is what a key
                         changes; the file given is left as it was (required)
-  --open <page>         home, videos, channels, rules or weights
+  --open <page>         home, videos, channels, rules, weights or import
                                                        (default: home)
   --out <file>          where to write                 (default: video-metrics.png)
   --columns <n>         the window's width, in cells

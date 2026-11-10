@@ -78,7 +78,15 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<down>", "player-down", Where::Anywhere),
     ("<up>", "player-up", Where::Anywhere),
     ("<left>", "player-less", Where::OnAValue),
+    // ON A GROUP OF THE QUEUE THE ARROW THAT TURNS IT: `←` folds an open one
+    // and `→` opens a folded one — the `player-less` and `player-more` around
+    // this, which a group does not turn, taught there in the toggle's word,
+    // whose click does what that arrow does in that state (`pressed_in`
+    // reads the first entry of a key: `Press::Less`, `Press::More`, which
+    // fold and open a group). Never the arrow that does nothing there.
+    ("<left>", "player-fold", Where::OnAnOpenGroup),
     ("<right>", "player-more", Where::OnAValue),
+    ("<right>", "player-fold", Where::OnAFoldedGroup),
     ("RET", "player-enter", Where::OnARow),
     ("SPC", "player-toggle", Where::Anywhere),
     ("s", "player-stop", Where::Anywhere),
@@ -98,7 +106,12 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("0", "player-mute", Where::Anywhere),
     ("w", "player-swap", Where::Anywhere),
     ("k", "player-tracks", Where::WithAChoice),
-    ("TAB", "player-fold", Where::OnAGroup),
+    // `TAB` CROSSES TO THE PICTURE'S CONTROLS and back (`Shift+TAB` too):
+    // the door's pane beside the rows, each side keeping its place
+    // ([`View::pane`]). With no pane it walks the sections, as `TAB` does in
+    // every list (`section_ring`); a group of the queue folds by `←` and `→`
+    // and its triangle.
+    ("TAB", "player-cross", Where::WithAPane),
     // `C-↑`/`C-↓` MOVE THE ENTRY under the cursor — a file, a playlist, a
     // set — one place earlier or later among its siblings: the `↑` and `↓`
     // at the end of its row, which a click presses (invariant 19). The plain
@@ -179,6 +192,39 @@ pub const OF_THE_VIEW: &[(&str, &str, Where)] = &[
     ("<end>", "player-ranking-last", Where::OnTheRanking),
     ("L", "player-ranking-layout", Where::OnTheRanking),
     ("e", "player-ranking-more", Where::OnARanked),
+    // `S` TURNS ITS SHORTS — with them, without, only them — as it turns the
+    // catalogue's source on that page; and THE QUICK MARKS on the video
+    // under the cursor, the glyphs beside its words: `b` sets it aside (the
+    // bookmark, as `b` keeps a station among the favourites), `v` hides it
+    // (its eye, as `v` hides a lane), `d` deletes it, `F` keeps it for ever,
+    // and `1` to `4` rate it, from very negative to very positive. Each
+    // letter is another entry's elsewhere: the ranking's pages say it is
+    // theirs (`Where::on_the_page`).
+    ("S", "player-ranking-shorts", Where::OnTheRanking),
+    ("b", "player-ranked-set-aside", Where::OnAVideoOfTheRanking),
+    ("v", "player-ranked-hide", Where::OnAVideoOfTheRanking),
+    ("d", "player-ranked-delete", Where::OnAVideoOfTheRanking),
+    ("F", "player-ranked-forever", Where::OnAVideoOfTheRanking),
+    (
+        "1",
+        "player-ranked-rate-very-negative",
+        Where::OnAVideoOfTheRanking,
+    ),
+    (
+        "2",
+        "player-ranked-rate-negative",
+        Where::OnAVideoOfTheRanking,
+    ),
+    (
+        "3",
+        "player-ranked-rate-positive",
+        Where::OnAVideoOfTheRanking,
+    ),
+    (
+        "4",
+        "player-ranked-rate-very-positive",
+        Where::OnAVideoOfTheRanking,
+    ),
 ];
 
 /// THE KEYS AFTER `LEADER Alt` that the rule for every window does not give
@@ -208,6 +254,45 @@ pub const LEADER_ALT_KEYS: &[(&str, &str)] = &[
     ("C-s", "\\"),
 ];
 
+/// THE KEYS WHILE THE PICTURE'S CONTROLS HAVE THE KEYBOARD ([`View::pane`]):
+/// the hint they replace the view's with — `↑`/`↓` walk the controls in
+/// reading order, and `←`/`→` too, but on the time bar they seek; `RET`
+/// presses as a click does; `TAB` takes the keyboard back to the rows.
+pub const OF_THE_PANE: &[(&str, &str, PaneWhere)] = &[
+    ("<up>", "player-pane-previous", PaneWhere::Any),
+    ("<down>", "player-pane-next", PaneWhere::Any),
+    ("<left>", "player-pane-previous", PaneWhere::OnAButton),
+    ("<right>", "player-pane-next", PaneWhere::OnAButton),
+    ("<left>", "player-rewind", PaneWhere::OnTheTrack),
+    ("<right>", "player-forward", PaneWhere::OnTheTrack),
+    ("RET", "player-pane-press", PaneWhere::OnAButton),
+    ("TAB", "player-cross", PaneWhere::Any),
+];
+
+/// Where a key of [`OF_THE_PANE`] applies: on any stop, on a button, or on
+/// the time bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneWhere {
+    /// On any stop of the pane.
+    Any,
+    /// On a button — the transport's, a seek, the fold.
+    OnAButton,
+    /// On the time bar.
+    OnTheTrack,
+}
+
+impl PaneWhere {
+    /// Whether it holds on `stop`.
+    const fn on(self, stop: crate::player_media::Stop) -> bool {
+        use crate::player_media::Stop;
+        match self {
+            Self::Any => true,
+            Self::OnAButton => matches!(stop, Stop::Button(_)),
+            Self::OnTheTrack => matches!(stop, Stop::Track),
+        }
+    }
+}
+
 /// Where a key applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Where {
@@ -221,8 +306,10 @@ pub enum Where {
     OnRemovable,
     /// On an entry of the queue — a file, a set, a playlist.
     OnAnEntry,
-    /// On a group of the queue: a playlist, a set.
-    OnAGroup,
+    /// On an open group of the queue — a playlist, a set — which `←` folds.
+    OnAnOpenGroup,
+    /// On a folded group of the queue, which `→` opens.
+    OnAFoldedGroup,
     /// On one of the file's media, on its kind's page.
     OnATrack,
     /// Anywhere, a key that OPENS what it shows — a question — which a door
@@ -266,17 +353,26 @@ pub enum Where {
     /// On channels by theme, or a listing of them: the catalogue's source
     /// turns there.
     OnTheCatalog,
-    /// On the ranking of the video catalogue (`ronoctua_shell_video_metrics::player_ranking`).
+    /// On the ranking of the video catalogue (`ronoctua_shell_video_metrics::player_ranking`),
+    /// or its list of the videos set aside.
     OnTheRanking,
     /// On a video of the ranking.
     OnARanked,
+    /// On a video of the ranking — under the cursor on one of its lists, or
+    /// the one whose own page is open: what a quick mark acts on.
+    OnAVideoOfTheRanking,
+    /// While the door shows controls of its picture the keyboard can stand
+    /// on ([`View::pane_is`]): the footer's pane beside the rows, the
+    /// window's transport.
+    WithAPane,
 }
 
 impl Where {
     /// Whether its keys act on WHAT PLAYS and not on the row under the
     /// cursor — so they act where no row is drawn (the window's stage, the
     /// footer's picture alone, the column's bar: [`Press::unseen`]): always,
-    /// or while what plays has what they act on.
+    /// or while what plays has what they act on. AND `TAB` TO THE PICTURE'S
+    /// CONTROLS, which are drawn where the rows are not.
     #[cfg(test)]
     #[must_use]
     pub const fn of_no_row(self) -> bool {
@@ -287,6 +383,7 @@ impl Where {
                 | Self::WithAPictureShown
                 | Self::WithAQueueFile
                 | Self::WithLyrics
+                | Self::WithAPane
         )
     }
 
@@ -304,17 +401,27 @@ impl Where {
             | Self::OnAListing
             | Self::OnTheCatalog
             | Self::OnTheRanking
-            | Self::WithAPictureShown => Some(self.shown(&Target::Nothing, None, view)),
+            | Self::WithAPictureShown
+            | Self::WithAPane => Some(self.shown(&Target::Nothing, None, view)),
+            // A VIDEO OF THE RANKING is a row of its pages, and those pages
+            // say the key is theirs whatever row the cursor is on: `e` there
+            // is the video's own page, and never a new name for what plays —
+            // which the first entry of the key, read on no page, was.
+            Self::OnARanked => Some(matches!(view.page(), PageId::Ranking | PageId::SetAside)),
+            Self::OnAVideoOfTheRanking => Some(matches!(
+                view.page(),
+                PageId::Ranking | PageId::SetAside | PageId::RankedVideo
+            )),
             Self::Anywhere
             | Self::OnAValue
             | Self::OnARow
             | Self::OnRemovable
             | Self::OnAnEntry
-            | Self::OnAGroup
+            | Self::OnAnOpenGroup
+            | Self::OnAFoldedGroup
             | Self::OnATrack
             | Self::Opening
             | Self::OnAPlayable
-            | Self::OnARanked
             | Self::WithAChoice
             | Self::WithAPicture
             | Self::OnALane
@@ -332,6 +439,7 @@ impl Where {
             Self::Anywhere => true,
             Self::WithAPosition => state.is_some_and(loaded),
             Self::WithAPictureShown => view.picture_fold.is_some(),
+            Self::WithAPane => !view.pane_stops.is_empty(),
             Self::WithAQueueFile => state.is_some_and(|s| {
                 matches!(
                     s.queue_file,
@@ -354,8 +462,11 @@ impl Where {
             },
             Self::OnAListing => page == PageId::Catalog,
             Self::OnTheCatalog => matches!(page, PageId::Channels | PageId::Catalog),
-            Self::OnTheRanking => page == PageId::Ranking,
+            Self::OnTheRanking => matches!(page, PageId::Ranking | PageId::SetAside),
             Self::OnARanked => matches!(target, Target::Ranked(_)),
+            Self::OnAVideoOfTheRanking => {
+                matches!(target, Target::Ranked(_)) || page == PageId::RankedVideo
+            }
             Self::OnAPick => matches!(target, Target::Pick(..)),
             Self::OnTheGlobe => crate::player_globe::on(page) && crate::globe::present(),
             Self::WithAChoice => {
@@ -384,7 +495,12 @@ impl Where {
                     | Target::Website(_)
             ),
             Self::OnAnEntry => matches!(target, Target::Entry(_) | Target::Group(_)),
-            Self::OnAGroup => matches!(target, Target::Group(_)),
+            Self::OnAnOpenGroup | Self::OnAFoldedGroup => match target {
+                Target::Group(id) => {
+                    view.group_open(*id, state) == Some(self == Self::OnAnOpenGroup)
+                }
+                _ => false,
+            },
             Self::OnATrack => matches!(target, Target::Track { id: Some(_), .. }),
             Self::Opening => true,
             // A ROW THAT PLAYS — from a directory, or a website's address —
@@ -507,6 +623,19 @@ pub enum Press {
     /// A key of the RANKING — a page, the layout, a video's own page
     /// (`ronoctua_shell_video_metrics::player_ranking`).
     Ranking(crate::player_seam::RankingKey),
+    /// `TAB` — `Shift+TAB`, `back` — the keyboard to the picture's controls
+    /// and back to the rows ([`View::pane`]); with no controls to cross to,
+    /// the next section's first row (`section_ring`).
+    Cross {
+        /// `Shift+TAB`: the ring walked the other way.
+        back: bool,
+    },
+    /// The control before, among the picture's.
+    PanePrevious,
+    /// The next control, among the picture's.
+    PaneNext,
+    /// The control the keyboard is on, pressed as a click presses it.
+    PanePress,
 }
 
 /// What a door that is NOT DRAWING THE ROWS does with a press — the window's
@@ -553,7 +682,14 @@ impl Press {
             | Self::Forward
             | Self::FoldPicture
             | Self::Translate
-            | Self::Escape => Unseen::Acts,
+            | Self::Escape
+            // THE PICTURE'S CONTROLS are drawn where the rows are not — the
+            // stage's transport, the footer's picture alone — and are what
+            // these walk and press.
+            | Self::Cross { .. }
+            | Self::PanePrevious
+            | Self::PaneNext
+            | Self::PanePress => Unseen::Acts,
             Self::Up
             | Self::Down
             | Self::Less
@@ -619,8 +755,8 @@ pub enum Target {
     /// cursor and "play this one" never land on another.
     Entry(EntryId),
     /// A GROUP of the queue — a named playlist, a set — by its id: `RET`
-    /// plays it, `TAB` folds it, `→` unfolds it and `←` folds it
-    /// (`crate::player_queue`).
+    /// plays it, `→` unfolds it and `←` folds it, and `player-fold` by name
+    /// turns it (`crate::player_queue`).
     Group(EntryId),
     /// A group's triangle, at the head of its row: a click folds or unfolds
     /// it at once.
@@ -972,11 +1108,40 @@ pub enum Target {
     RankingLayout,
     /// Its page — a ring.
     RankingPage,
+    /// Its Shorts — with them, without them, only them: a ring.
+    RankingShorts,
+    /// A QUICK MARK's glyph beside a video's words — a control a click acts
+    /// on at once: the video, and what it marks.
+    RankedQuick(
+        ronoctua_video_metrics::VideoId,
+        crate::player_seam::ranking::Quick,
+    ),
+    /// The person's rating, on a video's own page — a ring.
+    RankedRating,
     /// A row of a video's own page.
     RankedDo(crate::player_seam::ranking::RankedAct),
 }
 
 impl Target {
+    /// WHAT A ROW OF IT SAYS UNDER THE POINTER, for a row that is one thing
+    /// — the id of its sentence (`chrome::hint_sentence`: `cmd-<id>`, else
+    /// `about-<id>`), which both doors say where they say a control's: a row
+    /// of a video's own page of the ranking, its rating's ring, and a list's
+    /// page, layout and Shorts — the three rows above its videos. `None` for
+    /// the rest, which say nothing under the pointer.
+    #[must_use]
+    pub const fn about(&self) -> Option<&'static str> {
+        use crate::player_seam::ranking::{LAYOUT, RankedAct};
+        match self {
+            Self::RankedDo(act) => Some(act.about()),
+            Self::RankedRating => Some(RankedAct::Rate.about()),
+            Self::RankingPage => Some("player-ranking-page"),
+            Self::RankingLayout => Some(LAYOUT),
+            Self::RankingShorts => Some("player-ranking-shorts"),
+            _ => None,
+        }
+    }
+
     const fn turns(&self) -> bool {
         matches!(
             self,
@@ -1047,9 +1212,12 @@ impl Target {
                 | Self::CatalogLayout
                 | Self::SourcePosters(_)
                 | Self::SourceAdult(_)
-                // THE RANKING'S TWO RINGS (`ronoctua_shell_video_metrics::player_ranking`).
+                // THE RANKING'S RINGS (`ronoctua_shell_video_metrics::player_ranking`), and
+                // a video's rating on its own page.
                 | Self::RankingLayout
                 | Self::RankingPage
+                | Self::RankingShorts
+                | Self::RankedRating
         )
     }
 
@@ -1372,8 +1540,13 @@ pub enum Errand {
     /// footer's (`kiosk-open`), which a window and the column ask down its
     /// socket (`ronoctua_shell_video_metrics::player_ranking`).
     Kiosk(String),
-    /// A video of the ranking hidden, deleted or downloaded — OFF THE LOOP,
-    /// and said when it is done (`Told::Ranking`).
+    /// A VIDEO IN NYXT — the door's to do, as the kiosk is: a program
+    /// started by its entry in the launcher, the address its last word
+    /// (`launch::in_nyxt`). The footer closes its view first, as it does for
+    /// any window it starts; a window starts it itself.
+    Nyxt(String),
+    /// A video of the ranking hidden, deleted, downloaded or marked — OFF
+    /// THE LOOP, and said when it is done (`Told::Ranking`).
     Ranking(crate::player_seam::ranking::Act),
 }
 
@@ -1687,6 +1860,18 @@ pub struct View {
     /// `None` while it shows none it could fold away — the "Now" title
     /// carries no fold glyph then — else whether it is folded.
     pub picture_fold: Option<bool>,
+    /// THE CONTROLS OF THE DOOR'S PICTURE the keyboard stands on, in reading
+    /// order (`player_media::stops`) — told by the door at each frame, out of
+    /// what it PLACED ([`View::pane_is`]): the footer's pane beside the rows,
+    /// the window's transport. Empty while it draws none.
+    pub pane_stops: Vec<crate::player_media::Stop>,
+    /// WHERE THE KEYBOARD IS among them, while `TAB` took it there
+    /// ([`View::pane`]): the rows draw no cursor meanwhile — one cursor on
+    /// the screen at a time.
+    pane: Option<crate::player_media::Stop>,
+    /// Where it was when it went back to the rows: the next `TAB` lands
+    /// there, each side keeping its place.
+    pane_kept: Option<crate::player_media::Stop>,
     /// Whether the person let the lyrics' translator's host
     /// (`ronoctua_consent`): read with the preferences, and turned by the
     /// Internet page's switch.
@@ -2429,6 +2614,166 @@ impl View {
         Errand::FoldPicture
     }
 
+    /// THE STOPS OF THE DOOR'S PICTURE, as its frame placed them
+    /// (`player_media::stops`) — the door tells them at every frame, and
+    /// after it wakes controls a key is about to reach. The keyboard keeps
+    /// its stop by what it is; one that went keeps its place in the order
+    /// (the media's glyph came or went), and with none left — the picture
+    /// gone — the keyboard goes back to the rows, the stop kept for the next
+    /// `TAB`. A stage's controls hidden after a while are not gone: the
+    /// window tells them as shown (`player_window`'s `tell_the_stops`).
+    pub fn pane_is(&mut self, stops: Vec<crate::player_media::Stop>) {
+        if stops == self.pane_stops {
+            return;
+        }
+        let kept = |at: Option<crate::player_media::Stop>, old: &[crate::player_media::Stop]| {
+            let at = at?;
+            if stops.contains(&at) {
+                return Some(at);
+            }
+            let place = old.iter().position(|s| *s == at)?;
+            stops.get(place.min(stops.len().checked_sub(1)?)).copied()
+        };
+        if stops.is_empty() {
+            self.pane_kept = self.pane.take().or(self.pane_kept);
+        } else {
+            self.pane = kept(self.pane, &self.pane_stops);
+            self.pane_kept = kept(self.pane_kept, &self.pane_stops);
+        }
+        self.pane_stops = stops;
+    }
+
+    /// The stop of the picture's controls the keyboard is on — `None` while
+    /// it is on the rows.
+    #[must_use]
+    pub const fn pane(&self) -> Option<crate::player_media::Stop> {
+        self.pane
+    }
+
+    /// The keyboard back to the rows — `Esc` in the pane, a page opened, the
+    /// pointer choosing a row, a question asked — its stop kept for the next
+    /// `TAB`. The rows' cursor is where it was.
+    pub const fn leave_pane(&mut self) {
+        if let Some(at) = self.pane.take() {
+            self.pane_kept = Some(at);
+        }
+    }
+
+    /// Whether the picture's controls have the keyboard and `press` is
+    /// theirs: the arrows walk them, `RET` presses one, `Esc` and `TAB` go
+    /// back to the rows. What a door that does not draw the rows asks before
+    /// bringing them back for a key that needs them (the footer's picture
+    /// alone, the window's stage): these need the picture's controls.
+    #[must_use]
+    pub const fn pane_takes(&self, press: Press) -> bool {
+        self.pane.is_some()
+            && matches!(
+                press,
+                Press::Up
+                    | Press::Down
+                    | Press::Less
+                    | Press::More
+                    | Press::Enter
+                    | Press::Escape
+                    | Press::Cross { .. }
+                    | Press::PanePrevious
+                    | Press::PaneNext
+                    | Press::PanePress
+            )
+    }
+
+    /// `press` AS THE CONTROL UNDER THE KEYBOARD'S CLICK WOULD BE: `RET` on a
+    /// button of the pane that is a key of the view (`button_press`: the
+    /// media in the file, the fold) is that key — what each door asks
+    /// FIRST, before its rule for the rows it does not draw (the footer's
+    /// picture alone, the window's stage). A click on that button reaches
+    /// the rule as that key (`button_pressed`), and so must `RET`: read as
+    /// `RET`, the pane took it and the rule let it through, and the media's
+    /// page opened behind the picture — the cursor gone from the transport
+    /// and nothing seen to open. Every other press is itself.
+    #[must_use]
+    pub fn pane_press(&self, press: Press) -> Press {
+        match (self.pane, press) {
+            (Some(crate::player_media::Stop::Button(id)), Press::Enter | Press::PanePress) => {
+                crate::player_transport::button_press(id).unwrap_or(press)
+            }
+            _ => press,
+        }
+    }
+
+    /// A key while the picture's controls have the keyboard — `None` when it
+    /// is no key of theirs, and acts where it always does: one that acts on
+    /// a row (`d`, `a`) takes the keyboard back to the rows first, and one
+    /// that acts wherever the cursor is (`SPC`, `n`) leaves it where it is.
+    fn pane_keyed(
+        &mut self,
+        press: Press,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> Option<Errand> {
+        use crate::player_media::Stop;
+        let at = self.pane?;
+        let place = self.pane_stops.iter().position(|s| *s == at).unwrap_or(0);
+        // THE NEXT OR THE ONE BEFORE, in reading order — never round: the
+        // ends are where the controls are.
+        let mut walk = |forward: bool| {
+            let to = if forward {
+                (place + 1).min(self.pane_stops.len().saturating_sub(1))
+            } else {
+                place.saturating_sub(1)
+            };
+            if let Some(stop) = self.pane_stops.get(to) {
+                self.pane = Some(*stop);
+            }
+            Errand::Nothing
+        };
+        Some(match press {
+            Press::Up | Press::PanePrevious => walk(false),
+            Press::Down | Press::PaneNext => walk(true),
+            // ON THE TIME BAR the arrows SEEK — and as the commands the hint
+            // teaches for them (`OF_THE_PANE`: `player-rewind`,
+            // `player-forward`), whose click says the step it took: the key
+            // and its click, one seek and one sentence.
+            Press::Less | Press::More if at == Stop::Track => {
+                let seek = if press == Press::More {
+                    Press::Forward
+                } else {
+                    Press::Rewind
+                };
+                self.keyed(seek, state, columns, texts)
+            }
+            // AND `RET` jumps ahead, as on the rows' position row (`turn`).
+            Press::Enter | Press::PanePress if at == Stop::Track => {
+                turn(&Target::Position, Press::Enter, state, None)
+            }
+            Press::Less => walk(false),
+            Press::More => walk(true),
+            // A BUTTON PRESSED AS ITS CLICK PRESSES IT: a key of the view
+            // (`button_press`: the media in the file, the fold) as that key,
+            // and every other what `button_errand` says.
+            Press::Enter | Press::PanePress => {
+                let Stop::Button(id) = at else {
+                    return Some(Errand::Nothing);
+                };
+                match crate::player_transport::button_press(id) {
+                    Some(press) => self.keyed(press, state, columns, texts),
+                    None => button_errand(id, state, texts),
+                }
+            }
+            Press::Escape | Press::Cross { .. } => {
+                self.leave_pane();
+                Errand::Nothing
+            }
+            other => {
+                if other.unseen() != Unseen::Acts {
+                    self.leave_pane();
+                }
+                return None;
+            }
+        })
+    }
+
     /// Whether a page of the file picker is on screen.
     #[must_use]
     pub fn browsing(&self) -> bool {
@@ -2506,6 +2851,9 @@ impl View {
             prefs_unread: PrefsUnread::default(),
             editing: None,
             picture_fold: None,
+            pane_stops: Vec::new(),
+            pane: None,
+            pane_kept: None,
             translator_let: false,
             words_kept: Vec::new(),
             lyrics_tongue: None,
@@ -2770,6 +3118,8 @@ impl View {
     /// asks before a change is thrown away (`crate::text_area`).
     pub fn edit_text(&mut self, area: crate::text_area::TextArea) {
         self.clicked_control = None;
+        // EVERY KEY IS THE TEXT'S, and its caret the one cursor.
+        self.leave_pane();
         self.editing = Some(area);
     }
 
@@ -2899,6 +3249,16 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Vec<crate::chrome::Piece> {
+        // THE PICTURE'S CONTROLS teach theirs while they have the keyboard
+        // ([`OF_THE_PANE`]): the ones of the stop it is on, clickable.
+        if let Some(at) = self.pane {
+            let here: Vec<(&str, &str, bool)> = OF_THE_PANE
+                .iter()
+                .filter(|(_, _, w)| w.on(at))
+                .map(|(k, id, w)| (*k, *id, *w != PaneWhere::Any))
+                .collect();
+            return crate::chrome::hint_of_marked(&here, |_| None, texts);
+        }
         // A TEXT BEING EDITED teaches its own keys, clickable.
         if self.asking.is_none() && self.editing.is_some() {
             return crate::text_area::hint(texts);
@@ -2913,11 +3273,15 @@ impl View {
         let target = rows
             .get(self.cursor())
             .map_or(Target::Nothing, |r| r.target.clone());
+        // ON A TITLE'S CONTROLS `←` and `→` choose among them: they turn no
+        // value there, whatever the control chosen turns when pressed.
+        let on_a_title = self.top().on_title && rows.get(self.cursor()).is_some_and(|r| r.heading);
         // A KEY THAT IS ONLY HERE BECAUSE OF THE ROW UNDER THE CURSOR reads as
         // one (`Register::Contextual`): the owner asked for the passing guests to
         // look apart from the keys that are always on the line.
         let here: Vec<(&str, &str, bool)> = OF_THE_VIEW
             .iter()
+            .filter(|(_, _, w)| !(on_a_title && *w == Where::OnAValue))
             .filter(|(_, _, w)| w.shown(&target, state, self))
             .map(|(k, id, w)| (*k, *id, !matches!(w, Where::Anywhere)))
             .collect();
@@ -2983,6 +3347,10 @@ impl View {
     /// or a click on a control beside a title, which acts at once.
     pub fn clicked_at(&mut self, n: usize, column: u16, rows: &[Row]) -> bool {
         self.pages_touched();
+        // THE POINTER CHOSE A ROW: the keyboard is the rows' again, and off
+        // a title's controls the arrows put it on.
+        self.leave_pane();
+        self.top_mut().on_title = false;
         // A TEXT BEING EDITED takes the click: the caret where it lands, or
         // an answer of its question chosen, then given (`text_area::hit`,
         // the cells it drew). Nothing else on its page is a place to click.
@@ -3015,9 +3383,28 @@ impl View {
             self.top_mut().moved = true;
             return again;
         }
-        // A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON, its row's first:
-        // under it, on the rest of the row, the click is the row's
-        // (`player_rows::controls_under`).
+        // A CONTROL IS TAKEN ON THE LINE IT IS DRAWN ON — whichever line of
+        // its row that is: the glyphs said under a strip's title, beside its
+        // words, act on the click as the `⋯` on its first line does, and the
+        // cursor comes to the row they are about. A line's own cells are what
+        // it draws; anywhere else on it, the click is the row's.
+        if line != n
+            && !row.heading
+            && let Some(c) = rows.get(line).and_then(|l| {
+                l.cells
+                    .iter()
+                    .find(|c| c.control && crate::chrome::in_cell(column, c.from, c.width))
+            })
+        {
+            self.clicked_control = Some(c.target.clone());
+            let top = self.top_mut();
+            top.moved = true;
+            top.cursor = n;
+            return true;
+        }
+        // THE ROW'S OWN CELLS are its first line's: a control among them is
+        // taken there, and under it, on the rest of the row, the click is the
+        // row's (`player_rows::controls_under`).
         let cell = row.cells.iter().position(|c| {
             (line == n || !c.control) && crate::chrome::in_cell(column, c.from, c.width)
         });
@@ -3068,9 +3455,11 @@ impl View {
     /// bar acts on the press, as the window's time bar does, and holding
     /// drags it.
     pub fn grabbed(&mut self, n: usize) {
+        self.leave_pane();
         let top = self.top_mut();
         top.cursor = n;
         top.cell = 0;
+        top.on_title = false;
         top.moved = true;
     }
 
@@ -3089,8 +3478,10 @@ impl View {
             .as_mut()
             .is_some_and(|p| p.mark_target(target, range));
         if changed {
+            self.leave_pane();
             let top = self.top_mut();
             top.cursor = n;
+            top.on_title = false;
             top.moved = true;
         }
         changed
@@ -3266,7 +3657,11 @@ impl View {
     ) {
         let rows = self.rows(state, columns, texts);
         if let Some(i) = rows.iter().position(|r| r.spot == spot) {
-            self.top_mut().cursor = i;
+            let top = self.top_mut();
+            top.cursor = i;
+            // A TITLE'S CONTROLS FOLLOWED BY THEIR SPOT — the cursor was on
+            // them, and a state rebuilt the rows under it — stay its.
+            top.on_title = rows[i].heading && rows[i].walked_onto();
         }
         self.clamp(&rows);
     }
@@ -3275,20 +3670,29 @@ impl View {
         let top = self.top_mut();
         if rows.is_empty() {
             top.cursor = 0;
+            top.on_title = false;
             return;
         }
         top.cursor = top.cursor.min(rows.len() - 1);
         // ON THE REST OF A WRAPPED LABEL: back on the row it continues.
         top.cursor = Row::owner(rows, top.cursor);
-        if rows[top.cursor].heading {
+        // A TITLE IS NO PLACE FOR THE CURSOR — but the controls of one, which
+        // the arrows walked onto, are: they stay while it is still there.
+        let stays = top.on_title && rows[top.cursor].walked_onto();
+        if rows[top.cursor].heading && !stays {
             let after = (top.cursor..rows.len()).find(|&i| rows[i].stops());
             let before = (0..=top.cursor).rev().find(|&i| rows[i].stops());
             if let Some(i) = after.or(before) {
                 top.cursor = i;
             }
         }
+        top.on_title = rows[top.cursor].heading && stays;
     }
 
+    /// `↑` or `↓`: the row before or after the cursor's that it stops on —
+    /// and A TITLE'S CONTROLS on the way ([`Row::walked_onto`]), the glyphs
+    /// at the end of its line, so every control of a page is reached by the
+    /// arrows as by the pointer (`RET` presses the one chosen).
     fn walk(&mut self, rows: &[Row], down: bool) {
         let top = self.top_mut();
         let mut at = top.cursor;
@@ -3304,9 +3708,10 @@ impl View {
                 }
                 at -= 1;
             }
-            if rows[at].stops() {
+            if rows[at].walked_onto() {
                 top.cursor = at;
                 top.moved = true;
+                top.on_title = rows[at].heading;
                 top.cell = top.cell.min(rows[at].cells.len().saturating_sub(1));
                 return;
             }
@@ -3426,6 +3831,12 @@ impl View {
         {
             return self.pick_key(key, state, columns, texts);
         }
+        // THE PICTURE'S CONTROLS HAVE THE KEYBOARD (`TAB`): the arrows walk
+        // them, `RET` presses one, `Esc` and `TAB` go back to the rows — and
+        // a key that needs the rows takes the keyboard back there first.
+        if let Some(errand) = self.pane_keyed(press, state, columns, texts) {
+            return errand;
+        }
         self.settle_in(state, columns, texts);
         let rows = self.rows(state, columns, texts);
         // A CONTROL BESIDE A TITLE, clicked: what it does, now.
@@ -3434,10 +3845,74 @@ impl View {
         {
             return self.act(&target, press, state, columns, texts);
         }
+        // ON A TITLE'S CONTROLS — reached by `↑` from the row under it, or
+        // `↓` from the row above (`Row::walked_onto`) — `←` and `→` choose
+        // among them, and `RET` presses the one chosen, below, as its click
+        // does: they are the title's row's cells.
+        if matches!(press, Press::Less | Press::More)
+            && self.top().on_title
+            && let Some(row) = rows.get(self.cursor()).filter(|r| r.heading)
+        {
+            let last = row
+                .cells
+                .iter()
+                .filter(|c| c.control)
+                .count()
+                .saturating_sub(1);
+            let top = self.top_mut();
+            top.cell = if press == Press::Less {
+                top.cell.min(last).saturating_sub(1)
+            } else {
+                (top.cell + 1).min(last)
+            };
+            top.moved = true;
+            return Errand::Nothing;
+        }
         match press {
             // A KEY FOR A TEXT with none open — one left while the key was
             // on its way — types nothing anywhere.
             Press::Text(_) | Press::Pick(_) => return Errand::Nothing,
+            // `TAB` WITH THE KEYBOARD ON THE ROWS: to the picture's controls,
+            // where it was last — or the first — and with none, to the next
+            // section's first row (`section_ring`), as in every list. Never
+            // from a text being edited or the picker, whose keys are theirs.
+            Press::Cross { back } => {
+                if self.editing.is_some() || self.browsing() {
+                    return Errand::Nothing;
+                }
+                let landing = self
+                    .pane_kept
+                    .filter(|k| self.pane_stops.contains(k))
+                    .or_else(|| {
+                        if back {
+                            self.pane_stops.last().copied()
+                        } else {
+                            self.pane_stops.first().copied()
+                        }
+                    });
+                if let Some(stop) = landing {
+                    self.pane = Some(stop);
+                    return Errand::Nothing;
+                }
+                // A TITLE WITH CONTROLS IS STILL A TITLE to the ring: the
+                // rows a click takes it stands on are the ones the cursor
+                // stops on.
+                let fields: Vec<Vec<crate::fields::Field>> =
+                    rows.iter().map(|r| r.fields.clone()).collect();
+                let takes: Vec<bool> = rows.iter().map(Row::stops).collect();
+                if let Some(row) =
+                    crate::section_ring::landing(&fields, &takes, Some(self.cursor()), back)
+                {
+                    let top = self.top_mut();
+                    top.cursor = row;
+                    top.on_title = false;
+                    top.moved = true;
+                }
+                return Errand::Nothing;
+            }
+            // THE PICTURE'S CONTROLS' OWN KEYS, with the keyboard on the rows:
+            // nothing to walk or to press.
+            Press::PanePrevious | Press::PaneNext | Press::PanePress => return Errand::Nothing,
             // `Esc` GIVES EVERY ROW BACK first, where a group of the globe's
             // marks narrowed them — and then goes back one page.
             Press::Escape if self.top().only.is_some() => {
@@ -3653,7 +4128,7 @@ impl View {
             });
         }
         // WHICH GROUP OF THE QUEUE IS OPEN IS THIS VIEW'S: its triangle and
-        // `TAB` turn it, `→` opens it and `←` folds it
+        // `player-fold` turn it, `→` opens it and `←` folds it
         // (`crate::player_queue`).
         match (&target, press) {
             (Target::Fold(id), Press::Enter) | (Target::Group(id), Press::Fold) => {
@@ -3809,10 +4284,14 @@ impl View {
     /// Puts a question on screen; `no` is where the cursor starts, and what
     /// `Esc` answers — a question that appears on its own answers no.
     fn ask(&mut self, sentence: String, yes: Errand, no: Errand) -> Errand {
+        // A QUESTION TAKES EVERY KEY, and its cursor on "no" is the one
+        // drawn: the picture's controls give the keyboard up.
+        self.leave_pane();
         let top = self.top_mut();
         let back = (top.cursor, top.cell);
         top.cursor = 0;
         top.cell = 0;
+        top.on_title = false;
         top.moved = false;
         self.asking = Some(Choice {
             sentence,
@@ -4628,6 +5107,10 @@ impl View {
     ) -> Vec<Row> {
         let (left, room) = crate::chrome::extent(columns);
         let top = self.top();
+        // ONE CURSOR ON THE SCREEN AT A TIME: while the picture's controls
+        // have the keyboard (`TAB`) no row is drawn as the cursor's — its
+        // colour, a grid's selection — and the row stays where it was.
+        let shown = self.pane.is_none();
         // THE PICKER'S PAGE: its title, and the picker's own rows — its
         // cells the cells of a grid, each lit alone under the pointer
         // (`chrome::hover_cells`). A question of the view's, or a text being
@@ -4644,15 +5127,14 @@ impl View {
                     b.note(crate::key::PLAYER_ABOUT_OPEN);
                 }
             });
-            rows.extend(
-                picker
-                    .rows(columns, texts)
-                    .into_iter()
-                    .map(crate::player_rows::of_the_picker),
-            );
+            rows.extend(picker.rows(columns, texts).into_iter().map(|r| {
+                let mut row = crate::player_rows::of_the_picker(r);
+                row.focused &= shown;
+                row
+            }));
             return rows;
         }
-        Builder::build(left, room, top.cursor, top.cell, texts, |b| {
+        Builder::build_shown(left, room, (top.cursor, top.cell), shown, texts, |b| {
             self.page_rows(state, b);
         })
     }
@@ -4795,6 +5277,7 @@ impl View {
                 | PageId::Catalog
                 | PageId::Sources
                 | PageId::Ranking
+                | PageId::SetAside
                 | PageId::RankedVideo,
                 _,
             ) => {
@@ -5204,9 +5687,10 @@ pub fn carry_out(
         | Errand::FoldPicture
         | Errand::Ask(_)
         | Errand::Kiosk(_)
+        | Errand::Nyxt(_)
         | Errand::Pair { .. } => Err(errand),
         // A PAGE'S ERRAND, OFF THE LOOP (`crate::player_seam`): a video of the
-        // ranking hidden, deleted or downloaded — a write waits for a scan
+        // ranking hidden, deleted, downloaded or marked — a write waits for a scan
         // that holds the catalogue — or the person's password, checked for
         // the adult catalogue — PAM waits seconds on a wrong one — and how it
         // ended told back (`Told::Ranking`, `Told::Unlock`).
@@ -5989,6 +6473,11 @@ pub fn press_of(id: &str) -> Option<Press> {
         "player-swap" => Press::Swap,
         "player-tracks" => Press::Tracks,
         "player-fold" => Press::Fold,
+        // `TAB` TO THE PICTURE'S CONTROLS and back, and their own keys there.
+        "player-cross" => Press::Cross { back: false },
+        "player-pane-previous" => Press::PanePrevious,
+        "player-pane-next" => Press::PaneNext,
+        "player-pane-press" => Press::PanePress,
         // THE SAME PRESS AS ADDING A FILE: what `a` does depends on the row
         // it is pressed on — a file goes in the queue, a medium of the file
         // plays too (`Target::Also`).
@@ -6039,6 +6528,8 @@ pub fn press_of(id: &str) -> Option<Press> {
         // THE RANKING — `LEADER p k` — and its keys
         // (`ronoctua_shell_video_metrics::player_ranking`).
         "player-ranking" => Press::Go(PageId::Ranking),
+        // AND ITS LIST OF THE VIDEOS SET ASIDE — `LEADER p K`.
+        "player-set-aside" => Press::Go(PageId::SetAside),
         id if crate::player_seam::RankingKey::of_command(id).is_some() => {
             Press::Ranking(crate::player_seam::RankingKey::of_command(id)?)
         }
@@ -6071,9 +6562,16 @@ fn press_of_key_where(
     key: ronoctua_keymap::Key,
     page: impl Fn(Where) -> Option<bool>,
 ) -> Option<Press> {
-    use ronoctua_keymap::{Key, Sym};
+    use ronoctua_keymap::{Key, Mods, Sym};
+    let shift = Mods {
+        shift: true,
+        ..Mods::default()
+    };
     match key.sym {
         Sym::Esc => Some(Press::Escape),
+        // `Shift+TAB` IS `TAB` THE OTHER WAY ROUND, read before the table,
+        // which names the key once.
+        Sym::Tab if key.mods == shift => Some(Press::Cross { back: true }),
         Sym::Char(_) => pressed_where(&key.notation(), &page),
         other => pressed_where(&key.notation(), &page)
             .or_else(|| pressed_where(&Key::simple(other).notation(), &page)),
@@ -6662,12 +7160,31 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             id: "player-tracks",
             label: crate::key::CMD_PLAYER_TRACKS,
         },
-        // THE QUEUE'S GROUPS FOLD — the view's `TAB` — and ONE OF THE FILE'S
-        // MEDIA PLAYS TOO, `a` on its row: the view's keys, reached by name
-        // like the others.
+        // THE QUEUE'S GROUPS FOLD — the view's `←` on a group, and its
+        // triangle — and ONE OF THE FILE'S MEDIA PLAYS TOO, `a` on its row:
+        // the view's keys, reached by name like the others.
         ronoctua_cmd::Command {
             id: "player-fold",
             label: crate::key::CMD_PLAYER_FOLD,
+        },
+        // `TAB` TO THE PICTURE'S CONTROLS and back — the footer's pane beside
+        // the rows, the window's transport — and their keys while they have
+        // the keyboard: the one before, the next, pressed as a click.
+        ronoctua_cmd::Command {
+            id: "player-cross",
+            label: crate::key::CMD_PLAYER_CROSS,
+        },
+        ronoctua_cmd::Command {
+            id: "player-pane-previous",
+            label: crate::key::CMD_PLAYER_PANE_PREVIOUS,
+        },
+        ronoctua_cmd::Command {
+            id: "player-pane-next",
+            label: crate::key::CMD_PLAYER_PANE_NEXT,
+        },
+        ronoctua_cmd::Command {
+            id: "player-pane-press",
+            label: crate::key::CMD_PLAYER_PANE_PRESS,
         },
         // AN ENTRY OF THE QUEUE ONE PLACE EARLIER OR LATER — the arrows on
         // it, taught in their own words: on a group they fold it.
@@ -6901,6 +7418,48 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
             id: "player-ranking-layout",
             label: crate::key::CMD_PLAYER_RANKING_LAYOUT,
         },
+        // ITS LIST OF THE VIDEOS SET ASIDE, its Shorts, and the quick marks
+        // on a video of it.
+        ronoctua_cmd::Command {
+            id: "player-set-aside",
+            label: crate::key::CMD_PLAYER_SET_ASIDE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranking-shorts",
+            label: crate::key::CMD_PLAYER_RANKING_SHORTS,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-set-aside",
+            label: crate::key::CMD_PLAYER_RANKED_SET_ASIDE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-hide",
+            label: crate::key::CMD_PLAYER_RANKED_HIDE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-delete",
+            label: crate::key::CMD_PLAYER_RANKED_DELETE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-forever",
+            label: crate::key::CMD_PLAYER_RANKED_FOREVER,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-rate-very-negative",
+            label: crate::key::CMD_PLAYER_RANKED_RATE_VERY_NEGATIVE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-rate-negative",
+            label: crate::key::CMD_PLAYER_RANKED_RATE_NEGATIVE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-rate-positive",
+            label: crate::key::CMD_PLAYER_RANKED_RATE_POSITIVE,
+        },
+        ronoctua_cmd::Command {
+            id: "player-ranked-rate-very-positive",
+            label: crate::key::CMD_PLAYER_RANKED_RATE_VERY_POSITIVE,
+        },
     ],
     bindings: &[
         // `p` FOR THE PLAYER: its three doors, the three questions (play,
@@ -6946,6 +7505,9 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
         // `k` FOR THE RANKING of the video catalogue — its videos, best
         // first, a click from the queue (`ronoctua_shell_video_metrics::player_ranking`).
         ("p k", "player-ranking", None),
+        // `K` FOR WHAT WAS KEPT ASIDE from the ranking — the videos the
+        // person set aside for later, newest first.
+        ("p K", "player-set-aside", None),
     ],
     groups: &[("p", crate::key::GROUP_PLAYER)],
     by_name: &[
@@ -6981,11 +7543,13 @@ pub const KEYS: crate::bindings::Contribution = crate::bindings::Contribution {
 };
 
 /// What the view's own keys and rows run, for the keymap's reachability
-/// (`bindings::reachable`).
+/// (`bindings::reachable`) — and the picture's controls' while they have the
+/// keyboard ([`OF_THE_PANE`]).
 fn keys_reached() -> Vec<&'static str> {
     crate::player::OF_THE_VIEW
         .iter()
         .map(|(_, id, _)| *id)
+        .chain(OF_THE_PANE.iter().map(|(_, id, _)| *id))
         .collect()
 }
 
@@ -7747,6 +8311,275 @@ mod tests {
         assert_eq!(Press::Escape.unseen(), Unseen::Acts);
     }
 
+    /// The footer's view beside its picture's pane, 160 columns wide — a
+    /// picture to fold — and the stops its frame placed there.
+    fn beside_a_pane(s: &State) -> (View, Vec<crate::player_media::Stop>) {
+        let panel = crate::player_media::footer_panel(160, false).expect("a panel");
+        let d = crate::player_media::drawn(panel, 0, 15, Some(s), Some(false));
+        let stops = crate::player_media::stops(&d.buttons, d.track.map(|t| (t.line, t.from)));
+        let mut v = View::blank(None).in_the_footer();
+        v.beside_the_panel(true);
+        v.picture_foldable(Some(false));
+        v.pane_is(stops.clone());
+        (v, stops)
+    }
+
+    /// FAILS IF: the picture's controls' presses stop acting where no row is
+    /// drawn — the footer's picture alone, the window's stage — where they
+    /// are what is walked and pressed.
+    #[test]
+    fn pane_s_presses_act_where_no_rows_are_drawn() {
+        for press in [
+            Press::Cross { back: false },
+            Press::Cross { back: true },
+            Press::PanePrevious,
+            Press::PaneNext,
+            Press::PanePress,
+        ] {
+            assert_eq!(press.unseen(), Unseen::Acts, "{press:?}");
+        }
+        for (notation, id, _) in OF_THE_PANE {
+            assert!(
+                pressed(notation).is_some() && press_of(id).is_some(),
+                "{notation} → {id}"
+            );
+        }
+    }
+
+    /// FAILS IF: `TAB` stops taking the keyboard to the picture's controls
+    /// and back — landing on the first, then where it last was — or `↓`
+    /// stops reaching every control in reading order, the time bar and the
+    /// fold included, or walks round at the ends; or `Esc` leaves the rows'
+    /// cursor anywhere but where it was; or the hint stops being the
+    /// controls' while they have the keyboard.
+    #[test]
+    fn tab_takes_the_keyboard_to_the_pane_and_back() {
+        use crate::player_media::{FOLD, Stop};
+        let t = texts();
+        let s = playing();
+        let (mut v, stops) = beside_a_pane(&s);
+        v.settle_in(Some(&s), 80, &t);
+        let cursor = v.cursor();
+        let key = |n: &str| ronoctua_keymap::Key::parse(n).expect("a key");
+        assert_eq!(
+            v.press_of_key(key("TAB")),
+            Some(Press::Cross { back: false })
+        );
+        assert_eq!(
+            v.press_of_key(key("S-TAB")),
+            Some(Press::Cross { back: true })
+        );
+        assert_eq!(
+            v.key(Press::Cross { back: false }, Some(&s), 80, &t),
+            Errand::Nothing
+        );
+        assert_eq!(v.pane(), stops.first().copied());
+        assert!(stops.contains(&Stop::Track) && stops.last() == Some(&Stop::Button(FOLD)));
+        for want in &stops[1..] {
+            v.key(Press::Down, Some(&s), 80, &t);
+            assert_eq!(v.pane(), Some(*want));
+        }
+        // AT THE END IT STAYS — never round.
+        v.key(Press::Down, Some(&s), 80, &t);
+        assert_eq!(v.pane(), stops.last().copied());
+        v.key(Press::Up, Some(&s), 80, &t);
+        let kept = stops[stops.len() - 2];
+        assert_eq!(v.pane(), Some(kept));
+        // THE HINT IS THE CONTROLS' while they have the keyboard.
+        let ids: Vec<&str> = v
+            .hint(Some(&s), 80, &t)
+            .iter()
+            .filter_map(|p| p.id)
+            .collect();
+        assert!(
+            ids.contains(&"player-pane-next") && ids.contains(&"player-cross"),
+            "{ids:?}"
+        );
+        assert!(!ids.contains(&"player-remove"), "{ids:?}");
+        // `Esc`: the rows again, the cursor where it was.
+        assert_eq!(v.key(Press::Escape, Some(&s), 80, &t), Errand::Nothing);
+        assert_eq!(v.pane(), None);
+        assert_eq!(v.cursor(), cursor);
+        // `TAB` AGAIN: where it was; and `TAB` from there, the rows.
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        assert_eq!(v.pane(), Some(kept));
+        v.key(Press::Cross { back: true }, Some(&s), 80, &t);
+        assert_eq!(v.pane(), None);
+        assert_eq!(v.cursor(), cursor);
+        // THE STOPS MOVE UNDER IT — the media's glyph went — and it stays on
+        // its control; with none, the keyboard is the rows'.
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        v.pane_is(stops[1..].to_vec());
+        assert_eq!(v.pane(), Some(kept));
+        v.pane_is(Vec::new());
+        assert_eq!(v.pane(), None);
+    }
+
+    /// FAILS IF: `RET` on a control of the pane does other than its click —
+    /// what `button_press` and `button_errand` say: the next asked of the
+    /// player, the fold the door's, the media in the file a page, which
+    /// stands on its rows.
+    #[test]
+    fn every_stop_presses_what_its_click_does() {
+        use crate::player_media::Stop;
+        use crate::player_transport::button_press;
+        let t = texts();
+        let s = playing();
+        let (_, stops) = beside_a_pane(&s);
+        for stop in stops {
+            let Stop::Button(id) = stop else {
+                continue;
+            };
+            for press in [Press::Enter, Press::PanePress] {
+                let (mut v, _) = beside_a_pane(&s);
+                v.settle_in(Some(&s), 80, &t);
+                v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+                v.pane = Some(stop);
+                let errand = v.key(press, Some(&s), 80, &t);
+                match button_press(id) {
+                    Some(Press::FoldPicture) => assert_eq!(errand, Errand::FoldPicture),
+                    Some(Press::Tracks) => {
+                        assert!(matches!(v.page(), PageId::Tracks(_)), "{id}");
+                        assert_eq!(v.pane(), None, "a page opened from the pane");
+                    }
+                    Some(other) => panic!("{id} is {other:?}"),
+                    None => assert_eq!(errand, button_errand(id, Some(&s), &t), "{id}"),
+                }
+            }
+        }
+    }
+
+    /// FAILS IF: on the time bar the arrows stop seeking ten seconds back
+    /// and ahead, or seek otherwise than the click on what the hint teaches
+    /// for them (`player-rewind`, `player-forward`: the seek and the step it
+    /// says) — or `RET` stops jumping ahead as it does on the position row.
+    #[test]
+    fn on_the_time_bar_the_arrows_seek() {
+        use crate::player_media::Stop;
+        let t = texts();
+        let s = playing();
+        let (mut v, _) = beside_a_pane(&s);
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        v.pane = Some(Stop::Track);
+        for (press, ahead) in [(Press::Less, false), (Press::More, true)] {
+            assert_eq!(
+                v.key(press, Some(&s), 80, &t),
+                crate::player_transport::seek_errand(ahead, &t),
+                "{press:?}"
+            );
+            assert_eq!(v.pane(), Some(Stop::Track));
+        }
+        // THE HINT TEACHES what the arrows just did: a click on its piece
+        // is the same errand.
+        for (notation, id, at) in OF_THE_PANE {
+            if *at != PaneWhere::OnTheTrack {
+                continue;
+            }
+            let by_key = v.key(pressed(notation).expect("a key"), Some(&s), 80, &t);
+            let (mut clicked, _) = beside_a_pane(&s);
+            let by_click = clicked.key(press_of(id).expect("a command"), Some(&s), 80, &t);
+            assert_eq!(by_key, by_click, "{notation} → {id}");
+        }
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 80, &t),
+            Errand::Tell(Ask::Seek {
+                seconds: JUMP_STEP,
+                relative: true
+            })
+        );
+        assert_eq!(v.pane(), Some(Stop::Track));
+    }
+
+    /// FAILS IF: a row still wears the cursor — its colour, a grid's
+    /// selection — while the picture's controls have the keyboard, or the
+    /// rows come back without one.
+    #[test]
+    fn the_rows_draw_no_cursor_while_the_pane_has_the_keyboard() {
+        let t = texts();
+        let s = playing();
+        let (mut v, _) = beside_a_pane(&s);
+        v.settle_in(Some(&s), 80, &t);
+        let here = |v: &View| {
+            let rows = v.rows(Some(&s), 80, &t);
+            let focused = rows.iter().filter(|r| r.focused && !r.continues).count();
+            let coloured = rows.iter().any(|r| {
+                r.fields.iter().any(|f| {
+                    f.color == tokens::color::TEXT_HERE_ACTS
+                        || f.color == tokens::color::TEXT_HERE_READ
+                })
+            });
+            (focused, coloured)
+        };
+        assert_eq!(here(&v), (1, true));
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        assert_eq!(
+            here(&v),
+            (0, false),
+            "a cursor on the rows and one in the pane"
+        );
+        v.key(Press::Escape, Some(&s), 80, &t);
+        assert_eq!(here(&v), (1, true));
+    }
+
+    /// FAILS IF: with no picture's controls `TAB` stops walking the
+    /// sections — `Shift+TAB` back — as it does in every list, or lands on a
+    /// title.
+    #[test]
+    fn with_no_pane_tab_walks_the_sections() {
+        let t = texts();
+        let s = playing();
+        let mut v = View::blank(None);
+        v.outline_arrived(Some(outline(vec![
+            ronoctua_player::queue::Name::Titled("One".into()),
+            ronoctua_player::queue::Name::Titled("Two".into()),
+        ])));
+        v.settle_in(Some(&s), 80, &t);
+        let rows = v.rows(Some(&s), 80, &t);
+        let fields: Vec<Vec<crate::fields::Field>> =
+            rows.iter().map(|r| r.fields.clone()).collect();
+        let takes: Vec<bool> = rows.iter().map(Row::stops).collect();
+        let from = v.cursor();
+        let next = crate::section_ring::landing(&fields, &takes, Some(from), false)
+            .expect("sections to walk");
+        assert_eq!(
+            v.key(Press::Cross { back: false }, Some(&s), 80, &t),
+            Errand::Nothing
+        );
+        assert_eq!(v.pane(), None);
+        assert_eq!(v.cursor(), next);
+        assert!(!rows[next].heading);
+        v.key(Press::Cross { back: true }, Some(&s), 80, &t);
+        assert_eq!(
+            v.cursor(),
+            crate::section_ring::landing(&fields, &takes, Some(next), true).expect("back")
+        );
+    }
+
+    /// FAILS IF: a key that acts on the row under the cursor, pressed in the
+    /// pane, acts there — or does not take the keyboard back to the rows
+    /// and act on the cursor's row; or one that acts wherever the cursor is
+    /// takes the keyboard from the pane.
+    #[test]
+    fn a_key_that_needs_the_rows_leaves_the_pane() {
+        let t = texts();
+        let s = playing();
+        let (mut twin, _) = beside_a_pane(&s);
+        twin.settle_in(Some(&s), 80, &t);
+        let on_the_rows = twin.key(Press::Remove, Some(&s), 80, &t);
+        let (mut v, _) = beside_a_pane(&s);
+        v.settle_in(Some(&s), 80, &t);
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        assert!(v.pane().is_some());
+        assert_eq!(v.key(Press::Remove, Some(&s), 80, &t), on_the_rows);
+        assert_eq!(v.pane(), None, "`d` kept the keyboard in the pane");
+        v.key(Press::Cross { back: false }, Some(&s), 80, &t);
+        assert_eq!(
+            v.key(Press::Toggle, Some(&s), 80, &t),
+            Errand::Tell(toggle_ask(Some(&s)))
+        );
+        assert!(v.pane().is_some(), "`SPC` took the keyboard from the pane");
+    }
+
     /// FAILS IF: a question the view took stops taking the order's sentence
     /// off the door's line ("added…" while it asks whether to add it again)
     /// — in any door, for all three read this one answer — or a refusal no
@@ -8131,6 +8964,147 @@ mod tests {
         for (k, id, _) in OF_THE_VIEW {
             assert!(pressed(k).is_some(), "{k} → {id}");
         }
+    }
+
+    /// FAILS IF: on the ranking's pages a key the view shares with another
+    /// page stops being the ranking's — `e` there asked for a new name for
+    /// what plays instead of opening the video's own page, because the
+    /// ranking's entry of the key let the row decide and the row never did
+    /// — or a quick mark's key reaches past those pages, `d` on the home
+    /// deleting nothing and taking nothing off the queue; or the set-aside
+    /// list stops being a page its command opens.
+    #[test]
+    fn the_ranking_s_pages_read_their_own_keys() {
+        use crate::player_seam::RankingKey;
+        use crate::player_seam::ranking::Quick;
+        use ronoctua_video_metrics::Rating;
+        let key = |n: &str| ronoctua_keymap::Key::parse(n).expect("a key");
+        assert_eq!(
+            press_of("player-set-aside"),
+            Some(Press::Go(PageId::SetAside))
+        );
+        for page in [PageId::Ranking, PageId::SetAside] {
+            let mut v = View::blank(None);
+            v.push(page, None);
+            assert_eq!(
+                v.press_of_key(key("e")),
+                Some(Press::Ranking(RankingKey::More)),
+                "{page:?}: `e` is no longer the video's own page"
+            );
+            assert_eq!(
+                v.press_of_key(key("S")),
+                Some(Press::Ranking(RankingKey::Shorts)),
+                "{page:?}"
+            );
+        }
+        for page in [PageId::Ranking, PageId::SetAside, PageId::RankedVideo] {
+            let mut v = View::blank(None);
+            v.push(page, None);
+            for (notation, q) in [
+                ("b", Quick::SetAside),
+                ("v", Quick::Hide),
+                ("d", Quick::Delete),
+                ("F", Quick::Forever),
+                ("1", Quick::Rate(Rating::VeryNegative)),
+                ("2", Quick::Rate(Rating::Negative)),
+                ("3", Quick::Rate(Rating::Positive)),
+                ("4", Quick::Rate(Rating::VeryPositive)),
+            ] {
+                assert_eq!(
+                    v.press_of_key(key(notation)),
+                    Some(Press::Ranking(RankingKey::Quick(q))),
+                    "{page:?}: {notation}"
+                );
+            }
+        }
+        // ELSEWHERE THE KEYS ARE WHAT THEY WERE.
+        let v = View::blank(None);
+        assert_eq!(v.press_of_key(key("e")), Some(Press::Rename));
+        assert_eq!(v.press_of_key(key("d")), Some(Press::Remove));
+        assert_eq!(v.press_of_key(key("b")), Some(Press::Favourite));
+        assert_eq!(v.press_of_key(key("v")), Some(Press::Shown));
+        let mut v = View::blank(None);
+        v.push(PageId::Catalog, None);
+        assert_eq!(
+            v.press_of_key(key("F")),
+            Some(Press::Listing(ListingKey::Full))
+        );
+        assert_eq!(
+            v.press_of_key(key("S")),
+            Some(Press::Listing(ListingKey::Source))
+        );
+    }
+
+    /// FAILS IF: a control drawn on a line BELOW its row's first — a quick
+    /// mark's glyph beside the words said under a video's title — does
+    /// nothing when clicked, or acts on another line than its own; or a
+    /// click beside it on that line stops being a click on the row: the
+    /// first chooses, the second is `RET`.
+    #[test]
+    fn a_control_on_a_line_below_its_row_s_first_acts() {
+        use crate::player_posters::{Control, Said, Shape, Tile, strip};
+        use crate::player_seam::ranking::Quick;
+        let t = texts();
+        let id = ronoctua_video_metrics::VideoId("v1".into());
+        let mark = Control {
+            glyph: tokens::icon::VIDEO_FOREVER,
+            lit: false,
+            target: Target::RankedQuick(id.clone(), Quick::Forever),
+            about: Quick::Forever.command(),
+        };
+        let tiles = [Tile {
+            picture: None,
+            glyph: tokens::icon::PLAYER_LANE_PICTURE,
+            title: "A video".into(),
+            under: vec![Said {
+                parts: vec!["Slow Kitchen".into()],
+                after: Vec::new(),
+                end: vec![mark.clone()],
+            }],
+            target: Target::Ranked(id),
+            spot: "ranked-v1".into(),
+            more: None,
+        }];
+        let shape = Shape {
+            cells: 10,
+            lines: 3,
+            titles: 2,
+        };
+        let rows = Builder::build(1, 80, usize::MAX, 0, &t, |b| strip(&tiles, shape, b));
+        let line = rows
+            .iter()
+            .position(|r| r.cells.iter().any(|c| c.control))
+            .expect("a line with the glyph");
+        assert!(
+            line > 0 && rows[line].continues,
+            "the glyph is below the row's first line"
+        );
+        let from = rows[line].cells[0].from;
+        let mut v = View::blank(None);
+        v.top_mut().cursor = usize::MAX;
+        assert!(v.clicked_at(line, from, &rows), "the glyph did not act");
+        assert_eq!(v.clicked_control, Some(mark.target));
+        assert_eq!(v.cursor(), 0, "the cursor did not come to its row");
+        // ON ANOTHER LINE OF THE ROW, under the same column, it is not there.
+        let mut v = View::blank(None);
+        v.top_mut().cursor = usize::MAX;
+        let other = if line + 1 < rows.len() {
+            line + 1
+        } else {
+            line - 1
+        };
+        assert!(
+            !v.clicked_at(other, from, &rows),
+            "taken where it is not drawn"
+        );
+        assert_eq!(v.clicked_control, None);
+        // AND BESIDE IT, ON ITS LINE, THE ROW: chosen, then `RET`.
+        let words = rows[line].fields[0].at;
+        let mut v = View::blank(None);
+        v.top_mut().cursor = usize::MAX;
+        assert!(!v.clicked_at(line, words, &rows));
+        assert!(v.clicked_at(line, words, &rows));
+        assert_eq!(v.clicked_control, None);
     }
 
     /// The row `target` is on — or the entry of a grid — clicked twice: what

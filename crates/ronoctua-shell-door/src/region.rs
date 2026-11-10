@@ -304,6 +304,17 @@ pub enum LineLights {
     /// the row (`chrome::Across`), and nothing between two cells — a grid's
     /// row, lit as its click takes it.
     UnderX(Vec<(u16, u16)>),
+    /// [`LineLights::UnderX`] on a line that also holds a row's GLYPHS: a
+    /// glyph acts by itself and the row's other lines do not hold it, so it
+    /// lights on this line alone — stretched over the row's lines, a glyph
+    /// under a video's title lit a column up through the title and the
+    /// picture. Any other cell lights over the row's lines, as `UnderX`'s do.
+    Glyphs {
+        /// Every cell the pointer lights on the line, as `UnderX`'s.
+        cells: Vec<(u16, u16)>,
+        /// The ones of `cells` that light on this line alone.
+        alone: Vec<(u16, u16)>,
+    },
     /// The cell of these holding the pointer's CELL — a shelf of pictures,
     /// lit over the shelf's lines.
     UnderCell(Vec<(u16, u16)>),
@@ -1165,7 +1176,9 @@ pub trait Region {
     }
     /// The cells of row `row` the pointer's band lights at cell `cell` —
     /// `(from, to)` in the row's own cells — when the band is narrower than
-    /// the row: one of two lists side by side.
+    /// the row: one of two lists side by side. A span from cell `0` is lit
+    /// from the band's own edge, as a whole row is, and not where the text
+    /// starts.
     fn hover_span(&self, row: usize, cell: u16, seen: &Seen<'_>) -> Option<(u16, u16)> {
         let _ = (row, cell, seen);
         None
@@ -3318,6 +3331,8 @@ mod tests {
         assert_eq!(fake.command("other", None, &mut w), Taken::No);
         w.run("transfers-open", Some("x".to_owned()));
         w.queue(&ronoctua_transfers::Ask::List);
+        // AN ADDRESS IN NYXT is the footer's to start, after the call.
+        w.launch(crate::launch::in_nyxt("https://www.youtube.com/watch?v=x"));
         // AND WHAT A REGION ASKS OF THE FOOTER'S PAGE: the first one, the
         // cursor followed, measured again, the line taken back.
         w.first_page();
@@ -3331,6 +3346,11 @@ mod tests {
                 Effect::Close,
                 Effect::Run("transfers-open", Some("x".to_owned())),
                 Effect::Queue(ronoctua_transfers::Ask::List),
+                Effect::Launch(crate::door::Launching::EntryOpening {
+                    id: crate::launch::NYXT.to_owned(),
+                    address: "https://www.youtube.com/watch?v=x".to_owned(),
+                    absent: crate::key::DOOR_NYXT_ABSENT,
+                }),
                 Effect::FirstPage,
                 Effect::Follow,
                 Effect::Resized,

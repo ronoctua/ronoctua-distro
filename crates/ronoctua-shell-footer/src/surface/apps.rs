@@ -295,6 +295,39 @@ impl Footer {
         }
     }
 
+    /// Opens `address` with a launcher entry, by its desktop id — what a
+    /// view's "open it in Nyxt" asks (`Launching::EntryOpening`) — the
+    /// address after the entry's own words (`launch::argv_opening`), as a
+    /// window's launch does it.
+    ///
+    /// An address that is no web one (`launch::is_web_address`) opens
+    /// nothing and says so. An entry the catalogue does not have asks for the
+    /// sweep, and the sentence said is the LAUNCH's (`absent`): a browser the
+    /// person declined is not "in the launcher soon".
+    pub(super) fn launch_desktop_opening(
+        &mut self,
+        desktop_id: &str,
+        address: &str,
+        absent: &'static str,
+    ) {
+        let e = match opening_of(&self.catalogue, desktop_id, address, absent, &self.texts) {
+            Opening::Entry(e) => e,
+            Opening::Refused { said, sweep } => {
+                if sweep {
+                    self.rescan_if_changed();
+                }
+                self.echo_message(said);
+                return;
+            }
+        };
+        let Some((program, args, cwd)) = crate::launch::argv_opening(&e, address) else {
+            tracing::error!("I do not know my own binary");
+            return;
+        };
+        tracing::info!(app = %e.id, program, "opening an address with the application");
+        self.open_foreign(&program, &args, cwd.as_deref());
+    }
+
     /// The region's rows while it shows this view — the view's own line of
     /// `Footer::expansion`, the list the height and the drawing both read.
     pub(super) fn apps_expansion(&self) -> Vec<ExpansionRow> {
@@ -468,6 +501,111 @@ impl Footer {
         let action = self.apps.as_mut().map(|a| a.paste(text));
         if let Some(action) = action {
             self.apply_app_action(action);
+        }
+    }
+}
+
+/// What the footer does with an entry OPENING an address
+/// ([`Footer::launch_desktop_opening`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Opening {
+    /// The catalogue's entry, to start with the address after its words —
+    /// boxed, an entry being many times the size of a refusal.
+    Entry(Box<ronoctua_apps::DesktopEntry>),
+    /// Nothing starts, and `said` says why — after the launcher's sweep is
+    /// asked for when `sweep`, the entry missing from a catalogue that may
+    /// be behind.
+    Refused { said: String, sweep: bool },
+}
+
+/// [`Opening`] for entry `desktop_id` of `catalogue` opening `address`,
+/// said in `texts` — the footer's half of a window's launch
+/// (`launch::launch_entry_opening`), off any Wayland.
+///
+/// THE ADDRESS IS ASKED FIRST: one that is no web address opens nothing
+/// whichever entry is there, and is said as the window says it
+/// (`launch::not_a_web_address`). THEN THE ENTRY, and its absence is the
+/// launch's own sentence (`absent`), never "not in the launcher yet": a
+/// browser the person declined is no program installed a moment ago.
+fn opening_of(
+    catalogue: &[ronoctua_apps::DesktopEntry],
+    desktop_id: &str,
+    address: &str,
+    absent: &'static str,
+    texts: &ronoctua_i18n::Texts,
+) -> Opening {
+    if !crate::launch::is_web_address(address) {
+        return Opening::Refused {
+            said: crate::launch::not_a_web_address(texts, address),
+            sweep: false,
+        };
+    }
+    catalogue
+        .iter()
+        .find(|e| crate::launch::same_desktop(&e.id, desktop_id))
+        .map_or_else(
+            || Opening::Refused {
+                said: texts.t(absent),
+                sweep: true,
+            },
+            |e| Opening::Entry(Box::new(e.clone())),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Opening, opening_of};
+
+    /// An entry of the launcher by `id`, running `/bin/<id>`.
+    fn entry(id: &str) -> ronoctua_apps::DesktopEntry {
+        ronoctua_apps::DesktopEntry {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            description: String::new(),
+            icon: String::new(),
+            categories: Vec::new(),
+            mime_types: Vec::new(),
+            command: (format!("/bin/{id}"), Vec::new()),
+            terminal: false,
+            working_directory: None,
+            startup_wm_class: None,
+            key: id.to_owned(),
+            fallback: true,
+        }
+    }
+
+    /// FAILS IF: the footer opens an address with an entry its catalogue
+    /// has not, says "not in the launcher yet" where the launch brought its
+    /// own sentence (Nyxt declined, promised soon), does not ask for the
+    /// sweep then — or opens what is no web address, asks the catalogue
+    /// first, or says it otherwise than the window does.
+    #[test]
+    fn the_footer_opens_an_address_as_the_window_does() {
+        let texts = ronoctua_i18n::Texts::fresh(ronoctua_i18n::DEFAULT).expect("the base language");
+        let nyxt = crate::launch::NYXT;
+        let absent = crate::key::DOOR_NYXT_ABSENT;
+        let video = "https://www.youtube.com/watch?v=x";
+        assert_eq!(
+            opening_of(&[], nyxt, video, absent, &texts),
+            Opening::Refused {
+                said: texts.t(absent),
+                sweep: true,
+            }
+        );
+        let catalogue = [entry("org.gimp.GIMP"), entry("nyxt")];
+        assert_eq!(
+            opening_of(&catalogue, nyxt, video, absent, &texts),
+            Opening::Entry(Box::new(entry("nyxt")))
+        );
+        for refused in ["-x", "https://www.youtube.com/\n-x"] {
+            assert_eq!(
+                opening_of(&catalogue, nyxt, refused, absent, &texts),
+                Opening::Refused {
+                    said: crate::launch::not_a_web_address(&texts, refused),
+                    sweep: false,
+                },
+                "{refused:?}"
+            );
         }
     }
 }

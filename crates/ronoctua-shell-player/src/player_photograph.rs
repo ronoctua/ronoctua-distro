@@ -1656,6 +1656,16 @@ pub fn said_past_the_door_with<C: Photographed>(
             hosts.join(", ")
         ));
     }
+    // AND WHAT A VIDEO OF THE RANKING WOULD HAVE COME TO: the kiosk opened on
+    // it, or a write of the catalogue's, a download, a mark.
+    for url in &out.kiosk {
+        lines.push(format!("would have opened in the kiosk: {url}"));
+    }
+    for act in &out.ranked {
+        lines.push(format!(
+            "would have done to a video of the ranking: {act:?}"
+        ));
+    }
     Ok(lines)
 }
 

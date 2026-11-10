@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChannelId, Rating, Refusal, Rule, RuleId, Settings, VideoId, Weights};
+use crate::read::{Decision, Staged};
+use crate::{ChannelId, Keep, Rating, Refusal, Rule, RuleId, Settings, VideoId, Weights};
 
 /// A channel to add: resolved from what the person pasted (a URL or an
 /// `@handle`) by `ronoctua_ytdlp::channel_of`, on a thread, before this.
@@ -32,6 +33,28 @@ pub struct NewChannel {
     /// Its picture's address, when known.
     #[serde(default)]
     pub avatar_url: Option<String>,
+}
+
+/// What staging an imported list did ([`Person::stage`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Staging {
+    /// Channels now waiting for a decision (new ones, and the ones the list
+    /// named again).
+    pub staged: u32,
+    /// Channels already in the catalogue, never staged: their ids and the
+    /// catalogue's titles.
+    pub already: Vec<(ChannelId, String)>,
+}
+
+/// What registering an imported list did ([`Person::register_staged`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct Registered {
+    /// Channels that joined the catalogue.
+    pub kept: u32,
+    /// Channels dropped.
+    pub discarded: u32,
+    /// Channels still to decide.
+    pub left: u32,
 }
 
 /// Why a channel the person typed was not added ([`Person::add_from`]).
@@ -143,6 +166,112 @@ impl Person {
         return self.never((id, hidden));
     }
 
+    /// Sets a video aside for later (`true`) or takes it off that list
+    /// (`false`); set aside again, it keeps the moment it first was. While it
+    /// is set aside, its time never runs out.
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`].
+    pub fn set_aside(&self, id: &VideoId, aside: bool) -> Result<(), Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::set_aside(&self.conn, id, aside, crate::db::now_s());
+        #[cfg(not(feature = "db"))]
+        return self.never((id, aside));
+    }
+
+    /// Marks a video to keep for ever (`true`), whatever its channel keeps,
+    /// or takes the mark off (`false`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`].
+    pub fn set_keep(&self, id: &VideoId, keep: bool) -> Result<(), Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::set_keep(&self.conn, id, keep);
+        #[cfg(not(feature = "db"))]
+        return self.never((id, keep));
+    }
+
+    /// Sets how long a channel's videos stay (`None`: as everywhere); the
+    /// next scan takes out what outlived it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Why::Invalid`] for no days or more than
+    /// [`crate::KEEP_DAYS_MOST`], and as [`Person::set_rating`].
+    pub fn set_channel_keep(&self, id: &ChannelId, keep: Option<Keep>) -> Result<(), Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::set_channel_keep(&self.conn, id, keep);
+        #[cfg(not(feature = "db"))]
+        return self.never((id, keep));
+    }
+
+    /// Stages the channels of an imported list ([`crate::takeout::read`]):
+    /// each waits for a decision, never scanned until it is registered; a
+    /// channel already in the catalogue is answered as such and left alone.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Why::Invalid`] for an id that is not a channel's (the whole
+    /// list is refused), and as [`Person::set_rating`].
+    #[cfg(feature = "db")]
+    pub fn stage(&self, list: &[crate::takeout::Subscription]) -> Result<Staging, Refusal> {
+        crate::edit::stage(&self.conn, list, crate::db::now_s())
+    }
+
+    /// Decides what registering does with one staged channel.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Why::NotFound`] for a channel that is not staged, and as
+    /// [`Person::set_rating`].
+    pub fn decide(&self, id: &ChannelId, decision: Decision) -> Result<(), Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::decide(&self.conn, id, decision);
+        #[cfg(not(feature = "db"))]
+        return self.never((id, decision));
+    }
+
+    /// Gives every staged channel the same decision; answers how many.
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`].
+    pub fn decide_all(&self, decision: Decision) -> Result<u32, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::decide_all(&self.conn, decision);
+        #[cfg(not(feature = "db"))]
+        return self.never(decision);
+    }
+
+    /// Registers what was decided: the kept channels join the catalogue, the
+    /// discarded ones go, the undecided stay. REGISTERING IS THE CONSENT TO
+    /// SCAN, as adding is: a caller that registered any lets
+    /// [`crate::HOSTS`] (`ronoctua_consent::let_hosts`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`].
+    pub fn register_staged(&self) -> Result<Registered, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::edit::register_staged(&self.conn, crate::db::now_s());
+        #[cfg(not(feature = "db"))]
+        return self.never(());
+    }
+
+    /// Every channel of an imported list not registered yet, by title.
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`].
+    pub fn staged(&self) -> Result<Vec<Staged>, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::query::staged(&self.conn);
+        #[cfg(not(feature = "db"))]
+        return self.never(());
+    }
+
     /// Adds a channel (its first scan follows the safeguard in
     /// [`Settings`]); one already there keeps its score and its reference.
     ///
@@ -155,6 +284,43 @@ impl Person {
         return crate::edit::add_channel(&self.conn, channel, crate::db::now_s());
         #[cfg(not(feature = "db"))]
         return self.never(channel);
+    }
+
+    /// A TEST'S VIDEO: `id`, titled `title`, of `channel` — added before
+    /// ([`Person::add_channel`]) — catalogued as a scan that caught it would
+    /// leave it: published now, its details pending, its points the
+    /// channel's rescore's. A scan is the one writer of videos, and no test
+    /// outside this crate may drive one (`video-metrics-readers-are-read-only`);
+    /// this is how a door's test reads a mark back off a scratch catalogue
+    /// (`test-support`, never a product's).
+    ///
+    /// # Errors
+    ///
+    /// As [`Person::set_rating`]; [`crate::Why::Failed`] for a channel that
+    /// was not added.
+    #[cfg(feature = "test-support")]
+    pub fn plant(&self, id: &VideoId, channel: &ChannelId, title: &str) -> Result<(), Refusal> {
+        use crate::{db, edit};
+        let now = db::now_s();
+        let url = format!("https://www.youtube.com/watch?v={}", id.0);
+        let tx = db::immediate(&self.conn)?;
+        let generation = db::bump(&tx)?;
+        let video = edit::NewVideo {
+            id,
+            channel,
+            url: &url,
+            title,
+            description: "",
+            published_at_s: Some(now),
+            duration_s: None,
+            short_evidence: None,
+            live_status: None,
+            thumb_url: None,
+            views: None,
+        };
+        edit::insert_video(&tx, &video, false, generation, now)?;
+        edit::rescore(&tx, edit::Scope::Channel(channel), generation)?;
+        tx.commit().map_err(db::sql)
     }
 
     /// Adds the channel `input` names — an address, an `@handle` or a
@@ -309,11 +475,13 @@ impl Person {
     }
 
     /// Sets the switches (blocking Shorts hides the ones already in;
-    /// unblocking brings back what blocking hid).
+    /// unblocking brings back what blocking hid; a new keep takes out at the
+    /// next scan what outlived it).
     ///
     /// # Errors
     ///
-    /// As [`Person::set_rating`].
+    /// [`crate::Why::Invalid`] for a keep of no days or more than
+    /// [`crate::KEEP_DAYS_MOST`], and as [`Person::set_rating`].
     pub fn set_settings(&self, settings: &Settings) -> Result<(), Refusal> {
         #[cfg(feature = "db")]
         return crate::edit::set_settings(&self.conn, settings, crate::db::now_s());

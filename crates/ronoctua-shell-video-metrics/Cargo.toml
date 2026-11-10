@@ -33,7 +33,8 @@ ronoctua-player = { path = "../ronoctua-player" }
 # (`video-metrics-readers-are-read-only`); `net` for adding a channel, which
 # asks yt-dlp who it is and lets the hosts a scan asks.
 ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "net" ] }
-# The names of what yt-dlp answers, which the view says.
+# The names of what yt-dlp answers, which the view says, and a channel's
+# videos page (`youtube::tab_address`), which Chrome and Nyxt open.
 ronoctua-ytdlp = { path = "../ronoctua-ytdlp" }
 # A scan asked by name: the brain's module runs it (its declared unit).
 ronoctua-brain = { path = "../ronoctua-brain" }
@@ -51,6 +52,9 @@ tracing.workspace = true
 ronoctua-shell-kit = { path = "../ronoctua-shell-kit", features = [ "test-support" ] }
 ronoctua-shell-door = { path = "../ronoctua-shell-door", features = [ "test-support" ] }
 ronoctua-shell-player = { path = "../ronoctua-shell-player", features = [ "test-support" ] }
+# A video planted in a scratch catalogue, for the ranking's marks to land on
+# and be read back (`Person::plant`).
+ronoctua-video-metrics = { path = "../ronoctua-video-metrics", features = [ "net", "test-support" ] }
 
 [features]
 # WHAT THIS CRATE KEEPS FOR TESTS — for `[dev-dependencies]` only: the videos

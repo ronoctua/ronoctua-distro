@@ -12,8 +12,8 @@
 
 use crate::key;
 use ronoctua_i18n::Arg;
-use ronoctua_video_metrics::read::{Hidden, Shorts};
-use ronoctua_video_metrics::{Fields, Rating, RuleKind, Skip, Stop, TermMatch, Why};
+use ronoctua_video_metrics::read::{Decision, Hidden, SetAside, Shorts};
+use ronoctua_video_metrics::{Fields, Keep, Rating, RuleKind, Skip, Stop, TermMatch, Why};
 
 /// The sentence for a refusal of the catalogue.
 #[must_use]
@@ -51,6 +51,7 @@ pub const fn skip_key(skip: Skip) -> &'static str {
         Skip::BlockedShort => key::VIDEO_METRICS_SKIP_BLOCKED_SHORT,
         Skip::Unavailable => key::VIDEO_METRICS_SKIP_UNAVAILABLE,
         Skip::Deleted => key::VIDEO_METRICS_SKIP_DELETED,
+        Skip::Expired => key::VIDEO_METRICS_SKIP_EXPIRED,
     }
 }
 
@@ -62,6 +63,19 @@ pub const fn rating_key(rating: Rating) -> &'static str {
         Rating::Negative => key::VIDEO_METRICS_RATING_NEGATIVE,
         Rating::Positive => key::VIDEO_METRICS_RATING_POSITIVE,
         Rating::VeryPositive => key::VIDEO_METRICS_RATING_VERY_POSITIVE,
+    }
+}
+
+/// THE GLYPH OF A RATING beside a video's score — one of four faces of one
+/// family, from very negative to very positive (`icons.nix`, a video's quick
+/// marks): what its words are to a sentence, its glyph is to a list.
+#[must_use]
+pub const fn rating_glyph(rating: Rating) -> char {
+    match rating {
+        Rating::VeryNegative => ronoctua_tokens::icon::VIDEO_RATING_VERY_NEGATIVE,
+        Rating::Negative => ronoctua_tokens::icon::VIDEO_RATING_NEGATIVE,
+        Rating::Positive => ronoctua_tokens::icon::VIDEO_RATING_POSITIVE,
+        Rating::VeryPositive => ronoctua_tokens::icon::VIDEO_RATING_VERY_POSITIVE,
     }
 }
 
@@ -131,6 +145,73 @@ pub const fn hidden_key(hidden: Hidden) -> &'static str {
     }
 }
 
+/// The words for which set-aside videos a list shows.
+#[must_use]
+pub const fn set_aside_key(set_aside: SetAside) -> &'static str {
+    match set_aside {
+        SetAside::Any => key::VIDEO_METRICS_SET_ASIDE_ANY,
+        SetAside::Only => key::VIDEO_METRICS_SET_ASIDE_ONLY,
+        SetAside::Without => key::VIDEO_METRICS_SET_ASIDE_WITHOUT,
+    }
+}
+
+/// The words for what registering a list does with one of its channels.
+#[must_use]
+pub const fn decision_key(decision: Decision) -> &'static str {
+    match decision {
+        Decision::Undecided => key::VIDEO_METRICS_DECISION_UNDECIDED,
+        Decision::Keep => key::VIDEO_METRICS_DECISION_KEEP,
+        Decision::Discard => key::VIDEO_METRICS_DECISION_DISCARD,
+    }
+}
+
+/// THE QUESTION BEFORE EVERY STAGED CHANNEL IS GIVEN ONE DECISION while
+/// theirs differ — one sentence per decision, so each language words the
+/// decision as the sentence needs it (a plural, a gender), never a decision's
+/// word set into a sentence of another shape.
+#[must_use]
+pub const fn ask_decide_all_key(decision: Decision) -> &'static str {
+    match decision {
+        Decision::Undecided => key::ASK_VIDEO_METRICS_DECIDE_ALL_UNDECIDED,
+        Decision::Keep => key::ASK_VIDEO_METRICS_DECIDE_ALL_KEEP,
+        Decision::Discard => key::ASK_VIDEO_METRICS_DECIDE_ALL_DISCARD,
+    }
+}
+
+/// THE BOOKMARK BESIDE A VIDEO — filled while it is set aside, an outline
+/// while it is not: the player's favourite's rule, one family of two. The
+/// one choice of it, for the catalogue's lists and the player's ranking.
+#[must_use]
+pub const fn set_aside_glyph(aside: bool) -> char {
+    if aside {
+        ronoctua_tokens::icon::VIDEO_SET_ASIDE
+    } else {
+        ronoctua_tokens::icon::VIDEO_SET_ASIDE_OFF
+    }
+}
+
+/// THE EYE BESIDE A VIDEO — what a click on it does: shut, it hides a video
+/// shown; open, it shows a hidden one again. The one choice of it, for the
+/// catalogue's lists and the player's ranking.
+#[must_use]
+pub const fn hidden_glyph(hidden: bool) -> char {
+    if hidden {
+        ronoctua_tokens::icon::VIDEO_SHOW
+    } else {
+        ronoctua_tokens::icon::VIDEO_HIDE
+    }
+}
+
+/// HOW LONG VIDEOS STAY, in words: a number of days, or "never deleted" —
+/// the one value of a keep's ring that is no number.
+#[must_use]
+pub fn keep(keep: Keep, texts: &ronoctua_i18n::Texts) -> String {
+    match keep {
+        Keep::Days(n) => days(n, texts),
+        Keep::Forever => texts.t(key::VIDEO_METRICS_KEEP_NEVER),
+    }
+}
+
 /// The words for why the consent to ask YouTube could not be kept.
 #[must_use]
 pub const fn unkept_key(unkept: ronoctua_consent::Unkept) -> &'static str {
@@ -138,6 +219,18 @@ pub const fn unkept_key(unkept: ronoctua_consent::Unkept) -> &'static str {
         ronoctua_consent::Unkept::NoHome => key::VIDEO_METRICS_NOT_LET_NO_HOME,
         ronoctua_consent::Unkept::Unparseable => key::VIDEO_METRICS_NOT_LET_UNPARSEABLE,
         ronoctua_consent::Unkept::Unwritable => key::VIDEO_METRICS_NOT_LET_UNWRITABLE,
+    }
+}
+
+/// THE SAME WHY, ON ITS OWN — said after what registering a list did, which
+/// says how many channels went in: the words above begin with the one
+/// channel a person added.
+#[must_use]
+pub const fn unkept_alone_key(unkept: ronoctua_consent::Unkept) -> &'static str {
+    match unkept {
+        ronoctua_consent::Unkept::NoHome => key::VIDEO_METRICS_UNKEPT_NO_HOME,
+        ronoctua_consent::Unkept::Unparseable => key::VIDEO_METRICS_UNKEPT_UNPARSEABLE,
+        ronoctua_consent::Unkept::Unwritable => key::VIDEO_METRICS_UNKEPT_UNWRITABLE,
     }
 }
 
@@ -178,6 +271,18 @@ pub fn points(points: i64, texts: &ronoctua_i18n::Texts) -> String {
     texts.t_args(
         key::VIDEO_METRICS_POINTS_VALUE,
         &[("points", Arg::Number(points))],
+    )
+}
+
+/// A SCORE AS A NUMBER, with no word after it — what a list puts before the
+/// four faces of a video's rating, where "points" said on every line was a
+/// word read once and then only in the way. A NUMBER to Fluent all the same,
+/// as [`points`] is.
+#[must_use]
+pub fn score_number(score: i64, texts: &ronoctua_i18n::Texts) -> String {
+    texts.t_args(
+        key::VIDEO_METRICS_SCORE_NUMBER,
+        &[("score", Arg::Number(score))],
     )
 }
 

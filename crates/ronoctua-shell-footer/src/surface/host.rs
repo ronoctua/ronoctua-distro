@@ -380,6 +380,11 @@ impl Footer {
                 Effect::Launch(crate::door::Launching::Entry(desktop_id)) => {
                     self.launch_desktop(&desktop_id);
                 }
+                Effect::Launch(crate::door::Launching::EntryOpening {
+                    id,
+                    address,
+                    absent,
+                }) => self.launch_desktop_opening(&id, &address, absent),
                 Effect::OpenWindow(args) => {
                     if let Ok(me) = std::env::current_exe() {
                         self.open_foreign(&me.to_string_lossy(), &args, None);
@@ -1078,31 +1083,36 @@ impl Footer {
         self.regions.get(id)?.cover_picture(key)
     }
 
-    /// The band the pointer lights over the shown region's row, in the
-    /// surface's pixels: `None` for the whole row, as every list's, and
-    /// `Some(None)` where a click takes nothing — by the region's own answer
-    /// (`Region::lit`), the one its click reads. `click` is the row the
-    /// pointer is on, as drawn (`Click::Region`: its row in the region).
-    pub(super) fn hosted_band(
-        &self,
-        click: Option<Click>,
-        cell: Option<u16>,
-        cell_px: f32,
-    ) -> Option<Option<(f32, f32)>> {
+    /// What the pointer lights over the shown region's row at cell `cell` —
+    /// the region's own answer (`Region::lit`), the one its click reads —
+    /// or `None` off a region's row. `click` is the row the pointer is on, as
+    /// drawn (`Click::Region`: its row in the region).
+    fn hosted_lit(&self, click: Option<Click>, cell: Option<u16>) -> Option<Lit> {
         let Some(Click::Region(n)) = click else {
             return None;
         };
         let region = self.shown_region().and_then(|id| self.regions.get(id))?;
-        match region.lit(n, cell, &self.region_seen()) {
+        Some(region.lit(n, cell, &self.region_seen()))
+    }
+
+    /// The band the pointer lights over the shown region's row, in the
+    /// surface's pixels: `None` for the whole row, as every list's, and
+    /// `Some(None)` where a click takes nothing ([`Self::hosted_lit`]). The
+    /// row is placed `base` cells in, and a stretch of it is lit by the
+    /// arithmetic a grid's cell and the cursor's are (`region_across`), so
+    /// the three never place one row two ways.
+    pub(super) fn hosted_band(
+        &self,
+        click: Option<Click>,
+        cell: Option<u16>,
+        base: u16,
+    ) -> Option<Option<(f32, f32)>> {
+        match self.hosted_lit(click, cell)? {
             Lit::Row => None,
             Lit::Nothing => Some(None),
-            Lit::Cells(from, to) => {
-                let lead = crate::chrome::FIELDS_LEAD;
-                Some(Some((
-                    f32::from(lead + from) * cell_px,
-                    f32::from(to.saturating_sub(from)) * cell_px,
-                )))
-            }
+            Lit::Cells(from, to) => Some(Some(
+                Self::region_across(base).band_of(from, to.saturating_sub(from)),
+            )),
         }
     }
 
@@ -1122,11 +1132,7 @@ impl Footer {
         lit: Option<&crate::sections::LitAt>,
     ) -> bool {
         line.click.is_some()
-            && self.hosted_band(
-                line.click,
-                self.here.cell_under_pointer,
-                tokens::metrics::cell_width(tokens::text::size()),
-            ) != Some(None)
+            && self.hosted_lit(line.click, self.here.cell_under_pointer) != Some(Lit::Nothing)
             && self
                 .sections()
                 .is_none_or(|_| lit.is_some_and(|l| l.taken.is_some()))
@@ -1197,12 +1203,14 @@ impl Footer {
 
     /// The hover band's pixels inside the part of a row the shown region
     /// lights at cell `cell` — one of two halves — on a screen `columns`
-    /// wide, a cell `cell_px` wide (`Region::hover_span`).
+    /// wide, the row placed `base` cells in, a cell `cell_px` wide
+    /// (`Region::hover_span`, [`hover_span_px`]).
     pub(super) fn hosted_hover_px(
         &self,
         columns: u16,
         row: usize,
         cell: u16,
+        base: u16,
         cell_px: f32,
     ) -> Option<(f32, f32)> {
         let id = self.shown_region()?;
@@ -1211,11 +1219,7 @@ impl Footer {
             ..self.region_seen()
         };
         let (from, to) = self.regions.get(id)?.hover_span(row, cell, &seen)?;
-        let lead = crate::chrome::FIELDS_LEAD;
-        Some((
-            f32::from(lead + from) * cell_px,
-            f32::from(to.saturating_sub(from)) * cell_px,
-        ))
+        Some(hover_span_px(from, to, base, cell_px))
     }
 
     /// The text a sweep from cell `cell` of the shown region's row `row`
@@ -2446,9 +2450,66 @@ const fn a_click_moves_the_page(cursor: Option<usize>, offset: usize, rows: usiz
     }
 }
 
+/// The pixels, `(x, width)`, of a region's hover span `(from, to)` — cells
+/// of its row, drawn `FIELDS_LEAD` cells past `base` — on a line of cells
+/// `cell_px` wide.
+///
+/// A SPAN FROM THE ROW'S FIRST CELL STARTS AT THE BAND'S OWN EDGE, `base`,
+/// as a whole row's band does, and not one lead in: the lead is where the
+/// TEXT starts, and a band, as a rule, goes from edge to edge. Started a lead
+/// in, the first of two halves (an open notification's message) left a strip
+/// of the ground between the footer's edge and the light. A span from a later
+/// cell — the second half — starts at that cell; both end where cell `to`
+/// does.
+///
+/// AN EMPTY SPAN LIGHTS NOTHING, wherever it starts: one from the first cell
+/// would otherwise be widened by the lead it starts before.
+fn hover_span_px(from: u16, to: u16, base: u16, cell_px: f32) -> (f32, f32) {
+    let lead = crate::chrome::FIELDS_LEAD.saturating_add(base);
+    if to <= from {
+        return (f32::from(lead.saturating_add(from)) * cell_px, 0.0);
+    }
+    let at = if from == 0 {
+        base
+    } else {
+        lead.saturating_add(from)
+    };
+    let end = lead.saturating_add(to).max(at);
+    (f32::from(at) * cell_px, f32::from(end - at) * cell_px)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{a_click_moves_the_page, on_the_page};
+    use super::{a_click_moves_the_page, hover_span_px, on_the_page};
+
+    /// FAILS IF: a region's span from its row's first cell is lit from one
+    /// lead in — a strip of ground left between the footer's edge and the
+    /// light — or a span from a later cell, the second of two halves, starts
+    /// anywhere but at its cell, or either ends anywhere but where its last
+    /// cell does, or an empty span — one from the first cell included —
+    /// lights anything, on a row at the edge or placed further in.
+    #[test]
+    fn a_span_from_the_first_cell_is_lit_from_the_edge() {
+        let lead = crate::chrome::FIELDS_LEAD;
+        let cell = 10.0;
+        for base in [0, 7] {
+            let edge = f32::from(base) * cell;
+            let end = |to: u16| f32::from(base + lead + to) * cell;
+            let (at, wide) = hover_span_px(0, 30, base, cell);
+            assert!((at - edge).abs() < f32::EPSILON, "base {base}: {at}");
+            assert!((at + wide - end(30)).abs() < f32::EPSILON, "base {base}");
+            let (at, wide) = hover_span_px(31, 60, base, cell);
+            assert!((at - end(31)).abs() < f32::EPSILON, "base {base}: {at}");
+            assert!((at + wide - end(60)).abs() < f32::EPSILON, "base {base}");
+            for (from, to) in [(40, 40), (0, 0), (40, 31)] {
+                let (_, wide) = hover_span_px(from, to, base, cell);
+                assert!(
+                    wide.abs() < f32::EPSILON,
+                    "base {base}: the empty span {from}..{to} lit {wide}"
+                );
+            }
+        }
+    }
 
     /// FAILS IF: a click on a row of the page moves the page — the last two
     /// lines included, where the cursor's margin would have slid it out from

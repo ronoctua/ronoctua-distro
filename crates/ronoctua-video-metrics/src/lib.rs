@@ -14,8 +14,13 @@
 //! ([`person::Person`], the person's edits) write. The player's ranking and
 //! fast-access read ([`read::Catalog`], `mode=ro`), with two exceptions that
 //! go through the crate: [`read::Catalog::hide`] and
-//! [`read::Catalog::delete`]. A door watches the `-wal` file and
-//! [`read::Catalog::data_version`], never a clock.
+//! [`read::Catalog::delete`]. The player's ranking also puts the person's
+//! MARKS on a video — a rating, set aside, kept for ever, shown again — and
+//! writes them through the video-metrics door, never a writer of its own:
+//! the door's `video_metrics_feed::mark` opens a [`person::Person`] off the
+//! loop for the one write, and is the ranking's one way to it (the door is
+//! the only reader that may name `person`). A door watches the `-wal` file
+//! and [`read::Catalog::data_version`], never a clock.
 //!
 //! # The score
 //!
@@ -29,8 +34,17 @@
 //! # Tombstones
 //!
 //! What was skipped (before the reference, beyond the first scan, a blocked
-//! Short, unavailable, deleted) stays in `skipped`: a deleted video never
-//! comes back.
+//! Short, unavailable, deleted, past its time) stays in `skipped`: a deleted
+//! video never comes back.
+//!
+//! # Keeping
+//!
+//! A video stays [`Keep::DEFAULT`] — ninety days from when it was published
+//! (from when a scan first saw it, without a date) — and every scan takes out
+//! what outlived that, as a tombstone (`expired`). The global keep is a
+//! setting ([`Settings::keep`]); a channel may keep its own, or keep for
+//! ever; a video the person marked to keep, or set aside for later, is never
+//! taken out while it is so ([`read::Forever`]).
 //!
 //! # Layers
 //!
@@ -67,6 +81,8 @@ pub use reach::fetch_thumb;
 #[cfg(feature = "db")]
 pub mod scan;
 #[cfg(feature = "db")]
+pub mod takeout;
+#[cfg(feature = "db")]
 pub mod thumbs;
 
 /// The catalogue's folder, under the data root.
@@ -97,6 +113,10 @@ pub const CHANNEL_SCORE: i32 = 5000;
 
 /// The highest a channel's score goes.
 pub const CHANNEL_SCORE_MOST: i32 = 10_000;
+
+/// The most days a [`Keep::Days`] may say: a hundred years. Past it a number
+/// typed is a slip, not a wish — and "never" is [`Keep::Forever`].
+pub const KEEP_DAYS_MOST: u32 = 36_500;
 
 /// A video, by YouTube's id (`dQw4w9WgXcQ`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -297,6 +317,54 @@ pub struct Settings {
     pub first_scan_most: u32,
     /// Whether view counts are kept as snapshots.
     pub views_snapshots: bool,
+    /// How long a video stays, where its channel keeps no time of its own.
+    pub keep: Keep,
+}
+
+/// How long a video stays in the catalogue, counted from when it was
+/// published — or from when a scan first saw it, for a video without a date.
+///
+/// ONE NUMBER, THE SAME WAY EVERYWHERE IT IS KEPT ([`Keep::number`]): `0` is
+/// for ever and `N` is N days, in the global setting and in a channel's own
+/// (where no number at all is "as everywhere"). Two columns — a "for ever"
+/// beside a number of days — could say both at once; one cannot contradict
+/// itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Keep {
+    /// This many days, from one to [`KEEP_DAYS_MOST`].
+    Days(u32),
+    /// Never taken out by its time.
+    Forever,
+}
+
+impl Keep {
+    /// Ninety days: the person's decision (2026-11-09) — a catalogue of what
+    /// is new, not an archive; what deserves longer is marked to keep.
+    pub const DEFAULT: Self = Self::Days(90);
+
+    /// Its number in the catalogue: the days, or `0` for ever.
+    #[must_use]
+    pub const fn number(self) -> i64 {
+        match self {
+            Self::Days(days) => days as i64,
+            Self::Forever => 0,
+        }
+    }
+
+    /// The keep a number says; `None` for a number that says none (below
+    /// zero, or past [`KEEP_DAYS_MOST`]) — refused, never read as a
+    /// plausible other.
+    #[must_use]
+    pub fn of_number(number: i64) -> Option<Self> {
+        match number {
+            0 => Some(Self::Forever),
+            _ => u32::try_from(number)
+                .ok()
+                .filter(|days| *days <= KEEP_DAYS_MOST)
+                .map(Self::Days),
+        }
+    }
 }
 
 impl RuleKind {
@@ -364,13 +432,15 @@ impl Rating {
 }
 
 impl Default for Settings {
-    /// The design's safeguard: 14 days, 10 videos; Shorts allowed; no views.
+    /// The design's safeguard: 14 days, 10 videos; Shorts allowed; no views;
+    /// [`Keep::DEFAULT`].
     fn default() -> Self {
         Self {
             block_shorts: false,
             first_scan_days: 14,
             first_scan_most: 10,
             views_snapshots: false,
+            keep: Keep::DEFAULT,
         }
     }
 }
@@ -391,16 +461,20 @@ pub enum Skip {
     Unavailable,
     /// Deleted by the person, or its channel removed.
     Deleted,
+    /// Past its time in the catalogue ([`Keep`]): taken out by a scan, or
+    /// never catalogued for being past it already when a scan first met it.
+    Expired,
 }
 
 impl Skip {
     /// Every reason.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::BeforeReference,
         Self::FirstScan,
         Self::BlockedShort,
         Self::Unavailable,
         Self::Deleted,
+        Self::Expired,
     ];
 
     /// Its kebab-case name, as the catalogue keeps it and the suffix of its
@@ -413,6 +487,7 @@ impl Skip {
             Self::BlockedShort => "blocked-short",
             Self::Unavailable => "unavailable",
             Self::Deleted => "deleted",
+            Self::Expired => "expired",
         }
     }
 }
@@ -587,6 +662,17 @@ mod tests {
                 serde_json::to_string(&skip).unwrap(),
                 format!("\"{}\"", skip.id())
             );
+        }
+        for keep in [
+            Keep::DEFAULT,
+            Keep::Days(1),
+            Keep::Days(KEEP_DAYS_MOST),
+            Keep::Forever,
+        ] {
+            assert_eq!(Keep::of_number(keep.number()), Some(keep));
+        }
+        for number in [-1, i64::from(KEEP_DAYS_MOST) + 1, i64::MAX] {
+            assert_eq!(Keep::of_number(number), None, "{number}");
         }
         for stop in Stop::ALL {
             assert_eq!(Stop::of(stop.id()), Some(stop));

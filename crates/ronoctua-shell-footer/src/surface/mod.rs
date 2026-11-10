@@ -11572,6 +11572,23 @@ impl Footer {
     fn opened(&mut self, id: &str) {
         match crate::brain::opening(id) {
             Some(crate::brain::Opening::TheJournal) => self.follow_the_journal(),
+            // A WINDOW — the video catalogue's —, by the words its region
+            // hands `open_window`, and never through the region's command: a
+            // region answers it, and what it asks goes through `run_with`,
+            // whose arm for an action is what called this
+            // (`the-footer-does-not-ask-itself`).
+            Some(opening @ crate::brain::Opening::VideoMetrics) => {
+                let words: Vec<String> = opening
+                    .window()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|w| (*w).to_owned())
+                    .collect();
+                match std::env::current_exe() {
+                    Ok(me) => self.open_foreign(&me.to_string_lossy(), &words, None),
+                    Err(e) => tracing::error!(error = %e, "I do not know my own binary"),
+                }
+            }
             None => {
                 tracing::warn!(id, "an action opens what nothing here opens");
                 let m = self.texts.t(crate::key::ECHO_BRAIN_NO_ACTION);
@@ -19313,8 +19330,12 @@ impl Footer {
                             .map(|c| crate::fields::band_px(c, crate::chrome::FIELDS_LEAD, cell))
                     })
                     .unwrap_or((band_at, band_wide));
+                // ONE OF TWO HALVES, from the band's own edge (`base`) when
+                // it is the first (`host::hover_span_px`).
                 let (band_at, band_wide) = row_p
-                    .and_then(|line| self.hosted_hover_px(columns, line, cell_p.unwrap_or(0), cell))
+                    .and_then(|line| {
+                        self.hosted_hover_px(columns, line, cell_p.unwrap_or(0), base, cell)
+                    })
                     .unwrap_or((band_at, band_wide));
                 // A REGION'S LINE, by what its row says it lights
                 // (`region::LineLights`): a grid's cell under the pointer's `x` — the
@@ -19326,10 +19347,25 @@ impl Footer {
                     .and_then(|line| visible.get(line))
                     .filter(|l| l.region_row.is_some())
                     .map(|l| l.lit.clone());
+                // A GLYPH lights on its own line alone (`LineLights::Glyphs`).
+                let mut alone = false;
                 let (band_at, band_wide) = match hosted_lit {
                     Some(crate::region::LineLights::UnderX(cells)) => {
                         match x_p.and_then(|x| Self::region_across(base).band(&cells, x)) {
                             Some(band) => band,
+                            None => continue,
+                        }
+                    }
+                    Some(crate::region::LineLights::Glyphs {
+                        cells,
+                        alone: glyphs,
+                    }) => {
+                        let across = Self::region_across(base);
+                        match x_p.and_then(|x| across.band(&cells, x)) {
+                            Some(band) => {
+                                alone = x_p.is_some_and(|x| across.band(&glyphs, x).is_some());
+                                band
+                            }
                             None => continue,
                         }
                     }
@@ -19363,7 +19399,7 @@ impl Footer {
                         .and_then(|line| visible.get(line))
                         .and_then(|l| l.click),
                     cell_p,
-                    cell,
+                    base,
                 ) {
                     Some(Some(band)) => band,
                     Some(None) => continue,
@@ -19416,7 +19452,7 @@ impl Footer {
                     }) as f32;
                 // A PLAYER'S ROW OF SEVERAL LINES lights whole, as a click
                 // takes it whole: from its first line on screen to its last.
-                let (above, below) = row_p.map_or((0, 0), |line| {
+                let (above, below) = row_p.filter(|_| !alone).map_or((0, 0), |line| {
                     let above = (0..line)
                         .rev()
                         .take_while(|k| visible.get(k + 1).is_some_and(|l| l.continues))

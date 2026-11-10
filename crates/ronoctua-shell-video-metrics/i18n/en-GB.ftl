@@ -89,6 +89,7 @@ video-metrics-skip-first-scan = Beyond a channel's first scan
 video-metrics-skip-blocked-short = Shorts, while they are blocked
 video-metrics-skip-unavailable = Private, removed or gone
 video-metrics-skip-deleted = Deleted by you
+video-metrics-skip-expired = Past their time in the catalogue
 video-metrics-reading = Reading the catalogue…
 video-metrics-why-not-yet = This is not answered yet.
 video-metrics-why-no-database = This build has no video catalogue.
@@ -121,6 +122,11 @@ video-metrics-add-gone = YouTube has no channel there.
 video-metrics-not-let-no-home = The channel is in, and there is no home to keep the consent to ask YouTube in: a scan will not ask.
 video-metrics-not-let-unparseable = The channel is in, and the consent file does not parse, so it was left as it is: a scan will not ask YouTube.
 video-metrics-not-let-unwritable = The channel is in, and the consent to ask YouTube could not be written: a scan will not ask.
+# THE SAME WHY, ON ITS OWN: said after what registering a list did, which
+# already says how many channels went in.
+video-metrics-unkept-no-home = There is no home to keep the consent to ask YouTube in: a scan will not ask.
+video-metrics-unkept-unparseable = The consent file does not parse, so it was left as it is: a scan will not ask YouTube.
+video-metrics-unkept-unwritable = The consent to ask YouTube could not be written: a scan will not ask.
 video-metrics-address = Address
 video-metrics-handle = Handle
 video-metrics-added = Added
@@ -129,9 +135,9 @@ video-metrics-reference-none = not yet
 video-metrics-last-error = Last error
 video-metrics-its-videos = Its videos
 video-metrics-score = Score
-about-video-metrics-score = A channel's score, 0 to 10 000, goes into every video of it: the arrows move it by a hundred, and RET types it.
+about-video-metrics-score = A channel's score, 0 to 10 000, goes into every video of it: each step moves it by a hundred, or it is typed whole.
 video-metrics-its-shorts = Its Shorts
-video-metrics-shorts-follow = as everywhere
+video-metrics-as-everywhere = as everywhere
 video-metrics-shorts-blocked = blocked
 video-metrics-shorts-allowed = allowed
 video-metrics-its-rules = Its rules
@@ -154,6 +160,9 @@ video-metrics-points-value = { $points ->
         [one] { $points } point
        *[other] { $points } points
     }
+# A SCORE AS A BARE NUMBER — a list's, before the faces of the rating — a
+# NUMBER to Fluent all the same, as `points` is.
+video-metrics-score-number = { $score }
 video-metrics-days-value = { $days ->
         [one] one day
        *[other] { $days } days
@@ -178,7 +187,7 @@ video-metrics-rule-own-off-note = This is { $name }'s own rule, switched off: no
 video-metrics-recency-points = Points today
 video-metrics-recency-days = Fades over
 video-metrics-rule-points = Points
-about-video-metrics-points = The points it adds — negative ones take away: the arrows move them by a hundred, and RET types them.
+about-video-metrics-points = The points it adds — negative ones take away: each step moves them by a hundred, or they are typed whole.
 video-metrics-rule-length = Length
 video-metrics-term-words = Words
 video-metrics-term-match = Match
@@ -231,7 +240,9 @@ video-metrics-page-of = { $page } of { $pages } · { $videos ->
     }
 video-metrics-by-score = By score
 video-metrics-no-videos = No video matches.
-video-metrics-video-row = { $score } · { $channel } · { $age }
+video-metrics-video-row = { $channel } · { $age } · { $score }
+video-metrics-video-row-short = { $age } · { $score }
+video-metrics-video-row-undated = { $channel } · { $score }
 video-metrics-age = { $days ->
         [0] today
         [1] yesterday
@@ -255,11 +266,11 @@ video-metrics-views = Views
 video-metrics-first-seen = First seen
 video-metrics-tags = YouTube's tags
 video-metrics-description = YouTube's description
-about-video-metrics-copy = RET puts this value on the clipboard.
+about-video-metrics-copy = A fact the catalogue keeps; copied, it is on the clipboard, to be pasted anywhere.
 video-metrics-yours = Yours
 video-metrics-your-tags = Your tags
 video-metrics-your-description = Your description
-about-video-metrics-second-description = A description of your own, edited here: C-s keeps it, and a rule can look for its words.
+about-video-metrics-second-description = A description of your own, edited here and kept when you say so; a rule can look for its words.
 video-metrics-description-kept = Your description was kept.
 video-metrics-with-it = With it
 video-metrics-hide-row = In the lists
@@ -287,9 +298,254 @@ video-metrics-typed-not-days = That is not a whole number of days, one or more.
 video-metrics-typed-not-a-band = Write a band as two lengths, like 4-20 or 0:30-3:00.
 video-metrics-typed-no-words = There are no words in that to look for.
 video-metrics-typed-no-row = There is no row here for that: put the cursor on what it changes, and type it there.
+# WHAT EVERY ROW IS, under the pointer and in the window's foot (the owner,
+# 2026-11-09): a sentence for each thing a click takes (`about_of`, which a
+# new row cannot compile without), and what the hand does to it — the door
+# says the key or the click, these say what follows (`does_of`). No sentence
+# spells a key: the gesture beside the name does.
+video-metrics-act-opens = opens it
+video-metrics-act-turns = turns it to the next choice
+video-metrics-act-switches = switches it
+video-metrics-act-types = asks for it to be typed
+video-metrics-act-copies = copies it
+video-metrics-act-does = does it
+video-metrics-act-edits = edits it here
+video-metrics-act-asks = asks first, with “no” first
+video-metrics-act-answers = gives this answer
+about-video-metrics-last-scan = When the last scan ended — or that one runs now, or stopped before its end.
+about-video-metrics-scan-added = How many new videos the last scan brought in.
+about-video-metrics-scan-failed = How many channels the last scan could not read; each channel's page says why.
+about-video-metrics-videos = Every catalogued video, by score, with filters, as a list or as thumbnails.
+about-video-metrics-channels = The channels you follow, and adding one.
+about-video-metrics-rules = How every video is scored, how long videos stay, and whether Shorts are blocked.
+about-video-metrics-weights = What each of your ratings adds to a video's score.
+about-video-metrics-left-out = Videos the scans found and did not keep, or took out when their time was up, by why; none of them is listed.
+about-video-metrics-channel-row = A channel's page: its facts, its score, its Shorts, how long its videos stay, its own rules and its videos.
+about-video-metrics-its-videos = The list of videos, only this channel's.
+about-video-metrics-channel-shorts = Whether this channel's Shorts are catalogued: as everywhere, blocked, or allowed.
+about-video-metrics-remove-channel = Removes the channel and every video of it, after asking.
+about-video-metrics-reference = Where the scans stand on this channel: a video published more than a day before it is not taken in.
+about-video-metrics-rule-recency = Points a new video gets, fading to nothing over some days.
+about-video-metrics-rule-short = Points a Short gets — usually negative.
+about-video-metrics-rule-preferred = Points a video gets when its length is in the band you prefer.
+about-video-metrics-rule-live = Points a live stream or a premiere gets.
+about-video-metrics-rule-band = Points a video gets when its length is in this band.
+about-video-metrics-rule-term = Points a video gets when these words are in it.
+about-video-metrics-add-band = A new length band; a video in it gets its points.
+about-video-metrics-add-term = New words to look for; a video that has them gets their points.
+about-video-metrics-block-shorts = Whether Shorts are catalogued at all; a channel may choose otherwise.
+about-video-metrics-recency-days = Over how many days a new video's points fade.
+about-video-metrics-rule-length = The lengths this rule is about.
+about-video-metrics-term-words = The words this rule looks for.
+about-video-metrics-term-match = How the words are found: whole, in order, or as beginnings.
+about-video-metrics-term-field = Whether the words are looked for in this part of a video.
+about-video-metrics-rule-on = Whether this rule counts; off, it adds nothing.
+about-video-metrics-remove-rule = Removes this rule, after asking.
+about-video-metrics-filter-channel = Every channel's videos, or one channel's.
+about-video-metrics-filter-shorts = Shorts and the rest, only Shorts, or no Shorts.
+about-video-metrics-filter-rating = Whatever your rating, or only one rating.
+about-video-metrics-filter-hidden = Hidden videos left out, shown too, or only them.
+about-video-metrics-filter-since = How far back, by when a video was published.
+about-video-metrics-page = Which page of the list is shown.
+about-video-metrics-video-entry = The video's page: every field, your rating, tags and description, and what can be done with it.
+about-video-metrics-published = When YouTube says it was published.
+about-video-metrics-its-points = Its points without its channel's score and recency.
+about-video-metrics-rating = Your rating of this video: its weight goes into the score.
+about-video-metrics-second-tags = Tags of your own; a rule can look for them.
+about-video-metrics-player-row = Puts it in the player's queue; one already there is asked about first.
+about-video-metrics-kiosk-row = Its page on YouTube, in a window of Chrome with nothing around it.
+about-video-metrics-download-row = Hands it to the transfers' queue, into your downloads.
+about-video-metrics-hide-row = Hides it from the lists after asking, or shows it again at once.
+about-video-metrics-delete-row = Deletes it for good after asking: no scan brings it back.
+about-video-metrics-answer-no = Leaves everything as it is.
+about-video-metrics-answer-yes = Does what the question asks.
+about-video-metrics-text-line = Your description as it is written; a click puts the caret there.
+# WHAT "AS EVERYWHERE" IS NOW, quietly beside the value, and said where the
+# row is explained.
+video-metrics-default-now = ({ $value })
+video-metrics-follows-now = Everywhere, it is { $value } now.
+video-metrics-follows-rule-everywhere = This is the rule everywhere: its page changes it on every channel.
+# HOW LONG A VIDEO STAYS, WHAT IS SET ASIDE, AND THE GLYPHS of a video in
+# the lists (the owner, 2026-11-09): a video goes when its time is up — the
+# catalogue's, or its channel's own — unless it is set aside, or marked never
+# to be deleted; the four faces of its rating after its score, and its marks
+# at the line's end, each acting on the first click. The forms and the hint
+# words of the keys `s` and `f` are the view's (`OF_THE_VIEW`).
+cmd-video-metrics-set-aside = Set it aside for later, or take it out of the set-aside videos
+cmd-video-metrics-keep = Never delete it, or let it go when its time is up
+cmd-video-metrics-keep-days = Type after how many days videos are deleted
+video-metrics-set-aside = set aside
+video-metrics-keep = keep
+ask-video-metrics-keep-days = Deleted after how many days
+video-metrics-set-aside-videos = Set-aside videos
+video-metrics-filter-set-aside = Set aside
+video-metrics-set-aside-any = set aside or not
+video-metrics-set-aside-only = only those, newest first
+video-metrics-set-aside-without = not set aside
+video-metrics-by-set-aside = Newest set aside first
+video-metrics-grid-channel = Channel on thumbnails
+video-metrics-heading-keep = How long videos stay
+video-metrics-keep-after = Deleted after
+video-metrics-keep-never = never deleted
+video-metrics-channel-keep = Its videos are deleted after
+video-metrics-set-aside-row = Set aside for later
+video-metrics-never-delete = Never delete it
+video-metrics-goes-on = goes on { $date }
+video-metrics-goes-unknown = goes when its time is up
+video-metrics-kept-by-channel = its channel keeps every video
+video-metrics-kept-set-aside = kept while set aside
+video-metrics-kept-everywhere = kept for ever, as everywhere
+video-metrics-kept-for-ever = kept for ever
+video-metrics-without-the-mark = Without the mark: { $value }.
+video-metrics-once-out = Out of the set-aside videos: { $value }.
+# WHAT THE NEXT SCAN TAKES OUT, under a keep — quietly, so a small number
+# typed by mistake surprises nobody. Said only when it is one or more.
+video-metrics-expiring = { $count ->
+        [one] One video leaves the catalogue at the next scan: its time is up.
+       *[other] { $count } videos leave the catalogue at the next scan: their time is up.
+    }
+video-metrics-typed-not-keep-days = That is not a number of days from one to { $most }; past that, the ring has “{ $never }”.
+video-metrics-act-picks = gives it this rating
+video-metrics-act-unpicks = takes its rating away
+about-video-metrics-set-aside-videos = The videos you set aside, newest first; while set aside, a video is never deleted.
+about-video-metrics-filter-set-aside = Set-aside videos and the rest, only them (newest first), or none of them.
+about-video-metrics-grid-channel = Whether each thumbnail says its channel, under its title.
+about-video-metrics-keep-everywhere = How long a video stays, counted from when it was published, before it is deleted — or for ever. Set-aside videos, and the ones marked never to be deleted, stay.
+about-video-metrics-channel-keep = How long this channel's videos stay before they are deleted: as everywhere, days of its own, or for ever.
+about-video-metrics-set-aside-row = Whether it is among the set-aside videos; while it is, it is never deleted.
+about-video-metrics-never-delete = Whether it is kept for ever, whatever its channel and the catalogue keep.
+about-video-metrics-glyph-rate = Rates the video so: the rating's weight goes into its score.
+about-video-metrics-glyph-rated = The video's rating now; taken away, its weight leaves the score.
+about-video-metrics-glyph-set-aside = Sets it aside: it joins the set-aside videos, and is never deleted while there.
+about-video-metrics-glyph-take-out = Set aside: never deleted while it is; switched off, it leaves the set-aside videos.
+about-video-metrics-glyph-forever-no = Goes when its time is up; marked, it is kept for ever.
+about-video-metrics-glyph-forever-video = Kept for ever by your mark, whatever its channel and the catalogue keep.
+about-video-metrics-glyph-forever-channel = Kept for ever, as every video of its channel; your mark keeps it if the channel changes.
+about-video-metrics-glyph-forever-everywhere = Kept for ever, as videos are everywhere; your mark keeps it if that changes.
+about-video-metrics-glyph-forever-aside = Kept while set aside; marked, it is kept for ever, set aside or not.
+# THE SAME CATALOGUE IN OTHER APPS (the owner, 2026-11-09): the brain's page
+# on its scan, the player's two lists of it, and a video — or a channel's
+# videos — in Nyxt. The hint word and the form of the key `n` are the view's
+# (`OF_THE_VIEW`).
+cmd-video-metrics-nyxt = Open it in Nyxt
+video-metrics-nyxt = Nyxt
+video-metrics-heading-elsewhere = In other apps
+video-metrics-in-the-brain = The scan's schedule, in the brain
+video-metrics-in-the-player = Videos by score, in the player
+video-metrics-set-aside-in-the-player = Set-aside videos, in the player
+video-metrics-channel-in-chrome = Its videos in Chrome
+video-metrics-channel-in-nyxt = Its videos in Nyxt
+about-video-metrics-in-the-brain = The brain's page for this catalogue's scan: when it runs next, what it waits for, what it did.
+about-video-metrics-in-the-player = A new window of the player, on its list of these videos by score.
+about-video-metrics-set-aside-in-the-player = A new window of the player, on the videos you set aside.
+about-video-metrics-nyxt-row = Its page on YouTube, in Nyxt.
+about-video-metrics-channel-in-chrome = Its videos' page on YouTube, newest first, in a window of Chrome with nothing around it.
+about-video-metrics-channel-in-nyxt = Its videos' page on YouTube, newest first, in Nyxt.
+# A LIST OF SUBSCRIPTIONS, IMPORTED AND EXPORTED (the owner, 2026-11-09):
+# Google Takeout's list of the channels an account subscribes to, each
+# channel staged for the person to keep or discard before the list is
+# registered — and the channels here saved as a list of the same shape. No
+# sentence spells a key: the gesture beside the name does.
+video-metrics-import-export = Import or export a list
+about-video-metrics-import-export = Brings in the channels a YouTube account subscribes to, from Google Takeout's list, and saves the channels here as a list of the same shape.
+video-metrics-unregistered = { $count ->
+        [one] one not registered yet
+       *[other] { $count } not registered yet
+    }
+video-metrics-heading-import = From YouTube's subscriptions
+video-metrics-import-note = Google Takeout exports the channels an account subscribes to: choose YouTube, then its subscriptions, and download the list. Choose it here, and each channel waits for you to keep or discard it.
+video-metrics-takeout = Google Takeout
+about-video-metrics-takeout = Opens Google Takeout in Chrome, where the list of subscriptions is exported.
+video-metrics-choose-list = Choose the list…
+about-video-metrics-choose-list = Opens the file picker in your downloads, showing the lists of channels.
+video-metrics-pick-import = The list of subscriptions
+video-metrics-filter-csv = Lists of channels (.csv)
+about-video-metrics-pick = The file picker, over the page: the folder a list is read from or written to, and the file.
+video-metrics-act-takes = takes it
+video-metrics-import-left-out = Lines left out
+about-video-metrics-import-left-out = Lines of the file whose first column is not a YouTube channel's id: nothing of them was taken.
+video-metrics-heading-already = Already in the catalogue
+video-metrics-heading-to-decide = To decide
+video-metrics-decisions = So far
+video-metrics-decisions-value = { $keep } kept · { $discard } discarded · { $undecided } undecided
+about-video-metrics-decisions = How many channels of the list are kept, discarded and still undecided.
+video-metrics-decision = Decision
+about-video-metrics-decision = Whether this channel joins the catalogue with the others you keep, or is dropped, when the list is registered.
+video-metrics-decision-undecided = undecided
+video-metrics-decision-keep = kept
+video-metrics-decision-discard = discarded
+video-metrics-decision-mixed = mixed
+video-metrics-decide-all = All of them
+about-video-metrics-decide-all = Gives every channel still to register the same decision: undecided, kept or discarded. While their decisions differ, asked first.
+# EVERY CHANNEL GIVEN ONE DECISION while theirs differ: what each was given
+# goes, so it is asked — one sentence per decision, the count being the
+# channels whose decision changes (never zero: theirs differ).
+ask-video-metrics-decide-all-undecided = Make every channel of the list undecided? { $changed ->
+        [one] One channel loses its decision.
+       *[other] { $changed } channels lose their decision.
+    }
+ask-video-metrics-decide-all-keep = Mark every channel of the list kept? { $changed ->
+        [one] The decision of one channel changes.
+       *[other] The decision of { $changed } channels changes.
+    }
+ask-video-metrics-decide-all-discard = Mark every channel of the list discarded? { $changed ->
+        [one] The decision of one channel changes.
+       *[other] The decision of { $changed } channels changes.
+    }
+video-metrics-leave-decisions = No, leave them as they are
+video-metrics-decide-them-all = Yes, change them all
+about-video-metrics-staged = A channel of the list, not registered yet: kept or discarded when the list is registered. Its page sets its score, its Shorts, how long its videos stay and its rules before that.
+video-metrics-staged-note = Not registered yet: nothing of it is scanned until it is.
+video-metrics-register = Register the kept
+about-video-metrics-register = Registers the channels marked kept and drops the discarded ones; the undecided stay on this page. Asked first.
+ask-video-metrics-register = Register { $kept ->
+        [0] no channel
+        [one] one channel
+       *[other] { $kept } channels
+    } and drop { $discarded ->
+        [0] none
+        [one] one
+       *[other] { $discarded }
+    }? The undecided stay here.
+video-metrics-not-yet = No, not yet
+video-metrics-register-them = Yes, register them
+video-metrics-registered = { $kept ->
+        [0] No channel registered
+        [one] One channel registered
+       *[other] { $kept } channels registered
+    }; { $discarded ->
+        [0] none dropped
+        [one] one dropped
+       *[other] { $discarded } dropped
+    }.
+video-metrics-imported = { $staged ->
+        [0] No channel
+        [one] One channel
+       *[other] { $staged } channels
+    } to decide; { $already } already in the catalogue.
+video-metrics-import-unreadable = The file could not be read.
+video-metrics-import-too-large = The file is too large to be a list of subscriptions.
+video-metrics-import-not-a-list = No line of the file names a YouTube channel: it is not a list of subscriptions.
+video-metrics-import-not-text = The file is not text.
+video-metrics-import-unclosed = A quote opened on line { $line } is never closed.
+video-metrics-heading-export = Export
+video-metrics-save-list = Save the channels as a list…
+about-video-metrics-save-list = Saves the channels registered here as a list in Google's shape, which this page and Takeout's readers take.
+video-metrics-pick-export = Where the list of channels goes
+video-metrics-exported = { $count ->
+        [0] No channel saved
+        [one] One channel saved
+       *[other] { $count } channels saved
+    } in { $file }.
+video-metrics-export-failed = The list could not be written there.
 player-ranking-reading = Reading the video catalogue…
 player-ranking-none = Nothing is ranked yet: the video catalogue ({ $keys }) adds your channels, and its scans fill this list.
 player-ranking-empty = No video ranks yet: the scans found none, or every one is hidden.
+# A LIST WITH NOTHING ON IT, said for what it is: its Shorts turned away
+# — the filter its page was read under — or nothing set aside yet.
+player-ranking-empty-filtered = No video ranks with Shorts as “{ $shorts }”: the scans found none, or the Shorts row leaves them out.
+player-ranking-aside-empty = Nothing is set aside yet: the bookmark beside a video sets it aside.
+player-ranking-aside-empty-filtered = Nothing set aside with Shorts as “{ $shorts }”: nothing is set aside yet, or the Shorts row leaves out what is.
 player-ranking-layout-grid = Thumbnails
 player-ranking-added = Added: { $title }
 player-ranking-title = Video title
@@ -305,3 +561,15 @@ player-ranking-not-changed = { $title } was not changed. { $why }
 player-ranking-downloading = Downloading { $title }; { $keys } shows the transfers.
 player-ranking-downloading-plain = Downloading { $title }.
 player-ranking-not-downloaded = The transfer queue did not take { $title }: it is not running.
+# A MARK put on a video from the ranking, or taken off. Its rating's name is
+# the video catalogue's own word for it.
+player-ranking-rated = Your rating of { $title }: { $rating }
+player-ranking-unrated = { $title } is no longer rated
+player-ranking-now-set-aside = Set aside: { $title }
+player-ranking-no-longer-set-aside = Out of the set-aside list: { $title }
+player-ranking-now-forever = Never deleted: { $title }, by its own mark — which holds whatever its channel keeps, and if the channel changes
+player-ranking-no-longer-forever = { $title }: its own never-delete mark is off — its channel's time, or the catalogue's, applies again
+# A MARK PRESSED while the last one on the same video is still being written:
+# two writes on their own threads land in either order.
+player-ranking-still-marking = { $title }: its last mark is still being written; try again in a moment.
+player-ranking-shown-again = Back in the ranking: { $title }

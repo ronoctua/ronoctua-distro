@@ -229,19 +229,51 @@ pub fn layout(
     }
 }
 
-/// Opens the player in a window, on `stage`.
+/// THE PAGES A WINDOW OPENS ON, by the word after the door's name
+/// (`ronoctua-shell player ranking`): the ranking of the video catalogue and
+/// its videos set aside — what the video catalogue's door hands the player
+/// to show (`player_seam::ranking::OPEN_RANKING`). A new window each time,
+/// even with one open: the person asked for that list, beside whatever the
+/// open one shows.
+pub const OPENINGS: [(&str, crate::player::PageId); 2] = [
+    (
+        crate::player_seam::ranking::OPEN_RANKING,
+        crate::player::PageId::Ranking,
+    ),
+    (
+        crate::player_seam::ranking::OPEN_SET_ASIDE,
+        crate::player::PageId::SetAside,
+    ),
+];
+
+/// The page the word `word` opens a window on, when it names one
+/// ([`OPENINGS`]).
+#[must_use]
+pub fn opening_of(word: &str) -> Option<crate::player::PageId> {
+    OPENINGS
+        .iter()
+        .find(|(w, _)| *w == word)
+        .map(|(_, page)| *page)
+}
+
+/// Opens the player in a window, on `stage` — and on `page` over its home,
+/// when it was opened for one ([`opening_of`]).
 ///
 /// # Errors
 ///
 /// No Wayland compositor, or no `xdg_shell`.
-pub fn host_window(stage: Stage, screen: Option<String>) -> Result<()> {
+pub fn host_window(
+    stage: Stage,
+    screen: Option<String>,
+    page: Option<crate::player::PageId>,
+) -> Result<()> {
     // THIS WINDOW'S FILE, for as long as it is open: closing the player
     // everywhere with no daemon to say farewell finds it there.
     let _slot = crate::player_stage::WindowSlot::hold();
     // AND A SCREEN'S, for a window "show on every screen" opened there:
     // pressing it again finds every one (`player_stage::everywhere`).
     let _screen = screen.as_deref().map(crate::player_stage::ScreenSlot::hold);
-    crate::door::run(|w: &Wiring<'_, Player>| wired(w, Door::Window, stage, screen.clone()))
+    crate::door::run(|w: &Wiring<'_, Player>| wired(w, Door::Window, stage, screen.clone(), page))
 }
 
 /// Opens the player in the column on the right, as `opening` says
@@ -251,7 +283,7 @@ pub fn host_window(stage: Stage, screen: Option<String>) -> Result<()> {
 ///
 /// No Wayland compositor, or no layer shell.
 pub fn host_column(opening: &crate::column::Opening) -> Result<()> {
-    crate::column::run::<Player>(opening, |w| wired(w, Door::Column, Stage::Off, None))
+    crate::column::run::<Player>(opening, |w| wired(w, Door::Column, Stage::Off, None, None))
 }
 
 /// A door the player is in — the window, or the column around it — and how
@@ -274,12 +306,40 @@ impl PlayerHost for crate::column::Column<Player> {
     }
 }
 
-/// The player, with its channels hung on the loop of the door `C` it is in.
+/// THE VIEW A DOOR OPENS WITH — `view`, as [`wired`] makes it — made for
+/// `door`, `stage` and `page`. Pure: what `wired` hangs on a loop is proved
+/// here without one.
+fn opened(
+    mut view: crate::player::View,
+    door: Door,
+    stage: Stage,
+    page: Option<crate::player::PageId>,
+) -> crate::player::View {
+    // A WINDOW OPENED FOR THE LISTING opens on the one the door that asked
+    // handed over (the catalogue's page, `crate::player_seam`) — and a window
+    // takes the listing's stage itself: its `F` hands nothing over.
+    if door == Door::Window {
+        view.takes_its_own_stage();
+    }
+    if stage == Stage::Listing {
+        view.handed_over();
+    }
+    // A WINDOW OPENED FOR A PAGE opens on it, over the home: `Esc` goes back
+    // to the home, as from any page a row opened.
+    if let Some(page) = page {
+        view.push(page, None);
+    }
+    view
+}
+
+/// The player, with its channels hung on the loop of the door `C` it is in
+/// — on `page` over its home, when it was opened for one ([`opened`]).
 fn wired<C: PlayerHost>(
     w: &Wiring<'_, C>,
     door: Door,
     stage: Stage,
     screen: Option<String>,
+    page: Option<crate::player::PageId>,
 ) -> Result<Player> {
     // THE PLAYER'S STATE, on its own thread. A door that opens starts the
     // daemon: the nested loop has no unit, and a door onto nothing is a door
@@ -430,16 +490,7 @@ fn wired<C: PlayerHost>(
             Stage::Listing => crate::player::Show::Listing,
         });
     }
-    // A WINDOW OPENED FOR THE LISTING opens on the one the door that asked
-    // handed over (the catalogue's page, `crate::player_seam`) — and a window
-    // takes the listing's stage itself: its `F` hands nothing over.
-    let mut view = crate::player::View::fresh().waking(wake);
-    if door == Door::Window {
-        view.takes_its_own_stage();
-    }
-    if stage == Stage::Listing {
-        view.handed_over();
-    }
+    let view = opened(crate::player::View::fresh().waking(wake), door, stage, page);
 
     Ok(Player {
         door,
@@ -770,7 +821,10 @@ impl Outbox {
                 self.kiosk.push(url);
                 Ok(None)
             }
-            errand @ (Errand::Close
+            // NYXT IS THE DOOR'S, as on a screen: started through the door's
+            // `Ui`, which a photograph's keeps (`would have started: …`).
+            errand @ (Errand::Nyxt(_)
+            | Errand::Close
             | Errand::Unlock(_)
             | Errand::Show(_)
             | Errand::Swap
@@ -2257,6 +2311,12 @@ impl Player {
             // order goes down its socket off the loop, and a footer that is
             // not there is said here (`door-no-footer`).
             Err(crate::player::Errand::Kiosk(url)) => ui.tell_the_footer("kiosk-open", Some(&url)),
+            // NYXT, started by this window itself through its entry in the
+            // launcher (`launch::in_nyxt`): off the loop, and a machine
+            // without it said here (`door-nyxt-absent`).
+            Err(crate::player::Errand::Nyxt(url)) => {
+                crate::region::Doorway::launch(ui, crate::launch::in_nyxt(&url));
+            }
             // THE PICTURE FOLDED AWAY, or back: this door's, laid out again
             // at the next paint.
             Err(crate::player::Errand::FoldPicture) => {
@@ -2359,10 +2419,19 @@ impl Player {
 
     fn pressed(&mut self, ui: &mut Ui, press: crate::player::Press) {
         ui.message = None;
+        // `RET` ON A BUTTON OF THE TRANSPORT that is a key of the view is
+        // that key, as its click is (`pressed_button`) — before the stage's
+        // rule below, which then reads it as the click's.
+        let press = self.view.pane_press(press);
         // ON STAGE THE ROWS ARE NOT DRAWN: a key that needs them brings them
         // back first — and one that opens a page opens it there, in front of
         // the person (`player::Unseen`).
-        if self.on_stage() && press.unseen() != crate::player::Unseen::Acts {
+        // AND THE ARROWS AND `RET` WITH THE TRANSPORT AT HAND are its: they
+        // walk and press the stage's controls, which are drawn.
+        if self.on_stage()
+            && press.unseen() != crate::player::Unseen::Acts
+            && !self.view.pane_takes(press)
+        {
             // A WINDOW OPENED FOR ITS STAGE is that stage and nothing else:
             // leaving it closes it, so there are no rows here to bring back.
             if self.opened_for.is_some() {
@@ -2469,6 +2538,24 @@ impl Player {
             self.layout.transport,
             self.player.as_ref(),
         )
+    }
+
+    /// THE KEYBOARD'S STOPS AMONG THE TRANSPORT (`TAB`, `View::pane`), out
+    /// of where this frame places its buttons — the seeks around the clock
+    /// among them (`player_media::stops`). The time bar is the deck's, whose
+    /// position is a row of "Now" here: the arrows seek on that row.
+    ///
+    /// AS SHOWN, ALWAYS: controls the stage hid after a while are ASLEEP,
+    /// not gone. Told as none, they took the keyboard back to the rows the
+    /// stage does not draw, and the next arrow — which wakes them — found no
+    /// stop and left the stage instead of walking on: a person who paused
+    /// between two arrows was thrown off the picture. The keyboard keeps its
+    /// stop while they sleep; no stop's ground is drawn over the picture
+    /// then (`self.buttons` is empty), and any key wakes them before it acts
+    /// (`typed_here`).
+    fn tell_the_stops(&mut self, ui: &Ui) {
+        let (asleep, _) = self.placed_buttons(ui, true);
+        self.view.pane_is(crate::player_media::stops(&asleep, None));
     }
 
     /// The point `at` of the surface in the globe's picture, as this frame
@@ -3038,6 +3125,10 @@ impl Player {
     /// A key, in either door.
     fn typed_here(&mut self, ui: &mut Ui, event: &KeyEvent, mods: Modifiers) {
         self.wake_controls(ui);
+        // THE TRANSPORT THE KEY JUST WOKE is the keyboard's to stand on — on
+        // stage they slept and kept the keyboard's stop (`tell_the_stops`),
+        // and the frame since may have placed them anew (`View::pane_is`).
+        self.tell_the_stops(ui);
         // `Esc` CALLS A DRAG OFF first: the band stays where it was, and
         // letting it go asks nothing.
         if event.keysym == Keysym::Escape && self.dragged.take().is_some() {
@@ -3223,7 +3314,9 @@ impl Content for Player {
         APP_ID
     }
 
-    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` folds a group.
+    /// NOT THE DOOR'S `TAB` FROM SECTION TO SECTION (`section_ring`): its
+    /// `TAB` crosses to the transport's controls — and with none drawn, the
+    /// view walks the sections itself (`Press::Cross`).
     fn walks_sections(&self, _: &Ui) -> bool {
         false
     }
@@ -3460,6 +3553,11 @@ impl crate::column::Tenant for Player {
             // THE PICTURE ALONE needs a picture, and the bar has no room for
             // one: the column comes back.
             Some(Press::Only) => false,
+            // THE TRANSPORT'S CONTROLS ARE NOT IN THE BAR, whose buttons are
+            // a remote's: `TAB` to them, and their keys, put the column back.
+            Some(
+                Press::Cross { .. } | Press::PanePrevious | Press::PaneNext | Press::PanePress,
+            ) => false,
             // THE ONE ANSWER the window's stage and the footer's `o` read.
             Some(press) => press.unseen() == Unseen::Acts,
         }
@@ -3524,6 +3622,10 @@ impl Player {
         let stage = self.on_stage();
         let shown = self.controls_shown();
         (self.buttons, self.clock) = self.placed_buttons(ui, shown);
+        // AND THE KEYBOARD'S STOPS AMONG THEM: `TAB` reaches what the pointer
+        // takes — and hidden controls are asleep, the keyboard kept on its
+        // stop (`tell_the_stops`), while the pointer takes none of them.
+        self.tell_the_stops(ui);
         self.button_under = self.pointer_at.and_then(|(x, y)| self.button_at(x, y));
         // AND THE DECK'S CONTROL under a resting pointer, read against the
         // deck just laid out: a state that moved the playhead under the hand
@@ -3546,7 +3648,15 @@ impl Player {
                 crate::player_timeline::hover_sentence(hit, self.player.as_ref(), &ui.texts)
             }),
         }
-        .or_else(|| under_control.and_then(|id| crate::chrome::hint_sentence(id, &ui.texts)));
+        .or_else(|| under_control.and_then(|id| crate::chrome::hint_sentence(id, &ui.texts)))
+        // AND A ROW THAT IS ONE THING AND SAYS WHAT IT DOES — a row of a
+        // video's own page (`Target::about`) — read off the same row a click
+        // there takes.
+        .or_else(|| {
+            let (x, y) = self.pointer_at?;
+            let row = rows.get(self.row_at(ui, x, y)?)?;
+            crate::chrome::hint_sentence(row.target.about()?, &ui.texts)
+        });
         let question = crate::door::list::the_question(ui);
         let (pieces, carries) = match (question, crate::door::list::said_on_line_zero(ui), pointed)
         {
@@ -3667,6 +3777,29 @@ impl Player {
         // `placed_buttons` put them, the answer the pointer reads back.
         let tl = self.layout.transport;
         let s = self.player.as_ref();
+        // THE KEYBOARD'S STOP among them (`TAB`): a ground of
+        // `surface.selection` under the button it is on — the owner's
+        // exception of 2026-11-09 to "the cursor is a colour", for a switch
+        // lit and a glyph under the pointer wear `state.accent`, the cursor's
+        // own colour. Over the picture on stage, with the transport's band.
+        if let Some((on, from, to)) = self
+            .view
+            .pane()
+            .and_then(|stop| crate::player_media::stop_place(stop, &self.buttons, None))
+        {
+            let ground = ronoctua_render::quad::Quad {
+                x: f32::from(from) * cell_px(),
+                y: f32::from(on) * line,
+                width: f32::from(to.saturating_sub(from)) * cell_px(),
+                height: line,
+                color: tokens::color::SURFACE_SELECTION,
+            };
+            if stage {
+                top.push(ground);
+            } else {
+                canvas.under.push(ground);
+            }
+        }
         let transport: Vec<crate::player_media::Placed> = self
             .buttons
             .iter()
@@ -3987,6 +4120,61 @@ mod tests {
 
     use super::*;
 
+    /// FAILS IF: a word that opens the window on a page of the ranking
+    /// stops naming its page, or another word opens one; or a photograph's
+    /// door keeps a video sent to Nyxt instead of handing it back to the
+    /// door, which starts it through its `Ui` as a door on a screen does.
+    #[test]
+    fn a_window_opens_on_the_ranking_s_pages_and_hands_nyxt_back() {
+        use crate::player::{Errand, PageId};
+        use crate::player_seam::ranking::{OPEN_RANKING, OPEN_SET_ASIDE};
+        assert_eq!(opening_of(OPEN_RANKING), Some(PageId::Ranking));
+        assert_eq!(opening_of(OPEN_SET_ASIDE), Some(PageId::SetAside));
+        for word in ["only", "maximized", "pip", "listing", "", "Ranking"] {
+            assert_eq!(opening_of(word), None, "{word}");
+        }
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let url = "https://www.youtube.com/watch?v=video000001".to_owned();
+        assert_eq!(
+            Outbox::default().carry_out(Errand::Nyxt(url.clone()), &t),
+            Err(Errand::Nyxt(url))
+        );
+    }
+
+    /// FAILS IF: the view a window opened by its word starts with is not on
+    /// that page — the ranking, or its videos set aside — or is on it with
+    /// nothing under it, so that one `Esc` closes the window instead of
+    /// going back to the home; or a door opened for no page starts anywhere
+    /// but the home.
+    #[test]
+    fn a_window_opened_for_a_page_is_on_it_over_the_home() {
+        use crate::player::{Errand, PageId, Press, View};
+        use crate::player_seam::ranking::{OPEN_RANKING, OPEN_SET_ASIDE};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        for (word, page) in [
+            (OPEN_RANKING, PageId::Ranking),
+            (OPEN_SET_ASIDE, PageId::SetAside),
+        ] {
+            let mut v = opened(
+                View::blank(None),
+                Door::Window,
+                Stage::Off,
+                opening_of(word),
+            );
+            assert_eq!(v.page(), page, "{word}");
+            assert_eq!(
+                v.key(Press::Escape, None, 80, &t),
+                Errand::Nothing,
+                "{word}: Esc closed the window"
+            );
+            assert_eq!(v.page(), PageId::Home, "{word}");
+        }
+        for door in [Door::Window, Door::Column] {
+            let v = opened(View::blank(None), door, Stage::Off, None);
+            assert_eq!(v.page(), PageId::Home, "{door:?}");
+        }
+    }
+
     /// FAILS IF: a photograph's door — which reaches no machine — writes a
     /// key, or keeps WHAT was typed anywhere it says or prints, or stops
     /// saying the consent and the key it would have kept, in order, then the
@@ -4261,8 +4449,9 @@ mod tests {
 
     /// FAILS IF: in the bar a key acts on a row nobody sees, or a key the
     /// bar does show — play, next, the volume — stops acting there. The
-    /// rule is `Where::Anywhere`, less the cursor's keys, the picture, and
-    /// saving the queue again — which may ask, on the rows.
+    /// rule is `Where::Anywhere`, less the cursor's keys, the picture,
+    /// saving the queue again — which may ask, on the rows — and `TAB` to
+    /// the transport's controls, which the bar does not draw.
     #[test]
     fn in_the_bar_only_the_keys_of_everywhere_act() {
         use crate::column::Tenant as _;
@@ -4273,7 +4462,11 @@ mod tests {
             let everywhere = at.of_no_row()
                 && !matches!(
                     *id,
-                    "player-up" | "player-down" | "player-only" | "player-save-queue-again"
+                    "player-up"
+                        | "player-down"
+                        | "player-only"
+                        | "player-save-queue-again"
+                        | "player-cross"
                 );
             assert_eq!(w.acts_without_rows(key), everywhere, "{notation} ({id})");
         }
@@ -4618,6 +4811,125 @@ mod tests {
         c.turn_the_volume(&mut ui, 1);
         assert!(c.asked().is_empty(), "the wheel asked {:?}", c.asked());
         assert_eq!(ui.message, Some(not_running));
+    }
+
+    /// FAILS IF: `TAB` in the window stops taking the keyboard to its
+    /// transport — every button it placed, walked in order by the arrows —
+    /// or `RET` on one stops doing what its click does; or the column's bar,
+    /// which draws no transport, keeps the key instead of coming back.
+    #[test]
+    fn the_window_s_transport_is_reached_by_tab() {
+        use crate::player_media::Stop;
+        let state = State {
+            playing: true,
+            ..with_two_sounds()
+        };
+        let (mut w, mut ui) = a_photographs(Door::Window, state);
+        let key =
+            |n: &str| crate::door::keys::event_of(ronoctua_keymap::Key::parse(n).expect("a key"));
+        let (event, mods) = key("TAB");
+        w.typed_here(&mut ui, &event, mods);
+        let placed: Vec<Stop> = w
+            .placed_buttons(&ui, true)
+            .0
+            .iter()
+            .map(|b| Stop::Button(b.3))
+            .collect();
+        assert!(!placed.is_empty());
+        assert_eq!(
+            w.view.pane(),
+            placed.first().copied(),
+            "`TAB` stood nowhere"
+        );
+        let mut walked = vec![w.view.pane().expect("a stop")];
+        for _ in 1..placed.len() {
+            let (event, mods) = key("<down>");
+            w.typed_here(&mut ui, &event, mods);
+            walked.push(w.view.pane().expect("a stop"));
+        }
+        assert_eq!(walked, placed, "the arrows skipped a button");
+        // `RET` ON THE NEXT is the next asked of the player.
+        while w.view.pane() != Some(Stop::Button("player-next")) {
+            let (event, mods) = key("<up>");
+            w.typed_here(&mut ui, &event, mods);
+        }
+        let (event, mods) = key("RET");
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(w.asked(), [Ask::Next]);
+        // `TAB` AGAIN, the rows.
+        let (event, mods) = key("TAB");
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(w.view.pane(), None);
+        // THE COLUMN'S BAR draws no transport: `TAB` puts the column back.
+        let (c, _) = a_photographs(Door::Column, with_two_sounds());
+        assert!(!crate::column::Tenant::acts_without_rows(
+            &c,
+            ronoctua_keymap::Key::parse("TAB").expect("a key")
+        ));
+    }
+
+    /// FAILS IF: on stage, the controls hidden after a while take the
+    /// keyboard off its stop — the next arrow, which wakes them, finds none
+    /// and leaves the stage instead of walking on — or `RET` on the media's
+    /// button opens its page behind the picture instead of in front of the
+    /// person, as its click does.
+    #[test]
+    fn on_stage_the_transport_keeps_the_keyboard_while_it_sleeps() {
+        use crate::player::{PageId, Press};
+        use crate::player_media::Stop;
+        let key =
+            |n: &str| crate::door::keys::event_of(ronoctua_keymap::Key::parse(n).expect("a key"));
+        let state = State {
+            playing: true,
+            ..with_two_sounds()
+        };
+        let (mut w, mut ui) = a_photographs(Door::Window, state.clone());
+        w.stage_to(&mut ui, Stage::Only);
+        let (event, mods) = key("TAB");
+        w.typed_here(&mut ui, &event, mods);
+        let first = w.view.pane().expect("`TAB` stood nowhere on stage");
+        // THE CONTROLS' TIME RUNS OUT, and the frame after it tells the
+        // stops (`paint_in`).
+        w.rest(&mut ui);
+        assert!(!w.controls_shown());
+        w.tell_the_stops(&ui);
+        assert_eq!(w.view.pane(), Some(first), "the keyboard left its stop");
+        let (event, mods) = key("<down>");
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(w.stage, Stage::Only, "an arrow left the stage");
+        let placed = crate::player_media::stops(&w.placed_buttons(&ui, true).0, None);
+        assert_eq!(
+            w.view.pane(),
+            placed.get(1).copied(),
+            "the arrow walked nowhere"
+        );
+        // `RET` ON THE MEDIA'S BUTTON: the rows back, its page in front.
+        assert!(placed.contains(&Stop::Button("player-tracks")));
+        while w.view.pane() != Some(Stop::Button("player-tracks")) {
+            let (event, mods) = key("<down>");
+            w.typed_here(&mut ui, &event, mods);
+        }
+        let (event, mods) = key("RET");
+        w.typed_here(&mut ui, &event, mods);
+        assert_eq!(w.stage, Stage::Off, "the page opened behind the picture");
+        assert!(matches!(w.view.page(), PageId::Tracks(_)));
+        // AND A WINDOW OPENED FOR ITS STAGE says where the rows are, as the
+        // click there does.
+        let (mut w, mut ui) = a_photographs(Door::Window, state);
+        w.opened_for = Some(Stage::Maximized);
+        w.stage_to(&mut ui, Stage::Maximized);
+        let (event, mods) = key("TAB");
+        w.typed_here(&mut ui, &event, mods);
+        while w.view.pane() != Some(Stop::Button("player-tracks")) {
+            let (event, mods) = key("<down>");
+            w.typed_here(&mut ui, &event, mods);
+        }
+        w.pressed(&mut ui, Press::Enter);
+        assert_eq!(w.view.page(), PageId::Home);
+        assert_eq!(
+            ui.message.as_deref(),
+            Some(ui.texts.t(crate::key::PLAYER_STAGE_HAS_NO_ROWS).as_str())
+        );
     }
 
     /// FAILS IF: the swap stops trading the door for the other — a window

@@ -1452,6 +1452,14 @@ CONTRAST_GATES = (
     # nothing would say so.
     ("text.primary", ("surface.shelf",), 75, 82),
     ("text.dim", ("surface.shelf",), 15, 20),
+    # AND THE PLAYER'S PICTURE PANE, which is the shelf's ground in the
+    # footer (`player_region`, beside the rows): on it the clock and the
+    # title card are `text.secondary`, and a lit switch, a glyph under the
+    # pointer and the played part of the track are `state.accent`. The floors
+    # the two inks keep on the chrome. Measured 2026-11-09 over the 44
+    # palettes: 47.6 (frost's chrome) and 51.7 (owl's chrome) at the lowest.
+    ("text.secondary", ("surface.shelf",), 43, 45),
+    ("state.accent", ("surface.shelf",), 45, 50),
     # AND THE FILM'S CONTROLS, which are text on the one surface in the system
     # with an alpha. The gate measures it OPAQUE — its own hex over nothing —
     # which is the worst case it can be composited onto: the token is 90%
@@ -1758,6 +1766,19 @@ DISTANCE_GATES = (
     ("surface.selection", "rule.default", 0.05, 0.06),
     ("surface.selection", "modeline.background", 0.05, 0.06),
     ("surface.selection", "brain.background", 0.05, 0.06),
+    # THE KEYBOARD'S STOP IN THE PLAYER'S PICTURE PANE: a `surface.selection`
+    # cell on the shelf's ground — the pane's cursor is a ground, not an ink,
+    # because `state.accent` and `text.here.acts` are one colour there — told
+    # from the ground it stands on at the floor the selection keeps against
+    # every other. Measured 2026-11-09: 0.089 at the lowest (forest's chrome).
+    ("surface.selection", "surface.shelf", 0.05, 0.06),
+    # AND THE TIME BAR'S TRACK IN THE SAME PANE: `chrome::track_bar` lays the
+    # whole length in `rule.default`, the played share over it in the accent
+    # gated above, so the track is a `rule.default` line on the shelf's
+    # ground — and a shelf that crept towards the rule would leave a played
+    # share hanging in nothing. The floor the selection keeps against the
+    # same rule. Measured 2026-11-09: 0.082 at the lowest (papyrus's backdrop).
+    ("surface.shelf", "rule.default", 0.05, 0.06),
     ("brain.background", "surface.chrome", 0.04, 0.045),
     ("text.primary", "text.secondary", 0.10, 0.12),
     ("text.secondary", "text.dim", 0.10, 0.12),

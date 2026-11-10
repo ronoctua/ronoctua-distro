@@ -7,6 +7,10 @@
 //! [`Catalog::hide`] and [`Catalog::delete`] are the two writes a reader may
 //! make, through a short read-write connection of their own.
 //!
+//! The shape it hands out — [`Filter`], [`RankedVideo`], [`Forever`],
+//! [`SetAside`], [`Order`], [`Decision`] — exists without `db` too: the
+//! player's ranking names it and links no SQLite (`one-sqlite-boundary`).
+//!
 //! # Watching it
 //!
 //! A door watches `<catalogue>-wal` (the writers' commits land there) and,
@@ -20,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChannelId, Rating, Refusal, Skip, Stop, VideoId};
+use crate::{ChannelId, Keep, Rating, Refusal, Settings, Skip, Stop, VideoId};
 
 /// Shorts in a list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -48,6 +52,83 @@ pub enum Hidden {
     Any,
 }
 
+/// Videos set aside for later in a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SetAside {
+    /// Set aside or not (the default).
+    #[default]
+    Any,
+    /// Only the ones set aside.
+    Only,
+    /// Not the ones set aside.
+    Without,
+}
+
+/// The order of a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Order {
+    /// By score, best first (the default).
+    #[default]
+    Score,
+    /// The last set aside first — the set-aside list's; what was never set
+    /// aside comes after, by score.
+    NewestSetAside,
+}
+
+/// Why a video is never taken out by its time — the ∞ beside it.
+///
+/// A global "never" gives none: on every video it would mark nothing. A
+/// video set aside is not taken out while it is, and gets none either: that
+/// lasts only as long as it stays set aside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Forever {
+    /// It goes when its time is up.
+    #[default]
+    No,
+    /// The person marked this video to keep — whatever its channel says, and
+    /// still if the channel changes.
+    ByVideo,
+    /// Its channel keeps every video for ever.
+    ByChannel,
+}
+
+/// What registering an imported list does with one of its channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Decision {
+    /// Nothing yet: it stays to decide.
+    Undecided,
+    /// It is registered with the others.
+    Keep,
+    /// It is dropped, with whatever was set on it.
+    Discard,
+}
+
+impl Decision {
+    /// The three, in the ring's order.
+    pub const ALL: [Self; 3] = [Self::Undecided, Self::Keep, Self::Discard];
+
+    /// Its kebab-case name, as the catalogue keeps it and the suffix of its
+    /// key.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Undecided => "undecided",
+            Self::Keep => "keep",
+            Self::Discard => "discard",
+        }
+    }
+
+    /// The decision a name keeps; `None` for a name that is none.
+    #[must_use]
+    pub fn of(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.id() == id)
+    }
+}
+
 /// What a list shows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct Filter {
@@ -66,6 +147,10 @@ pub struct Filter {
     pub published_after_s: Option<i64>,
     /// Published before, seconds since the epoch.
     pub published_before_s: Option<i64>,
+    /// Set aside or not.
+    pub set_aside: SetAside,
+    /// In which order.
+    pub order: Order,
 }
 
 /// Which page of a list.
@@ -102,6 +187,13 @@ pub struct RankedVideo {
     pub is_short: bool,
     /// Whether the person hid it.
     pub hidden: bool,
+    /// The person's rating.
+    pub rating: Option<Rating>,
+    /// When the person set it aside for later, seconds since the epoch;
+    /// `None` when it is not.
+    pub set_aside_at_s: Option<i64>,
+    /// Whether, and why, it is never taken out by its time.
+    pub forever: Forever,
 }
 
 /// A chapter of a video.
@@ -175,8 +267,21 @@ pub struct Channel {
     pub last_error: Option<String>,
     /// Its own "block Shorts" switch; `None` follows the global one.
     pub block_shorts: Option<bool>,
+    /// How long its videos stay; `None` is as everywhere
+    /// ([`Settings::keep`]).
+    pub keep: Option<Keep>,
     /// How many of its videos are catalogued.
     pub videos: u64,
+}
+
+/// A channel of an imported list, not registered yet: never scanned, and
+/// edited on the same pages as any other until it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Staged {
+    /// The channel, as the list named it.
+    pub channel: Channel,
+    /// What registering will do with it.
+    pub decision: Decision,
 }
 
 /// What the last scan did.
@@ -325,7 +430,8 @@ impl Catalog {
         return self.never(id);
     }
 
-    /// Every channel, by score.
+    /// Every channel, by score — the registered ones: a channel of an
+    /// imported list is [`Catalog::staged`]'s until it is registered.
     ///
     /// # Errors
     ///
@@ -335,6 +441,60 @@ impl Catalog {
         return crate::query::channels(&self.conn);
         #[cfg(not(feature = "db"))]
         return self.never(());
+    }
+
+    /// Every channel of an imported list not registered yet, by title — never
+    /// grouped by decision, so a row stays where the person is while they
+    /// decide down the list.
+    ///
+    /// # Errors
+    ///
+    /// As [`Catalog::ranked`].
+    pub fn staged(&self) -> Result<Vec<Staged>, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::query::staged(&self.conn);
+        #[cfg(not(feature = "db"))]
+        return self.never(());
+    }
+
+    /// The catalogue's switches — the global keep among them, which a list
+    /// that marks what stays reads.
+    ///
+    /// # Errors
+    ///
+    /// As [`Catalog::ranked`].
+    pub fn settings(&self) -> Result<Settings, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::db::settings(&self.conn);
+        #[cfg(not(feature = "db"))]
+        return self.never(());
+    }
+
+    /// How many videos the next scan takes out for their time, under the
+    /// keeps in force now — what a door says beside a keep, so a small number
+    /// typed by mistake does not surprise anyone.
+    ///
+    /// # Errors
+    ///
+    /// As [`Catalog::ranked`].
+    pub fn expiring(&self) -> Result<u64, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::query::expiring(&self.conn, crate::db::now_s());
+        #[cfg(not(feature = "db"))]
+        return self.never(());
+    }
+
+    /// [`Catalog::expiring`] as of `now_s` — a test's clock.
+    ///
+    /// # Errors
+    ///
+    /// As [`Catalog::ranked`].
+    #[doc(hidden)]
+    pub fn expiring_at(&self, now_s: i64) -> Result<u64, Refusal> {
+        #[cfg(feature = "db")]
+        return crate::query::expiring(&self.conn, now_s);
+        #[cfg(not(feature = "db"))]
+        return self.never(now_s);
     }
 
     /// The videos changed since the catalogue's generation `generation` —
@@ -350,8 +510,8 @@ impl Catalog {
         return self.never(generation);
     }
 
-    /// The ids taken out since `generation` (deleted, unavailable) — what
-    /// the index's crawler removes.
+    /// The ids taken out since `generation` (deleted, unavailable, past
+    /// their time) — what the index's crawler removes.
     ///
     /// # Errors
     ///

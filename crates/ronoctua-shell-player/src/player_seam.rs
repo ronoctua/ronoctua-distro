@@ -126,13 +126,79 @@ pub mod ranking {
     use std::path::PathBuf;
 
     use crate::key;
-    use ronoctua_video_metrics::{VideoId, Why};
+    use ronoctua_video_metrics::{Rating, VideoId, Why};
 
     /// The command `⋯` is, and `e`: the video's own page.
     pub const MORE: &str = "player-ranking-more";
 
     /// The command the title's glyph is, and `L`: the other layout.
     pub const LAYOUT: &str = "player-ranking-layout";
+
+    /// THE WORDS THAT OPEN THE PLAYER'S WINDOW ON A PAGE of the ranking
+    /// (`ronoctua-shell player ranking`, `player-window ranking`): what the
+    /// video catalogue's door hands the player's to show its videos by
+    /// score — a window of its own, even with one open
+    /// (`player_window::opening_of`).
+    pub const OPEN_RANKING: &str = "ranking";
+
+    /// And the set-aside videos, newest first.
+    pub const OPEN_SET_ASIDE: &str = "set-aside";
+
+    /// WHAT THE EYE OF A HIDDEN VIDEO SAYS under the pointer — the id of its
+    /// sentence (`about-<id>`): on the set-aside list, which holds the hidden
+    /// ones too, [`Quick::Hide`] on one shows it in the ranking again, and its
+    /// glyph is the open eye. The command's own sentence says hiding.
+    pub const SHOW: &str = "player-ranked-show";
+
+    /// A QUICK MARK ON ONE VIDEO — a glyph beside its words on the ranking's
+    /// rows and tiles, and a key on them (`b`, `v`, `d`, `F`, `1`–`4`): what
+    /// the click acts on at once, without opening the video's own page.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Quick {
+        /// Set aside for later, or taken out of the set-aside list.
+        SetAside,
+        /// Hidden from the ranking — or, one hidden already, shown in it
+        /// again ([`SHOW`]).
+        Hide,
+        /// Deleted from the catalogue for good, after a question.
+        Delete,
+        /// Never deleted when its time is up, by its own mark — or that mark
+        /// taken off: its channel's time, or the catalogue's, applies again.
+        Forever,
+        /// Rated so; on the rating it has, the rating goes.
+        Rate(Rating),
+    }
+
+    impl Quick {
+        /// Every one, in the order a tile draws them: the four ratings, then
+        /// the marks.
+        pub const ALL: [Self; 8] = [
+            Self::Rate(Rating::VeryNegative),
+            Self::Rate(Rating::Negative),
+            Self::Rate(Rating::Positive),
+            Self::Rate(Rating::VeryPositive),
+            Self::SetAside,
+            Self::Hide,
+            Self::Delete,
+            Self::Forever,
+        ];
+
+        /// Its command — the key that presses it, and what its glyph says
+        /// under the pointer (`cmd-<id>`, `chrome::hint_sentence`).
+        #[must_use]
+        pub const fn command(self) -> &'static str {
+            match self {
+                Self::SetAside => "player-ranked-set-aside",
+                Self::Hide => "player-ranked-hide",
+                Self::Delete => "player-ranked-delete",
+                Self::Forever => "player-ranked-forever",
+                Self::Rate(Rating::VeryNegative) => "player-ranked-rate-very-negative",
+                Self::Rate(Rating::Negative) => "player-ranked-rate-negative",
+                Self::Rate(Rating::Positive) => "player-ranked-rate-positive",
+                Self::Rate(Rating::VeryPositive) => "player-ranked-rate-very-positive",
+            }
+        }
+    }
 
     /// The ranking's own keys (`Press::Ranking`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,17 +215,26 @@ pub mod ranking {
         Layout,
         /// The video under the cursor's own page (`e`, the `⋯`).
         More,
+        /// The list with its Shorts, without them, or only them (`S`).
+        Shorts,
+        /// A quick mark on the video under the cursor — or on the one whose
+        /// own page is open.
+        Quick(Quick),
     }
 
     impl RankingKey {
         /// The key of command `id`, when it is one of the ranking's.
         #[must_use]
         pub fn of_command(id: &str) -> Option<Self> {
+            if let Some(q) = Quick::ALL.into_iter().find(|q| q.command() == id) {
+                return Some(Self::Quick(q));
+            }
             Some(match id {
                 "player-ranking-earlier" => Self::Earlier,
                 "player-ranking-later" => Self::Later,
                 "player-ranking-first" => Self::First,
                 "player-ranking-last" => Self::Last,
+                "player-ranking-shorts" => Self::Shorts,
                 LAYOUT => Self::Layout,
                 MORE => Self::More,
                 _ => return None,
@@ -176,8 +251,17 @@ pub mod ranking {
         Add,
         /// Watched in the Chrome kiosk.
         Kiosk,
+        /// Watched in Nyxt, the browser the machine has beside Chrome.
+        Nyxt,
         /// Downloaded, by the transfers' queue.
         Download,
+        /// The person's rating — a ring.
+        Rate,
+        /// Set aside for later, or taken out of that list.
+        SetAside,
+        /// Never deleted when its time is up, by its own mark — or that mark
+        /// taken off.
+        Forever,
         /// Hidden from the ranking.
         Hide,
         /// Deleted from the catalogue for good, after a question.
@@ -185,12 +269,16 @@ pub mod ranking {
     }
 
     impl RankedAct {
-        /// The six, in the page's order.
-        pub const ALL: [Self; 6] = [
+        /// The ten, in the page's order.
+        pub const ALL: [Self; 10] = [
             Self::PlayNow,
             Self::Add,
             Self::Kiosk,
+            Self::Nyxt,
             Self::Download,
+            Self::Rate,
+            Self::SetAside,
+            Self::Forever,
             Self::Hide,
             Self::Delete,
         ];
@@ -202,9 +290,47 @@ pub mod ranking {
                 Self::PlayNow => key::PLAYER_RANKING_PLAY_NOW,
                 Self::Add => key::PLAYER_RANKING_ADD,
                 Self::Kiosk => key::PLAYER_RANKING_KIOSK,
+                Self::Nyxt => key::PLAYER_RANKING_NYXT,
                 Self::Download => key::PLAYER_RANKING_DOWNLOAD,
+                Self::Rate => key::PLAYER_RANKING_RATE,
+                Self::SetAside => key::PLAYER_RANKING_SET_ASIDE,
+                Self::Forever => key::PLAYER_RANKING_FOREVER,
                 Self::Hide => key::PLAYER_RANKING_HIDE,
                 Self::Delete => key::PLAYER_RANKING_DELETE,
+            }
+        }
+
+        /// Its row's label WHEN THE VIDEO IS SO already — `on`: a row that
+        /// sets a video aside takes it out of that list, and says so; one
+        /// that keeps it for ever by its own mark takes that mark off — its
+        /// channel may keep it all the same; one that hides it shows a
+        /// hidden one again — the set-aside list holds the hidden ones too.
+        #[must_use]
+        pub const fn key_when(self, on: bool) -> &'static str {
+            match (self, on) {
+                (Self::SetAside, true) => key::PLAYER_RANKING_SET_ASIDE_UNDO,
+                (Self::Forever, true) => key::PLAYER_RANKING_FOREVER_UNDO,
+                (Self::Hide, true) => key::PLAYER_RANKING_SHOW,
+                _ => self.key(),
+            }
+        }
+
+        /// WHAT ITS ROW SAYS UNDER THE POINTER — the id of its sentence
+        /// (`chrome::hint_sentence`: `about-<id>`), its label's own name: a
+        /// row of a video's page says what pressing it does, and where.
+        #[must_use]
+        pub const fn about(self) -> &'static str {
+            match self {
+                Self::PlayNow => "player-ranking-play-now",
+                Self::Add => "player-ranking-add",
+                Self::Kiosk => "player-ranking-kiosk",
+                Self::Nyxt => "player-ranking-nyxt",
+                Self::Download => "player-ranking-download",
+                Self::Rate => "player-ranking-rate",
+                Self::SetAside => "player-ranking-set-aside",
+                Self::Forever => "player-ranking-forever",
+                Self::Hide => "player-ranking-hide",
+                Self::Delete => "player-ranking-delete",
             }
         }
 
@@ -215,11 +341,34 @@ pub mod ranking {
                 Self::PlayNow => "ranked-play-now",
                 Self::Add => "ranked-add",
                 Self::Kiosk => "ranked-kiosk",
+                Self::Nyxt => "ranked-nyxt",
                 Self::Download => "ranked-download",
+                Self::Rate => "ranked-rate",
+                Self::SetAside => "ranked-set-aside",
+                Self::Forever => "ranked-forever",
                 Self::Hide => "ranked-hide",
                 Self::Delete => "ranked-delete",
             }
         }
+    }
+
+    /// A MARK THE PERSON PUTS ON A VIDEO from the ranking — written by the
+    /// video catalogue's own door (`video_metrics_feed::mark`), the one that
+    /// may write the person's catalogue: defined HERE, under the view's
+    /// [`Act`] that carries it, because the view cannot name a type of the
+    /// crate above it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Mark {
+        /// Rated so — `None` takes the rating off.
+        Rating(VideoId, Option<Rating>),
+        /// Set aside for later (`true`), or taken out of that list.
+        SetAside(VideoId, bool),
+        /// Kept for ever (`true`) by the video's own mark, whatever its
+        /// channel keeps — or that mark taken off.
+        Keep(VideoId, bool),
+        /// Hidden (`true`), or shown in the ranking again — what the
+        /// set-aside list does for a hidden video it holds.
+        Hidden(VideoId, bool),
     }
 
     /// A WRITE OR AN ERRAND for a video, carried out off the loop
@@ -253,6 +402,16 @@ pub mod ranking {
             /// Its title, for the sentence.
             title: String,
         },
+        /// A mark put on it, or taken off — written by the video
+        /// catalogue's door, and said when it is done.
+        Mark {
+            /// The catalogue.
+            catalogue: PathBuf,
+            /// The mark.
+            mark: Mark,
+            /// Its title, for the sentence.
+            title: String,
+        },
     }
 
     /// What an [`Act`] came to.
@@ -262,6 +421,8 @@ pub mod ranking {
         Hidden(VideoId, String, Result<(), Why>),
         /// Deleted, or why not.
         Deleted(VideoId, String, Result<(), Why>),
+        /// Marked — the mark, the video's title — or why not.
+        Marked(Mark, String, Result<(), Why>),
         /// Handed to the transfers' queue — `taken` — and how the queue is
         /// opened, as the leader teaches it.
         Downloading {
@@ -289,6 +450,9 @@ pub mod ranking {
                     taken: true,
                     keys: None,
                 },
+                Self::Mark { mark, title, .. } => {
+                    Outcome::Marked(mark.clone(), title.clone(), Ok(()))
+                }
             }
         }
     }
@@ -823,5 +987,44 @@ mod tests {
                 None
             );
         });
+    }
+
+    /// FAILS IF: a quick mark's command is not the key that presses it — a
+    /// glyph whose sentence is another mark's, or a key that marks nothing —
+    /// or two marks share one command, or the ten acts of a video's own page
+    /// share a spot.
+    #[test]
+    fn every_quick_mark_is_its_own_command() {
+        use ranking::{Quick, RankedAct};
+        let mut seen = Vec::new();
+        for q in Quick::ALL {
+            assert_eq!(
+                RankingKey::of_command(q.command()),
+                Some(RankingKey::Quick(q)),
+                "{q:?}"
+            );
+            assert!(!seen.contains(&q.command()), "{q:?}");
+            seen.push(q.command());
+        }
+        assert_eq!(
+            RankingKey::of_command("player-ranking-shorts"),
+            Some(RankingKey::Shorts)
+        );
+        let mut spots: Vec<&str> = RankedAct::ALL.iter().map(|a| a.spot()).collect();
+        spots.sort_unstable();
+        spots.dedup();
+        assert_eq!(spots.len(), RankedAct::ALL.len());
+        // AND EACH SAYS ITS OWN SENTENCE under the pointer.
+        let mut abouts: Vec<&str> = RankedAct::ALL.iter().map(|a| a.about()).collect();
+        abouts.sort_unstable();
+        abouts.dedup();
+        assert_eq!(abouts.len(), RankedAct::ALL.len());
+        // A LABEL THAT FLIPS says the other thing once the video is so — a
+        // hidden one, on the set-aside list, is shown again — and the others
+        // say what they always do.
+        for act in [RankedAct::SetAside, RankedAct::Forever, RankedAct::Hide] {
+            assert_ne!(act.key_when(true), act.key_when(false), "{act:?}");
+        }
+        assert_eq!(RankedAct::Delete.key_when(true), RankedAct::Delete.key());
     }
 }

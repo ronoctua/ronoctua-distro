@@ -5,10 +5,10 @@
 //!
 //! A named PLAYLIST holds entries, and a SET holds lanes; each is a group, its
 //! row headed by a triangle — folded or open — which a click turns at once
-//! (`player_rows::Cell::control`). `TAB` turns the group under the cursor,
-//! `→` opens it and `←` folds it; on an entry that holds nothing the arrows
-//! still move it among its siblings (`player::moved`). What a group holds is
-//! set in by `view.nestCells`, a level at a time.
+//! (`player_rows::Cell::control`). `→` opens the group under the cursor and
+//! `←` folds it, and `player-fold` by name turns it; on an entry that holds
+//! nothing the arrows still move it among its siblings (`player::moved`).
+//! What a group holds is set in by `view.nestCells`, a level at a time.
 //!
 //! Which group is open is the VIEW's, by id: as a person left it, and — for
 //! one nobody touched — open while what plays is in it. What plays ENTERING a
@@ -201,6 +201,19 @@ impl View {
         }
     }
 
+    /// Whether group `id` of the outline is open ([`View::is_open`]) —
+    /// `None` when the outline has no such group. What [`View::fold`]
+    /// turns, and what the hint reads to teach the arrow that turns it
+    /// (`Where::OnAnOpenGroup`, `Where::OnAFoldedGroup`).
+    #[must_use]
+    pub fn group_open(&self, id: EntryId, state: Option<&State>) -> Option<bool> {
+        let current = state.and_then(|s| s.current);
+        self.outline
+            .as_deref()
+            .and_then(|o| node_of(o, id))
+            .map(|node| self.is_open(node, current))
+    }
+
     /// Group `id` folded or opened — to `to`, or the other way round — and the
     /// cursor on the row it was on; inside what folded, on the group's row.
     pub fn fold(
@@ -211,13 +224,7 @@ impl View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) {
-        let current = state.and_then(|s| s.current);
-        let Some(open) = self
-            .outline
-            .as_deref()
-            .and_then(|o| node_of(o, id))
-            .map(|node| self.is_open(node, current))
-        else {
+        let Some(open) = self.group_open(id, state) else {
             return;
         };
         let want = to.unwrap_or(!open);
@@ -1008,12 +1015,15 @@ mod tests {
         }
     }
 
-    /// FAILS IF: a group of the queue stops folding and opening by `TAB`, by
-    /// its triangle — a click that acts at once — or by `→` and `←`; or what
-    /// it holds stops being set in under it; or the cursor is left on a row
-    /// that folded away instead of on the group's own.
+    /// FAILS IF: a group of the queue stops folding and opening by its
+    /// command (`player-fold`), by its triangle — a click that acts at once —
+    /// or by `→` and `←`; or `TAB` comes back to folding it, where it crosses
+    /// to the picture's controls; or the hint teaches the arrow that does
+    /// nothing there (`←` on a folded group); or what it holds stops being set in under
+    /// it; or the cursor is left on a row that folded away instead of on the
+    /// group's own.
     #[test]
-    fn a_group_folds_by_tab_and_by_its_glyph() {
+    fn a_group_folds_by_its_command_by_the_arrows_and_by_its_glyph() {
         let t = texts("en-GB");
         let (mut v, s) = queued(Some(2));
         v.settle_in(Some(&s), 80, &t);
@@ -1028,13 +1038,44 @@ mod tests {
             0,
             "a playlist nothing plays in is born folded"
         );
-        // `TAB` on its row opens it, and its entries are set in under it.
+        // ITS COMMAND on its row opens it, and its entries are set in under
+        // it. `TAB` is no longer it: it crosses to the picture's controls.
         let rows = v.rows(Some(&s), 80, &t);
         let (at, _) = row_of(&rows, &Target::Group(EntryId(3))).expect("the playlist");
         v.clicked(at, &rows);
-        assert_eq!(crate::player::pressed("TAB"), Some(Press::Fold));
+        assert_eq!(
+            crate::player::pressed("TAB"),
+            Some(Press::Cross { back: false })
+        );
+        assert_eq!(crate::player::press_of("player-fold"), Some(Press::Fold));
+        assert_eq!(crate::player::pressed("<left>"), Some(Press::Less));
+        assert_eq!(crate::player::pressed("<right>"), Some(Press::More));
+        // THE HINT TEACHES THE ARROW THAT TURNS IT NOW, in the toggle's
+        // words: `→` on a folded group, `←` on an open one — never the one
+        // that does nothing there.
+        let taught = |v: &View| -> Vec<ronoctua_keymap::Key> {
+            v.hint(Some(&s), 80, &t)
+                .iter()
+                .filter(|p| p.id == Some("player-fold"))
+                .filter_map(|p| match p.press {
+                    Some(crate::chrome::Act::Key(k)) => Some(k),
+                    _ => None,
+                })
+                .collect()
+        };
+        let arrow = |n: &str| ronoctua_keymap::Key::parse(n).expect("a key");
+        let folded = taught(&v);
+        assert!(
+            !folded.is_empty() && folded.iter().all(|k| *k == arrow("<right>")),
+            "a folded group taught {folded:?}"
+        );
         assert_eq!(v.key(Press::Fold, Some(&s), 80, &t), Errand::Nothing);
         assert_eq!(children(&v), 3);
+        let open = taught(&v);
+        assert!(
+            !open.is_empty() && open.iter().all(|k| *k == arrow("<left>")),
+            "an open group taught {open:?}"
+        );
         let rows = v.rows(Some(&s), 80, &t);
         let (_, group) = row_of(&rows, &Target::Group(EntryId(3))).expect("the playlist");
         let (_, child) = row_of(&rows, &Target::Entry(EntryId(5))).expect("a child");
@@ -1058,7 +1099,7 @@ mod tests {
             tokens::icon::PLAYER_UNFOLDED.to_string(),
             "the open triangle"
         );
-        // `TAB` again folds it; `→` opens it and `←` folds it — and
+        // ITS COMMAND again folds it; `→` opens it and `←` folds it — and
         // `C-↑`/`C-↓` move an entry, a group too.
         v.key(Press::Fold, Some(&s), 80, &t);
         assert_eq!(children(&v), 0);

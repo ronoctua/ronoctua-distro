@@ -67,6 +67,16 @@
     };
   };
 
+  # THE WAY BACK TO THE CATALOGUE (the owner, 2026-11-09): from this
+  # module's page, the app whose scan it schedules, in a window — as the app's
+  # home page links here. Only the way to it, which the footer opens at either
+  # door (`openable`, `nix/brain-modules.nix`): no row, no question.
+  actions = {
+    catalogue = {
+      opens = "video-metrics-window";
+    };
+  };
+
   # WHAT IT RELIES ON AND DOES NOT OWN: the scanner, and the unit that runs it.
   uses = [
     "crates/ronoctua-video-metrics"
@@ -88,7 +98,11 @@
     "crates/ronoctua-video-metrics/src/main.rs" = "*";
     "crates/ronoctua-video-metrics/src/thumbs.rs" = "*";
     "crates/ronoctua-video-metrics/src/db.rs" = [ "video-metrics" ];
-    "crates/ronoctua-video-metrics/src/person.rs" = [ "video-metrics" ];
+    "crates/ronoctua-video-metrics/src/person.rs" = [
+      "video-metrics"
+      "video-metrics-readers-are-read-only"
+    ];
+    "crates/ronoctua-video-metrics/Cargo.toml" = [ "video-metrics-readers-are-read-only" ];
     "crates/ronoctua-ytdlp/src/lib.rs" = [ "video-metrics" ];
     "crates/ronoctua-ytdlp/src/youtube.rs" = [ "video-metrics" ];
     "crates/ronoctua-consent/src/lib.rs" = [ "video-metrics" ];
@@ -115,6 +129,11 @@
     "crates/ronoctua-shell-video-metrics/i18n/en-GB.ftl" = "*";
     "crates/ronoctua-shell-video-metrics/i18n/pt-BR.ftl" = "*";
     "nix/cache.nix" = "*";
+    "nix/brain-modules.nix" = [ "video-metrics-window" ];
+    "crates/ronoctua-shell-footer/src/brain.rs" = [
+      "video-metrics"
+      "video-metrics-window"
+    ];
     "nix/modules/video-metrics.nix" = "*";
     "tests/checks.nix" = "*";
     "tests/video-metrics-vm.nix" = "*";

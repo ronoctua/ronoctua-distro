@@ -1128,6 +1128,12 @@
   # what the page is for — a world of marks to point at — and ten lines keep
   # a country's stations apart on a laptop's screen while the rows under it
   # still show a screenful.
+  #
+  # `paneGap` is THE AIR between the rows and the picture's pane in the
+  # footer (`player_media::footer_panel`): the rows' band stops before it,
+  # the pane's ground starts after it — air, never a rule (inv. 15). Two
+  # cells, the air `icons.stageGap` and `calc.historyGap` leave between a
+  # list and what stands beside it.
   player = {
     queueGlyph = 2;
     queueAir = 1;
@@ -1158,6 +1164,7 @@
     coverPx = 512;
     coverGap = 2;
     globeLines = 10;
+    paneGap = 2;
   };
 
   # THE SUBTITLE LANES OVER A FILM (`ronoctua_player::subtitles::merge`), in

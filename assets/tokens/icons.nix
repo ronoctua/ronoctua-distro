@@ -1045,6 +1045,60 @@
   # scan fetches the picture.
   video-no-thumb = "md-video_outline";
 
+  # A VIDEO'S QUICK MARKS — the player's ranking and the video catalogue's
+  # lists draw the same ones, on a video's own lines: the four ratings after
+  # its score's number, then setting it aside, hiding it, deleting it and
+  # keeping it for ever. Each is a click that acts at once; deleting asks
+  # first, with the "no" drawn first.
+  #
+  # THE FOUR RATINGS, from very negative to very positive: one Material
+  # family of faces on one scale, so the four read as one ladder. Faces and
+  # not arrows, because the chevrons and arrows here open and close things
+  # (`expand`, `row-opens`), and an arrow on a video's line would read as
+  # "this opens". The lit one is the rating the video has, and clicking it
+  # takes the rating away. They sit shoulder to shoulder with the score's
+  # digits, so `chrome-icons-match-the-text` measures them.
+  video-rating-very-negative = "md-emoticon_angry_outline";
+  video-rating-negative = "md-emoticon_sad_outline";
+  video-rating-positive = "md-emoticon_happy_outline";
+  video-rating-very-positive = "md-emoticon_excited_outline";
+  # SET ASIDE FOR LATER, and not: a matched pair that alternates in ONE cell
+  # and shows the state the video is in — filled while it is set aside, the
+  # outline while it is not — as `player-favourite`'s star does.
+  video-set-aside = "md-bookmark";
+  video-set-aside-off = "md-bookmark_outline";
+  # HIDDEN FROM THE LISTS, and shown again: the eye struck through on a video
+  # one can hide, the open eye on one that is hidden — again what a press
+  # does, a pair from one outline family. An eye is drawn wide and flat, so
+  # it fills the cell's width short of the digit's height (80% and 66%), and
+  # `chrome-icons-match-the-text` names the two WIDE: no family in the font
+  # has an open eye and a struck one at the digit's height — the eyes that
+  # stand that tall (in a circle, with a gear, closed) have no partner.
+  video-hide = "md-eye_off_outline";
+  video-show = "md-eye_outline";
+  # DELETED FROM THE CATALOGUE: the bin, drawn the same as the marks beside
+  # it — danger is a colour, never another drawing.
+  video-delete = "md-trash_can_outline";
+  # NEVER DELETED, the ∞: on a video that outlives the catalogue's time, by
+  # its own mark or by its channel's — the sign everybody already reads as
+  # "for ever", lit while it holds. In its outlined box, and not the bare
+  # `md-infinity`: the bare sign is twice as wide as it is tall, and at
+  # the cell's width it stood at 44% of the age's digits beside it — below
+  # even the floor a wide drawing keeps. The box is Material's own ∞ at the
+  # digit's height, in the outline the marks beside it are drawn in.
+  video-forever = "md-all_inclusive_box_outline";
+
+  # WHERE A VIDEO, OR A CHANNEL'S VIDEOS, OPEN OUTSIDE: the Chrome kiosk and
+  # Nyxt. A browser is the one thing here that IS a brand, so each is its
+  # own mark — Chrome's wheel, and Nyxt's cat — side by side at a row's end,
+  # so the two are measured to one height (`chrome-icons-match-the-text`)
+  # and read as one set. The cat is Font Awesome's, the one cat in the font
+  # that stands as tall as the wheel: Material's is a head drawn wide, ears
+  # out, at three quarters of it, and beside the wheel it read as another
+  # size. Not `app-chrome` for the wheel: that one is the tray's.
+  open-in-chrome = "md-google_chrome";
+  open-in-nyxt = "fa-cat";
+
   # THE CENTRE'S OWN THREE: the shield beside "nothing is off" and the
   # firewall on, the shield struck through beside the firewall off, and the
   # fingerprint beside each finger enrolled. Material, and the same shield the

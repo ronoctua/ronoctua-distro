@@ -959,7 +959,7 @@ fn parts_errand(e: crate::parts::Errand, open: &mut Open, way: &mut dyn Doorway)
 /// ONE list, which the region's scroll, bar and wheel read, and only the
 /// rows on the page built. The footer has no foot: what the thing under the
 /// pointer is, and the cursor's, is said on its explanation line, joined
-/// into one sentence.
+/// into one sentence (`door::Explained::joined`).
 pub struct UpdateRegion {
     open: Open,
     /// Whether the page follows the cursor: after an arrow it does, after
@@ -969,24 +969,6 @@ pub struct UpdateRegion {
     /// cursor's, until a key — the window's foot's rule. On a row about
     /// nothing (air, a fact) the cursor's thing is said, as the foot says it.
     pointed: Option<usize>,
-}
-
-/// What the door explains of a thing, as ONE line, which the footer cuts at
-/// its width: what the hand does to it first — the line's whole question
-/// under the pointer —, then its sentences.
-fn joined(e: &crate::door::Explained) -> Option<String> {
-    let said: Vec<&str> = e
-        .said
-        .iter()
-        .map(|(text, _)| text.as_str())
-        .filter(|t| !t.is_empty())
-        .collect();
-    let said = said.join(" ");
-    match e.gesture.as_deref().filter(|g| !g.is_empty()) {
-        Some(g) if said.is_empty() => Some(g.to_owned()),
-        Some(g) => Some(format!("{g}. {said}")),
-        None => (!said.is_empty()).then_some(said),
-    }
 }
 
 impl UpdateRegion {
@@ -1140,7 +1122,7 @@ impl UpdateRegion {
         if !row.takes {
             e.gesture = None;
         }
-        joined(&e)
+        e.joined()
     }
 }
 
@@ -1271,12 +1253,10 @@ impl Region for UpdateRegion {
             return None;
         }
         let item = self.open.view.cursor_item()?;
-        joined(
-            &self
-                .open
-                .view
-                .explained(&item, crate::door::Gesture::Ret, seen.texts),
-        )
+        self.open
+            .view
+            .explained(&item, crate::door::Gesture::Ret, seen.texts)
+            .joined()
     }
 
     /// The pointer moved: whether it rests on a row of the region — what

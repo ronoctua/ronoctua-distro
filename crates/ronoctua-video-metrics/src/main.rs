@@ -9,6 +9,8 @@
 //! ronoctua-video-metrics [--catalog <path>] hide <video id>
 //! ronoctua-video-metrics [--catalog <path>] delete <video id>
 //! ronoctua-video-metrics [--catalog <path>] list [--hidden] [--most <n>]
+//! ronoctua-video-metrics [--catalog <path>] import <subscriptions.csv>
+//! ronoctua-video-metrics [--catalog <path>] export <subscriptions.csv>
 //! ```
 //!
 //! Every line it prints is for a log or a terminal: English, one line per
@@ -21,7 +23,10 @@
 //! never wrote its end, and this writes it, with systemd's `$SERVICE_RESULT`
 //! as the trouble — a sheet that already ended is left as it is. `list`
 //! READS — `Catalog::open_ro`, the readers' way in, while a scan may be
-//! writing — and prints the videos by score, one per line. Exit status: 0
+//! writing — and prints the videos by score, one per line. `import` stages
+//! the channels of Google Takeout's list of subscriptions for the person to
+//! decide in the door (`takeout`), and `export` writes the registered ones
+//! in the same shape — for a fixture, a photograph and the VM. Exit status: 0
 //! done; 1 refused (the reason on standard error); 2 a command it does not
 //! know; 3 a scan stopped early (a bot check, a 429, no network, consent
 //! taken back — recorded in the catalogue); 4 a scan in which every channel
@@ -33,6 +38,7 @@ use std::process::ExitCode;
 use ronoctua_video_metrics::person::{NotAdded, Person};
 use ronoctua_video_metrics::read::{Catalog, Filter, Hidden, Page};
 use ronoctua_video_metrics::scan::{self, Options};
+use ronoctua_video_metrics::takeout::{self, Subscription, Unread};
 use ronoctua_video_metrics::{Refusal, VideoId};
 
 const HELP: &str = "\
@@ -48,6 +54,9 @@ usage: ronoctua-video-metrics [--catalog <path>] <command>
   delete <video id>                     delete a video for good (it never returns)
   list [--hidden] [--most <n>]          the videos by score, read-only: id, score, title
                                         (--hidden: the hidden ones too)
+  import <subscriptions.csv>            stage the channels of Google Takeout's list,
+                                        to be decided and registered in the door
+  export <subscriptions.csv>            write the registered channels as such a list
 
 The catalogue is $XDG_DATA_HOME/ronoctua/video-metrics/catalog.sqlite unless
 --catalog names another.";
@@ -91,6 +100,14 @@ fn main() -> ExitCode {
             _ => usage(&format!("{command} takes one video id")),
         },
         "list" => list(&catalog, args),
+        "import" => match args.as_slice() {
+            [file] => import(&catalog, std::path::Path::new(file)),
+            _ => usage("import takes one list of subscriptions"),
+        },
+        "export" => match args.as_slice() {
+            [file] => export(&catalog, std::path::Path::new(file)),
+            _ => usage("export takes the file to write"),
+        },
         "help" | "--help" | "-h" => {
             println!("{HELP}");
             ExitCode::SUCCESS
@@ -328,6 +345,93 @@ fn write_sheet(at: &std::path::Path, began: i64, ended: Option<i64>, trouble: &s
     let draft = PathBuf::from(draft);
     if std::fs::write(&draft, body).is_err() || std::fs::rename(&draft, at).is_err() {
         let _ = std::fs::remove_file(&draft);
+    }
+}
+
+/// `import <file>`: reads Google Takeout's list (at most
+/// [`takeout::MOST_BYTES`]) and stages its channels — each waits for a
+/// decision in the door, never scanned until it is registered.
+fn import(catalog: &std::path::Path, file: &std::path::Path) -> ExitCode {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(file).and_then(|f| {
+        f.take(takeout::MOST_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| ())
+    });
+    if read.is_err() {
+        eprintln!("unreadable: {}", file.display());
+        return ExitCode::from(1);
+    }
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > takeout::MOST_BYTES {
+        eprintln!(
+            "too large to be a list of subscriptions: {}",
+            file.display()
+        );
+        return ExitCode::from(1);
+    }
+    let list = match takeout::read(&bytes) {
+        Ok(list) => list,
+        Err(unread) => {
+            eprintln!(
+                "not a list of subscriptions: {}",
+                match unread {
+                    Unread::NotText => "not text".to_owned(),
+                    Unread::Unclosed { line } => format!("a quote on line {line} never closes"),
+                    Unread::NotAList => "no line names a channel".to_owned(),
+                }
+            );
+            return ExitCode::from(1);
+        }
+    };
+    done(
+        Person::open(catalog).and_then(|p| p.stage(&list.subscriptions)),
+        |staging| {
+            println!(
+                "staged: {}, already: {}, left out: {}",
+                staging.staged,
+                staging.already.len(),
+                list.left_out.len()
+            );
+        },
+    )
+}
+
+/// `export <file>`: the registered channels, by id, in Google's shape —
+/// written whole and renamed.
+fn export(catalog: &std::path::Path, file: &std::path::Path) -> ExitCode {
+    let (Some(name), dir) = (
+        file.file_name().and_then(|n| n.to_str()),
+        file.parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new(".")),
+    ) else {
+        return usage(&format!("export cannot write to {}", file.display()));
+    };
+    let channels = match Catalog::open_ro(catalog).and_then(|c| c.channels()) {
+        Ok(channels) => channels,
+        Err(refusal) => {
+            eprintln!("refused: {}", refusal.why.id());
+            return ExitCode::from(1);
+        }
+    };
+    let mut list: Vec<Subscription> = channels
+        .into_iter()
+        .map(|c| Subscription {
+            id: c.id,
+            title: c.title,
+        })
+        .collect();
+    list.sort_by(|a, b| a.id.cmp(&b.id));
+    match ronoctua_xdg::write_atomically(dir, name, takeout::write(&list).as_bytes()) {
+        Ok(()) => {
+            println!("exported: {} channels to {}", list.len(), file.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("not written: {}: {e}", file.display());
+            ExitCode::from(1)
+        }
     }
 }
 

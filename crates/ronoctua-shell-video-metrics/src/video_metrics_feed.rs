@@ -8,7 +8,8 @@
 //! the catalogue opened READ-ONLY (`Catalog::open_ro`), and writes what the
 //! person changes through the one writer a door has (`Person`) — the two
 //! openers this shell may use (`video-metrics-readers-are-read-only`). It
-//! decodes the thumbnails a page shows. And it carries the three errands
+//! decodes the thumbnails a page shows, reads a list of subscriptions to
+//! import and writes the channels as one. And it carries the three errands
 //! that leave the view for another process: a scan asked of the brain (or
 //! of systemd, with no brain), a video put in the player's queue, a download
 //! handed to the transfers' queue.
@@ -16,9 +17,11 @@
 //! # Event, not clock
 //!
 //! The catalogue's writers commit into `catalog.sqlite-wal`, which is WATCHED
-//! (`Notice::on_file`, inotify): a commit stirs the thread, which asks
+//! (`Notice::on_log`, inotify): a commit stirs the thread, which asks
 //! SQLite's `data_version` whether another connection committed, and reads
-//! the page again only then. Nothing here wakes on a timer.
+//! the page again only then. Nothing here wakes on a timer. Every WRITE into
+//! it is heard, and not only the writer letting go: the scanner holds its
+//! connection, and the `-wal` with it, open for the whole scan.
 //!
 //! # What it hands back
 //!
@@ -32,13 +35,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
 use ronoctua_tokens as tokens;
-use ronoctua_video_metrics::person::{NotAdded, Person};
+use ronoctua_video_metrics::person::{NotAdded, Person, Registered};
 use ronoctua_video_metrics::read::{Catalog, Page as ListPage};
-use ronoctua_video_metrics::{Refusal, Why};
+use ronoctua_video_metrics::{Refusal, Why, takeout};
 
 use crate::video_metrics::{
-    Done, Edit, Look, Page, Picture, Queued, Reading, Scanned, ToPlay, Unadded,
+    Done, Edit, Imported, Look, Page, Picture, Queued, Reading, Scanned, ToPlay, Unadded,
+    Unexported, Unimported,
 };
+
+/// A mark the player's ranking puts on a video ([`mark`]) — the player's
+/// word, under the view that carries it.
+pub use crate::player_seam::ranking::Mark;
 
 /// What a door asks of its feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +66,8 @@ pub enum Want {
         /// Its title.
         title: String,
     },
+    /// The registered channels written as a list, in Google's shape, here.
+    Export(PathBuf),
 }
 
 /// What the feed hands back.
@@ -69,25 +79,45 @@ pub enum Arrived {
     Done(Done),
 }
 
+/// AN ERRAND THAT LEAVES THE VIEW FOR ANOTHER PROGRAM, which only a door
+/// carries out ([`carry_out`]'s `Err`): the footer's region makes room for it
+/// first, and a window asks it down the footer's socket, or starts it
+/// itself. ITS OWN TYPE, and not the view's [`crate::video_metrics::Errand`]:
+/// each door matches every one of these by name, with no arm for the rest,
+/// so an errand added here that a door does not carry out does not compile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Leaving {
+    /// The transfers' queue (`LEADER t t`), where a download handed over is
+    /// seen going — the footer's.
+    Transfers,
+    /// A page of YouTube in Chrome, as a kiosk — the footer's `kiosk-open`.
+    Kiosk(String),
+    /// A page of YouTube in Nyxt, started by its entry in the launcher.
+    Nyxt(String),
+    /// The brain's page on the catalogue's scan — the footer's
+    /// `brain-open <module>`.
+    Brain,
+    /// A window of the player's on the page this word opens — the player's
+    /// `player-window <word>`.
+    Player(&'static str),
+}
+
 /// CARRIES OUT what the view asked of a door — the ONE handler of the two
 /// doors, the footer's region (`crate::video_metrics_region`) and the window
 /// (`crate::video_metrics_window`): what is said, asked, pasted and closed is
 /// done on `way`, and what the door's feed must do is handed back as a
-/// [`Want`]. What only a door can do is handed back as `Err`: the queue's
-/// (`Errand::Transfers`) and the kiosk's (`Errand::Kiosk`) — the footer's,
-/// which a window asks down its socket and the footer's region makes room
-/// for.
+/// [`Want`]. What only a door can do is handed back as `Err`, a [`Leaving`]:
+/// the queue, Chrome, Nyxt, the brain's page and the player's window — the
+/// footer's region makes room for each, and a window asks the footer or
+/// starts it itself.
 ///
 /// # Errors
 ///
 /// The errand is the door's own.
-// THE ERRAND HANDED BACK is the door's own, moved once: boxing it would cost
-// an allocation on every key, of every errand, for the two a door keeps.
-#[allow(clippy::result_large_err)]
 pub fn carry_out(
     errand: crate::video_metrics::Errand,
     way: &mut dyn crate::region::Doorway,
-) -> Result<Option<Want>, crate::video_metrics::Errand> {
+) -> Result<Option<Want>, Leaving> {
     use crate::video_metrics::Errand;
     Ok(match errand {
         Errand::Nothing => None,
@@ -130,7 +160,19 @@ pub fn carry_out(
             way.say(text, crate::echo::Echo::Long);
             None
         }
-        errand @ (Errand::Transfers | Errand::Kiosk(_)) => return Err(errand),
+        // THE FILE PICKER'S SENTENCE, in the door's language.
+        Errand::Explain(e) => {
+            let said = way.texts().t_with(e.key, &e.borrowed());
+            way.say(said, crate::echo::Echo::Long);
+            None
+        }
+        // A FILE WRITTEN, on the feed's thread: never on the loop.
+        Errand::Export(path) => Some(Want::Export(path)),
+        Errand::Transfers => return Err(Leaving::Transfers),
+        Errand::Kiosk(url) => return Err(Leaving::Kiosk(url)),
+        Errand::Nyxt(url) => return Err(Leaving::Nyxt(url)),
+        Errand::Brain => return Err(Leaving::Brain),
+        Errand::Player(word) => return Err(Leaving::Player(word)),
     })
 }
 
@@ -204,13 +246,16 @@ impl Feed {
 }
 
 /// A feed with NO THREAD: each want answered on the spot, in the caller's
-/// turn — what a photograph draws with (`crate::video_metrics_window`), so a
-/// frame is never taken before the reading it shows has arrived. It reads and
-/// writes the catalogue it is given, READS this instance's consent to ask
-/// YouTube and keeps a change of it in memory (never in this machine's file),
-/// and carries NO errand to another process: a scan, a video for the player,
-/// a download and adding a channel (which asks yt-dlp) are answered with
-/// nothing, and the caller says what would have been done.
+/// turn — what a photograph draws with (the window's,
+/// `crate::video_metrics_window`, and the footer's region, whose door runs
+/// no loop a thread could wake), so a frame is never taken before the
+/// reading it shows has arrived. It reads and writes the catalogue it is
+/// given, READS this instance's consent to ask YouTube and keeps a change of
+/// it in memory (never in this machine's file), and carries NO errand to
+/// another process: a scan, a video for the player, a download and adding a
+/// channel (which asks yt-dlp) are answered with nothing, and what would
+/// have been done is printed — for both doors alike. Nor does it write a
+/// list of channels anywhere: an export is answered with nothing too.
 pub struct Direct {
     hand: Hand,
 }
@@ -219,18 +264,46 @@ impl Direct {
     /// The catalogue at `path`, read and written on the spot.
     #[must_use]
     pub fn at(path: PathBuf) -> Self {
-        let mut hand = Hand::new(Some(path));
+        Self::of(Some(path))
+    }
+
+    /// The catalogue at `path` — `None`: there is no home, and every look is
+    /// refused, as a feed's is.
+    #[must_use]
+    pub fn of(path: Option<PathBuf>) -> Self {
+        let mut hand = Hand::new(path);
         hand.pretended = Some(hand.consented());
         Self { hand }
     }
 
-    /// One want, answered now. A scan, a play, a download and a channel to
-    /// add answer nothing.
+    /// One want, answered now. A scan, a play, a download, a channel to
+    /// add and an export answer nothing.
     pub fn want(&mut self, want: Want) -> Vec<Arrived> {
+        // WHAT A PHOTOGRAPH WOULD HAVE DONE past the catalogue is printed,
+        // never done: its door reaches nothing.
+        match &want {
+            Want::Scan => println!("would have asked the brain for a scan"),
+            Want::Play(p) => println!("asked the player: put {} ({})", p.url, p.title),
+            Want::Download { url, .. } => println!("would have downloaded {url}"),
+            Want::Edit(Edit::AddChannel(input)) => {
+                println!("would have asked yt-dlp who {input} is, and added it");
+            }
+            Want::Edit(Edit::Consent(on)) => {
+                println!("kept in memory, not in this machine's file: ask YouTube = {on}");
+            }
+            Want::Export(path) => {
+                println!(
+                    "would have saved the list of channels to {}",
+                    path.display()
+                );
+            }
+            Want::Look(_) | Want::Edit(_) => {}
+        }
         match want {
             Want::Scan
             | Want::Play(_)
             | Want::Download { .. }
+            | Want::Export(_)
             | Want::Edit(Edit::AddChannel(_)) => Vec::new(),
             other => self.hand.handle(vec![Message::Want(other)]),
         }
@@ -241,6 +314,12 @@ impl Direct {
 /// that holds it — MADE FIRST, because a watch on a folder that does not
 /// exist never fires, and the scanner's first commit is what the door is
 /// waiting for.
+///
+/// A LOG'S WATCH (`Notice::on_log`) and not a file's: the scanner writes
+/// into a `-wal` it never closes while it runs, so a watch that waited for
+/// the close heard the scan begin only once it was over. Coalesced, because
+/// a scan is a stream of writes: a few stirs a second at most, each a
+/// `data_version` asked (`Hand::moved`).
 fn watched(
     catalogue: &Path,
     wants: mpsc::Sender<Message>,
@@ -252,7 +331,7 @@ fn watched(
         return None;
     }
     let wants = Mutex::new(wants);
-    ronoctua_files::notice::Notice::on_file(
+    ronoctua_files::notice::Notice::on_log(
         dir,
         &name,
         ronoctua_files::notice::Pace::Coalesced,
@@ -329,7 +408,16 @@ impl Hand {
                     out.push(Arrived::Done(self.edit(edit)));
                     read = true;
                 }
-                Message::Want(Want::Scan) => out.push(Arrived::Done(Done::Scan(scan()))),
+                // AND THE PAGE READ AGAIN, here and not by the door: a scan
+                // already writing when the answer came back is on it now, and
+                // one that begins later is a commit the watch hears. A new
+                // look from the door would page it back to the top
+                // (`Doorway::first_page`); with no look — the region closed —
+                // nothing is read.
+                Message::Want(Want::Scan) => {
+                    out.push(Arrived::Done(Done::Scan(scan())));
+                    read = true;
+                }
                 Message::Want(Want::Play(play)) => {
                     let said = queue(&play);
                     out.push(Arrived::Done(Done::Queued(play, said)));
@@ -337,6 +425,10 @@ impl Hand {
                 Message::Want(Want::Download { url, title }) => {
                     let taken = download(&url);
                     out.push(Arrived::Done(Done::Downloading(title, taken)));
+                }
+                // READ, NOT WRITTEN: the catalogue is as it was.
+                Message::Want(Want::Export(path)) => {
+                    out.push(Arrived::Done(Done::Exported(self.export(&path))));
                 }
             }
         }
@@ -426,16 +518,48 @@ impl Hand {
                 );
                 take(c.skipped().map(|s| r.skipped = Some(s)));
                 take(c.channels().map(|x| r.channels = Some(x)));
+                // AND WHAT WAS SET ASIDE, hidden or not: the home page's way
+                // to them says how many.
+                let aside = ronoctua_video_metrics::read::Filter {
+                    set_aside: ronoctua_video_metrics::read::SetAside::Only,
+                    hidden: ronoctua_video_metrics::read::Hidden::Any,
+                    ..ronoctua_video_metrics::read::Filter::default()
+                };
+                take(c.count(&aside).map(|n| r.set_aside_count = Some(n)));
             }
-            Page::Channels | Page::Channel(_) | Page::Rule(Some(_), _) => {
+            // A CHANNEL'S KEEP SAYS, under it, what the next scan takes out
+            // (`Catalog::expiring`) — as the rules' page says it under the
+            // keep everywhere. AND THE CHANNELS STAGED, wherever a channel's
+            // page may be a staged one's (its own, its rules') and where the
+            // list of channels says how many wait.
+            Page::Channel(_) => {
                 take(c.channels().map(|x| r.channels = Some(x)));
+                take(c.staged().map(|x| r.staged = Some(x)));
+                take(c.expiring().map(|n| r.expiring = Some(n)));
             }
-            Page::Videos => take(c.channels().map(|x| r.channels = Some(x))),
+            Page::Channels | Page::Rule(Some(_), _) => {
+                take(c.channels().map(|x| r.channels = Some(x)));
+                take(c.staged().map(|x| r.staged = Some(x)));
+            }
+            // THE CHANNELS OF A LIST IMPORTED, each with its decision.
+            Page::Import => take(c.staged().map(|x| r.staged = Some(x))),
+            // THE SWITCHES, what a video and the list of them follow "as
+            // everywhere" (`video_metrics::Follows`) — by the reader open
+            // already: a page that only lists videos holds no writer.
+            Page::Videos => {
+                take(c.channels().map(|x| r.channels = Some(x)));
+                take(c.settings().map(|s| r.settings = Some(s)));
+            }
+            // AND ITS CHANNEL, whose days of its own say when it goes
+            // (`video_metrics::lasting`).
             Page::Video(id) => {
                 let id = id.clone();
                 take(c.video(&id).map(|v| r.video = Some((id, v))));
+                take(c.settings().map(|s| r.settings = Some(s)));
+                take(c.channels().map(|x| r.channels = Some(x)));
             }
-            Page::Rules | Page::Rule(None, _) | Page::Weights => {}
+            Page::Rules => take(c.expiring().map(|n| r.expiring = Some(n))),
+            Page::Rule(None, _) | Page::Weights => {}
         }
         if let Some(q) = &look.query {
             let page = ListPage {
@@ -461,7 +585,17 @@ impl Hand {
             _ => None,
         };
         let wants_weights = look.page == Page::Weights;
-        let wants_settings = matches!(look.page, Page::Rules);
+        // THE SWITCHES, wherever a row follows them "as everywhere" and
+        // says what that is now (`video_metrics::Follows`): a channel's
+        // Shorts, a rule's page in a channel's scope — and the rules' page,
+        // which turns them. Read by the writer these pages open for their
+        // rules anyway, which is only reached once the catalogue answered:
+        // nothing is made to read a default. A video and the list of them
+        // read theirs by the reader, above.
+        let wants_settings = matches!(
+            look.page,
+            Page::Rules | Page::Channel(_) | Page::Rule(Some(_), _)
+        );
         if scope.is_some() || wants_weights || wants_settings {
             match self.person() {
                 Ok(p) => {
@@ -534,6 +668,14 @@ impl Hand {
         if let Edit::AddChannel(input) = &edit {
             return Done::Added(self.add(input));
         }
+        // A LIST IMPORTED, AND WHAT WAS DECIDED REGISTERED: each says what it
+        // did, in its own words — never only "written".
+        if let Edit::Import(file) = &edit {
+            return Done::Imported(self.import(file));
+        }
+        if edit == Edit::Register {
+            return Done::Registered(self.register());
+        }
         // THE CONSENT IS NOT THE CATALOGUE: a switch that could not be kept
         // says why in the consent's own words (no home, a file it will not
         // write over, a folder it cannot write), never "the catalogue could
@@ -570,6 +712,96 @@ impl Hand {
             )),
         }
     }
+
+    /// THE LIST IN `file`, STAGED — read whole, but never past
+    /// `takeout::MOST_BYTES` (one byte more says it is something else), read
+    /// as Google Takeout's subscriptions, and each of its channels left
+    /// waiting for a decision; a channel registered already is answered as
+    /// such and left as it is.
+    fn import(&mut self, file: &Path) -> Result<Imported, Unimported> {
+        use std::io::Read as _;
+        let mut bytes = Vec::new();
+        std::fs::File::open(file)
+            .and_then(|f| {
+                f.take(takeout::MOST_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map(|_| ())
+            })
+            .map_err(|e| {
+                tracing::info!(file = %file.display(), error = %e, "a list of subscriptions that could not be read");
+                Unimported::Unreadable
+            })?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > takeout::MOST_BYTES {
+            return Err(Unimported::TooLarge);
+        }
+        let list = takeout::read(&bytes).map_err(Unimported::Unread)?;
+        let staging = self
+            .person()
+            .map_err(Unimported::Refused)?
+            .stage(&list.subscriptions)
+            .map_err(|r| Unimported::Refused(r.why))?;
+        Ok(Imported {
+            staged: staging.staged,
+            already: staging.already,
+            left_out: u32::try_from(list.left_out.len()).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// WHAT WAS DECIDED, REGISTERED — and, once one channel joined, the
+    /// hosts a scan asks let, ONCE: REGISTERING IS THE CONSENT TO SCAN, as
+    /// adding a channel is (`Person::register_staged`). A photograph's
+    /// consent is kept in memory ([`Hand::let_hosts`]), never this
+    /// machine's file.
+    ///
+    /// A CONSENT NOT KEPT IS SAID BESIDE WHAT WAS REGISTERED, never in its
+    /// place: the catalogue committed before the consent was asked, so the
+    /// channels are in, and how many went in and how many were dropped is
+    /// still the answer — with the key of why a scan will not ask them.
+    fn register(&mut self) -> Result<(Registered, Option<&'static str>), Why> {
+        let registered = self.person()?.register_staged().map_err(|r| r.why)?;
+        let unkept = if registered.kept > 0 && !self.consented() {
+            self.let_hosts(true)
+                .err()
+                .map(crate::video_metrics_words::unkept_alone_key)
+        } else {
+            None
+        };
+        Ok((registered, unkept))
+    }
+
+    /// THE REGISTERED CHANNELS, WRITTEN TO `file` as a list in Google's
+    /// shape — by id, so two exports of one catalogue are one file — whole,
+    /// and renamed over what was there (`ronoctua_xdg::write_atomically`).
+    /// The staged ones are not channels of the catalogue yet, and stay out.
+    fn export(&mut self, file: &Path) -> Result<(u32, PathBuf), Unexported> {
+        let channels = self
+            .catalog()
+            .map_err(Unexported::Refused)?
+            .channels()
+            .map_err(|r| Unexported::Refused(r.why))?;
+        let mut list: Vec<takeout::Subscription> = channels
+            .into_iter()
+            .map(|c| takeout::Subscription {
+                id: c.id,
+                title: c.title,
+            })
+            .collect();
+        list.sort_by(|a, b| a.id.cmp(&b.id));
+        let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|n| n.to_str()))
+        else {
+            return Err(Unexported::NotWritten);
+        };
+        ronoctua_xdg::write_atomically(dir, name, takeout::write(&list).as_bytes()).map_err(
+            |e| {
+                tracing::warn!(file = %file.display(), error = %e, "the list of channels was not written");
+                Unexported::NotWritten
+            },
+        )?;
+        Ok((
+            u32::try_from(list.len()).unwrap_or(u32::MAX),
+            file.to_owned(),
+        ))
+    }
 }
 
 /// One of the person's writes.
@@ -586,9 +818,68 @@ fn write(p: &Person, edit: &Edit) -> Result<(), Refusal> {
         Edit::SecondDescription(id, text) => p.set_second_description(id, text),
         Edit::SecondTags(id, tags) => p.set_second_tags(id, tags),
         Edit::Hidden(id, hidden) => p.set_hidden(id, *hidden),
+        // THE MARKS THE RANKING PUTS ON A VIDEO TOO, by the one writer of
+        // them both doors and the ranking share.
+        Edit::SetAside(id, aside) => mark_with(p, &Mark::SetAside(id.clone(), *aside)),
+        Edit::KeepVideo(id, keep) => mark_with(p, &Mark::Keep(id.clone(), *keep)),
+        Edit::ChannelKeep(id, keep) => p.set_channel_keep(id, *keep),
+        Edit::Decide(id, decision) => p.decide(id, *decision),
+        Edit::DecideAll(decision) => p.decide_all(*decision).map(|_| ()),
         // Answered by the caller, never here.
-        Edit::AddChannel(_) | Edit::Delete(_) | Edit::Consent(_) => Err(Refusal::of(Why::Invalid)),
+        Edit::AddChannel(_)
+        | Edit::Delete(_)
+        | Edit::Consent(_)
+        | Edit::Import(_)
+        | Edit::Register => Err(Refusal::of(Why::Invalid)),
     }
+}
+
+/// THE MARKS A VIDEO TAKES FROM THE PLAYER'S RANKING — rated, set aside,
+/// kept for ever by its own mark, hidden or shown again — each one of the
+/// person's writes.
+fn mark_with(p: &Person, mark: &Mark) -> Result<(), Refusal> {
+    match mark {
+        Mark::Rating(id, rating) => p.set_rating(id, *rating),
+        Mark::SetAside(id, aside) => p.set_aside(id, *aside),
+        Mark::Keep(id, keep) => p.set_keep(id, *keep),
+        Mark::Hidden(id, hidden) => p.set_hidden(id, *hidden),
+    }
+}
+
+/// A MARK FROM THE PLAYER'S RANKING, written into the catalogue at
+/// `catalogue` — the ranking's one way to the person's writer, which only
+/// this door may name (`video-metrics-readers-are-read-only`). Called off
+/// the loop, by the thread that carries the ranking's act
+/// (`player_ranking::carry`): the catalogue is opened for the one write, as
+/// a reader's hide opens it, and a scan that holds it is waited for.
+///
+/// # Errors
+///
+/// What the catalogue answered: not there, busy, no such video.
+pub fn mark(catalogue: &Path, mark: &Mark) -> Result<(), Why> {
+    Person::open(catalogue)
+        .and_then(|p| mark_with(&p, mark))
+        .map_err(|r| r.why)
+}
+
+/// A SCRATCH CATALOGUE at `catalogue` holding one video, `id` titled
+/// `title`, of a channel of its own — what a test of the ranking's marks
+/// reads back (`Person::plant`, under `test-support`). Made by this door, as
+/// every write of the person's catalogue is.
+#[cfg(test)]
+pub(crate) fn holding_one(catalogue: &Path, id: &ronoctua_video_metrics::VideoId, title: &str) {
+    let person = Person::open(catalogue).expect("a scratch catalogue");
+    let channel = ronoctua_video_metrics::ChannelId(format!("UC{}", "a".repeat(22)));
+    person
+        .add_channel(&ronoctua_video_metrics::person::NewChannel {
+            id: channel.clone(),
+            handle: None,
+            title: "A channel".to_owned(),
+            url: format!("https://www.youtube.com/channel/{}", channel.0),
+            avatar_url: None,
+        })
+        .expect("a channel");
+    person.plant(id, &channel, title).expect("a video");
 }
 
 /// A thumbnail file, decoded and made no larger than
@@ -780,6 +1071,132 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FAILS IF: a page with a row "as everywhere" is read without the
+    /// switches it follows — the row would say "as everywhere" and not what
+    /// that is now —, a page that only lists videos opens the writer to read
+    /// them, or a page with none of them reads them for nothing.
+    #[test]
+    fn the_switches_are_read_where_a_default_is_shown() {
+        let dir = scratch("switches");
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        drop(Person::open(&path).expect("a catalogue"));
+        let mut hand = Hand::new(Some(path));
+        let channel = ronoctua_video_metrics::ChannelId(format!("UC{}", "a".repeat(22)));
+        let video = ronoctua_video_metrics::VideoId("video000000".to_owned());
+        let read = |hand: &mut Hand, page: Page| {
+            let said = hand.handle(vec![Message::Want(Want::Look(Look {
+                page: page.clone(),
+                query: None,
+            }))]);
+            let Some(Arrived::Reading(r)) = said.last() else {
+                panic!("{page:?}: no reading: {said:?}");
+            };
+            r.settings.is_some()
+        };
+        // A PAGE THAT ONLY LISTS VIDEOS reads them by the reader: no writer
+        // is opened for a default.
+        for page in [Page::Videos, Page::Video(video)] {
+            assert!(
+                read(&mut hand, page.clone()),
+                "{page:?}: the switches were not read"
+            );
+        }
+        assert!(
+            hand.person.is_none(),
+            "a page of videos opened the writer to read the switches"
+        );
+        for page in [
+            Page::Rules,
+            Page::Channel(channel.clone()),
+            Page::Rule(
+                Some(channel),
+                crate::video_metrics::Slot::Single(crate::video_metrics::Single::Short),
+            ),
+        ] {
+            assert!(
+                read(&mut hand, page.clone()),
+                "{page:?}: the switches were not read"
+            );
+        }
+        for page in [Page::Home, Page::Channels, Page::Weights] {
+            assert!(
+                !read(&mut hand, page.clone()),
+                "{page:?}: the switches read for nothing"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a page that says a count is read without it — the home
+    /// page's set-aside videos, hidden ones included; what the next scan
+    /// takes out under the keep everywhere and a channel's —, a video's page
+    /// is read without its channel, whose days say when it goes, or a mark a
+    /// door writes does not land on its video.
+    #[test]
+    fn the_counts_a_page_says_are_read() {
+        let dir = scratch("counts");
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        let video = ronoctua_video_metrics::VideoId("video000000".to_owned());
+        holding_one(&path, &video, "A video");
+        let mut hand = Hand::new(Some(path));
+        let read = |hand: &mut Hand, page: Page| -> Box<crate::video_metrics::Reading> {
+            let said = hand.handle(vec![Message::Want(Want::Look(Look {
+                page: page.clone(),
+                query: None,
+            }))]);
+            match said.into_iter().last() {
+                Some(Arrived::Reading(r)) => r,
+                other => panic!("{page:?}: no reading: {other:?}"),
+            }
+        };
+        assert_eq!(read(&mut hand, Page::Home).set_aside_count, Some(0));
+        // SET ASIDE AND HIDDEN, by the door's own writes: still counted.
+        for edit in [
+            Edit::SetAside(video.clone(), true),
+            Edit::Hidden(video.clone(), true),
+            Edit::KeepVideo(video.clone(), true),
+        ] {
+            let said = hand.handle(vec![Message::Want(Want::Edit(edit.clone()))]);
+            assert!(
+                said.iter()
+                    .any(|a| matches!(a, Arrived::Done(Done::Edited(e, Ok(()))) if *e == edit)),
+                "{edit:?}: {said:?}"
+            );
+        }
+        assert_eq!(read(&mut hand, Page::Home).set_aside_count, Some(1));
+        let channel = read(&mut hand, Page::Channels)
+            .channels
+            .and_then(|c| c.first().map(|c| c.id.clone()))
+            .expect("the channel");
+        for page in [Page::Rules, Page::Channel(channel.clone())] {
+            assert_eq!(read(&mut hand, page.clone()).expiring, Some(0), "{page:?}");
+        }
+        let seen = read(&mut hand, Page::Video(video));
+        assert!(
+            seen.channels.is_some_and(|c| !c.is_empty()),
+            "the video's channel unread"
+        );
+        let row = seen.video.and_then(|(_, v)| v).expect("the video").row;
+        assert!(row.set_aside_at_s.is_some(), "the bookmark did not land");
+        assert_eq!(row.forever, ronoctua_video_metrics::read::Forever::ByVideo);
+        // A CHANNEL'S KEEP, written and read back.
+        let keep = Some(ronoctua_video_metrics::Keep::Days(7));
+        let said = hand.handle(vec![Message::Want(Want::Edit(Edit::ChannelKeep(
+            channel.clone(),
+            keep,
+        )))]);
+        assert!(
+            said.iter()
+                .any(|a| matches!(a, Arrived::Done(Done::Edited(_, Ok(()))))),
+            "{said:?}"
+        );
+        let channels = read(&mut hand, Page::Channel(channel))
+            .channels
+            .expect("the channels");
+        assert_eq!(channels[0].keep, keep);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FAILS IF: two looks waiting at once are read twice, or a stir with
     /// nothing committed by another connection reads the page again — the
     /// feed would wake the door for nothing on every checkpoint.
@@ -815,6 +1232,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FAILS IF: a commit wakes the door only when its writer lets go. The
+    /// scanner holds its connection — and the `-wal` under it — open for the
+    /// whole scan, so a watch that waited for the close heard the scan begin
+    /// only once it was over: "Scan now" said nothing until the page was
+    /// opened again.
+    #[test]
+    fn a_commit_into_an_open_wal_wakes_the_feed() {
+        // A CEILING, never a sleep: every wait returns the moment the ring
+        // does.
+        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+        let dir = scratch("open-wal");
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        // THE SCANNER: its connection open from before the door to after,
+        // so the `-wal` is neither made nor let go of while the door watches.
+        let scanner = Person::open(&path).expect("a catalogue");
+        let (rang, rings) = mpsc::channel();
+        let feed = Feed::start(Some(path), move || {
+            let _ = rang.send(());
+        });
+        feed.want(Want::Look(Look {
+            page: Page::Weights,
+            query: None,
+        }));
+        rings
+            .recv_timeout(PATIENCE)
+            .expect("the look was never read");
+        assert!(
+            matches!(feed.take().last(), Some(Arrived::Reading(_))),
+            "the look came back as no reading"
+        );
+        // A COMMIT, and again until the door reads one: the watch is armed
+        // on a thread of its own, and a commit before it is nobody's to
+        // hear. Each is weights no default has, so the reading that shows
+        // them is a reading of a commit.
+        let deadline = std::time::Instant::now() + PATIENCE;
+        let mut positive = 1000;
+        let heard = loop {
+            positive += 1;
+            scanner
+                .set_weights(&ronoctua_video_metrics::Weights {
+                    positive,
+                    ..ronoctua_video_metrics::Weights::default()
+                })
+                .expect("a commit");
+            let _ = rings.recv_timeout(std::time::Duration::from_secs(1));
+            let read = feed.take().iter().any(|a| {
+                matches!(a, Arrived::Reading(r)
+                    if r.weights.is_some_and(|w| w.positive > 1000))
+            });
+            if read || std::time::Instant::now() >= deadline {
+                break read;
+            }
+        };
+        assert!(
+            heard,
+            "commits into a `-wal` its writer holds open never woke the feed"
+        );
+        drop(feed);
+        drop(scanner);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FAILS IF: a page of the list is read without its count, or the
     /// grid's pictures are decoded for a list — or kept past the page.
     #[test]
@@ -837,6 +1316,196 @@ mod tests {
         let listed = r.listed.as_ref().expect("a page of the list");
         assert_eq!((listed.rows.len(), listed.total), (0, 0));
         assert!(r.pictures.as_ref().is_some_and(HashMap::is_empty));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A channel's id shaped as YouTube's — `UC` and twenty-two more —
+    /// made up: no account's list is in this tree (invariant 13).
+    fn made_up(n: u8) -> ronoctua_video_metrics::ChannelId {
+        ronoctua_video_metrics::ChannelId(format!(
+            "UC{}",
+            char::from(b'k' + n).to_string().repeat(22)
+        ))
+    }
+
+    /// What one want came to, and the reading after it.
+    fn asked(hand: &mut Hand, want: Want) -> Vec<Arrived> {
+        hand.handle(vec![Message::Want(want)])
+    }
+
+    /// FAILS IF: a list of subscriptions does not travel the whole way
+    /// through a door's feed — imported (what it staged, what was here
+    /// already, the line it left out), decided one by one and all at once,
+    /// registered (the kept join the catalogue, the discarded go, the
+    /// undecided wait, and the hosts a scan asks are let — in memory, for a
+    /// photograph's door), and exported in Google's exact shape, the
+    /// registered channels only, by id —; or a file that is no list, or is
+    /// not there, or a place that cannot be written, is not refused as
+    /// such.
+    #[test]
+    fn a_list_is_imported_decided_registered_and_exported() {
+        use crate::video_metrics::{Imported, Unexported, Unimported};
+        use ronoctua_video_metrics::read::Decision;
+        let dir = scratch("takeout");
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        // ONE CHANNEL HERE ALREADY, and a list naming it with three more and
+        // a line that names none.
+        let person = Person::open(&path).expect("a catalogue");
+        let here = made_up(0);
+        person
+            .add_channel(&ronoctua_video_metrics::person::NewChannel {
+                id: here.clone(),
+                handle: None,
+                title: "Here already".to_owned(),
+                url: format!("https://www.youtube.com/channel/{}", here.0),
+                avatar_url: None,
+            })
+            .expect("a channel");
+        drop(person);
+        let (kept, dropped, waiting) = (made_up(1), made_up(2), made_up(3));
+        let line = |id: &ronoctua_video_metrics::ChannelId, title: &str| {
+            format!("{},{},{title}\n", id.0, takeout::channel_url(id))
+        };
+        let list = dir.join("subscriptions.csv");
+        std::fs::write(
+            &list,
+            format!(
+                "{}\n{}{}{}not-a-channel,x,Nothing\n{}\n\n",
+                takeout::HEADER,
+                line(&here, "Here already"),
+                line(&kept, "\"Kept, with a comma\""),
+                line(&dropped, "Dropped"),
+                line(&waiting, "Waiting").trim_end(),
+            ),
+        )
+        .expect("a list");
+        let mut hand = Hand::new(Some(path));
+        hand.pretended = Some(false);
+        hand.handle(vec![Message::Want(Want::Look(Look {
+            page: Page::Import,
+            query: None,
+        }))]);
+        // IMPORTED.
+        let said = asked(&mut hand, Want::Edit(Edit::Import(list)));
+        let Some(Arrived::Done(Done::Imported(Ok(imported)))) = said.first() else {
+            panic!("not imported: {said:?}");
+        };
+        assert_eq!(
+            *imported,
+            Imported {
+                staged: 3,
+                already: vec![(here.clone(), "Here already".to_owned())],
+                left_out: 1,
+            }
+        );
+        let Some(Arrived::Reading(r)) = said.last() else {
+            panic!("the import was not read back: {said:?}");
+        };
+        let staged = r.staged.clone().expect("the staged channels");
+        assert_eq!(staged.len(), 3);
+        assert!(staged.iter().all(|s| s.decision == Decision::Undecided));
+        assert!(
+            staged
+                .iter()
+                .any(|s| s.channel.id == kept && s.channel.title == "Kept, with a comma")
+        );
+        // DECIDED: all kept, then one dropped and one left to wait.
+        for edit in [
+            Edit::DecideAll(Decision::Keep),
+            Edit::Decide(dropped, Decision::Discard),
+            Edit::Decide(waiting.clone(), Decision::Undecided),
+        ] {
+            let said = asked(&mut hand, Want::Edit(edit.clone()));
+            assert!(
+                matches!(said.first(), Some(Arrived::Done(Done::Edited(e, Ok(())))) if *e == edit),
+                "{edit:?}: {said:?}"
+            );
+        }
+        // REGISTERED — and the hosts let, in memory only.
+        let said = asked(&mut hand, Want::Edit(Edit::Register));
+        let Some(Arrived::Done(Done::Registered(Ok((done, None))))) = said.first() else {
+            panic!("not registered, or the consent said unkept: {said:?}");
+        };
+        assert_eq!((done.kept, done.discarded, done.left), (1, 1, 1));
+        assert_eq!(
+            hand.pretended,
+            Some(true),
+            "registering did not let the hosts"
+        );
+        let said = asked(
+            &mut hand,
+            Want::Look(Look {
+                page: Page::Channels,
+                query: None,
+            }),
+        );
+        let Some(Arrived::Reading(r)) = said.last() else {
+            panic!("no reading: {said:?}");
+        };
+        let mut ids: Vec<String> = r
+            .channels
+            .clone()
+            .expect("the channels")
+            .into_iter()
+            .map(|c| c.id.0)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, [here.0.clone(), kept.0.clone()]);
+        let left: Vec<_> = r
+            .staged
+            .clone()
+            .expect("the staged")
+            .into_iter()
+            .map(|s| s.channel.id)
+            .collect();
+        assert_eq!(left, [waiting]);
+        // EXPORTED: Google's shape, the registered channels by id.
+        let out = dir.join("out").join("subscriptions.csv");
+        let said = asked(&mut hand, Want::Export(out.clone()));
+        assert_eq!(said.len(), 1, "an export read the page again: {said:?}");
+        let Some(Arrived::Done(Done::Exported(Ok((count, to))))) = said.first() else {
+            panic!("not exported: {said:?}");
+        };
+        assert_eq!((*count, to), (2, &out));
+        let written = std::fs::read_to_string(&out).expect("the list written");
+        assert_eq!(
+            written.lines().next(),
+            Some(takeout::HEADER),
+            "not Google's header"
+        );
+        let mut expected = vec![
+            takeout::Subscription {
+                id: here,
+                title: "Here already".to_owned(),
+            },
+            takeout::Subscription {
+                id: kept,
+                title: "Kept, with a comma".to_owned(),
+            },
+        ];
+        expected.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(written, takeout::write(&expected));
+        // REFUSED, each as what it is.
+        let refused = |hand: &mut Hand, want: Want| match asked(hand, want).into_iter().next() {
+            Some(Arrived::Done(done)) => done,
+            other => panic!("no answer: {other:?}"),
+        };
+        let blank = dir.join("blank.csv");
+        std::fs::write(&blank, "Channel ID\n\n").expect("a file");
+        assert_eq!(
+            refused(&mut hand, Want::Edit(Edit::Import(blank))),
+            Done::Imported(Err(Unimported::Unread(takeout::Unread::NotAList)))
+        );
+        assert_eq!(
+            refused(&mut hand, Want::Edit(Edit::Import(dir.join("none.csv")))),
+            Done::Imported(Err(Unimported::Unreadable))
+        );
+        let a_file = dir.join("a-file");
+        std::fs::write(&a_file, b"").expect("a file");
+        assert_eq!(
+            refused(&mut hand, Want::Export(a_file.join("subscriptions.csv"))),
+            Done::Exported(Err(Unexported::NotWritten))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

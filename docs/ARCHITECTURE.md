@@ -6058,6 +6058,14 @@ DE FORA de propósito — dispara a cada `write` e um log crescendo viraria mang
 o momento que uma listagem quer, e `ATTRIB` entra porque as colunas de permissão e dono mudam sem a
 pasta mudar.
 
+**Só o `Notice::on_log` pede `MODIFY`**, para o arquivo que quem escreve nunca fecha: o
+`catalog.sqlite-wal` que o scanner de vídeos segura aberto a varredura inteira. Esperando o
+`CLOSE_WRITE`, a porta ouvia a varredura começar só quando ela acabava, e o "Varrer agora" não dizia
+nada até a página ser reaberta. Ali a mangueira é o ponto: o nome do arquivo deixa o resto da pasta
+de fora (uma escrita ao lado acorda a thread e não conta), e o `Pace::Coalesced` faz da rajada uma
+notícia na hora e depois poucas por segundo, cada uma um `data_version` perguntado. O
+`files-notices-the-directory` cobra que o `MODIFY` só apareça dentro do `on_log`.
+
 Todas as chamadas de inotify moram na thread do observador: a porta manda o caminho por `mpsc` e
 toca um `pipe`, que é um dos dois descritores do `poll`. Assim não há corrida sobre a qual watch um
 evento enfileirado pertencia — as ordens são tomadas ANTES de drenar, e evento sem dono é
@@ -10795,9 +10803,10 @@ recomeçar a fila é só o "abrir fila" do próprio player.
 **A fila é uma árvore na porta também** (`player_queue`). Uma playlist com nome guarda entradas, e
 um conjunto guarda faixas; os dois são GRUPOS, a linha encabeçada por um triângulo (`md-menu_right`,
 `md-menu_down` — não os chevrons da gaveta, que abrem uma LINHA para baixo) que um clique vira na
-hora: é um controle, e não a primeira metade de um duplo clique. `TAB` vira o grupo sob o cursor, `→`
-abre e `←` fecha. **`C-↑` e `C-↓` movem a entrada sob o cursor — um arquivo, uma playlist, um
-conjunto — uma casa entre as irmãs** (`player-earlier`, `player-later`, `Where::OnAnEntry`; decisão
+hora: é um controle, e não a primeira metade de um duplo clique. `→` abre e `←` fecha; o `TAB`, que
+também o virava, passou a cruzar para os controles da imagem ("Dois painéis, e ar entre eles",
+abaixo). **`C-↑` e `C-↓` movem a entrada sob o cursor — um arquivo, uma playlist, um conjunto — uma
+casa entre as irmãs** (`player-earlier`, `player-later`, `Where::OnAnEntry`; decisão
 do dono, 2026-09-29): as setas puras andam nas linhas e, num grupo, o dobram, então mover um GRUPO
 precisava de outra tecla, e a mesma serve a toda entrada — as setas de lado numa folha deixaram de
 movê-la. A tecla é lida pela notação inteira antes da seta pura (`player::press_of_key`), nas duas
@@ -11130,12 +11139,12 @@ que uma porta tinha e a outra não foi fechado nos dois sentidos:
 - **Parar é uma tecla da vista** (`s`), a mesma do botão da janela.
 - **O rodapé tem uma coluna de mídia** (`player_media`). A região é larga e baixa, então o painel
   vai à direita das linhas, na largura da coluna nos três tamanhos dela — 72, 48 ou 32 células, o
-  mais largo que deixa às linhas pelo menos a largura dele —, com a última célula para a barra da
-  região (`player_media::footer_panel`, função só da largura: as linhas são dispostas no que sobra,
-  e perguntar a altura da região de volta seria o rodapé perguntando a si mesmo). Ele existe
-  enquanto algo está CARREGADO, e não só enquanto um vídeo toca: a imagem — um filme, ou a capa que
-  o mpv decodifica como uma —, e sem quadro um CARTÃO DE TÍTULO, o que toca em palavras
-  (`text.secondary`) no meio do lugar da imagem, sobre o chão da própria região — nunca sobre
+  mais largo que deixa às linhas pelo menos a largura dele e o ar entre os dois —, com a última
+  célula para a barra da região (`player_media::footer_panel`, função só da largura: as linhas são
+  dispostas no que sobra, e perguntar a altura da região de volta seria o rodapé perguntando a si
+  mesmo). Ele existe enquanto algo está CARREGADO, e não só enquanto um vídeo toca: a imagem — um
+  filme, ou a capa que o mpv decodifica como uma —, e sem quadro um CARTÃO DE TÍTULO, o que toca em
+  palavras (`text.secondary`) no meio do lugar da imagem, sobre o chão do painel — nunca sobre
   `surface.backdrop`, que não leva texto. No pé do painel ficam uma linha do transporte e a barra de
   tempo, as duas linhas da janela nesta porta: os botões são postos por `player_media::buttons` e a
   barra por `player_media::Track`, o quadro GUARDA o que pôs (`Footer::player_drawn`, ao lado do
@@ -11146,15 +11155,45 @@ que uma porta tinha e a outra não foi fechado nos dois sentidos:
   o par da modeline, senão ela acendia um e o clique levava o vizinho. Ao lado das linhas o painel
   guarda as linhas da imagem em TODA página — 16:9 na largura dele, mais o pé
   (`player_media::panel_lines`), a região completada por linhas vazias até isso, sob o teto: a
-  região tinha a altura das linhas, e uma página de duas linhas deixava o filme sem nenhuma. Abaixo de 32
-  células livres o painel não cabe, e a home diz isso sob "Agora", com a tecla que mostra a imagem
-  sozinha (`player-panel-no-room`) — uma recusa é uma frase; antes ele sumia em silêncio abaixo de
-  97 colunas. Cada tela desenha as imagens roteadas a ELA (`player_media::placed_on_screen`), e o
-  rodapé guarda uma imagem por faixa para todas — as faixas roteadas a alguma das telas dele
-  (`player_media::lanes_shown`) —, pedida uma vez e desenhada onde vai. As chaves das texturas são
-  `player:picture:lane-{faixa}:{conector}` (`Picture::key`): a textura de uma tela nunca é a de
-  outra. A thread de quadros é a mesma da janela (`player_picture`), e só existe enquanto o painel
-  mostra uma imagem.
+  região tinha a altura das linhas, e uma página de duas linhas deixava o filme sem nenhuma. Abaixo
+  de 32 células livres o painel não cabe, e a home diz isso sob "Agora", com a tecla que mostra a
+  imagem sozinha (`player-panel-no-room`) — uma recusa é uma frase; antes ele sumia em silêncio
+  abaixo de 97 colunas. Cada tela desenha as imagens roteadas a ELA
+  (`player_media::placed_on_screen`), e o rodapé guarda uma imagem por faixa para todas — as faixas
+  roteadas a alguma das telas dele (`player_media::lanes_shown`) —, pedida uma vez e desenhada onde
+  vai. As chaves das texturas são `player:picture:lane-{faixa}:{conector}` (`Picture::key`): a
+  textura de uma tela nunca é a de outra. A thread de quadros é a mesma da janela
+  (`player_picture`), e só existe enquanto o painel mostra uma imagem.
+- **Dois painéis, e ar entre eles** (decisão do dono, 2026-11-09). As linhas acabam
+  `space.player.paneGap` células antes do painel (`player_media::rows_end`), e o painel veste um chão
+  próprio, `surface.shelf` (`chrome::shelf_ground`), em toda linha da região, recolhido ou não: ar e
+  chão, nunca régua nem contorno (inv. 15). Os portões medem `text.secondary` e `state.accent` sobre
+  esse chão, e a seleção e a régua da barra de tempo contra ele. A faixa sob o ponteiro e a seleção
+  ficam no painel das linhas, e o vão não é de ninguém: nem faixa, nem clique. Tudo é função da
+  largura (`the-footer-does-not-ask-itself`); as linhas perdem as duas células do vão, e o painel
+  aparece um pouco mais tarde num rodapé estreito. O glifo de recolher a imagem saiu do
+  "Agora" e fica no fim da linha da barra de tempo, no painel — onde a janela tem o mudo —, e a
+  barra para uma célula antes dele; na janela e na coluna ele continua no título.
+- **O `TAB` cruza para os controles da imagem** (`player-cross`, `Shift+TAB` de volta): com painel,
+  ele vai das linhas aos controles e volta, e cada lado guarda o lugar; sem painel, anda pelas
+  seções, como em toda lista. Lá, `↑↓` andam pelos controles em ordem de leitura
+  (`player_media::stops`: o transporte, os saltos em volta do relógio, a barra, o recolher) — tirada
+  do que o quadro PÔS, para o teclado andar pelo que o ponteiro pega —, e `←→` também, salvo na
+  barra de tempo, onde buscam como os comandos que a dica ensina; `RET` aperta um botão como o
+  clique e, na barra, salta à frente como na linha da posição; `Esc` volta às linhas. Uma tecla que
+  age na linha do cursor (`d`, `a`) devolve o teclado às linhas antes de agir; uma que age onde quer
+  que o cursor esteja (`SPC`, `n`) o deixa no painel. A dica é a do painel (`OF_THE_PANE`) enquanto
+  ele tem o teclado, e as linhas não desenham cursor: um cursor na tela por vez. A janela tem o
+  mesmo anel sobre os botões do transporte; no palco, os controles que se escondem DORMEM e guardam
+  a parada, senão uma pausa entre duas setas jogava a pessoa para fora da imagem.
+- **O cursor no painel é um CHÃO** `surface.selection` sob o controle, na caixa em que o clique o
+  pega — exceção do dono (2026-11-09) a "o cursor é uma cor": ali um interruptor ligado, o glifo sob
+  o ponteiro e a parte tocada da barra já são `state.accent`, que é a cor do `text.here.acts`, e um
+  cursor de cor se leria como um deles. O mesmo chão marca a parada no transporte da janela.
+- **Título com controles é parada das setas** (`Row::walked_onto`): o `↑` da linha de baixo ou o
+  `↓` da de cima param nos glifos do fim do título — a fila (salvar, limpar), a letra (traduzir), o
+  layout do ranking e do catálogo, a ordem dos países, o "Agora" na janela —, `←→` escolhem entre
+  eles e `RET` aperta o escolhido. Antes só o ponteiro os alcançava.
 - **`o` é o palco do rodapé, e o filme passa dos dois tetos.** A região vira o painel — a imagem, ou
   o cartão, com o transporte e a barra no pé —, as linhas somem e continuam respondendo às teclas, e
   `Esc` as devolve. O palco pode levar o rodapé inteiro a `expansion.playerStagePct` (70%) da tela, e
@@ -14562,13 +14601,15 @@ nenhum — `j` e `l` continuam. Um clique duplo na imagem: no terço do meio max
 num lado salta dez segundos, e cada clique a mais no mesmo lado salta de novo sem pausar
 (`player_media::PictureClicks`, a mesma leitura na janela, na coluna e no rodapé).
 
-**Recolher a imagem é da porta.** O glifo no título "Agora" (e `z`) aparece só na porta que mostra
-uma imagem que dá para recolher (`View::picture_foldable`, dito pela porta): a janela e a coluna
-guardam o próprio `picture_folded` e o layout fica sem faixa; o rodapé guarda `player_folded`, que o
-`metric` lê (duas linhas, transporte e barra — `player_media::FOLDED_LINES`), e nenhuma imagem é
-pedida enquanto está recolhida. Numa página do mundo o globo ocupa o lugar da imagem no painel do
-rodapé: ali nada se recolhe (o rodapé guarda `player_globe` e lê `player_folded_now`), e o globo
-fica, como na janela e na coluna. Nada disso é gravado: cada porta nasce com a imagem.
+**Recolher a imagem é da porta.** O glifo (e `z`) aparece só na porta que mostra uma imagem que dá
+para recolher (`View::picture_foldable`, dito pela porta) — no título "Agora" da janela e da coluna,
+e no rodapé no fim da barra de tempo do painel ("Dois painéis, e ar entre eles", acima): a janela e
+a coluna guardam o próprio `picture_folded` e o layout fica sem faixa; o rodapé guarda
+`player_folded`, que o `metric` lê (duas linhas, transporte e barra — `player_media::FOLDED_LINES`),
+e nenhuma imagem é pedida enquanto está recolhida. Numa página do mundo o globo ocupa o lugar da
+imagem no painel do rodapé: ali nada se recolhe (o rodapé guarda `player_globe` e lê
+`player_folded_now`), e o globo fica, como na janela e na coluna. Nada disso é gravado: cada porta
+nasce com a imagem.
 
 **Vídeo de um site é página, não linha dos arquivos.** Endereço não é arquivo: a página
 (`player_website.rs`, `LEADER p h`, linha em "Ouvir e assistir") tem "Tocar agora…" e "Pôr na
@@ -14731,12 +14772,19 @@ recusa: é com ele que o `player-vm` prova o serviço declarado (certa, errada, 
 uma `video_metrics::View` só (`video_metrics.rs`); as portas guardam o que o catálogo disse
 (`Readings`) e cada uma tem o seu FEED (`video_metrics_feed.rs`): uma thread que lê e escreve o
 catálogo e leva os recados que saem da vista (varrer, o player, a fila). O laço nunca espera: a
-thread vigia o `catalog.sqlite-wal` (`Notice::on_file`) e só relê quando o `PRAGMA data_version`
-diz que OUTRA conexão gravou — um checkpoint ou a própria escrita não acordam nada.
+thread vigia o `catalog.sqlite-wal` (`Notice::on_log`, que ouve cada escrita: o scanner nunca o fecha
+enquanto varre) e só relê quando o `PRAGMA data_version` diz que OUTRA conexão gravou — um
+checkpoint ou a própria escrita não acordam nada. O ranking do player vigia do mesmo jeito. O
+"Varrer agora" relê a página quando a resposta volta, na thread e não pela porta: uma varredura que
+já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
 
-- **Quem escreve são dois**: o scanner (a unidade) e a porta (`Person`). Todo outro leitor abre
-  `mode=ro` (`Catalog::open_ro`, com `query_only`), e as duas exceções de leitor, `hide` e
-  `delete`, passam pelo escritor curto do crate. Check: `video-metrics-readers-are-read-only`.
+- **Quem escreve são três**: o scanner (a unidade), a porta (`Person`) e o ranking do player, que
+  só escreve as marcas (nota, separar, nunca apagar, mostrar de novo) por
+  `video_metrics_feed::mark` — um `Person` aberto fora do laço, na thread do ranking, para aquela
+  escrita, sem pedir nada a uma porta do video metrics, que nem precisa estar aberta. Todo outro
+  leitor abre `mode=ro` (`Catalog::open_ro`, com `query_only`), e as duas exceções de leitor, `hide`
+  e `delete` (por onde o ranking oculta e apaga), passam pelo escritor curto do crate. Check:
+  `video-metrics-readers-are-read-only`, que só deixa os arquivos da porta nomearem `person`.
 - **O cursor é uma identidade** (um `spot`), nunca um índice: a varredura que reordena a lista não
   tira o cursor do vídeo. Numa página recém-aberta ele é desenhado onde uma tecla agiria.
 - **A lista tem duas linhas por vídeo**: o título na largura toda, quebrado, e embaixo pontuação,
@@ -14744,7 +14792,19 @@ diz que OUTRA conexão gravou — um checkpoint ou a própria escrita não acord
   A grade de miniaturas é a `ronoctua_design::Grid`; o realce do ponteiro na grade é a CÉLULA, nunca
   uma faixa na prateleira (nas duas portas). A célula é a miniatura com um `GAP` de ar dos DOIS lados
   (`video_metrics::TILE`), e o clique pega a mesma caixa: o ar entre duas células não é de ninguém.
-  A pontuação e a idade de um vídeo da grade são uma linha cada: juntas não cabem na largura.
+  A pontuação e a idade de um vídeo da grade são uma linha cada: juntas não cabem na largura. O canal
+  sob o título de cada miniatura se liga numa linha da página Vídeos (`View.grid_channel`, só na
+  grade), desligado de partida e guardado só na sessão, como o layout: a lista de um canal só não
+  tem uso para ele.
+- **As marcas de um vídeo são glifos que agem no PRIMEIRO clique** (`Control`): na grade, a linha
+  da pontuação leva o número e as quatro caras da nota; a da idade, separar, ocultar ou mostrar,
+  apagar e o ∞; na lista, o mesmo numa linha de meta. A cara acesa é a nota atual, e clicar nela a
+  tira; só apagar pergunta. Caras e não setas: os chevrons são de abrir e fechar. O ponteiro acende
+  só o glifo sob ele. Os controles moram FORA das células da prateleira: o cursor lê as células como
+  paradas em cinco funções, e um controle entre elas pediria a cada uma que o pulasse — as setas
+  nunca param num glifo, e o teclado tem as teclas dele (`s`, `f`, `h`, `d`). Uma marca do próprio
+  vídeo, ligada (separar, o ∞ dele), diz o que vale quando sai (`Control::follows`, lido de
+  `lasting` sem ela): sem o ∞ próprio, um vídeo de canal eterno continua.
 - **Pergunta é linha da página, embaixo da linha de onde foi pedida**, com o "não" primeiro e o
   cursor nele: apagar, ocultar, remover canal ou regra, e "já está na fila" (o player recusa um
   `Put{once}` com `AlreadyQueued`; o "sim" manda de novo sem `once`). Essa última chega de um
@@ -14774,16 +14834,28 @@ diz que OUTRA conexão gravou — um checkpoint ou a própria escrita não acord
   transferências com `where_to::work_for` — a resposta dela sobre onde mídia de uma página vai — e,
   entregue, a fila abre (`LEADER t t`, do rodapé): no rodapé a vista fecha antes, como antes do
   Chrome; a janela pede ao rodapé.
+- **Nyxt** abre um vídeo, o `/videos` de um canal (`youtube::tab_address`, pelo id, o endereço que
+  o scanner lista; na lista de canais, Chrome e Nyxt são glifos no fim da linha) e o `⋯` do player.
+  Vai pela ENTRADA do lançador (`Launching::EntryOpening`, `launch::in_nyxt`), nunca por um caminho
+  do store via `option_env!`: assado, o caminho seria referência em todo fecho, seja qual for a
+  escolha da máquina, e a pessoa pode recusar o Nyxt — onde ele falta, a porta diz
+  `door-nyxt-absent`. O endereço vai como ÚLTIMA palavra do comando e é dado de fora, então só um
+  endereço web passa (`launch::is_web_address`): um que começasse com `-` seria lido como flag do
+  programa. O que sai da vista para outro programa é um `video_metrics_feed::Leaving`, que cada
+  porta casa pelo nome, sem braço para o resto: o rodapé fecha a vista antes (uma vista aberta sobre
+  a janela que abriu fica com o teclado), e a janela lança o Nyxt ela mesma.
 - **Varrer agora** pede ao brain (fila, portão, diário, marca) e lê a resposta: sem brain, ou com
   um que não tem o módulo (desligado pela pessoa), pede ao systemd — o brain agenda, não barra. Com a
   economia de energia ligada diz que não varre (o módulo pularia a rodada), e numa segunda instância
   (`.#dev`) diz que não pede nada: o cérebro dela só ensaia e a unidade do systemd é a da sessão
   instalada, que varreria o catálogo de verdade.
 - **Acrescentar um canal é o consentimento** para os dois hosts da varredura
-  (`ronoctua_video_metrics::HOSTS`); a página inicial mostra e alterna "Perguntar ao YouTube".
-- **A câmera** (`photograph --door video-metrics --catalog <arquivo>`) abre uma CÓPIA do catálogo,
-  lê o consentimento desta instância e guarda a mudança dele em memória; varrer, tocar, baixar,
-  acrescentar canal e o Chrome são impressos, nunca feitos.
+  (`ronoctua_video_metrics::HOSTS`), e cadastrar os canais de uma lista importada também; a página
+  inicial mostra e alterna "Perguntar ao YouTube".
+- **A câmera** (`photograph --door video-metrics --catalog <arquivo>`, e a do rodapé) abre uma CÓPIA
+  do catálogo, lê o consentimento desta instância e guarda a mudança dele em memória; varrer, tocar,
+  baixar, acrescentar canal, exportar, a fila, o Chrome, o Nyxt, a página do brain e a janela do
+  player (tudo o que sai como `Leaving`) são impressos, nunca feitos.
 
 A varredura é uma unidade de usuário do app (`nix/modules/video-metrics.nix`, `oneshot`, `Nice`,
 I/O ocioso, yt-dlp e o trio do PO por caminho no store — o trio é do próprio minter,
@@ -14808,6 +14880,84 @@ Uma origem de feeds de loopback (`RONOCTUA_VIDEO_METRICS_FEEDS`, a fixture do `v
 não busca miniaturas: são figuras do YouTube, e uma máquina de teste sem saída pararia toda
 varredura nelas. O `ronoctua-video-metrics list` é o leitor da linha de comando (`open_ro`): o do
 teste durante a varredura, e o de quem está num terminal.
+
+**Um vídeo tem prazo** (decisão do dono, 2026-11-09): o catálogo é do que é novo, não um arquivo.
+Por padrão ele fica 90 dias desde a publicação — ou desde que uma varredura o viu, sem data — e o
+que merece mais é marcado. O prazo é UM inteiro onde quer que seja guardado: a chave global
+`keep_days` (`0` é nunca) e o `channels.keep_days` de um canal (NULL é como em todo lugar, `0`
+nunca, N dias); no Rust, `Keep { Days, Forever }`. Duas colunas — um "para sempre" ao lado de um
+número de dias — poderiam dizer as duas coisas, e uma não se contradiz. Um número que não diz prazo
+(negativo, além de cem anos) é lido como ilegível, nunca como um prazo plausível que apagaria o que
+a pessoa queria guardar; zero dias digitado é recusado, porque o nunca é o `Forever` e zero apagaria
+tudo na próxima varredura.
+
+- **Quem apaga é a varredura**, logo depois do `began()` e antes de ler qualquer canal (o ensaio
+  também): `edit::expire` escolhe e tira na MESMA transação — um vídeo separado entre escolher e
+  tirar não se perde —, cada um vira lápide `expired` (`Skip::Expired`, que sobrescreve como
+  apagado e indisponível), e as miniaturas saem depois do commit. Um avistamento já vencido nunca
+  entra: buscar detalhes e miniatura para a próxima varredura apagar seria trabalho à toa. Ocultos
+  saem como os outros. A cláusula é uma só (`edit::EXPIRED`), da varredura e da porta, que diz
+  discreta sob a linha do prazo quantos saem na próxima (`Catalog::expiring`): um número pequeno
+  digitado por engano não surpreende ninguém depois.
+- **O ∞ marca quem nunca será apagado**, pelo canal (`0` nele) ou pela marca do próprio vídeo
+  (`videos.keep`, só `0` ou `1` por `CHECK`: a cláusula que poupa e a coluna que mostra o ∞ leem o
+  mesmo número, e nenhum valor solto é um vídeo que nunca sai e nunca diz). O "nunca" global não
+  acende ∞ em nada: em todo vídeo, não marcaria nada (`read::Forever`). Clicar no ∞ liga ou desliga
+  a marca DO VÍDEO, mesmo quando o canal já o mantém, e a frase diz que ela vale se o canal mudar.
+- **Separado não expira** enquanto está separado (`videos.set_aside_at`), e por isso não leva ∞: o
+  prazo volta quando ele sai da lista. A lista é pela hora em que a pessoa separou, e separar de
+  novo guarda o primeiro momento; separar não é ponto da pontuação. A página Vídeos tem o anel
+  "qualquer, só eles, sem eles", e "só eles" ordena pelos últimos separados (`Order::NewestSetAside`).
+- **"Como em todo lugar" diz o que é agora** (decisão do dono, 2026-11-09): o valor de todo lugar
+  vai depois do valor da linha, na tinta mais quieta e fora da cor de estado e da do cursor
+  (`Follows`) — os Shorts e o prazo de um canal, uma regra herdada nele, o "nunca apagar" de um
+  vídeo (sai em tal data, o canal mantém, fica enquanto separado). O feed lê as configurações onde
+  uma dessas linhas existe: o que está em todo lugar se lê na linha, não em outra página.
+- A migração para o schema 2 não protege nada: o catálogo de antes era de teste (decisão do dono),
+  e a primeira varredura depois dela apaga o que passou dos 90 dias.
+
+**A lista de inscrições do Google Takeout entra em espera NA PRÓPRIA tabela `channels`** (`staged`:
+`undecided`, `keep`, `discard`; NULL é canal do catálogo). Numa tabela à parte, a página do canal e
+as das regras precisariam de um segundo caminho; aqui um canal em espera ganha pontuação, prazo e
+regras nas mesmas páginas, sem mudar nada nelas, e nunca é varrido (`channels_to_scan` e
+`query::channels` pedem `staged IS NULL`). Importar (`takeout::read`, puro) segue a RFC 4180 com
+BOM e CRLF; o cabeçalho é reconhecido pela FORMA, porque o Takeout o escreve na língua da conta; da
+linha valem o id (`is_channel_id`) e o título, e uma linha sem id fica de fora e é contada. Um canal
+que já é do catálogo é dito e não muda; um ainda em espera guarda a decisão, descarte inclusive; um
+que um cadastro descartou (saiu sem lápide) volta a esperar sem decisão — descarte não deixa
+memória.
+
+- **A página da lista (`Page::Import`, de "Importar ou exportar uma lista" nos canais) põe as linhas
+  curtas antes da lista longa**: uma conta segue centenas de canais, e "Já no catálogo", cadastrar
+  e exportar ficariam a centenas de linhas. Cada canal tem o anel da decisão, Chrome e Nyxt no
+  `/videos`, e o `RET` abre a página dele. O arquivo se escolhe no seletor de arquivos, hospedado
+  nas duas portas. "Cadastrar os mantidos" pergunta antes, com o "não" primeiro, e "Todos eles"
+  também enquanto as decisões variam: girar ali jogaria fora o que cada canal recebeu, e nenhum giro
+  devolve.
+- **Cadastrar** é uma transação: os mantidos entram AGORA (a primeira varredura segue a
+  salvaguarda) e são repontuados com o que receberam esperando; os descartados saem com as regras e
+  sem lápide — nunca foram varridos, não têm vídeos —; os sem decisão ficam. Um consentimento que não
+  foi gravado é dito AO LADO do que foi cadastrado, nunca no lugar: o catálogo já tinha gravado.
+- **Exportar** escreve os canais cadastrados no formato do Google — o cabeçalho exato e a URL
+  `http://www.youtube.com/channel/<id>` como ele escreve —, por id (duas exportações do mesmo
+  catálogo são o mesmo arquivo), inteiro e renomeado, na thread do feed. Os em espera ficam de
+  fora: ainda não são canais do catálogo. A linha de comando tem `import` e `export`, para fixture,
+  foto e VM.
+
+**Toda linha se explica sob o ponteiro** (decisão do dono, 2026-11-09). A janela guarda um pé
+(`Content::foot_lines`, o da janela de atualização) com a COISA sob o ponteiro — nome, o que o
+clique faz, a frase e o que ela segue em todo lugar — até uma tecla, e depois a do cursor; nada vai
+ao minibuffer. O pé guarda a coisa em que o ponteiro descansou, nunca a linha: uma prateleira tem
+vários vídeos na mesma linha, e um vídeo atravessa várias. O rodapé não tem pé, e diz o mesmo
+juntado na linha de explicação (`door::Explained::joined`). A frase sai de `about_of`, exaustivo e
+sem curinga: um `Target` novo não compila sem dizer o que é.
+
+**A vista e o resto se apontam.** A página inicial tem "Em outros apps": a página do módulo no brain
+(`brain-open`, onde a agenda da varredura se lê e muda), "Vídeos por pontuação" e "Vídeos separados"
+no player — cada um uma janela NOVA do player naquela página (`player-window ranking|set-aside`),
+mesmo com uma aberta, porque a pessoa pediu aquela lista ao lado do que a outra mostra. O módulo
+devolve o caminho: a ação `catalogue` dele (`opens = "video-metrics-window"`, um nome do `openable`
+do `nix/brain-modules.nix`) abre a janela do catálogo pelo comando dela.
 
 ### Segurança — a porta do sudo, a janela sem senha, a tabela da pessoa e as digitais
 
@@ -15469,46 +15619,70 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
 ### O ranking no player (`player_ranking.rs`, `LEADER p k`)
 
 - **A porta lê o catálogo de vídeos sozinha**, como lê o de canais por tema: `Catalog::open_ro`
-  numa thread dela, que vigia o `-wal` e pergunta o `data_version` antes de reler — o daemon do
-  player nunca vê o banco, e a página existe sem player rodando. Sem banco, a página é uma frase que
-  ensina onde se adicionam canais (a sequência que a leader ensina); banco ilegível diz por quê.
+  numa thread dela, que vigia o `-wal` (`Notice::on_log`, como a porta do catálogo) e pergunta o
+  `data_version` antes de reler — o daemon do player nunca vê o banco, e a página existe sem player
+  rodando. Sem banco, a página é uma frase que ensina onde se adicionam canais (a sequência que a
+  leader ensina); banco ilegível diz por quê.
+- **Duas listas**: o ranking e os vídeos SEPARADOS para depois (`PageId::SetAside`, `LEADER p K`),
+  só eles, os últimos separados primeiro, ocultos inclusive. Cada uma guarda a página e os Shorts
+  dela (`S` ou o anel: com, sem, só eles), só enquanto a porta vive: o ranking abre SEM eles — uma
+  varredura os traz às dúzias, e eles empurram os vídeos longos para fora das primeiras páginas —;
+  os separados, com eles, porque a pessoa escolheu cada um. Uma thread e uma página guardada servem as
+  duas, e o que está guardado diz a que lista responde: uma lista nunca desenha as linhas da outra.
 - **Uma recusa é uma resposta, e fica.** A página guarda a que página a resposta é (`answered`),
   lida ou recusada, e só pergunta de novo quando a página muda ou o catálogo se move — a vigia do
   `-wal` relê o que foi pedido. Perguntada a cada `settle`, uma máquina sem catálogo lia, acordava e
-  repintava o rodapé sem fim. Uma escrita desta porta (ocultar, apagar) marca a página como velha, e
-  ela é relida sem piscar para "lendo"; um commit que chega junto com um pedido do outro tipo relê
-  os dois.
+  repintava o rodapé sem fim. Uma escrita desta porta (uma marca, ocultar, apagar) marca a página
+  como velha, e ela é relida sem piscar para "lendo"; um commit que chega junto com um pedido do
+  outro tipo relê os dois.
 - **Um vídeo entra na fila titulado e uma vez**: `Put { Named, once: true }`, e o "já está na fila"
   é a recusa do daemon virando a pergunta da vista com o "não" primeiro (`player::overruled`,
   `Told::Asks`) — o mesmo caminho do resto das portas, nada reimplementado aqui.
+- **As marcas são glifos que agem no primeiro clique**, e teclas: as quatro caras da nota logo
+  depois da pontuação (`1`–`4`; a acesa é a atual, e clicar nela a tira) e, no fim da linha,
+  separar, ocultar, apagar e o ∞ (`b`, `v`, `d`, `F`), com as regras do catálogo — o ∞ é a marca do
+  próprio vídeo, e só apagar pergunta. A pontuação é um número nu: a lista é por pontuação, e
+  "pontos" em toda linha era palavra lida uma vez e depois só no caminho. Quando falta espaço os
+  glifos caem antes das palavras, e o `⋯` nunca cai: ele abre o que todo glifo faz.
 - **O `⋯` de cada vídeo** (e `e`) abre a página do vídeo: tocar agora, pôr na fila, Chrome
-  quiosque, baixar, ocultar e apagar. O quiosque é do rodapé (`kiosk-open`, pela ordem no socket
-  quando a porta é janela ou coluna); baixar é a fila de transferências; ocultar e apagar são as duas
-  escritas que um leitor do catálogo pode fazer (`Catalog::hide`/`delete`), numa thread, e o
-  resultado volta como `Told::Ranking` — apagar pergunta antes, ocultar não (a porta do catálogo de
-  vídeos desfaz).
+  quiosque, Nyxt, baixar, a nota, separar, nunca apagar, ocultar e apagar. O quiosque é do rodapé
+  (`kiosk-open`, pela ordem no socket quando a porta é janela ou coluna); o Nyxt, a entrada dele no
+  lançador; baixar é a fila de transferências. Ocultar e apagar são as duas escritas que um leitor do
+  catálogo pode fazer (`Catalog::hide`/`delete`); a nota, separar e manter são da pessoa, escritas
+  pela porta do catálogo (`video_metrics_feed::mark`). Tudo numa thread, e o resultado volta como
+  `Told::Ranking` — apagar pergunta antes, ocultar não (a porta do catálogo de vídeos desfaz). Uma
+  marca fica na linha do clique até o catálogo ser relido, e o próximo toque compõe a partir dela:
+  composto do que foi lido, um segundo toque antes da releitura gravava a mesma nota duas vezes. O
+  `e` é da página: a entrada dele no ranking deixava a linha decidir, a linha nunca decidia, e ele
+  caía em renomear o que toca.
 - **Lista ou miniaturas** (`L`, o glifo do título): a lista é uma linha por vídeo com a miniatura à
   cabeça (`player_posters::strip`), a grade são as caixas do catálogo de canais
   (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas). Na grade, a
-  pontuação e o `⋯` ficam numa linha INERTE sob o título: um controle na linha que é a do vídeo
-  valeria para a coluna dele em toda a altura da caixa, e o clique na figura abriria a página. Essa
-  linha acende só o `⋯` sob o ponteiro (`Lit::Controls`), porque o clique só pega ele.
+  pontuação com as caras e o `⋯`, e embaixo o canal com as marcas, ficam em linhas INERTES sob o
+  título: um controle na linha que é a do vídeo valeria para a coluna dele em toda a altura da
+  caixa, e o clique na figura abriria a página. Essas linhas acendem só o glifo sob o ponteiro
+  (`Lit::Controls`), porque o clique só pega ele.
 - **Um controle é pego na linha em que é desenhado.** Uma linha de vídeo da lista tem seis ou sete
   linhas, e o `⋯` está na primeira: `player_rows::controls_under`, `control_under` e
   `View::clicked_at` só tomam um controle na linha dele — no resto da linha o clique é da linha.
-  Vale para toda vista: todo construtor põe os controles na primeira linha.
+  Vale para toda vista, e para qualquer linha da linha lógica: os glifos ditos sob o título de uma
+  tira agem no clique como o `⋯`, e o cursor vai à linha de que eles falam.
+- **A janela do player abre numa página pela palavra** (`player-window ranking|set-aside`,
+  `ronoctua-shell player ranking|set-aside`, `player_window::OPENINGS`): é o que a página inicial do
+  catálogo de vídeos pede. Uma janela NOVA a cada vez, mesmo com uma aberta, sobre a home — o `Esc`
+  volta à home, como de toda página que uma linha abriu.
 - **A linha da lista acende as palavras, nunca a figura** (`Lit::From`, lido pelas duas portas em
   `player_rows::lighting`): da coluna do texto até a borda, em todas as linhas do vídeo, onde quer
   que o ponteiro esteja na linha — com miniatura ou sem, igual. Antes, a linha com miniatura era
   "figura" e não acendia nunca, e a sem miniatura acendia por cima da caixa vazia.
 - **O que se diz sob o título vai em partes** (canal e pontuação; idade e duração): juntas numa linha
-  quando cabem, uma por linha quando não — um número nunca se separa da unidade (`7000` / `points`).
+  quando cabem, uma por linha quando não — um número nunca se separa da unidade dele.
 - Na grade, o cursor guarda o vídeo da CÉLULA (`ranking_here`), não o da prateleira: o ranking que
   se reordena põe outro vídeo naquela célula, e o `RET` punha na fila um vídeo que ninguém escolheu.
 - As miniaturas são arquivos que o catálogo já guardou; a porta só as decodifica fora do laço
   (`Posters::look_files`), com a chave levando arquivo, pixels e paleta.
-- Foto: `photograph --ranking <catalog.sqlite>` (lido `mode=ro`; o que esconderia, apagaria ou
-  baixaria fica no `Outbox`).
+- Foto: `photograph --ranking <catalog.sqlite>` (lido `mode=ro`; o que marcaria, esconderia,
+  apagaria ou baixaria fica no `Outbox`; o Nyxt volta à porta, cuja `Ui` de foto só o imprime).
 
 
 ### A varredura do shell (leva de 2026-09-30, X1) — o que mudou e por quê

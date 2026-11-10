@@ -184,9 +184,10 @@ const BUFFER: usize = 4096;
 ///
 /// `MODIFY` is deliberately absent. It fires on every `write`, so a log being
 /// appended to would be a hose; `CLOSE_WRITE` is the moment a listing cares
-/// about, which is when the writer let go. `ATTRIB` is present because the
-/// permission, owner and group columns (`C-d`) change without the directory
-/// changing at all.
+/// about, which is when the writer let go. Only [`Notice::on_log`] asks for it,
+/// on top of this, for the one file whose writer never lets go. `ATTRIB` is
+/// present because the permission, owner and group columns (`C-d`) change
+/// without the directory changing at all.
 ///
 /// `EXCL_UNLINK` stops events for a file that is unlinked but still open, and
 /// `ONLYDIR` makes a path that is not a directory a refusal here rather than a
@@ -255,6 +256,7 @@ impl Notice {
             Vec::new(),
             None,
             Pace::Coalesced,
+            inotify::WatchFlags::empty(),
             on_stir,
         )
     }
@@ -285,6 +287,7 @@ impl Notice {
             Vec::new(),
             None,
             Pace::Coalesced,
+            inotify::WatchFlags::empty(),
             on_stir,
         )
     }
@@ -314,6 +317,7 @@ impl Notice {
             trees.iter().cloned().map(Tree::shared).collect(),
             None,
             pace,
+            inotify::WatchFlags::empty(),
             on_stir,
         )
     }
@@ -335,17 +339,26 @@ impl Notice {
     where
         F: Fn() -> bool + Send + 'static,
     {
-        Self::raise(dirs.to_vec(), trees, None, pace, on_stir)
+        Self::raise(
+            dirs.to_vec(),
+            trees,
+            None,
+            pace,
+            inotify::WatchFlags::empty(),
+            on_stir,
+        )
     }
 
     /// The one constructor behind the doors: the fixed directories (the
     /// sidebar's, the file's, or a repository's), the trees, an optional name
-    /// that narrows what counts, and the thread.
+    /// that narrows what counts, what is asked beside [`WANTED`] (`extra`:
+    /// nothing, but for [`Notice::on_log`]), and the thread.
     fn raise<F>(
         fixed: Vec<PathBuf>,
         trees: Vec<Tree>,
         only: Option<OsString>,
         pace: Pace,
+        extra: inotify::WatchFlags,
         on_stir: F,
     ) -> Result<Self>
     where
@@ -383,6 +396,7 @@ impl Notice {
                     grown: Vec::new(),
                     only,
                     pace,
+                    wanted: WANTED | extra,
                     held: Vec::new(),
                     listing_wd: None,
                 }
@@ -422,6 +436,45 @@ impl Notice {
             Vec::new(),
             Some(OsString::from(name)),
             pace,
+            inotify::WatchFlags::empty(),
+            on_stir,
+        )
+    }
+
+    /// [`Notice::on_file`], for a file WRITTEN IN PLACE AND NEVER CLOSED — a
+    /// SQLite catalogue's `-wal`, today: every `write` into it is heard, which
+    /// is `MODIFY` asked beside [`WANTED`].
+    ///
+    /// # Why a constructor of its own
+    ///
+    /// Because a writer that holds its file open for its whole run never lets
+    /// go, so `CLOSE_WRITE` — the moment every other watch waits for — does
+    /// not come while it runs. The video scanner holds its connection, and the
+    /// `-wal` under it, for the whole scan: a door that waited for the close
+    /// heard the scan begin only once it was over, and "Scan now" said nothing
+    /// until the page was opened again. `MODIFY` is the hose [`WANTED`] keeps
+    /// out of every other watch; here the hose is the point, and the name
+    /// keeps the rest of the folder out — a write beside the file wakes the
+    /// thread and counts for nothing.
+    ///
+    /// Take [`Pace::Coalesced`]: a scan is a stream of writes, and the
+    /// hold-off makes it a report at once and then at most a few a second
+    /// ([`QUIET`], [`BURST`]; the arithmetic is in [`Watcher::hold_off`]),
+    /// each of them a question the door asks its catalogue.
+    ///
+    /// # Errors
+    ///
+    /// As [`Notice::watching`].
+    pub fn on_log<F>(dir: &Path, name: &str, pace: Pace, on_stir: F) -> Result<Self>
+    where
+        F: Fn() -> bool + Send + 'static,
+    {
+        Self::raise(
+            vec![dir.to_path_buf()],
+            Vec::new(),
+            Some(OsString::from(name)),
+            pace,
+            inotify::WatchFlags::MODIFY,
             on_stir,
         )
     }
@@ -501,9 +554,9 @@ struct Watcher {
     told: mpsc::Receiver<Option<PathBuf>>,
     /// The directory on screen.
     listing: Option<PathBuf>,
-    /// The directory the sidebar persists into — or, for [`Notice::on_file`],
-    /// the one the file lives in, or [`Notice::on_dirs`]'s. Fixed for the
-    /// life of the watch.
+    /// The directory the sidebar persists into — or, for [`Notice::on_file`]
+    /// and [`Notice::on_log`], the one the file lives in, or
+    /// [`Notice::on_dirs`]'s. Fixed for the life of the watch.
     fixed: Vec<PathBuf>,
     /// The watches the fixed directories hold: an event in one is heard
     /// whatever a tree says of it.
@@ -520,6 +573,9 @@ struct Watcher {
     only: Option<OsString>,
     /// How much of a burst this watch absorbs. See [`Pace`].
     pace: Pace,
+    /// What is asked of the kernel for every directory held: [`WANTED`], and
+    /// `MODIFY` beside it for [`Notice::on_log`].
+    wanted: inotify::WatchFlags,
     /// Every watch descriptor held.
     ///
     /// A list and not two fields because inotify keys a watch by INODE: asking
@@ -731,7 +787,7 @@ impl Watcher {
         if !ronoctua_private::may_touch(dir) {
             return None;
         }
-        match inotify::add_watch(&self.fd, dir, WANTED) {
+        match inotify::add_watch(&self.fd, dir, self.wanted) {
             Ok(wd) => {
                 if !self.held.contains(&wd) {
                     self.held.push(wd);
@@ -923,6 +979,44 @@ mod tests {
         })
         .unwrap();
         (notice, seen)
+    }
+
+    /// [`counted_file`], for a file written in place ([`Notice::on_log`]).
+    fn counted_log(dir: &Path, name: &str, pace: Pace) -> (Notice, Arc<AtomicUsize>) {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mine = Arc::clone(&seen);
+        let notice = Notice::on_log(dir, name, pace, move || {
+            mine.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .unwrap();
+        (notice, seen)
+    }
+
+    /// [`armed`], for watches on ONE file: the file itself replaced whole —
+    /// a rename every one-file watch hears — until each counter has moved.
+    /// A file beside it would prove nothing: that is what such a watch must
+    /// not hear.
+    fn armed_on(seen: &[&Arc<AtomicUsize>], dir: &Path, name: &str) -> bool {
+        let deadline = Instant::now() + PATIENCE;
+        let mut deaf: Vec<&Arc<AtomicUsize>> = seen.to_vec();
+        loop {
+            let was: Vec<usize> = deaf.iter().map(|s| s.load(Ordering::SeqCst)).collect();
+            ronoctua_xdg::write_atomically(dir, name, b"arming").unwrap();
+            let mut still = Vec::new();
+            for (s, was) in deaf.into_iter().zip(was) {
+                if past(s, was, Duration::from_millis(100)) == was {
+                    still.push(s);
+                }
+            }
+            deaf = still;
+            if deaf.is_empty() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+        }
     }
 
     /// A notice whose reports are counted, and the counter.
@@ -1389,6 +1483,61 @@ mod tests {
             past(&seen, was, PATIENCE) > was,
             "the watched file was replaced and nothing said so"
         );
+    }
+
+    #[test]
+    // THE DEFECT THIS CATCHES: a catalogue's commits heard only when their
+    // writer lets go. The video scanner holds its connection — and the `-wal`
+    // under it — open for the whole scan, so a watch that waited for
+    // `CLOSE_WRITE` heard the scan begin only once it was over: "Scan now"
+    // said nothing until the page was opened again.
+    //
+    // Three halves, because only all of them pin the choice: the log watch
+    // hears a write through a handle that stays open; the file watch beside
+    // it does not — `MODIFY` stays out of every watch but the log's — and yet
+    // it hears the same file the moment its writer lets go, so its silence
+    // was the mask's and not a deaf watch's.
+    fn a_log_written_in_place_stirs_only_on_log() {
+        const NAME: &str = "catalog.sqlite-wal";
+        let dir = scratch("log");
+        let (_log, logged) = counted_log(&dir, NAME, Pace::Coalesced);
+        let (_file, filed) = counted_file(&dir, NAME, Pace::Coalesced);
+        assert!(
+            armed_on(&[&logged, &filed], &dir, NAME),
+            "the watches never came alive"
+        );
+        // The arming was a burst, and its tail is not what is measured.
+        settled(&logged);
+        settled(&filed);
+
+        // WRITTEN IN PLACE, through a handle kept open — the scanner's way.
+        let mut writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join(NAME))
+            .unwrap();
+        let (was_log, was_file) = (logged.load(Ordering::SeqCst), filed.load(Ordering::SeqCst));
+        writer.write_all(b"a commit").unwrap();
+        writer.flush().unwrap();
+        assert!(
+            past(&logged, was_log, PATIENCE) > was_log,
+            "a write through a handle kept open was not heard by the log's watch"
+        );
+        // NOT BY THE FILE'S, a second on from the moment the log's heard it:
+        // the kernel queued the event for both at once, and a watch that
+        // asked for it reports it in milliseconds — a regime, never a race.
+        assert_eq!(
+            past(&filed, was_file, Duration::from_secs(1)),
+            was_file,
+            "a file's watch heard a write in place: MODIFY crept into every watch"
+        );
+
+        // THE WRITER LETS GO, and the file's watch hears it.
+        drop(writer);
+        assert!(
+            past(&filed, was_file, PATIENCE) > was_file,
+            "the file's watch is deaf, and its silence above proved nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -18,13 +18,27 @@
 //! score is the channel's, the video's static points and its recency,
 //! computed at read time — a list read tomorrow is tomorrow's.
 //!
+//! # Two lists
+//!
+//! The RANKING (`PageId::Ranking`) and the VIDEOS SET ASIDE for later
+//! (`PageId::SetAside`, `LEADER p K`): the second only those, the last set
+//! aside first, hidden ones included ([`List`], [`Ranking::asked`]). Each
+//! keeps its own page and its own Shorts — with them, without them, only
+//! them, `S` or its row's ring — the ranking opening WITHOUT them; kept while
+//! the door is open, never written down. One thread and one held page serve
+//! both, and what is held says which list it answers: a list never draws the
+//! other's rows.
+//!
 //! # A row, a tile
 //!
 //! Each video is its thumbnail (the catalogue's file on disk, decoded off the
 //! loop by `crate::player_posters`), its title, its channel and its score —
-//! a row each, the picture at its head (`player_posters::strip`), or a grid
-//! of thumbnails (`player_posters::tiled`); `L` and the glyph on the title
-//! turn one into the other, and `<prior>`/`<next>`/`<home>`/`<end>` walk the
+//! a bare number, the four faces of its rating after it and its marks at the
+//! line's edge (set aside, hidden, deleted, kept for ever), each a glyph a
+//! click acts on at once, and a key (`b`, `v`, `d`, `F`, `1`–`4`) — a row
+//! each, the picture at its head (`player_posters::strip`), or a grid of
+//! thumbnails (`player_posters::tiled`); `L` and the glyph on the title turn
+//! one into the other, and `<prior>`/`<next>`/`<home>`/`<end>` walk the
 //! pages. `RET` — the second click — puts the video at the queue's end,
 //! TITLED (`Thing::Named`) and ONCE: one the queue has already is the
 //! player's refusal, which the view asks about, "no" first
@@ -34,11 +48,16 @@
 //!
 //! The `⋯` at the end of a row — `e` on the keyboard — opens the video's own
 //! page (`PageId::RankedVideo`): play now, add, watch it in the Chrome kiosk
-//! (the footer's `kiosk-open`), download it (the transfers' queue), hide it
-//! from the ranking, or delete it from the catalogue for good — after a
-//! question, "no" first. Hiding and deleting are the two writes a reader of
-//! the catalogue may make (`Catalog::hide`, `Catalog::delete`), carried out
-//! off the loop ([`carry`]) and said when they are done.
+//! (the footer's `kiosk-open`) or in Nyxt (its entry in the launcher),
+//! download it (the transfers' queue), rate it, set it aside, keep it for
+//! ever, hide it from the ranking, or delete it from the catalogue for good —
+//! after a question, "no" first. Hiding and deleting are the two writes a
+//! reader of the catalogue may make (`Catalog::hide`, `Catalog::delete`); a
+//! rating, setting aside and keeping are the person's, written by the video
+//! catalogue's own door (`video_metrics_feed::mark`). Each is carried out off
+//! the loop ([`carry`]) and said when it is done. A mark is on its row from
+//! the click until the catalogue is read again, and the next press composes
+//! from it; one more on the same video waits, said so, while it is written.
 //!
 //! # Without the catalogue
 //!
@@ -46,6 +65,7 @@
 //! sentence that teaches where channels are added; a catalogue that cannot
 //! be read says why. Never an empty page that reads as "nothing ranks".
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
@@ -53,18 +73,22 @@ use crate::key;
 use ronoctua_i18n::Arg;
 use ronoctua_player::wire::{Ask, State, Thing};
 use ronoctua_tokens as tokens;
-use ronoctua_video_metrics::read::{Catalog, Filter, Page, RankedVideo, Video};
-use ronoctua_video_metrics::{VideoId, Why};
+use ronoctua_video_metrics::read::{
+    Catalog, Filter, Forever, Hidden, Order, Page, RankedVideo, SetAside, Shorts, Video,
+};
+use ronoctua_video_metrics::{Rating, VideoId, Why};
 
 use crate::player::{Errand, PageId, Press, Target, View};
-use crate::player_posters::{Shape, Tile};
+use crate::player_posters::{Control, Said, Shape, Tile};
 use crate::player_rows::Builder;
 
 // THE WORDS THE PLAYER'S VIEW NAMES this page by — its keys, a video's own
 // page's rows, the errands and answers a door carries for it — live under it
 // (`crate::player_seam::ranking`): a line here recompiles nothing of the
 // player's.
-pub use crate::player_seam::ranking::{Act, LAYOUT, MORE, Outcome, RankedAct, RankingKey};
+pub use crate::player_seam::ranking::{
+    Act, LAYOUT, MORE, Mark, Outcome, Quick, RankedAct, RankingKey,
+};
 
 /// How many videos a page of the ranking holds — the video catalogue's own
 /// page, whose grid's pictures the renderer's frame is known to keep
@@ -111,20 +135,89 @@ impl Layout {
     }
 }
 
+/// WHICH OF THE TWO LISTS a page of the ranking shows: every video, best
+/// first, or the ones the person set aside for later, the last set aside
+/// first. One reading thread and one held page serve both, so what is held
+/// says which it is ([`Asked::list`]) — and a list never draws the other's
+/// rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum List {
+    /// The ranking: every video not hidden, best first — the ones set aside
+    /// among them, marked.
+    Ranking,
+    /// The videos set aside, the last set aside first — the hidden ones too:
+    /// the person set them aside, and the eye beside one shows it again.
+    SetAside,
+}
+
+impl List {
+    /// The list page `page` shows — `None` for a page that shows none.
+    #[must_use]
+    pub const fn of(page: PageId) -> Option<Self> {
+        match page {
+            PageId::Ranking => Some(Self::Ranking),
+            PageId::SetAside => Some(Self::SetAside),
+            _ => None,
+        }
+    }
+}
+
+/// WHERE A LIST STANDS, as the person left it: its page and its Shorts —
+/// each list its own, kept while the door is open and never written down
+/// (the owner's choice: the filter is the session's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shown {
+    /// Which page, from 0.
+    pub page: u32,
+    /// Its Shorts: with them, without them, only them.
+    pub shorts: Shorts,
+}
+
+impl Shown {
+    /// Where list `list` opens: its first page — the ranking WITHOUT ITS
+    /// SHORTS, which a scan brings by the dozen and which push the long
+    /// videos the ranking is for off its first pages; the videos set aside
+    /// with theirs, since the person chose each one.
+    #[must_use]
+    pub const fn first(list: List) -> Self {
+        Self {
+            page: 0,
+            shorts: match list {
+                List::Ranking => Shorts::Without,
+                List::SetAside => Shorts::Any,
+            },
+        }
+    }
+}
+
+/// WHAT IS ASKED OF THE CATALOGUE for a list: which list, its filter and its
+/// page — the one question the reading thread answers, and the one a page
+/// held answers ([`Ranking::holds`]): a page read under another filter is
+/// not the page asked.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Asked {
+    /// Which list.
+    pub list: List,
+    /// What it shows, and in which order.
+    pub filter: Filter,
+    /// Which page, from 0.
+    pub page: u32,
+}
+
 /// What the reading thread is asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Want {
-    /// A page of the ranking, from 0.
-    Page(u32),
+    /// A page of a list.
+    Page(Asked),
     /// One video, whole.
     Video(VideoId),
 }
 
-/// A page of the ranking, as read.
+/// A page of a list, as read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
-    /// Which page, from 0.
-    pub page: u32,
+    /// What it answers: its list, its filter, its page.
+    pub asked: Asked,
     /// Its videos, best first.
     pub rows: Vec<RankedVideo>,
     /// How many videos rank, on every page.
@@ -148,7 +241,7 @@ struct Reader {
     version: Option<u64>,
     /// What was last asked of each kind — read again when another
     /// connection commits.
-    page: Option<u32>,
+    page: Option<Asked>,
     video: Option<VideoId>,
 }
 
@@ -171,7 +264,7 @@ impl Reader {
         let mut wants: Vec<Want> = Vec::new();
         for want in asked {
             match &want {
-                Want::Page(n) => self.page = Some(*n),
+                Want::Page(asked) => self.page = Some(asked.clone()),
                 Want::Video(id) => self.video = Some(id.clone()),
             }
             wants.retain(|w| std::mem::discriminant(w) != std::mem::discriminant(&want));
@@ -179,7 +272,7 @@ impl Reader {
         }
         if stirred && self.moved() {
             if !wants.iter().any(|w| matches!(w, Want::Page(_))) {
-                wants.extend(self.page.map(Want::Page));
+                wants.extend(self.page.clone().map(Want::Page));
             }
             if !wants.iter().any(|w| matches!(w, Want::Video(_))) {
                 wants.extend(self.video.clone().map(Want::Video));
@@ -214,25 +307,23 @@ impl Reader {
         };
         self.version = c.data_version().ok();
         let got = match want {
-            Want::Page(n) => {
-                let filter = Filter::default();
-                c.ranked(
-                    &filter,
+            Want::Page(asked) => c
+                .ranked(
+                    &asked.filter,
                     Page {
-                        number: *n,
+                        number: asked.page,
                         per_page: PER_PAGE,
                     },
                 )
                 .and_then(|rows| {
-                    c.count(&filter).map(|total| {
+                    c.count(&asked.filter).map(|total| {
                         Got::Page(Listed {
-                            page: *n,
+                            asked: asked.clone(),
                             rows,
                             total,
                         })
                     })
-                })
-            }
+                }),
             Want::Video(id) => c.video(id).map(|v| Got::Video(v.map(Box::new))),
         };
         // A READING THAT FAILED is read again from a catalogue opened anew:
@@ -346,7 +437,10 @@ impl Drop for Worker {
 /// The watch on the catalogue's commits: `<catalogue>-wal`, in its folder —
 /// made first, as the video catalogue's door makes it: a watch on a folder
 /// that does not exist never fires, and the first scan's commit is what a
-/// page that says "nothing yet" waits for.
+/// page that says "nothing yet" waits for. A log's watch (`Notice::on_log`),
+/// as the video catalogue's door's: the scanner writes into a `-wal` it
+/// never closes while it runs, and the videos a scan adds are on this page
+/// as they land, not once it is over.
 fn watched(
     catalogue: &Path,
     shared: Arc<(Mutex<Shared>, Condvar)>,
@@ -357,7 +451,7 @@ fn watched(
         tracing::warn!(error = %e, "no folder for the video catalogue; the ranking does not follow it");
         return None;
     }
-    ronoctua_files::notice::Notice::on_file(
+    ronoctua_files::notice::Notice::on_log(
         dir,
         &name,
         ronoctua_files::notice::Pace::Coalesced,
@@ -379,32 +473,36 @@ fn watched(
 /// or why it was not read.
 type Whole = Result<Option<Box<Video>>, Why>;
 
-/// The ranking as this view holds it.
-#[derive(Debug, Default)]
+/// The ranking as this view holds it — both of its lists.
+#[derive(Debug)]
 pub struct Ranking {
     /// The catalogue: this machine's, or a photograph's; `None` with no home
     /// to keep one in.
     path: Option<PathBuf>,
-    /// Which page, from 0.
-    pub page: u32,
-    /// How it is drawn.
+    /// Where the ranking stands: its page, and its Shorts — left out until
+    /// the person turns them in ([`Shown::first`]).
+    pub ranking: Shown,
+    /// Where the list of the videos set aside stands.
+    pub aside: Shown,
+    /// How both are drawn.
     pub layout: Layout,
     /// The video whose own page is open.
     pub chosen: Option<VideoId>,
-    /// The last page read, or why it was not.
+    /// The last page read, of either list, or why it was not.
     listed: Option<Result<Listed, Why>>,
-    /// The page `listed` answers — read, or REFUSED: a refusal is an answer
+    /// What `listed` answers — read, or REFUSED: a refusal is an answer
     /// too, held until the catalogue moves (the thread's watch reads it
     /// again) or another page is asked. Asked again on every settle, a
-    /// machine with no catalogue read, woke and repainted without end.
-    answered: Option<u32>,
+    /// machine with no catalogue read, woke and repainted without end. And
+    /// WHICH LIST it is: the other list's page is never drawn as this one's.
+    answered: Option<Asked>,
     /// The page held was changed by a write of this door's, and is read
     /// again at the next look (the video read whole is dropped instead).
     stale: bool,
     /// The last video read, or why it was not.
     video: Option<(VideoId, Whole)>,
     /// What was asked and not answered yet — asked once.
-    asked_page: Option<u32>,
+    asked_page: Option<Asked>,
     asked_video: Option<VideoId>,
     /// The reading thread, once a door with a loop asked.
     worker: Option<Worker>,
@@ -418,6 +516,78 @@ pub struct Ranking {
     /// The spot the cursor goes back to at the next settle — the row that
     /// opened a video's page this door closed when the video went.
     follow_owed: Option<String>,
+    /// THE MARKS THIS DOOR SENT and has not read back yet, in the order
+    /// sent: a row is drawn, and the next press on it composes, with these
+    /// put on it ([`Ranking::row_of`]). Composed from the row as read, a
+    /// second press before the catalogue was read again wrote the same next
+    /// rating twice, and set aside again what the first took out.
+    marking: Vec<Sent>,
+}
+
+/// A MARK THIS DOOR SENT: being written, or written and not read back yet —
+/// let go of at the next reading kept ([`Ranking::read_back`]).
+#[derive(Debug, Clone)]
+struct Sent {
+    mark: Mark,
+    /// The catalogue's door told it written. Until then the video's next
+    /// mark waits ([`Ranking::writing`]): two writes, each on a thread of
+    /// its own, land in either order behind a scan that holds the
+    /// catalogue.
+    written: bool,
+}
+
+/// The video `mark` is on.
+const fn video_of(mark: &Mark) -> &VideoId {
+    match mark {
+        Mark::Rating(id, _) | Mark::SetAside(id, _) | Mark::Keep(id, _) | Mark::Hidden(id, _) => id,
+    }
+}
+
+/// `mark` put on `v`, as the catalogue reads it back once written — but for
+/// a channel that keeps every video, behind the video's own mark taken off:
+/// the row never said it, and the next reading does.
+fn put_on(mark: &Mark, v: &mut RankedVideo) {
+    match mark {
+        Mark::Rating(_, rating) => v.rating = *rating,
+        Mark::SetAside(_, on) => {
+            v.set_aside_at_s = if *on {
+                Some(v.set_aside_at_s.unwrap_or_else(now_s))
+            } else {
+                None
+            };
+        }
+        Mark::Keep(_, on) => {
+            v.forever = if *on { Forever::ByVideo } else { Forever::No };
+        }
+        Mark::Hidden(_, on) => v.hidden = *on,
+    }
+}
+
+/// BY HAND, AND NOT DERIVED: a derived default would open the ranking with
+/// its Shorts in (`Shorts::Any`, the catalogue's own default), and a view's
+/// ranking is built from this one (`Ranked::state`).
+impl Default for Ranking {
+    fn default() -> Self {
+        Self {
+            path: None,
+            ranking: Shown::first(List::Ranking),
+            aside: Shown::first(List::SetAside),
+            layout: Layout::default(),
+            chosen: None,
+            listed: None,
+            answered: None,
+            stale: false,
+            video: None,
+            asked_page: None,
+            asked_video: None,
+            worker: None,
+            posters: crate::player_posters::Posters::default(),
+            opens_with: None,
+            given: false,
+            follow_owed: None,
+            marking: Vec::new(),
+        }
+    }
 }
 
 impl Ranking {
@@ -437,22 +607,76 @@ impl Ranking {
         }
     }
 
-    /// A page HANDED to the view, read from nowhere — a test's
-    /// (`test-support`).
+    /// A page of the RANKING HANDED to the view, read from nowhere — a
+    /// test's (`test-support`).
     #[cfg(any(test, feature = "test-support"))]
     pub fn given(&mut self, rows: Vec<RankedVideo>, total: u64) {
-        self.given = true;
-        self.answered = Some(self.page);
-        self.listed = Some(Ok(Listed {
-            page: self.page,
-            rows,
-            total,
-        }));
+        self.given_to(List::Ranking, rows, total);
     }
 
-    /// How many pages the ranking takes, at least one.
-    fn pages(&self) -> u32 {
-        match &self.listed {
+    /// A page of the VIDEOS SET ASIDE handed to the view — a test's.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn given_aside(&mut self, rows: Vec<RankedVideo>, total: u64) {
+        self.given_to(List::SetAside, rows, total);
+    }
+
+    /// A page of `list` handed to the view, as asked now.
+    #[cfg(any(test, feature = "test-support"))]
+    fn given_to(&mut self, list: List, rows: Vec<RankedVideo>, total: u64) {
+        let asked = self.asked(list);
+        self.given = true;
+        self.answered = Some(asked.clone());
+        self.listed = Some(Ok(Listed { asked, rows, total }));
+        self.read_back();
+    }
+
+    /// Where `list` stands.
+    #[must_use]
+    pub const fn shown(&self, list: List) -> Shown {
+        match list {
+            List::Ranking => self.ranking,
+            List::SetAside => self.aside,
+        }
+    }
+
+    /// The same, to change.
+    const fn shown_mut(&mut self, list: List) -> &mut Shown {
+        match list {
+            List::Ranking => &mut self.ranking,
+            List::SetAside => &mut self.aside,
+        }
+    }
+
+    /// WHAT `list` ASKS of the catalogue, where it stands now. The RANKING:
+    /// every video not hidden, best first, its Shorts as turned — the ones
+    /// set aside among them, marked. The VIDEOS SET ASIDE: only those, the
+    /// last set aside first, hidden or not.
+    #[must_use]
+    pub fn asked(&self, list: List) -> Asked {
+        let shown = self.shown(list);
+        let filter = match list {
+            List::Ranking => Filter {
+                shorts: shown.shorts,
+                ..Filter::default()
+            },
+            List::SetAside => Filter {
+                shorts: shown.shorts,
+                set_aside: SetAside::Only,
+                hidden: Hidden::Any,
+                order: Order::NewestSetAside,
+                ..Filter::default()
+            },
+        };
+        Asked {
+            list,
+            filter,
+            page: shown.page,
+        }
+    }
+
+    /// How many pages `list` takes, at least one — as its page held says.
+    fn pages(&self, list: List) -> u32 {
+        match self.listed(list) {
             Some(Ok(l)) => u32::try_from(l.total.div_ceil(u64::from(PER_PAGE)))
                 .unwrap_or(u32::MAX)
                 .max(1),
@@ -460,23 +684,83 @@ impl Ranking {
         }
     }
 
-    /// The page read, when it is the one asked.
-    fn listed(&self) -> Option<&Result<Listed, Why>> {
-        self.listed.as_ref()
+    /// The page held, read or refused, WHEN IT IS `list`'s: the other list's
+    /// is never drawn as this one's.
+    fn listed(&self, list: List) -> Option<&Result<Listed, Why>> {
+        self.listed
+            .as_ref()
+            .filter(|_| self.answered.as_ref().is_some_and(|a| a.list == list))
     }
 
-    /// A video of the page, or the one read whole — whichever holds it.
-    fn row_of(&self, id: &VideoId) -> Option<&RankedVideo> {
+    /// The list the page held is of — the one under a video's own page.
+    fn listed_list(&self) -> Option<List> {
+        self.answered.as_ref().map(|a| a.list)
+    }
+
+    /// A video of the page, or the one read whole — whichever holds it —
+    /// with the marks this door sent and has not read back put on it.
+    fn row_of(&self, id: &VideoId) -> Option<Cow<'_, RankedVideo>> {
         let whole = self
             .video
             .as_ref()
             .filter(|(v, _)| v == id)
             .and_then(|(_, got)| got.as_ref().ok()?.as_ref())
             .map(|v| &v.row);
-        whole.or_else(|| match &self.listed {
+        let read = whole.or_else(|| match &self.listed {
             Some(Ok(l)) => l.rows.iter().find(|r| &r.id == id),
             _ => None,
-        })
+        })?;
+        Some(self.as_marked(read))
+    }
+
+    /// `v` as read, with the marks this door sent on it and has not read
+    /// back put on it, in the order sent: what its glyphs light, what its
+    /// own page's rows say, and what the next press on it composes from.
+    fn as_marked<'r>(&self, v: &'r RankedVideo) -> Cow<'r, RankedVideo> {
+        let mut sent = self
+            .marking
+            .iter()
+            .filter(|s| video_of(&s.mark) == &v.id)
+            .peekable();
+        if sent.peek().is_none() {
+            return Cow::Borrowed(v);
+        }
+        let mut marked = v.clone();
+        for s in sent {
+            put_on(&s.mark, &mut marked);
+        }
+        Cow::Owned(marked)
+    }
+
+    /// Whether a mark this door sent on video `id` is still being written.
+    fn writing(&self, id: &VideoId) -> bool {
+        self.marking
+            .iter()
+            .any(|s| !s.written && video_of(&s.mark) == id)
+    }
+
+    /// What a mark this door sent came to: WRITTEN, it stays on the rows
+    /// until the catalogue is read again; REFUSED, it is dropped, and the
+    /// row is the catalogue's as it was.
+    fn mark_told(&mut self, mark: &Mark, written: bool) {
+        let Some(at) = self
+            .marking
+            .iter()
+            .position(|s| !s.written && s.mark == *mark)
+        else {
+            return;
+        };
+        if written {
+            self.marking[at].written = true;
+        } else {
+            self.marking.remove(at);
+        }
+    }
+
+    /// A READING KEPT — a page, a video, refused too — says what the
+    /// catalogue holds now: the marks told written are in it, and let go of.
+    fn read_back(&mut self) {
+        self.marking.retain(|s| !s.written);
     }
 
     /// Everything shown is read again at the next look: a write of this
@@ -489,37 +773,41 @@ impl Ranking {
         self.stale = true;
     }
 
-    /// Whether page `n` is held, read or refused, and not stale.
-    fn holds(&self, n: u32) -> bool {
-        !self.stale && self.answered == Some(n)
+    /// Whether what `asked` asks is held, read or refused, and not stale.
+    fn holds(&self, asked: &Asked) -> bool {
+        !self.stale && self.answered.as_ref() == Some(asked)
     }
 
-    /// An answer kept: a page past the last — the ranking shrank under it —
+    /// An answer kept: a page past the last — its list shrank under it —
     /// goes back to the last one, and is asked for.
     fn keep(&mut self, want: Want, got: Result<Got, Why>) {
         match (want, got) {
-            (Want::Page(n), Ok(Got::Page(l))) => {
-                if self.asked_page == Some(n) {
+            (Want::Page(asked), Ok(Got::Page(l))) => {
+                if self.asked_page.as_ref() == Some(&asked) {
                     self.asked_page = None;
                 }
                 let last = u32::try_from(l.total.div_ceil(u64::from(PER_PAGE)))
                     .unwrap_or(u32::MAX)
                     .saturating_sub(1);
-                let shrank = l.rows.is_empty() && n > last;
+                let shrank = l.rows.is_empty() && asked.page > last;
+                let list = asked.list;
+                let n = asked.page;
                 self.listed = Some(Ok(l));
-                self.answered = Some(n);
+                self.answered = Some(asked);
                 self.stale = false;
-                if shrank && self.page == n {
-                    self.page = last;
+                self.read_back();
+                if shrank && self.shown(list).page == n {
+                    self.shown_mut(list).page = last;
                 }
             }
-            (Want::Page(n), Err(why)) => {
-                if self.asked_page == Some(n) {
+            (Want::Page(asked), Err(why)) => {
+                if self.asked_page.as_ref() == Some(&asked) {
                     self.asked_page = None;
                 }
                 self.listed = Some(Err(why));
-                self.answered = Some(n);
+                self.answered = Some(asked);
                 self.stale = false;
+                self.read_back();
             }
             (Want::Video(id), got) => {
                 if self.asked_video.as_ref() == Some(&id) {
@@ -531,6 +819,7 @@ impl Ranking {
                     Err(why) => Err(why),
                 };
                 self.video = Some((id, got));
+                self.read_back();
             }
             (Want::Page(_), Ok(Got::Video(_))) => {}
         }
@@ -544,7 +833,7 @@ impl Ranking {
             return;
         };
         match &want {
-            Want::Page(n) => self.asked_page = Some(*n),
+            Want::Page(asked) => self.asked_page = Some(asked.clone()),
             Want::Video(id) => self.asked_video = Some(id.clone()),
         }
         match wake {
@@ -614,6 +903,16 @@ pub fn carry(act: Act) -> Outcome {
             let keys = crate::bindings::taught("transfers-open", None);
             Outcome::Downloading { title, taken, keys }
         }
+        // A MARK OF THE PERSON'S, written by the video catalogue's own door —
+        // the one that may write the person's catalogue.
+        Act::Mark {
+            catalogue,
+            mark,
+            title,
+        } => {
+            let done = crate::video_metrics_feed::mark(&catalogue, &mark);
+            Outcome::Marked(mark, title, done)
+        }
     }
 }
 
@@ -636,9 +935,31 @@ pub fn said(outcome: &Outcome, texts: &ronoctua_i18n::Texts) -> String {
         Outcome::Deleted(_, title, Ok(())) => {
             texts.t_with(key::PLAYER_RANKING_DELETED, &[("title", title)])
         }
-        Outcome::Hidden(_, title, Err(why)) | Outcome::Deleted(_, title, Err(why)) => {
-            refused(title, *why)
+        Outcome::Marked(Mark::Rating(_, Some(rating)), title, Ok(())) => texts.t_with(
+            key::PLAYER_RANKING_RATED,
+            &[
+                ("title", title),
+                (
+                    "rating",
+                    &texts.t(crate::video_metrics_words::rating_key(*rating)),
+                ),
+            ],
+        ),
+        Outcome::Marked(mark, title, Ok(())) => {
+            let said = match mark {
+                Mark::Rating(_, _) => key::PLAYER_RANKING_UNRATED,
+                Mark::SetAside(_, true) => key::PLAYER_RANKING_NOW_SET_ASIDE,
+                Mark::SetAside(_, false) => key::PLAYER_RANKING_NO_LONGER_SET_ASIDE,
+                Mark::Keep(_, true) => key::PLAYER_RANKING_NOW_FOREVER,
+                Mark::Keep(_, false) => key::PLAYER_RANKING_NO_LONGER_FOREVER,
+                Mark::Hidden(_, true) => key::PLAYER_RANKING_HIDDEN,
+                Mark::Hidden(_, false) => key::PLAYER_RANKING_SHOWN_AGAIN,
+            };
+            texts.t_with(said, &[("title", title)])
         }
+        Outcome::Hidden(_, title, Err(why))
+        | Outcome::Deleted(_, title, Err(why))
+        | Outcome::Marked(_, title, Err(why)) => refused(title, *why),
         Outcome::Downloading {
             title,
             taken: true,
@@ -694,21 +1015,31 @@ pub fn spot_of(id: &VideoId) -> String {
     format!("ranked-{}", id.0)
 }
 
-/// What is said under a video's title, each line in its parts
-/// (`player_posters::Tile::under`). In a ROW: its channel and its score,
-/// then when it was published and how long it runs — each line's parts on
-/// one line where they fit, else a line each. In a TILE of the grid, a box
-/// too narrow for both on a line: its score first — what the ranking is by,
-/// never cut — and its channel under it.
-fn under(
-    v: &RankedVideo,
-    layout: Layout,
-    now_s: i64,
-    texts: &ronoctua_i18n::Texts,
-) -> Vec<Vec<String>> {
-    let points = crate::video_metrics_words::points(v.score, texts);
+/// What is said under a video's title, each line in its parts, with its
+/// glyphs (`player_posters::Tile::under`). Its SCORE IS A BARE NUMBER — the
+/// list is by score, and "points" on every line was a word read once and
+/// then only in the way — with the FOUR FACES of its rating right after it
+/// ([`ratings`]), and its MARKS at the line's right edge ([`marks`]). In a
+/// ROW: its channel and its score, then when it was published and how long
+/// it runs, the marks at that line's end — or at the first's, with neither
+/// known. In a TILE of the grid, a box too narrow for both on a line: its
+/// score first — what the ranking is by, never cut — and its channel under
+/// it, the marks beside the channel.
+fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Texts) -> Vec<Said> {
+    let score = crate::video_metrics_words::score_number(v.score, texts);
     if layout == Layout::Grid {
-        return vec![vec![points], vec![v.channel.clone()]];
+        return vec![
+            Said {
+                parts: vec![score],
+                after: ratings(v),
+                end: Vec::new(),
+            },
+            Said {
+                parts: vec![v.channel.clone()],
+                after: Vec::new(),
+                end: marks(v),
+            },
+        ];
     }
     let when: Vec<String> = v
         .published_at_s
@@ -716,11 +1047,271 @@ fn under(
         .into_iter()
         .chain(v.duration_s.map(crate::video_metrics_words::length))
         .collect();
-    let mut lines = vec![vec![v.channel.clone(), points]];
-    if !when.is_empty() {
-        lines.push(when);
+    let mut first = Said {
+        parts: vec![v.channel.clone(), score],
+        after: ratings(v),
+        end: Vec::new(),
+    };
+    if when.is_empty() {
+        first.end = marks(v);
+        return vec![first];
     }
-    lines
+    vec![
+        first,
+        Said {
+            parts: when,
+            after: Vec::new(),
+            end: marks(v),
+        },
+    ]
+}
+
+/// THE FOUR FACES OF A VIDEO'S RATING, from very negative to very positive:
+/// the one it has lit, and a click on it takes the rating off; on another, it
+/// rates the video so.
+fn ratings(v: &RankedVideo) -> Vec<Control> {
+    Rating::ALL
+        .into_iter()
+        .map(|r| {
+            let q = Quick::Rate(r);
+            Control {
+                glyph: crate::video_metrics_words::rating_glyph(r),
+                lit: v.rating == Some(r),
+                target: Target::RankedQuick(v.id.clone(), q),
+                about: q.command(),
+            }
+        })
+        .collect()
+}
+
+/// A VIDEO'S MARKS, each a click that acts at once: set aside — the bookmark
+/// filled while it is — hidden, or shown again when it is (the set-aside list
+/// holds the hidden ones too), deleted after a question, and kept for ever
+/// (the ∞, lit while it is kept, by its own mark or by its channel's).
+fn marks(v: &RankedVideo) -> Vec<Control> {
+    let id = &v.id;
+    let aside = v.set_aside_at_s.is_some();
+    vec![
+        Control {
+            glyph: crate::video_metrics_words::set_aside_glyph(aside),
+            lit: aside,
+            target: Target::RankedQuick(id.clone(), Quick::SetAside),
+            about: Quick::SetAside.command(),
+        },
+        Control {
+            glyph: crate::video_metrics_words::hidden_glyph(v.hidden),
+            lit: v.hidden,
+            target: Target::RankedQuick(id.clone(), Quick::Hide),
+            about: if v.hidden {
+                crate::player_seam::ranking::SHOW
+            } else {
+                Quick::Hide.command()
+            },
+        },
+        Control {
+            glyph: tokens::icon::VIDEO_DELETE,
+            lit: false,
+            target: Target::RankedQuick(id.clone(), Quick::Delete),
+            about: Quick::Delete.command(),
+        },
+        Control {
+            glyph: tokens::icon::VIDEO_FOREVER,
+            lit: v.forever != Forever::No,
+            target: Target::RankedQuick(id.clone(), Quick::Forever),
+            about: Quick::Forever.command(),
+        },
+    ]
+}
+
+/// The rating a turn of the ring gives after `now` — none, then the four,
+/// from very negative to very positive — `forward`, else back.
+fn rating_turned(now: Option<Rating>, forward: bool) -> Option<Rating> {
+    let ring: Vec<Option<Rating>> = std::iter::once(None)
+        .chain(Rating::ALL.into_iter().map(Some))
+        .collect();
+    let at = ring.iter().position(|r| *r == now).unwrap_or(0);
+    let next = if forward {
+        (at + 1) % ring.len()
+    } else {
+        (at + ring.len() - 1) % ring.len()
+    };
+    ring[next]
+}
+
+/// THE RATING'S RING on video `id`'s own page, turned once — `forward`, else
+/// back — and written as the person's mark ([`marked`]): the one way the
+/// ring turns, whichever key or click turned it.
+fn rating_ring(
+    ranking: &mut Ranking,
+    id: &VideoId,
+    forward: bool,
+    texts: &ronoctua_i18n::Texts,
+) -> Errand {
+    marked(
+        ranking,
+        id,
+        |v| Mark::Rating(id.clone(), rating_turned(v.rating, forward)),
+        texts,
+    )
+}
+
+/// The video a quick mark acts on: the one whose own page is open, else the
+/// one under the cursor on the ranking's rows — none on a row that is no
+/// video.
+fn video_here(
+    view: &View,
+    state: Option<&State>,
+    columns: u16,
+    texts: &ronoctua_i18n::Texts,
+) -> Option<VideoId> {
+    if view.page() == PageId::RankedVideo {
+        return view.ranking().chosen.clone();
+    }
+    match view
+        .rows(state, columns, texts)
+        .get(view.cursor())
+        .map(|r| r.target.clone())
+    {
+        Some(Target::Ranked(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// Why nothing is sent for video `title`: a mark on it is still being
+/// written ([`Ranking::writing`]) — said, and pressed again in a moment.
+fn still_writing(title: &str, texts: &ronoctua_i18n::Texts) -> Errand {
+    Errand::Said(texts.t_with(key::PLAYER_RANKING_STILL_MARKING, &[("title", title)]))
+}
+
+/// A MARK ON VIDEO `id`, as the person's mark makes it of the video held —
+/// with the marks sent before it on ([`Ranking::row_of`]) — written off the
+/// loop by the video catalogue's door, kept on the rows until it is read
+/// back, and said when it is done; or why not, at once: no such video held,
+/// a mark on it still being written, no catalogue.
+fn marked(
+    ranking: &mut Ranking,
+    id: &VideoId,
+    mark: impl FnOnce(&RankedVideo) -> Mark,
+    texts: &ronoctua_i18n::Texts,
+) -> Errand {
+    let Some(v) = ranking.row_of(id) else {
+        return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
+    };
+    let (mark, title) = (mark(&v), v.title.clone());
+    if ranking.writing(id) {
+        return still_writing(&title, texts);
+    }
+    let Some(catalogue) = ranking.path.clone() else {
+        return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotThere)));
+    };
+    ranking.marking.push(Sent {
+        mark: mark.clone(),
+        written: false,
+    });
+    Errand::Ranking(Act::Mark {
+        catalogue,
+        mark,
+        title,
+    })
+}
+
+/// A QUICK MARK on video `id` — its glyph clicked, its key, a row of its own
+/// page: a rating — the one it has taken off — setting it aside or taking it
+/// out, keeping it for ever by its own mark — whatever its channel keeps, so
+/// it stays if the channel changes — or the mark taken off, a hidden video
+/// shown again, all written off the loop; hidden at once; deleted after a
+/// question, "no" first. None while a mark on it is still being written.
+fn quick(view: &mut View, id: &VideoId, q: Quick, texts: &ronoctua_i18n::Texts) -> Errand {
+    let hidden = view.ranking().row_of(id).is_some_and(|v| v.hidden);
+    let ranking = view.ranking_mut();
+    match q {
+        // ONE HIDDEN ALREADY — the set-aside list holds them — is shown in
+        // the ranking again: a mark of the person's, as the eye beside it
+        // says.
+        Quick::Hide if hidden => marked(ranking, id, |_| Mark::Hidden(id.clone(), false), texts),
+        Quick::Rate(r) => marked(
+            ranking,
+            id,
+            |v| Mark::Rating(id.clone(), (v.rating != Some(r)).then_some(r)),
+            texts,
+        ),
+        Quick::SetAside => marked(
+            ranking,
+            id,
+            |v| Mark::SetAside(id.clone(), v.set_aside_at_s.is_none()),
+            texts,
+        ),
+        Quick::Forever => marked(
+            ranking,
+            id,
+            |v| Mark::Keep(id.clone(), v.forever != Forever::ByVideo),
+            texts,
+        ),
+        Quick::Hide | Quick::Delete => {
+            let Some(title) = ranking.row_of(id).map(|v| v.title.clone()) else {
+                return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
+            };
+            // NOT RACING A MARK: shown again and hidden, each on a thread of
+            // its own, land in either order.
+            if ranking.writing(id) {
+                return still_writing(&title, texts);
+            }
+            let Some(catalogue) = ranking.path.clone() else {
+                return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotThere)));
+            };
+            let id = id.clone();
+            if q == Quick::Hide {
+                return Errand::Ranking(Act::Hide {
+                    catalogue,
+                    id,
+                    title,
+                });
+            }
+            // FOR GOOD, after a question — "no" first: a deleted video never
+            // comes back.
+            let sentence = texts.t_with(key::ASK_PLAYER_RANKING_DELETE, &[("title", &title)]);
+            view.ask_about(
+                sentence,
+                Errand::Ranking(Act::Delete {
+                    catalogue,
+                    id,
+                    title,
+                }),
+            )
+        }
+    }
+}
+
+/// The Shorts a turn of the ring gives after `now` — with them, without
+/// them, only them — `forward`, else back.
+fn shorts_after(now: Shorts, forward: bool) -> Shorts {
+    const RING: [Shorts; 3] = [Shorts::Any, Shorts::Without, Shorts::Only];
+    let at = RING.iter().position(|s| *s == now).unwrap_or(0);
+    let next = if forward {
+        (at + 1) % RING.len()
+    } else {
+        (at + RING.len() - 1) % RING.len()
+    };
+    RING[next]
+}
+
+/// THE SHORTS OF `list`, turned once — `forward`, else back — whichever key
+/// or click turned them: a new filter is a new list, read from its first
+/// page, the cursor staying on the ring that turned. Kept while the door is
+/// open, never written down.
+fn shorts_turned(
+    view: &mut View,
+    list: List,
+    forward: bool,
+    state: Option<&State>,
+    columns: u16,
+    texts: &ronoctua_i18n::Texts,
+) {
+    let shown = view.ranking_mut().shown_mut(list);
+    shown.shorts = shorts_after(shown.shorts, forward);
+    shown.page = 0;
+    view.follow("ranking-shorts", state, columns, texts);
+    view.settle_in(state, columns, texts);
 }
 
 /// Now, in seconds since the epoch — an age is counted from it.
@@ -769,16 +1360,17 @@ pub trait RankingView {
         texts: &ronoctua_i18n::Texts,
     );
 
-    /// The ranking's title, its layout's glyph beside it.
-    fn ranking_title(&self, b: &mut Builder<'_>);
+    /// The title of list page `page` — the ranking's, or the videos set
+    /// aside — its layout's glyph beside it.
+    fn ranking_title(&self, page: PageId, b: &mut Builder<'_>);
 
     /// Why there is no ranking to show, in a sentence: no catalogue yet —
     /// and where channels are added — or why it cannot be read.
     fn ranking_refused(&self, why: Why, b: &mut Builder<'_>);
 
-    /// The ranking's rows, under its title: the page, the layout, and the
-    /// videos of the page — a row each or a grid.
-    fn ranking_rows(&self, b: &mut Builder<'_>);
+    /// The rows of `list`, under its title: the page, the layout, its
+    /// Shorts, and the videos of the page — a row each or a grid.
+    fn ranking_rows(&self, list: List, b: &mut Builder<'_>);
 
     /// A video's own page: its thumbnail, what it is, and what can be done
     /// with it.
@@ -822,10 +1414,13 @@ pub trait RankingView {
         texts: &ronoctua_i18n::Texts,
     ) -> Errand;
 
-    /// What a hide or a delete came to, for the view: done, the video's own
-    /// page closes — it is no longer in the ranking — the cursor goes back
-    /// to the row that opened it at the next settle, and the ranking is read
-    /// again. `true` when the rows changed.
+    /// What a hide, a delete or a mark came to, for the view: hidden or
+    /// deleted, the video's own page closes — it is no longer on the list
+    /// under it — and the cursor goes back to the row that opened it at the
+    /// next settle; but hidden from the videos set aside, which hold the
+    /// hidden ones, or marked, the page stays. Either way the list is read
+    /// again — and a mark refused is dropped from the rows it was drawn on.
+    /// `true` when the rows changed.
     fn ranking_told(&mut self, outcome: &Outcome) -> bool;
 }
 
@@ -844,7 +1439,10 @@ impl RankingView for View {
 
     fn ranking_look(&mut self, state: Option<&State>, columns: u16, texts: &ronoctua_i18n::Texts) {
         let page = self.page();
-        if !matches!(page, PageId::Ranking | PageId::RankedVideo) {
+        if !matches!(
+            page,
+            PageId::Ranking | PageId::SetAside | PageId::RankedVideo
+        ) {
             return;
         }
         if self.ranking().opens_with.is_none() {
@@ -873,12 +1471,15 @@ impl RankingView for View {
             return;
         }
         let wake = self.wake.clone();
-        let n = self.ranking().page;
         // A PAGE ANSWERED IS HELD, refused too: it is read again when the
-        // catalogue moves — the thread's watch — or another page is asked.
-        let held = self.ranking().holds(n);
-        if page == PageId::Ranking && !held && self.ranking().asked_page != Some(n) {
-            self.ranking_mut().ask(Want::Page(n), wake.as_ref());
+        // catalogue moves — the thread's watch — or another page, another
+        // filter or the other list is asked.
+        if let Some(list) = List::of(page) {
+            let asked = self.ranking().asked(list);
+            let held = self.ranking().holds(&asked);
+            if !held && self.ranking().asked_page.as_ref() != Some(&asked) {
+                self.ranking_mut().ask(Want::Page(asked), wake.as_ref());
+            }
         }
         if page == PageId::RankedVideo
             && let Some(id) = self.ranking().chosen.clone()
@@ -889,12 +1490,12 @@ impl RankingView for View {
             }
         }
         // THE THUMBNAILS OF WHAT IS SHOWN — the page's, or the video's own.
-        let files: Vec<PathBuf> = match page {
-            PageId::Ranking => match &self.ranking().listed {
+        let files: Vec<PathBuf> = match List::of(page) {
+            Some(list) => match self.ranking().listed(list) {
                 Some(Ok(l)) => l.rows.iter().filter_map(|r| r.thumb_file.clone()).collect(),
                 _ => Vec::new(),
             },
-            _ => self
+            None => self
                 .ranking()
                 .chosen
                 .as_ref()
@@ -949,9 +1550,9 @@ impl RankingView for View {
         }
     }
 
-    fn ranking_title(&self, b: &mut Builder<'_>) {
+    fn ranking_title(&self, page: PageId, b: &mut Builder<'_>) {
         b.heading_controls_said(
-            b.t(key::PLAYER_PAGE_RANKING),
+            b.t(page.key()),
             &[(self.ranking().layout.glyph(), Target::RankingLayout, LAYOUT)],
         );
     }
@@ -970,8 +1571,10 @@ impl RankingView for View {
         crate::player_find::note_said(&said, b);
     }
 
-    fn ranking_rows(&self, b: &mut Builder<'_>) {
-        let listed = match self.ranking().listed() {
+    fn ranking_rows(&self, list: List, b: &mut Builder<'_>) {
+        // THE OTHER LIST'S PAGE is never drawn as this one's: until this
+        // one's is read, it is being read.
+        let listed = match self.ranking().listed(list) {
             None => {
                 b.note(key::PLAYER_RANKING_READING);
                 return;
@@ -982,18 +1585,15 @@ impl RankingView for View {
             }
             Some(Ok(l)) => l,
         };
-        if listed.total == 0 {
-            b.note(key::PLAYER_RANKING_EMPTY);
-            return;
-        }
+        let shown = self.ranking().shown(list);
         let n = |x: u64| Arg::Number(i64::try_from(x).unwrap_or(i64::MAX));
         b.pair(
             b.t(key::PLAYER_CATALOG_PAGE),
             b.texts.t_args(
                 key::PLAYER_CATALOG_PAGE_OF,
                 &[
-                    ("page", Arg::Number(i64::from(listed.page) + 1)),
-                    ("pages", Arg::Number(i64::from(self.ranking().pages()))),
+                    ("page", Arg::Number(i64::from(listed.asked.page) + 1)),
+                    ("pages", Arg::Number(i64::from(self.ranking().pages(list)))),
                 ],
             ),
             Target::RankingPage,
@@ -1005,7 +1605,38 @@ impl RankingView for View {
             Target::RankingLayout,
             "ranking-layout",
         );
-        let from = u64::from(listed.page) * u64::from(PER_PAGE) + 1;
+        // ITS SHORTS, a ring — drawn on a list with nothing on it too: the
+        // filter that left it empty is turned back here.
+        let shorts = b.t(crate::video_metrics_words::shorts_key(shown.shorts));
+        b.pair(
+            b.t(key::VIDEO_METRICS_FILTER_SHORTS),
+            shorts,
+            Target::RankingShorts,
+            "ranking-shorts",
+        );
+        // NOTHING ON IT, said for what it is: the Shorts turned away — as the
+        // page drawn was READ, which for a moment after a turn is the filter
+        // before it — or nothing set aside yet, or nothing ranked at all. The
+        // videos set aside say it of themselves: the scans have nothing to do
+        // with what the person set aside.
+        if listed.total == 0 {
+            let read_under = listed.asked.filter.shorts;
+            if read_under != Shorts::Any {
+                let sentence = match list {
+                    List::Ranking => key::PLAYER_RANKING_EMPTY_FILTERED,
+                    List::SetAside => key::PLAYER_RANKING_ASIDE_EMPTY_FILTERED,
+                };
+                let filter = b.t(crate::video_metrics_words::shorts_key(read_under));
+                let said = b.texts.t_with(sentence, &[("shorts", &filter)]);
+                crate::player_find::note_said(&said, b);
+            } else if list == List::SetAside {
+                b.note(key::PLAYER_RANKING_ASIDE_EMPTY);
+            } else {
+                b.note(key::PLAYER_RANKING_EMPTY);
+            }
+            return;
+        }
+        let from = u64::from(listed.asked.page) * u64::from(PER_PAGE) + 1;
         let to = from + u64::try_from(listed.rows.len()).unwrap_or(0);
         b.heading_said(b.texts.t_args(
             key::PLAYER_CATALOG_SHOWN,
@@ -1016,9 +1647,12 @@ impl RankingView for View {
             ],
         ));
         let now = now_s();
+        // EACH AS READ, with the marks this door sent on it: a glyph lights
+        // at the click, not when the catalogue is read again.
         let tiles: Vec<Tile> = listed
             .rows
             .iter()
+            .map(|v| self.ranking().as_marked(v))
             .map(|v| Tile {
                 picture: v
                     .thumb_file
@@ -1026,10 +1660,15 @@ impl RankingView for View {
                     .and_then(|f| self.ranking().posters.of_file(f)),
                 glyph: tokens::icon::PLAYER_LANE_PICTURE,
                 title: v.title.clone(),
-                under: under(v, self.ranking().layout, now, b.texts),
+                under: under(&v, self.ranking().layout, now, b.texts),
                 target: Target::Ranked(v.id.clone()),
                 spot: spot_of(&v.id),
-                more: Some((Target::RankedMore(v.id.clone()), MORE)),
+                more: Some(Control {
+                    glyph: tokens::icon::ELLIPSIS,
+                    lit: false,
+                    target: Target::RankedMore(v.id.clone()),
+                    about: MORE,
+                }),
             })
             .collect();
         let shape = Shape {
@@ -1107,8 +1746,29 @@ impl RankingView for View {
         }
         b.heading(key::PLAYER_RANKING_ACTIONS);
         for act in RankedAct::ALL {
+            // THE RATING IS A RING, its value beside it; a row whose video is
+            // so already says what pressing it does now — taken out of the
+            // set-aside list, its own never-delete mark taken off.
+            if act == RankedAct::Rate {
+                b.pair(
+                    b.t(act.key()),
+                    b.t(v.rating.map_or(
+                        key::VIDEO_METRICS_RATING_NONE,
+                        crate::video_metrics_words::rating_key,
+                    )),
+                    Target::RankedRating,
+                    act.spot(),
+                );
+                continue;
+            }
+            let on = match act {
+                RankedAct::SetAside => v.set_aside_at_s.is_some(),
+                RankedAct::Forever => v.forever == Forever::ByVideo,
+                RankedAct::Hide => v.hidden,
+                _ => false,
+            };
             b.pair(
-                b.t(act.key()),
+                b.t(act.key_when(on)),
                 String::new(),
                 Target::RankedDo(act),
                 act.spot(),
@@ -1140,16 +1800,31 @@ impl RankingView for View {
         columns: u16,
         texts: &ronoctua_i18n::Texts,
     ) -> Errand {
-        if self.page() != PageId::Ranking {
+        // A QUICK MARK on the video under the cursor — or on the one whose
+        // own page is open.
+        if let RankingKey::Quick(q) = key {
+            return match video_here(self, state, columns, texts) {
+                Some(id) => quick(self, &id, q, texts),
+                None => Errand::Nothing,
+            };
+        }
+        // THE REST ARE A LIST'S: the ranking's, or the videos set aside.
+        let Some(list) = List::of(self.page()) else {
+            return Errand::Nothing;
+        };
+        // ITS SHORTS, turned on: with them, without them, only them.
+        if key == RankingKey::Shorts {
+            shorts_turned(self, list, true, state, columns, texts);
             return Errand::Nothing;
         }
-        let last = self.ranking().pages().saturating_sub(1);
+        let last = self.ranking().pages(list).saturating_sub(1);
         let r = self.ranking_mut();
+        let page = r.shown(list).page;
         match key {
-            RankingKey::Earlier => r.page = r.page.saturating_sub(1),
-            RankingKey::Later => r.page = (r.page + 1).min(last),
-            RankingKey::First => r.page = 0,
-            RankingKey::Last => r.page = last,
+            RankingKey::Earlier => r.shown_mut(list).page = page.saturating_sub(1),
+            RankingKey::Later => r.shown_mut(list).page = (page + 1).min(last),
+            RankingKey::First => r.shown_mut(list).page = 0,
+            RankingKey::Last => r.shown_mut(list).page = last,
             RankingKey::Layout => r.layout = r.layout.next(),
             RankingKey::More => {
                 let target = self
@@ -1161,6 +1836,8 @@ impl RankingView for View {
                 }
                 return Errand::Nothing;
             }
+            // THE SHORTS AND A QUICK MARK were answered above.
+            RankingKey::Shorts | RankingKey::Quick(_) => return Errand::Nothing,
         }
         // A NEW PAGE STARTS AT ITS TOP: the cursor's spot is on another page.
         if matches!(
@@ -1184,7 +1861,7 @@ impl RankingView for View {
         let errand = match (target, press) {
             (Target::Ranked(id), Press::Enter | Press::Add | Press::PlayNow) => {
                 let v = self.ranking().row_of(id)?;
-                put(v, press == Press::PlayNow, texts)
+                put(&v, press == Press::PlayNow, texts)
             }
             (Target::RankedMore(id), Press::Enter) => {
                 let id = id.clone();
@@ -1194,20 +1871,38 @@ impl RankingView for View {
             (Target::RankingLayout, Press::Enter | Press::Less | Press::More) => {
                 return Some(self.ranking_pressed(RankingKey::Layout, state, columns, texts));
             }
+            // ITS SHORTS' RING: `RET` and `→` on, `←` back.
+            (Target::RankingShorts, Press::Enter | Press::Less | Press::More) => {
+                let list = List::of(self.page())?;
+                shorts_turned(self, list, press != Press::Less, state, columns, texts);
+                Errand::Nothing
+            }
             (Target::RankingPage, Press::Less) => {
                 return Some(self.ranking_pressed(RankingKey::Earlier, state, columns, texts));
             }
             // `RET` ON THE PAGE goes on, and from the last back to the first.
             (Target::RankingPage, Press::Enter | Press::More) => {
-                let key =
-                    if press == Press::Enter && self.ranking().page + 1 >= self.ranking().pages() {
-                        RankingKey::First
-                    } else {
-                        RankingKey::Later
-                    };
+                let list = List::of(self.page())?;
+                let r = self.ranking();
+                let key = if press == Press::Enter && r.shown(list).page + 1 >= r.pages(list) {
+                    RankingKey::First
+                } else {
+                    RankingKey::Later
+                };
                 return Some(self.ranking_pressed(key, state, columns, texts));
             }
             (Target::RankedDo(act), Press::Enter) => self.ranked_do(*act, state, columns, texts),
+            // A QUICK MARK'S GLYPH, clicked: at once.
+            (Target::RankedQuick(id, q), Press::Enter) => {
+                let id = id.clone();
+                quick(self, &id, *q, texts)
+            }
+            // THE RATING'S RING on a video's own page: `RET` and `→` on,
+            // `←` back.
+            (Target::RankedRating, Press::Enter | Press::Less | Press::More) => {
+                let id = self.ranking().chosen.clone()?;
+                rating_ring(self.ranking_mut(), &id, press != Press::Less, texts)
+            }
             _ => return None,
         };
         Some(errand)
@@ -1223,49 +1918,53 @@ impl RankingView for View {
         let Some(id) = self.ranking().chosen.clone() else {
             return Errand::Nothing;
         };
-        let Some(v) = self.ranking().row_of(&id).cloned() else {
+        let Some(v) = self.ranking().row_of(&id).map(Cow::into_owned) else {
             return Errand::Said(texts.t(crate::video_metrics_words::why_key(Why::NotFound)));
         };
-        let catalogue = self.ranking().path.clone();
+        let _ = (state, columns);
         match act {
             RankedAct::PlayNow | RankedAct::Add => put(&v, act == RankedAct::PlayNow, texts),
             RankedAct::Kiosk => Errand::Kiosk(v.url),
+            RankedAct::Nyxt => Errand::Nyxt(v.url),
             RankedAct::Download => Errand::Ranking(Act::Download {
                 url: v.url,
                 title: v.title,
             }),
-            RankedAct::Hide | RankedAct::Delete => {
-                let Some(catalogue) = catalogue else {
-                    return Errand::Said(
-                        texts.t(crate::video_metrics_words::why_key(Why::NotThere)),
-                    );
-                };
-                if act == RankedAct::Hide {
-                    return Errand::Ranking(Act::Hide {
-                        catalogue,
-                        id,
-                        title: v.title,
-                    });
-                }
-                let _ = (state, columns);
-                // FOR GOOD, after a question — "no" first: a deleted video
-                // never comes back.
-                let sentence = texts.t_with(key::ASK_PLAYER_RANKING_DELETE, &[("title", &v.title)]);
-                self.ask_about(
-                    sentence,
-                    Errand::Ranking(Act::Delete {
-                        catalogue,
-                        id,
-                        title: v.title,
-                    }),
-                )
-            }
+            // NO ROW IS DRAWN AS THIS ONE: the rating's row is its ring
+            // (`Target::RankedRating`, `ranking_turned`), which the arrows
+            // turn too. The act is here for the match to be whole, and does
+            // what `RET` on that row does — through the same ring.
+            RankedAct::Rate => rating_ring(self.ranking_mut(), &id, true, texts),
+            RankedAct::SetAside => quick(self, &id, Quick::SetAside, texts),
+            RankedAct::Forever => quick(self, &id, Quick::Forever, texts),
+            RankedAct::Hide => quick(self, &id, Quick::Hide, texts),
+            RankedAct::Delete => quick(self, &id, Quick::Delete, texts),
         }
     }
 
     fn ranking_told(&mut self, outcome: &Outcome) -> bool {
         let gone = match outcome {
+            // HIDDEN, FROM THE VIDEOS SET ASIDE: it stays on that list —
+            // which holds the hidden ones — and its page stays, as a mark's.
+            Outcome::Hidden(_, _, Ok(()))
+                if self.ranking().listed_list() == Some(List::SetAside) =>
+            {
+                self.ranking_mut().forget();
+                return true;
+            }
             Outcome::Hidden(id, _, Ok(())) | Outcome::Deleted(id, _, Ok(())) => id,
+            // A MARK keeps the page where it is: what is held is read again,
+            // and the row says what the catalogue says now — the mark on it
+            // until then. One REFUSED leaves the row as the catalogue has
+            // it.
+            Outcome::Marked(mark, _, done) => {
+                let r = self.ranking_mut();
+                r.mark_told(mark, done.is_ok());
+                if done.is_ok() {
+                    r.forget();
+                }
+                return true;
+            }
             _ => return false,
         };
         self.ranking_mut().forget();
@@ -1307,19 +2006,20 @@ impl crate::player_seam::Page for Ranked {
     }
 
     fn title(&self, view: &View, page: PageId, b: &mut Builder<'_>) -> bool {
-        // THE RANKING carries its layout beside its title.
-        if page != PageId::Ranking {
+        // THE TWO LISTS carry their layout beside their title.
+        if List::of(page).is_none() {
             return false;
         }
-        view.ranking_title(b);
+        view.ranking_title(page, b);
         true
     }
 
     fn rows(&self, view: &View, page: PageId, _: Option<&State>, b: &mut Builder<'_>) -> bool {
-        // THE RANKING AND A VIDEO'S OWN PAGE: the video catalogue's, read by
-        // this door itself.
+        // THE RANKING, THE VIDEOS SET ASIDE AND A VIDEO'S OWN PAGE: the video
+        // catalogue's, read by this door itself.
         match page {
-            PageId::Ranking => view.ranking_rows(b),
+            PageId::Ranking => view.ranking_rows(List::Ranking, b),
+            PageId::SetAside => view.ranking_rows(List::SetAside, b),
             PageId::RankedVideo => view.ranked_video_rows(b),
             _ => return false,
         }
@@ -1372,8 +2072,9 @@ impl crate::player_seam::Page for Ranked {
     }
 
     fn told(&self, view: &mut View, answer: &crate::player::Told) -> Option<bool> {
-        // A VIDEO HIDDEN OR DELETED: its own page closes, and the ranking is
-        // read again.
+        // A VIDEO HIDDEN OR DELETED: its own page closes — but not one hidden
+        // from the videos set aside, which hold the hidden ones — and a MARK
+        // keeps it; either way the list is read again.
         match answer {
             crate::player::Told::Ranking(outcome) => Some(view.ranking_told(outcome)),
             _ => None,
@@ -1388,12 +2089,12 @@ impl crate::player_seam::Page for Ranked {
     }
 
     fn off_the_loop(&self, errand: Errand) -> Result<crate::player_seam::OffTheLoop, Errand> {
-        // A VIDEO OF THE RANKING hidden, deleted or downloaded, OFF THE LOOP —
-        // a write waits for a scan that holds the catalogue — and said when
-        // it is done (`Told::Ranking`).
+        // A VIDEO OF THE RANKING hidden, deleted, downloaded or marked, OFF
+        // THE LOOP — a write waits for a scan that holds the catalogue — and
+        // said when it is done (`Told::Ranking`).
         match errand {
             Errand::Ranking(act) => Ok(crate::player_seam::OffTheLoop {
-                about: "a video of the ranking, hidden, deleted or downloaded",
+                about: "a video of the ranking, hidden, deleted, downloaded or marked",
                 thread: "player-ranking-act",
                 work: Box::new(move || crate::player::Told::Ranking(carry(act))),
                 unstarted: None,
@@ -1437,6 +2138,9 @@ pub mod fixture {
             published_at_s: Some(1_700_000_000),
             is_short: false,
             hidden: false,
+            rating: None,
+            set_aside_at_s: None,
+            forever: ronoctua_video_metrics::read::Forever::No,
         }
     }
 }
@@ -1473,6 +2177,16 @@ pub(crate) mod tests {
         rows.iter()
             .position(|r| r.spot == spot)
             .unwrap_or_else(|| panic!("no row {spot}"))
+    }
+
+    /// The mark errand `e` sends, told written to view `v` as the catalogue's
+    /// door tells it — not read back yet.
+    fn written(v: &mut View, e: Errand) -> Mark {
+        let Errand::Ranking(Act::Mark { mark, title, .. }) = e else {
+            panic!("no mark: {e:?}");
+        };
+        assert!(v.ranking_told(&Outcome::Marked(mark.clone(), title, Ok(()))));
+        mark
     }
 
     /// FAILS IF: `RET` on a video stops putting it at the queue's end,
@@ -1639,49 +2353,76 @@ pub(crate) mod tests {
         let mut v = on_the_ranking(3);
         v.ranking_mut()
             .given((0..PER_PAGE).map(video).collect(), 60);
-        assert_eq!(v.ranking().pages(), 3);
+        assert_eq!(v.ranking().pages(List::Ranking), 3);
         v.key(Press::Ranking(RankingKey::Earlier), Some(&s), 100, &t);
-        assert_eq!(v.ranking().page, 0);
+        assert_eq!(v.ranking().ranking.page, 0);
         v.key(Press::Ranking(RankingKey::Last), Some(&s), 100, &t);
-        assert_eq!(v.ranking().page, 2);
+        assert_eq!(v.ranking().ranking.page, 2);
         v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
-        assert_eq!(v.ranking().page, 2, "past the last");
+        assert_eq!(v.ranking().ranking.page, 2, "past the last");
         v.key(Press::Ranking(RankingKey::First), Some(&s), 100, &t);
-        assert_eq!(v.ranking().page, 0);
+        assert_eq!(v.ranking().ranking.page, 0);
         v.key(Press::Ranking(RankingKey::Layout), Some(&s), 100, &t);
         assert_eq!(v.ranking().layout, Layout::Grid);
         let rows = v.rows(Some(&s), 100, &t);
         let shelf = row_at(&rows, &format!("shelf-{}", spot_of(&video(0).id)));
-        // THE ⋯ LINE is a line of its own, under the titles: a click on the
-        // picture takes the video, and only the ⋯ opens its page.
+        // THE ⋯ LINE is a line of its own, under the titles — the score's,
+        // the four faces of its rating beside it — and the channel's under
+        // it, the marks at its edge: a click on the picture takes the video,
+        // and only a glyph acts.
         let more_line = (shelf..rows.len())
-            .find(|&n| rows[n].cells.iter().any(|c| c.control))
+            .find(|&n| rows[n].cells.iter().any(|c| c.about == Some(MORE)))
             .expect("a line with the ⋯");
         assert!(rows[more_line].heading, "the ⋯'s line is the tile's row");
         assert!(rows[shelf].cells.iter().all(|c| !c.control));
-        assert!(
-            rows[more_line]
-                .cells
-                .iter()
-                .all(|c| c.about == Some(MORE) && c.width == tokens::space::PLAYER_QUEUEGLYPH)
-        );
-        // AND IT LIGHTS ONLY ITS `⋯`, as a click takes only it: the lines
-        // of what is said under the titles light nothing.
-        use crate::player_rows::{Lighting, lighting};
-        let mores: Vec<(u16, u16)> = rows[more_line]
+        let tiles = rows[more_line]
             .cells
             .iter()
-            .map(|c| (c.from, c.width))
-            .collect();
-        assert_eq!(lighting(&rows, more_line), Lighting::Cell(mores));
-        assert_eq!(lighting(&rows, more_line + 1), Lighting::Cell(Vec::new()));
+            .filter(|c| c.about == Some(MORE))
+            .count();
+        assert!(tiles >= 3, "a shelf of three at least: {tiles}");
+        let said = |n: usize, q: Quick| {
+            rows[n]
+                .cells
+                .iter()
+                .filter(|c| c.about == Some(q.command()))
+                .count()
+        };
+        for r in Rating::ALL {
+            assert_eq!(said(more_line, Quick::Rate(r)), tiles, "{r:?}");
+        }
+        let marks_line = more_line + 1;
+        for q in [Quick::SetAside, Quick::Hide, Quick::Delete, Quick::Forever] {
+            assert_eq!(said(marks_line, q), tiles, "{q:?}");
+        }
+        assert!(
+            rows[more_line..=marks_line]
+                .iter()
+                .flat_map(|r| &r.cells)
+                .all(|c| c.control && c.width == tokens::space::PLAYER_QUEUEGLYPH)
+        );
+        // AND THEY LIGHT ONLY THEIR GLYPHS, as a click takes only them: the
+        // words said under the titles light nothing, and the air under them
+        // nothing.
+        use crate::player_rows::{Lighting, lighting};
+        let cells = |n: usize| -> Vec<(u16, u16)> {
+            rows[n].cells.iter().map(|c| (c.from, c.width)).collect()
+        };
+        assert_eq!(lighting(&rows, more_line), Lighting::Cell(cells(more_line)));
+        assert_eq!(
+            lighting(&rows, marks_line),
+            Lighting::Cell(cells(marks_line))
+        );
+        assert_eq!(lighting(&rows, marks_line + 1), Lighting::Cell(Vec::new()));
         v.key(Press::Ranking(RankingKey::Layout), Some(&s), 100, &t);
         assert_eq!(v.ranking().layout, Layout::List);
     }
 
     /// FAILS IF: the list's `⋯` is taken — by a click, or said under the
     /// pointer — on a line of the video's row it is not drawn on, or the
-    /// row's lines stop lighting from its words on, each line the same.
+    /// row's lines stop lighting from its words on, each line the same; or a
+    /// click on a line's words, where no glyph is, stops being a click on the
+    /// row.
     #[test]
     fn the_list_s_more_is_taken_on_its_own_line() {
         let t = texts("en-GB");
@@ -1711,16 +2452,23 @@ pub(crate) mod tests {
             if l == at {
                 continue;
             }
-            assert_eq!(
+            // UNDER IT, a mark of that line's own may stand — the ∞ at the
+            // row's edge — and never the `⋯`.
+            assert_ne!(
                 crate::player_rows::control_under(&rows, l, more.from),
-                None,
+                Some(MORE),
                 "the ⋯ said on line {l}, under it"
             );
-            // A CLICK THERE IS A CLICK ON THE ROW: the first chooses it, the
-            // second queues it — and the video's page never opens.
+            // A CLICK ON THE WORDS IS A CLICK ON THE ROW: the first chooses
+            // it, the second queues it — and the video's page never opens.
+            assert_eq!(
+                crate::player_rows::control_under(&rows, l, words),
+                None,
+                "a glyph on line {l}'s words"
+            );
             v.follow(&spot_of(&video(0).id), Some(&s), 100, &t);
-            assert!(!v.clicked_at(l, more.from, &rows), "line {l} acted at once");
-            assert!(v.clicked_at(l, more.from, &rows), "the second click");
+            assert!(!v.clicked_at(l, words, &rows), "line {l} acted at once");
+            assert!(v.clicked_at(l, words, &rows), "the second click");
             assert!(
                 matches!(
                     v.key(Press::Enter, Some(&s), 100, &t),
@@ -1764,9 +2512,9 @@ pub(crate) mod tests {
             .unwrap_or_else(PoisonError::into_inner)
             .answered
             .push((
-                Want::Page(0),
+                Want::Page(v.ranking().asked(List::Ranking)),
                 Ok(Got::Page(Listed {
-                    page: 0,
+                    asked: v.ranking().asked(List::Ranking),
                     rows: now,
                     total: 9,
                 })),
@@ -1842,11 +2590,12 @@ pub(crate) mod tests {
         let mut v = View::blank(None).plugging(&PAGE);
         v.ranking_at(path);
         v.key(Press::Go(PageId::Ranking), None, 100, &t);
-        assert!(v.ranking().holds(0));
+        let asked = v.ranking().asked(List::Ranking);
+        assert!(v.ranking().holds(&asked));
         assert!(v.ranking_told(&Outcome::Hidden(video(1).id, video(1).title, Ok(()))));
-        assert!(!v.ranking().holds(0), "the page is held as it was");
+        assert!(!v.ranking().holds(&asked), "the page is held as it was");
         v.settle_in(None, 100, &t);
-        assert!(v.ranking().holds(0), "read again");
+        assert!(v.ranking().holds(&asked), "read again");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1884,12 +2633,29 @@ pub(crate) mod tests {
                 ),
                 "{language}: {said}"
             );
+            // EMPTY WITH ITS SHORTS IN, nothing ranks; with them left out —
+            // the ranking's first filter — the sentence says the filter.
+            v.ranking_mut().ranking.shorts = Shorts::Any;
             v.ranking_mut().given(Vec::new(), 0);
             let said = said_on(&v.rows(Some(&s), 100, &t));
             assert!(
                 said.contains(
                     crate::chrome::note_lines(&t.t(key::PLAYER_RANKING_EMPTY), 40)[0].trim()
                 ),
+                "{language}: {said}"
+            );
+            v.ranking_mut().ranking.shorts = Shorts::Without;
+            v.ranking_mut().given(Vec::new(), 0);
+            let said = said_on(&v.rows(Some(&s), 100, &t));
+            let filtered = t.t_with(
+                key::PLAYER_RANKING_EMPTY_FILTERED,
+                &[(
+                    "shorts",
+                    &t.t(crate::video_metrics_words::shorts_key(Shorts::Without)),
+                )],
+            );
+            assert!(
+                said.contains(crate::chrome::note_lines(&filtered, 40)[0].trim()),
                 "{language}: {said}"
             );
         }
@@ -1925,7 +2691,13 @@ pub(crate) mod tests {
             std::env::temp_dir().join(format!("ronoctua-ranking-reader-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut absent = Reader::new(dir.join("none").join("catalog.sqlite"));
-        let got = absent.handle(vec![Want::Page(0)], false);
+        let ranking = Ranking::default();
+        let page = |n: u32| {
+            let mut r = Ranking::default();
+            r.ranking.page = n;
+            Want::Page(r.asked(List::Ranking))
+        };
+        let got = absent.handle(vec![Want::Page(ranking.asked(List::Ranking))], false);
         assert!(
             matches!(got.as_slice(), [(_, Err(Why::NotThere))]),
             "{got:?}"
@@ -1933,10 +2705,10 @@ pub(crate) mod tests {
         let path = dir.join("video-metrics").join("catalog.sqlite");
         committed(&path);
         let mut r = Reader::new(path.clone());
-        let got = r.handle(vec![Want::Page(1), Want::Page(0)], false);
+        let got = r.handle(vec![page(1), page(0)], false);
         assert_eq!(got.len(), 1, "two asks of a page read twice");
         assert!(
-            matches!(&got[0], (Want::Page(0), Ok(Got::Page(l))) if l.total == 0 && l.rows.is_empty()),
+            matches!(&got[0], (w, Ok(Got::Page(l))) if *w == page(0) && l.total == 0 && l.rows.is_empty()),
             "{got:?}"
         );
         assert!(r.handle(Vec::new(), true).is_empty(), "nothing moved");
@@ -1948,7 +2720,7 @@ pub(crate) mod tests {
         committed(&path);
         let got = r.handle(vec![Want::Video(video(1).id)], true);
         assert!(
-            got.iter().any(|(w, _)| *w == Want::Page(0))
+            got.iter().any(|(w, _)| *w == page(0))
                 && got.iter().any(|(w, _)| *w == Want::Video(video(1).id)),
             "{got:?}"
         );
@@ -1963,27 +2735,266 @@ pub(crate) mod tests {
     /// another door — stays past the last one, empty.
     #[test]
     fn a_page_past_the_last_goes_back_to_the_last() {
-        let mut r = Ranking::at(None);
-        r.page = 3;
-        r.keep(
-            Want::Page(3),
-            Ok(Got::Page(Listed {
-                page: 3,
-                rows: Vec::new(),
-                total: u64::from(PER_PAGE) + 1,
-            })),
-        );
-        assert_eq!(r.page, 1);
+        for list in [List::Ranking, List::SetAside] {
+            let mut r = Ranking::at(None);
+            r.shown_mut(list).page = 3;
+            let asked = r.asked(list);
+            r.keep(
+                Want::Page(asked.clone()),
+                Ok(Got::Page(Listed {
+                    asked,
+                    rows: Vec::new(),
+                    total: u64::from(PER_PAGE) + 1,
+                })),
+            );
+            assert_eq!(r.shown(list).page, 1, "{list:?}");
+            let other = if list == List::Ranking {
+                List::SetAside
+            } else {
+                List::Ranking
+            };
+            assert_eq!(r.shown(other).page, 0, "{list:?}: the other list moved");
+        }
     }
 
-    /// FAILS IF: what a hide, a delete or a download came to stops being
-    /// said — the refusal's reason included — in either language.
+    /// FAILS IF: a video's own page stops sending it to Nyxt — or sends
+    /// another address — or a quick mark's key stops marking the video under
+    /// the cursor as its glyph says: a rating, and the same rating taken off;
+    /// set aside or taken out; kept for ever by its own mark even where its
+    /// channel keeps it, and that mark taken off; hidden at once; deleted
+    /// only after a question, "no" first. Or a mark with no catalogue to
+    /// write is not said.
+    #[test]
+    fn the_quick_marks_do_what_they_say() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let catalogue = PathBuf::from("/nowhere/catalog.sqlite");
+        let on = |rated: Option<Rating>, aside: bool, forever: Forever| {
+            let mut v = View::blank(None).plugging(&PAGE);
+            *v.ranking_mut() = Ranking::at(Some(catalogue.clone()));
+            let mut one = video(1);
+            one.rating = rated;
+            one.set_aside_at_s = aside.then_some(1_700_000_000);
+            one.forever = forever;
+            v.ranking_mut().given(vec![video(0), one], 2);
+            v.push(PageId::Ranking, None);
+            v.follow(&spot_of(&video(1).id), Some(&s), 100, &t);
+            v
+        };
+        // A QUICK MARK'S KEY, and the mark told written — the next composes
+        // from it, as it would before the catalogue is read again.
+        let mark_of = |v: &mut View, q: Quick| {
+            let e = v.key(Press::Ranking(RankingKey::Quick(q)), Some(&s), 100, &t);
+            written(v, e)
+        };
+        let id = video(1).id;
+        let mut v = on(Some(Rating::Positive), true, Forever::ByChannel);
+        assert_eq!(
+            mark_of(&mut v, Quick::Rate(Rating::Positive)),
+            Mark::Rating(id.clone(), None),
+            "the rating it has is taken off"
+        );
+        assert_eq!(
+            mark_of(&mut v, Quick::Rate(Rating::Negative)),
+            Mark::Rating(id.clone(), Some(Rating::Negative))
+        );
+        assert_eq!(
+            mark_of(&mut v, Quick::SetAside),
+            Mark::SetAside(id.clone(), false)
+        );
+        assert_eq!(
+            mark_of(&mut v, Quick::Forever),
+            Mark::Keep(id.clone(), true),
+            "its own mark, whatever its channel keeps"
+        );
+        let mut v = on(None, false, Forever::ByVideo);
+        assert_eq!(
+            mark_of(&mut v, Quick::SetAside),
+            Mark::SetAside(id.clone(), true)
+        );
+        assert_eq!(
+            mark_of(&mut v, Quick::Forever),
+            Mark::Keep(id.clone(), false)
+        );
+        assert!(matches!(
+            v.key(Press::Ranking(RankingKey::Quick(Quick::Hide)), Some(&s), 100, &t),
+            Errand::Ranking(Act::Hide { id: hidden, .. }) if hidden == id
+        ));
+        assert_eq!(
+            v.key(
+                Press::Ranking(RankingKey::Quick(Quick::Delete)),
+                Some(&s),
+                100,
+                &t
+            ),
+            Errand::Nothing,
+            "deleted with no question"
+        );
+        let rows = v.rows(Some(&s), 100, &t);
+        assert_eq!(rows.get(v.cursor()).map(|r| r.spot.as_str()), Some("no"));
+        // ON A VIDEO'S OWN PAGE: its rows mark it, and Nyxt plays it.
+        let mut v = on(None, false, Forever::No);
+        v.key(Press::Ranking(RankingKey::More), Some(&s), 100, &t);
+        assert_eq!(v.page(), PageId::RankedVideo);
+        v.follow(RankedAct::Rate.spot(), Some(&s), 100, &t);
+        let e = v.key(Press::Less, Some(&s), 100, &t);
+        assert_eq!(
+            written(&mut v, e),
+            Mark::Rating(id.clone(), Some(Rating::VeryPositive)),
+            "the ring turned back from no rating is the last one"
+        );
+        assert_eq!(
+            mark_of(&mut v, Quick::Rate(Rating::VeryPositive)),
+            Mark::Rating(id, None),
+            "the rating just written is the one taken off"
+        );
+        v.follow(RankedAct::Nyxt.spot(), Some(&s), 100, &t);
+        assert_eq!(
+            v.key(Press::Enter, Some(&s), 100, &t),
+            Errand::Nyxt(video(1).url)
+        );
+        // NO CATALOGUE TO WRITE: said, at once.
+        let mut v = on(None, false, Forever::No);
+        v.ranking_mut().path = None;
+        assert!(matches!(
+            v.key(
+                Press::Ranking(RankingKey::Quick(Quick::SetAside)),
+                Some(&s),
+                100,
+                &t
+            ),
+            Errand::Said(_)
+        ));
+    }
+
+    /// FAILS IF: a mark this door carries out is not written by the video
+    /// catalogue's own door — a catalogue with no such video is not what it
+    /// says — or a mark done closes the video's own page, or leaves what is
+    /// held as it was read.
+    #[test]
+    fn a_mark_is_written_and_the_page_stays() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-ranking-mark-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        committed(&path);
+        let out = carry(Act::Mark {
+            catalogue: path,
+            mark: Mark::SetAside(video(1).id, true),
+            title: video(1).title,
+        });
+        assert_eq!(
+            out,
+            Outcome::Marked(
+                Mark::SetAside(video(1).id, true),
+                video(1).title,
+                Err(Why::NotFound)
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let mut v = on_the_ranking(3);
+        v.follow(&spot_of(&video(1).id), Some(&s), 100, &t);
+        v.key(Press::Ranking(RankingKey::More), Some(&s), 100, &t);
+        assert!(v.ranking_told(&Outcome::Marked(
+            Mark::Keep(video(1).id, true),
+            video(1).title,
+            Ok(())
+        )));
+        assert_eq!(v.page(), PageId::RankedVideo, "a mark closed the page");
+        assert!(v.ranking().stale, "what is held is not read again");
+    }
+
+    /// FAILS IF: a mark this door carries out lands as another — set aside
+    /// written as kept for ever, kept as set aside, hidden as a rating — or
+    /// on nothing: each is read back off the video of a scratch catalogue
+    /// it was put on, the others as they were, and each taken off again.
+    #[test]
+    fn every_mark_lands_on_its_video() {
+        let dir =
+            std::env::temp_dir().join(format!("ronoctua-ranking-marks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("video-metrics").join("catalog.sqlite");
+        let one = video(1);
+        crate::video_metrics_feed::holding_one(&path, &one.id, &one.title);
+        // ITS MARKS, as the catalogue reads them back: rating, set aside,
+        // kept for ever, hidden.
+        let marks = || {
+            let v = Catalog::open_ro(&path)
+                .and_then(|c| c.video(&one.id))
+                .expect("the catalogue read")
+                .expect("the video planted")
+                .row;
+            (v.rating, v.set_aside_at_s.is_some(), v.forever, v.hidden)
+        };
+        let put = |mark: Mark| {
+            assert_eq!(
+                carry(Act::Mark {
+                    catalogue: path.clone(),
+                    mark: mark.clone(),
+                    title: one.title.clone(),
+                }),
+                Outcome::Marked(mark.clone(), one.title.clone(), Ok(())),
+                "{mark:?}"
+            );
+        };
+        let id = || one.id.clone();
+        assert_eq!(marks(), (None, false, Forever::No, false));
+        put(Mark::Rating(id(), Some(Rating::VeryPositive)));
+        assert_eq!(
+            marks(),
+            (Some(Rating::VeryPositive), false, Forever::No, false)
+        );
+        put(Mark::SetAside(id(), true));
+        assert_eq!(
+            marks(),
+            (Some(Rating::VeryPositive), true, Forever::No, false)
+        );
+        put(Mark::Keep(id(), true));
+        assert_eq!(
+            marks(),
+            (Some(Rating::VeryPositive), true, Forever::ByVideo, false)
+        );
+        put(Mark::Hidden(id(), true));
+        assert_eq!(
+            marks(),
+            (Some(Rating::VeryPositive), true, Forever::ByVideo, true)
+        );
+        // AND TAKEN OFF, one by one.
+        put(Mark::Rating(id(), None));
+        assert_eq!(marks(), (None, true, Forever::ByVideo, true));
+        put(Mark::SetAside(id(), false));
+        assert_eq!(marks(), (None, false, Forever::ByVideo, true));
+        put(Mark::Keep(id(), false));
+        assert_eq!(marks(), (None, false, Forever::No, true));
+        put(Mark::Hidden(id(), false));
+        assert_eq!(marks(), (None, false, Forever::No, false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: what a hide, a delete, a download or a mark came to stops
+    /// being said — the refusal's reason included — in either language.
     #[test]
     fn what_was_done_is_said() {
         for language in ["en-GB", "pt-BR"] {
             let t = texts(language);
             let title = "Ünïcode title";
+            let id = || video(1).id;
             for o in [
+                Outcome::Marked(
+                    Mark::Rating(id(), Some(Rating::Negative)),
+                    title.into(),
+                    Ok(()),
+                ),
+                Outcome::Marked(Mark::Rating(id(), None), title.into(), Ok(())),
+                Outcome::Marked(Mark::SetAside(id(), true), title.into(), Ok(())),
+                Outcome::Marked(Mark::SetAside(id(), false), title.into(), Ok(())),
+                Outcome::Marked(Mark::Keep(id(), true), title.into(), Ok(())),
+                Outcome::Marked(Mark::Keep(id(), false), title.into(), Ok(())),
+                Outcome::Marked(Mark::Hidden(id(), true), title.into(), Ok(())),
+                Outcome::Marked(Mark::Hidden(id(), false), title.into(), Ok(())),
+                Outcome::Marked(Mark::Keep(id(), true), title.into(), Err(Why::Busy)),
                 Outcome::Hidden(video(1).id, title.into(), Ok(())),
                 Outcome::Deleted(video(1).id, title.into(), Ok(())),
                 Outcome::Hidden(video(1).id, title.into(), Err(Why::Busy)),
@@ -2012,6 +3023,516 @@ pub(crate) mod tests {
                 &t,
             );
             assert!(busy.contains(&t.t(crate::video_metrics_words::why_key(Why::Busy))));
+        }
+    }
+
+    /// A view on the videos set aside, handed `rows`.
+    fn on_the_aside(rows: Vec<RankedVideo>) -> View {
+        let mut v = View::blank(None).plugging(&PAGE);
+        *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+        let total = u64::try_from(rows.len()).unwrap_or(u64::MAX);
+        v.ranking_mut().given_aside(rows, total);
+        v.push(PageId::SetAside, None);
+        v
+    }
+
+    /// FAILS IF: the ranking opens with its Shorts in — a scan brings them
+    /// by the dozen, and they push the long videos off its first pages — in
+    /// the view a door builds (`Ranked::state`) or in this machine's; or the
+    /// videos set aside open with theirs left out, which the person chose.
+    #[test]
+    fn shorts_are_left_out_by_default() {
+        use crate::player_seam::Page as _;
+        let built = PAGE.state(false);
+        let built = built
+            .downcast_ref::<Ranking>()
+            .expect("the ranking's state");
+        for r in [&Ranking::default(), &Ranking::of_this_machine(), built] {
+            assert_eq!(r.asked(List::Ranking).filter.shorts, Shorts::Without);
+            assert_eq!(r.asked(List::SetAside).filter.shorts, Shorts::Any);
+            assert_eq!((r.ranking.page, r.aside.page), (0, 0));
+        }
+        assert_eq!(shorts_after(Shorts::Without, true), Shorts::Only);
+        assert_eq!(shorts_after(Shorts::Only, true), Shorts::Any);
+        assert_eq!(shorts_after(Shorts::Any, true), Shorts::Without);
+        assert_eq!(shorts_after(Shorts::Without, false), Shorts::Any);
+    }
+
+    /// FAILS IF: turning a list's Shorts — `S`, or the ring's row — leaves
+    /// the page held as the answer to the new filter on the SAME page, or the
+    /// list where it was and not on its first page, or the other list turned
+    /// with it; or the Shorts' row is gone from a list the filter left empty,
+    /// where it is the one way back.
+    #[test]
+    fn a_filter_change_is_a_new_answer() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        // ON THE FIRST PAGE, which the turn keeps: only the filter tells the
+        // page held from the one asked now.
+        let mut v = on_the_ranking(3);
+        let held = v.ranking().asked(List::Ranking);
+        assert!(v.ranking().holds(&held));
+        v.key(Press::Ranking(RankingKey::Shorts), Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.shorts, Shorts::Only);
+        let now = v.ranking().asked(List::Ranking);
+        assert_eq!(now.page, held.page);
+        assert!(
+            !v.ranking().holds(&now),
+            "the old page held as the new answer"
+        );
+        assert_eq!(
+            v.ranking().aside.shorts,
+            Shorts::Any,
+            "the other list turned"
+        );
+        // FROM THE LAST PAGE: a new filter is read from its first.
+        let mut v = on_the_ranking(3);
+        v.ranking_mut()
+            .given((0..PER_PAGE).map(video).collect(), 60);
+        v.key(Press::Ranking(RankingKey::Last), Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.page, 2);
+        v.ranking_mut().given(vec![video(0)], 60);
+        v.key(Press::Ranking(RankingKey::Shorts), Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.page, 0, "a new filter, its first page");
+        // THE RING'S ROW, `RET` on and `←` back — the cursor stays on it.
+        let rows = v.rows(Some(&s), 100, &t);
+        v.top_mut().cursor = row_at(&rows, "ranking-shorts");
+        v.key(Press::Enter, Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.shorts, Shorts::Any);
+        v.key(Press::Less, Some(&s), 100, &t);
+        assert_eq!(v.ranking().ranking.shorts, Shorts::Only);
+        assert_eq!(
+            v.spot_here(Some(&s), 100, &t).as_deref(),
+            Some("ranking-shorts")
+        );
+        // NOTHING WITH ONLY SHORTS: the row that turns it back is there.
+        v.ranking_mut().given(Vec::new(), 0);
+        let rows = v.rows(Some(&s), 100, &t);
+        let at = row_at(&rows, "ranking-shorts");
+        assert_eq!(rows[at].target, Target::RankingShorts);
+        let said = said_on(&rows);
+        assert!(
+            said.contains(&t.t(key::VIDEO_METRICS_SHORTS_ONLY)),
+            "{said}"
+        );
+    }
+
+    /// FAILS IF: a list with nothing on it says it of the Shorts as just
+    /// turned, and not as the page drawn was read — a page read without them
+    /// said empty "with only Shorts" the moment `S` turns them — or the
+    /// videos set aside, filtered empty, say what the ranking says: the
+    /// scans have nothing to do with what the person set aside.
+    #[test]
+    fn an_empty_list_says_the_filter_it_was_read_under() {
+        let s = fixture::idle();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let shorts = |v: &View| {
+                let key = crate::video_metrics_words::shorts_key(v.ranking().ranking.shorts);
+                t.t(key)
+            };
+            // THE SENTENCE WHOLE, across the lines it was wrapped in.
+            let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            let filtered = |v: &View, sentence: &str, shorts: &str| {
+                let said = words(&said_on(&v.rows(Some(&s), 100, &t)));
+                said.contains(&words(&t.t_with(sentence, &[("shorts", shorts)])))
+            };
+            // READ WITHOUT SHORTS, then turned to only them: the page drawn
+            // is still the one read without.
+            let mut v = on_the_ranking(0);
+            let read_under = shorts(&v);
+            v.key(Press::Ranking(RankingKey::Shorts), Some(&s), 100, &t);
+            let turned = shorts(&v);
+            assert_ne!(read_under, turned);
+            assert!(
+                filtered(&v, key::PLAYER_RANKING_EMPTY_FILTERED, &read_under),
+                "{language}: not said as read"
+            );
+            assert!(
+                !filtered(&v, key::PLAYER_RANKING_EMPTY_FILTERED, &turned),
+                "{language}: said as just turned"
+            );
+            // THE VIDEOS SET ASIDE, their Shorts turned away: a sentence of
+            // their own.
+            let mut v = on_the_aside(Vec::new());
+            v.ranking_mut().aside.shorts = Shorts::Without;
+            v.ranking_mut().given_aside(Vec::new(), 0);
+            let without = t.t(key::VIDEO_METRICS_SHORTS_WITHOUT);
+            assert!(
+                filtered(&v, key::PLAYER_RANKING_ASIDE_EMPTY_FILTERED, &without),
+                "{language}: the set-aside list says the ranking's sentence"
+            );
+            assert!(
+                !filtered(&v, key::PLAYER_RANKING_EMPTY_FILTERED, &without),
+                "{language}: the scans named on the set-aside list"
+            );
+        }
+    }
+
+    /// FAILS IF: the videos set aside are asked as anything but those, the
+    /// last set aside first, hidden ones included — or the page is titled
+    /// as the ranking, or a list with nothing set aside draws a page of
+    /// nothing, or the ranking's rows are drawn on it before its own are
+    /// read; or hiding a video there closes its own page though the list
+    /// still holds it.
+    #[test]
+    fn the_set_aside_list() {
+        let s = fixture::idle();
+        let r = Ranking::default();
+        let asked = r.asked(List::SetAside);
+        assert_eq!(asked.filter.set_aside, SetAside::Only);
+        assert_eq!(asked.filter.hidden, Hidden::Any);
+        assert_eq!(asked.filter.order, Order::NewestSetAside);
+        let ranking = r.asked(List::Ranking);
+        assert_eq!(
+            ranking.filter.set_aside,
+            SetAside::Any,
+            "the ranking left the set aside out"
+        );
+        assert_eq!(ranking.filter.hidden, Hidden::Without);
+        assert_eq!(ranking.filter.order, Order::Score);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            // THE RANKING HELD, THE SET-ASIDE LIST NOT YET READ: it is being
+            // read, and the ranking's videos are not on it.
+            let mut v = on_the_ranking(3);
+            v.key(Press::Go(PageId::SetAside), Some(&s), 100, &t);
+            assert_eq!(v.page(), PageId::SetAside);
+            let rows = v.rows(Some(&s), 100, &t);
+            assert!(
+                rows.iter().all(|r| !matches!(r.target, Target::Ranked(_))),
+                "{language}: the ranking's rows on the set-aside list"
+            );
+            let said = said_on(&rows);
+            assert!(
+                said.contains(&t.t(key::PLAYER_PAGE_SET_ASIDE)),
+                "{language}: {said}"
+            );
+            assert!(
+                said.contains(&t.t(key::PLAYER_RANKING_READING)),
+                "{language}: {said}"
+            );
+            // NOTHING SET ASIDE.
+            let v = on_the_aside(Vec::new());
+            let said = said_on(&v.rows(Some(&s), 100, &t));
+            let empty = t.t(key::PLAYER_RANKING_ASIDE_EMPTY);
+            assert!(
+                said.contains(crate::chrome::note_lines(&empty, 40)[0].trim()),
+                "{language}: {said}"
+            );
+            // ITS OWN VIDEOS, and none of them on the ranking.
+            let mut one = video(7);
+            one.set_aside_at_s = Some(1_700_000_000);
+            let mut v = on_the_aside(vec![one.clone()]);
+            let rows = v.rows(Some(&s), 100, &t);
+            row_at(&rows, &spot_of(&one.id));
+            v.key(Press::Go(PageId::Ranking), Some(&s), 100, &t);
+            let rows = v.rows(Some(&s), 100, &t);
+            assert!(
+                rows.iter().all(|r| r.spot != spot_of(&one.id)),
+                "{language}: the set-aside list's rows on the ranking"
+            );
+        }
+        // HIDDEN FROM ITS OWN PAGE, opened from the set-aside list: the page
+        // stays, and what is held is read again.
+        let t = texts("en-GB");
+        let mut one = video(1);
+        one.set_aside_at_s = Some(1_700_000_000);
+        let mut v = on_the_aside(vec![one.clone()]);
+        v.follow(&spot_of(&one.id), Some(&s), 100, &t);
+        v.key(Press::Ranking(RankingKey::More), Some(&s), 100, &t);
+        assert_eq!(v.page(), PageId::RankedVideo);
+        assert!(v.ranking_told(&Outcome::Hidden(one.id.clone(), one.title, Ok(()))));
+        assert_eq!(v.page(), PageId::RankedVideo, "hiding closed its page");
+        assert!(v.ranking().stale);
+    }
+
+    /// FAILS IF: a glyph beside a video's words stops doing at once what it
+    /// shows — the face of its rating lit, and a click on it taking the
+    /// rating off; another face rating it so; the bookmark filled while it is
+    /// set aside, and taking it out; the ∞ lit while its channel keeps it,
+    /// and a click putting the video's own mark; the eye hiding it at once;
+    /// the bin asking first, "no" first — or, on the set-aside list, the eye
+    /// of a hidden video stops showing it again and saying so.
+    #[test]
+    fn the_quick_glyphs_do_what_they_say() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let mut one = video(1);
+        one.rating = Some(Rating::Positive);
+        one.set_aside_at_s = Some(1_700_000_000);
+        one.forever = Forever::ByChannel;
+        let id = one.id.clone();
+        let on = |layout: Layout| {
+            let mut v = View::blank(None).plugging(&PAGE);
+            *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+            v.ranking_mut().layout = layout;
+            v.ranking_mut().given(vec![video(0), one.clone()], 2);
+            v.push(PageId::Ranking, None);
+            v
+        };
+        for layout in [Layout::List, Layout::Grid] {
+            let mut v = on(layout);
+            let rows = v.rows(Some(&s), 100, &t);
+            // WHERE A GLYPH OF THE VIDEO IS DRAWN, and in which colour.
+            let glyph = |q: Quick| {
+                let target = Target::RankedQuick(id.clone(), q);
+                rows.iter()
+                    .enumerate()
+                    .find_map(|(n, r)| {
+                        let c = r.cells.iter().find(|c| c.target == target)?;
+                        let f = r.fields.iter().find(|f| f.at == c.from)?;
+                        Some((n, c.from, f.color, c.about))
+                    })
+                    .unwrap_or_else(|| panic!("{layout:?}: no glyph for {q:?}"))
+            };
+            let lit = tokens::color::STATE_ACCENT;
+            let quiet = tokens::color::TEXT_DIM;
+            for (q, colour) in [
+                (Quick::Rate(Rating::VeryNegative), quiet),
+                (Quick::Rate(Rating::Negative), quiet),
+                (Quick::Rate(Rating::Positive), lit),
+                (Quick::Rate(Rating::VeryPositive), quiet),
+                (Quick::SetAside, lit),
+                (Quick::Hide, quiet),
+                (Quick::Delete, quiet),
+                (Quick::Forever, lit),
+            ] {
+                let (_, _, drawn, about) = glyph(q);
+                assert_eq!(drawn, colour, "{layout:?}: {q:?}");
+                assert_eq!(about, Some(q.command()), "{layout:?}: {q:?}");
+            }
+            // AND A CLICK ON EACH ACTS AT ONCE — a mark told written, the
+            // next composing from it.
+            let mut click = |q: Quick| {
+                let (n, from, _, _) = glyph(q);
+                assert!(
+                    v.clicked_at(n, from, &rows),
+                    "{layout:?}: {q:?} did not act"
+                );
+                let e = v.key(Press::Enter, Some(&s), 100, &t);
+                if matches!(e, Errand::Ranking(Act::Mark { .. })) {
+                    written(&mut v, e.clone());
+                }
+                e
+            };
+            let mark = |e: Errand| match e {
+                Errand::Ranking(Act::Mark { mark, .. }) => mark,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                mark(click(Quick::Rate(Rating::Positive))),
+                Mark::Rating(id.clone(), None)
+            );
+            assert_eq!(
+                mark(click(Quick::Rate(Rating::Negative))),
+                Mark::Rating(id.clone(), Some(Rating::Negative))
+            );
+            assert_eq!(
+                mark(click(Quick::SetAside)),
+                Mark::SetAside(id.clone(), false)
+            );
+            assert_eq!(mark(click(Quick::Forever)), Mark::Keep(id.clone(), true));
+            assert!(matches!(
+                click(Quick::Hide),
+                Errand::Ranking(Act::Hide { id: hidden, .. }) if hidden == id
+            ));
+            assert_eq!(
+                click(Quick::Delete),
+                Errand::Nothing,
+                "deleted with no question"
+            );
+            let rows = v.rows(Some(&s), 100, &t);
+            assert_eq!(rows.get(v.cursor()).map(|r| r.spot.as_str()), Some("no"));
+        }
+        // A HIDDEN VIDEO, SET ASIDE: its eye is open, lit, says so, and shows
+        // it again.
+        let mut hidden = video(2);
+        hidden.hidden = true;
+        hidden.set_aside_at_s = Some(1_700_000_000);
+        let mut v = on_the_aside(vec![hidden.clone()]);
+        let rows = v.rows(Some(&s), 100, &t);
+        let target = Target::RankedQuick(hidden.id.clone(), Quick::Hide);
+        let (n, c) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(n, r)| Some((n, r.cells.iter().find(|c| c.target == target)?.clone())))
+            .expect("the eye");
+        let drawn = rows[n]
+            .fields
+            .iter()
+            .find(|f| f.at == c.from)
+            .expect("its glyph");
+        assert_eq!(drawn.text, tokens::icon::VIDEO_SHOW.to_string());
+        assert_eq!(drawn.color, tokens::color::STATE_ACCENT);
+        assert_eq!(c.about, Some(crate::player_seam::ranking::SHOW));
+        assert!(crate::chrome::hint_sentence(crate::player_seam::ranking::SHOW, &t).is_some());
+        assert!(v.clicked_at(n, c.from, &rows));
+        assert!(matches!(
+            v.key(Press::Enter, Some(&s), 100, &t),
+            Errand::Ranking(Act::Mark { mark: Mark::Hidden(shown, false), .. }) if shown == hidden.id
+        ));
+    }
+
+    /// FAILS IF: a second press before the catalogue is read again composes
+    /// from the row as it was read — the ring's next rating written twice,
+    /// the bookmark setting aside again what the first click took out — or
+    /// a mark does not show on the row at the click; or a second mark is sent
+    /// while the first is still being written, to race it; or a mark refused
+    /// stays drawn; or a mark read back stays on a row the catalogue changed
+    /// since.
+    #[test]
+    fn a_second_mark_composes_from_the_first() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let one = video(1);
+        let id = one.id.clone();
+        let mut v = View::blank(None).plugging(&PAGE);
+        *v.ranking_mut() = Ranking::at(Some(PathBuf::from("/nowhere/catalog.sqlite")));
+        v.ranking_mut().given(vec![video(0), one.clone()], 2);
+        v.push(PageId::Ranking, None);
+        v.follow(&spot_of(&id), Some(&s), 100, &t);
+        v.key(Press::Ranking(RankingKey::More), Some(&s), 100, &t);
+        assert_eq!(v.page(), PageId::RankedVideo);
+        v.follow(RankedAct::Rate.spot(), Some(&s), 100, &t);
+        let said = |v: &View| said_on(&v.rows(Some(&s), 100, &t));
+        // THE RING TURNED: shown at once, and the next turn waits for it.
+        let e = v.key(Press::More, Some(&s), 100, &t);
+        assert!(
+            said(&v).contains(&t.t(crate::video_metrics_words::rating_key(Rating::VeryNegative))),
+            "the rating sent is not on its row"
+        );
+        assert!(
+            matches!(v.key(Press::More, Some(&s), 100, &t), Errand::Said(ref w) if w.contains(&one.title)),
+            "a second mark sent while the first is being written"
+        );
+        assert_eq!(
+            written(&mut v, e),
+            Mark::Rating(id.clone(), Some(Rating::VeryNegative))
+        );
+        // WRITTEN, NOT READ BACK: the next turn is the next rating.
+        let e = v.key(Press::More, Some(&s), 100, &t);
+        assert_eq!(
+            written(&mut v, e),
+            Mark::Rating(id.clone(), Some(Rating::Negative)),
+            "the same rating written twice"
+        );
+        // READ BACK, changed since by another door: the row is the
+        // catalogue's, and the ring turns from it.
+        let mut read = one;
+        read.rating = Some(Rating::Positive);
+        v.ranking_mut().given(vec![video(0), read], 2);
+        let e = v.key(Press::More, Some(&s), 100, &t);
+        assert_eq!(
+            written(&mut v, e),
+            Mark::Rating(id.clone(), Some(Rating::VeryPositive)),
+            "a mark read back still drawn"
+        );
+        // THE BOOKMARK, twice: set aside, then taken out.
+        let aside = |v: &mut View| {
+            v.key(
+                Press::Ranking(RankingKey::Quick(Quick::SetAside)),
+                Some(&s),
+                100,
+                &t,
+            )
+        };
+        let e = aside(&mut v);
+        assert!(
+            said(&v).contains(&t.t(RankedAct::SetAside.key_when(true))),
+            "set aside, and its row does not say so"
+        );
+        assert_eq!(written(&mut v, e), Mark::SetAside(id.clone(), true));
+        let e = aside(&mut v);
+        assert_eq!(
+            written(&mut v, e),
+            Mark::SetAside(id.clone(), false),
+            "set aside again"
+        );
+        // REFUSED: dropped, and the row is the catalogue's.
+        let e = aside(&mut v);
+        let Errand::Ranking(Act::Mark { mark, title, .. }) = e else {
+            panic!("no mark: {e:?}");
+        };
+        assert_eq!(mark, Mark::SetAside(id, true));
+        assert!(v.ranking_told(&Outcome::Marked(mark, title, Err(Why::Busy))));
+        assert!(
+            said(&v).contains(&t.t(RankedAct::SetAside.key())),
+            "a mark refused still drawn"
+        );
+        assert!(matches!(
+            aside(&mut v),
+            Errand::Ranking(Act::Mark {
+                mark: Mark::SetAside(_, true),
+                ..
+            })
+        ));
+    }
+
+    /// FAILS IF: a list's lines say a video's score with a word after its
+    /// number — "points" on every line, read once and then only in the way —
+    /// in either language, either layout; or the number is not the one the
+    /// language writes.
+    #[test]
+    fn the_score_has_no_word() {
+        let s = fixture::idle();
+        for (language, word) in [("en-GB", "point"), ("pt-BR", "ponto")] {
+            let t = texts(language);
+            for layout in [Layout::List, Layout::Grid] {
+                let mut v = on_the_ranking(3);
+                v.ranking_mut().layout = layout;
+                let said = said_on(&v.rows(Some(&s), 100, &t));
+                assert!(!said.contains(word), "{language} {layout:?}: {said}");
+                let number = crate::video_metrics_words::score_number(video(1).score, &t);
+                assert!(said.contains(&number), "{language} {layout:?}: {said}");
+            }
+        }
+    }
+
+    /// FAILS IF: a row of a video's own page — or the page, the layout or
+    /// the Shorts' ring of a list — stops saying under the pointer what it
+    /// does, in either language: Nyxt, the rating, setting aside and keeping
+    /// for ever among them.
+    #[test]
+    fn every_row_of_a_video_s_page_explains_itself() {
+        let s = fixture::idle();
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            let mut v = on_the_ranking(3);
+            v.follow(&spot_of(&video(1).id), Some(&s), 100, &t);
+            v.key(Press::Ranking(RankingKey::More), Some(&s), 100, &t);
+            let rows = v.rows(Some(&s), 100, &t);
+            for act in RankedAct::ALL {
+                let row = &rows[row_at(&rows, act.spot())];
+                let id = row
+                    .target
+                    .about()
+                    .unwrap_or_else(|| panic!("{act:?}: no sentence"));
+                assert!(
+                    crate::chrome::hint_sentence(id, &t).is_some(),
+                    "{language}: {act:?} says nothing"
+                );
+            }
+            // THE THREE ROWS ABOVE A LIST'S VIDEOS, on both lists.
+            for v in [on_the_ranking(3), on_the_aside(vec![video(1)])] {
+                let rows = v.rows(Some(&s), 100, &t);
+                for spot in ["ranking-page", "ranking-layout", "ranking-shorts"] {
+                    assert!(
+                        rows[row_at(&rows, spot)]
+                            .target
+                            .about()
+                            .and_then(|id| crate::chrome::hint_sentence(id, &t))
+                            .is_some(),
+                        "{language}: {spot} says nothing"
+                    );
+                }
+            }
+            for q in Quick::ALL {
+                assert!(
+                    crate::chrome::hint_sentence(q.command(), &t).is_some(),
+                    "{q:?}"
+                );
+            }
         }
     }
 }

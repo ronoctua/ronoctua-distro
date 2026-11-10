@@ -142,8 +142,12 @@ pub enum PageId {
     /// THE RANKING of the video catalogue: its videos, best first, a page at
     /// a time — a click puts one in the queue (`ronoctua_shell_video_metrics::player_ranking`).
     Ranking,
+    /// THE VIDEOS THE PERSON SET ASIDE for later, newest first — the
+    /// ranking's other list (`ronoctua_shell_video_metrics::player_ranking`).
+    SetAside,
     /// One video of the ranking, by the view's choice: play it now, add it,
-    /// watch it in Chrome, download it, hide it, delete it.
+    /// watch it in Chrome or Nyxt, download it, rate it, set it aside, keep
+    /// it for ever, hide it, delete it.
     RankedVideo,
 }
 
@@ -251,7 +255,7 @@ impl PageId {
     ///
     /// And what `photograph --open` names a page among ([`PageId::by_key`]),
     /// which is how `player-pages-fit-every-size` photographs each one.
-    pub const PAGES: [Self; 43] = [
+    pub const PAGES: [Self; 44] = [
         Self::Pick(Purpose::Queue),
         Self::Pick(Purpose::Lane),
         Self::Pick(Purpose::Open),
@@ -294,6 +298,7 @@ impl PageId {
         Self::Website,
         Self::Queue,
         Self::Ranking,
+        Self::SetAside,
         Self::RankedVideo,
     ];
 
@@ -353,6 +358,7 @@ impl PageId {
             Self::Website => key::PLAYER_PAGE_WEBSITE,
             Self::Queue => key::PLAYER_PAGE_QUEUE,
             Self::Ranking => key::PLAYER_PAGE_RANKING,
+            Self::SetAside => key::PLAYER_PAGE_SET_ASIDE,
             Self::RankedVideo => key::PLAYER_PAGE_RANKED_VIDEO,
         }
     }
@@ -405,6 +411,7 @@ impl PageId {
             Self::Website => "page-website",
             Self::Queue => "page-queue",
             Self::Ranking => "page-ranking",
+            Self::SetAside => "page-set-aside",
             Self::RankedVideo => "page-ranked-video",
         }
     }
@@ -428,7 +435,7 @@ impl PageId {
             // THE RANKING IS THE VIDEO CATALOGUE'S, a file this door reads:
             // there with no player running — the one that plays a video is
             // started to play it (`ronoctua_shell_video_metrics::player_ranking`).
-            (Self::Ranking | Self::RankedVideo, _) => Subject::Here,
+            (Self::Ranking | Self::SetAside | Self::RankedVideo, _) => Subject::Here,
             // ITS SOURCES are the player's to keep: with none running, the
             // page says so.
             (Self::Sources, None) => Subject::NotRunning,
@@ -576,6 +583,11 @@ pub struct Level {
     /// language, and not the most first (`O`, the glyph on their title):
     /// the page's own, never kept past it.
     pub by_name: bool,
+    /// THE CURSOR STANDS ON A TITLE'S CONTROLS — walked onto by the arrows
+    /// (`player_rows::Row::walked_onto`), `cell` the one chosen among them.
+    /// Only the arrows put it there: a page never opens on a title, and a
+    /// rebuild that moves the cursor off one ends it (`View::clamp`).
+    pub on_title: bool,
 }
 
 impl Level {
@@ -592,6 +604,7 @@ impl Level {
             query: None,
             only: None,
             by_name: false,
+            on_title: false,
         }
     }
 }
@@ -624,6 +637,9 @@ impl View {
     /// p m` and `k` pressed in turn stacked the same two pages without end,
     /// and `Esc` had to unwind every one of them.
     pub fn push(&mut self, page: PageId, opened_from: Option<String>) {
+        // A PAGE OPENED FROM THE PICTURE'S CONTROLS — the media in the file
+        // — stands on its rows: the keyboard goes there with it.
+        self.leave_pane();
         if let Some(at) = self.levels.iter().position(|l| l.page == page) {
             self.levels.truncate(at + 1);
             return;
@@ -647,6 +663,7 @@ impl View {
             query: crate::player_directory::listed_on(page),
             only: None,
             by_name: false,
+            on_title: false,
         });
         // A DIRECTORY'S PAGE ASKS FOR ITS LIST as it opens — the daemon's
         // desk is every door's, and another may hold something else on it.
@@ -664,11 +681,13 @@ impl View {
         opened_from: Option<String>,
     ) {
         if let Some(at) = self.levels.iter().position(|l| l.page == page) {
+            self.leave_pane();
             self.levels.truncate(at + 1);
             let top = self.top_mut();
             top.query = Some(query);
             top.only = None;
             top.cursor = 0;
+            top.on_title = false;
             top.moved = false;
             self.listing_follows();
             return;
@@ -694,6 +713,8 @@ impl View {
         let Some(left) = self.levels.pop() else {
             return false;
         };
+        // THE PAGE COME BACK TO stands on its rows, the keyboard with it.
+        self.leave_pane();
         if let Some(spot) = left.opened_from {
             self.follow(&spot, state, columns, texts);
         }

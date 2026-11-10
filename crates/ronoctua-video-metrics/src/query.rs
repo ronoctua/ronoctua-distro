@@ -1,6 +1,7 @@
 //! Every read of the catalogue: a page of videos by score, how many a filter
-//! keeps, one video whole, the channels, what changed since a generation,
-//! and the last scan.
+//! keeps, one video whole, the channels (and the ones of an imported list
+//! still to decide), what changed since a generation, how many the next scan
+//! takes out for their time, and the last scan.
 //!
 //! # The order and the page are SQL's
 //!
@@ -16,11 +17,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use rusqlite::types::Value;
-use rusqlite::{Connection, OptionalExtension as _, Row, ToSql, params};
+use rusqlite::{Connection, OptionalExtension as _, Row, ToSql, named_params, params};
 
 use crate::db::{self, sql};
-use crate::read::{Channel, Chapter, Filter, Hidden, Page, RankedVideo, ScanRecord, Shorts, Video};
-use crate::{ChannelId, Rating, Refusal, Skip, Stop, VideoId, Why};
+use crate::read::{
+    Channel, Chapter, Decision, Filter, Forever, Hidden, Order, Page, RankedVideo, ScanRecord,
+    SetAside, Shorts, Staged, Video,
+};
+use crate::{ChannelId, Keep, Rating, Refusal, Skip, Stop, VideoId, Why};
 
 /// The most rows one page may ask for.
 pub(crate) const PAGE_MOST: u32 = 1000;
@@ -33,9 +37,19 @@ pub(crate) const TOTAL: &str = "(c.score + v.static_points + CASE
       / c.recency_days
     ELSE 0 END)";
 
-/// The columns of a ranked row, in [`ranked_of`]'s order.
+/// The columns of a ranked row, in [`ranked_of`]'s order. NEW ONES GO AT THE
+/// END: `ORDER BY 6` names the total by its place, and [`video_of`] reads the
+/// whole video's columns after [`RANKED_COLUMNS`] of these.
+///
+/// The last is the ∞ ([`Forever`]): the video's own mark (`1`) wins over its
+/// channel's for ever (`2`), so the person's mark stands if the channel
+/// changes.
 const RANKED: &str = "v.id, v.url, v.title, c.title, v.channel, TOTAL, v.thumb_file,
-    v.duration_s, v.published_at, v.is_short, v.hidden";
+    v.duration_s, v.published_at, v.is_short, v.hidden, v.rating, v.set_aside_at,
+    CASE WHEN v.keep = 1 THEN 1 WHEN c.keep_days = 0 THEN 2 ELSE 0 END";
+
+/// How many columns [`RANKED`] has.
+const RANKED_COLUMNS: usize = 14;
 
 /// The words of a full-text search as an FTS5 query: each word quoted (a
 /// quote inside doubled), all of them required, the last one a prefix — so
@@ -92,6 +106,11 @@ fn where_of(filter: &Filter) -> (String, Vec<(&'static str, Value)>) {
         clauses.push("v.published_at < :before".to_owned());
         values.push((":before", Value::Integer(before)));
     }
+    match filter.set_aside {
+        SetAside::Any => {}
+        SetAside::Only => clauses.push("v.set_aside_at IS NOT NULL".to_owned()),
+        SetAside::Without => clauses.push("v.set_aside_at IS NULL".to_owned()),
+    }
     (clauses.join(" AND "), values)
 }
 
@@ -114,33 +133,59 @@ pub(crate) fn ranked(
         ":offset",
         Value::Integer(i64::from(page.number) * i64::from(per_page)),
     ));
+    // THE ID LAST in either order: two rows that tie on everything else still
+    // come in one order, so a page never shows a row twice or never.
+    let order = match filter.order {
+        Order::Score => "6 DESC, v.published_at DESC NULLS LAST, v.id",
+        Order::NewestSetAside => "v.set_aside_at DESC NULLS LAST, 6 DESC, v.id",
+    };
     let text = format!(
         "SELECT {} FROM videos v JOIN channels c ON c.id = v.channel WHERE {where_}
-         ORDER BY 6 DESC, v.published_at DESC NULLS LAST, v.id LIMIT :limit OFFSET :offset",
+         ORDER BY {order} LIMIT :limit OFFSET :offset",
         RANKED.replace("TOTAL", TOTAL)
     );
     let mut statement = conn.prepare_cached(&text).map_err(sql)?;
-    let rows = statement
-        .query_map(named(&values).as_slice(), ranked_of)
-        .map_err(sql)?;
-    rows.collect::<Result<_, _>>().map_err(sql)
+    let mut rows = statement.query(named(&values).as_slice()).map_err(sql)?;
+    let mut ranked = Vec::new();
+    while let Some(row) = rows.next().map_err(sql)? {
+        ranked.push(ranked_of(row)?);
+    }
+    Ok(ranked)
 }
 
-/// A ranked row, from [`RANKED`]'s columns.
-fn ranked_of(r: &Row<'_>) -> rusqlite::Result<RankedVideo> {
-    Ok(RankedVideo {
-        id: VideoId(r.get(0)?),
-        url: r.get(1)?,
-        title: r.get(2)?,
-        channel: r.get(3)?,
-        channel_id: ChannelId(r.get(4)?),
-        score: r.get(5)?,
-        thumb_file: r.get::<_, Option<String>>(6)?.map(PathBuf::from),
-        duration_s: r.get(7)?,
-        published_at_s: r.get(8)?,
-        is_short: r.get(9)?,
-        hidden: r.get(10)?,
-    })
+/// A ranked row, from [`RANKED`]'s columns. A rating or a ∞ this build does
+/// not know is refused ([`Why::Unreadable`]), never read as none.
+fn ranked_of(r: &Row<'_>) -> Result<RankedVideo, Refusal> {
+    let unreadable = || Refusal::of(Why::Unreadable);
+    let rating = match r.get::<_, Option<i64>>(11).map_err(sql)? {
+        None => None,
+        Some(n) => Some(Rating::of_number(n).ok_or_else(unreadable)?),
+    };
+    let forever = match r.get::<_, i64>(13).map_err(sql)? {
+        0 => Forever::No,
+        1 => Forever::ByVideo,
+        2 => Forever::ByChannel,
+        _ => return Err(unreadable()),
+    };
+    let plain = || -> rusqlite::Result<RankedVideo> {
+        Ok(RankedVideo {
+            id: VideoId(r.get(0)?),
+            url: r.get(1)?,
+            title: r.get(2)?,
+            channel: r.get(3)?,
+            channel_id: ChannelId(r.get(4)?),
+            score: r.get(5)?,
+            thumb_file: r.get::<_, Option<String>>(6)?.map(PathBuf::from),
+            duration_s: r.get(7)?,
+            published_at_s: r.get(8)?,
+            is_short: r.get(9)?,
+            hidden: r.get(10)?,
+            rating,
+            set_aside_at_s: r.get(12)?,
+            forever,
+        })
+    };
+    plain().map_err(sql)
 }
 
 /// How many videos `filter` keeps.
@@ -231,8 +276,8 @@ fn videos_where(
 
 /// A video's row read whole (tags and views are filled after).
 fn video_of(r: &Row<'_>) -> Result<Video, Refusal> {
-    let row = ranked_of(r).map_err(sql)?;
-    let at = |i: usize| i + 11;
+    let row = ranked_of(r)?;
+    let at = |i: usize| i + RANKED_COLUMNS;
     let json = |i: usize| -> Result<String, Refusal> { r.get(at(i)).map_err(sql) };
     let unreadable = || Refusal::of(Why::Unreadable);
     let chapters: Vec<Chapter> = serde_json::from_str(&json(8)?).map_err(|_| unreadable())?;
@@ -286,13 +331,14 @@ pub(crate) fn all_since(conn: &Connection, generation: u64) -> Result<(Vec<Video
     Ok((videos, u64::try_from(now).unwrap_or(0)))
 }
 
-/// The ids taken out of the catalogue (deleted, unavailable) since
-/// `generation`.
+/// The ids taken out of the catalogue (deleted, unavailable, past their
+/// time) since `generation` — every reason that takes a CATALOGUED video out,
+/// or the index would keep it for ever.
 pub(crate) fn gone_since(conn: &Connection, generation: u64) -> Result<Vec<VideoId>, Refusal> {
     let since = i64::try_from(generation).unwrap_or(i64::MAX);
     let mut statement = conn
         .prepare_cached(
-            "SELECT video FROM skipped WHERE generation > ?1 AND reason IN (?2, ?3)
+            "SELECT video FROM skipped WHERE generation > ?1 AND reason IN (?2, ?3, ?4)
              ORDER BY video",
         )
         .map_err(sql)?;
@@ -301,7 +347,8 @@ pub(crate) fn gone_since(conn: &Connection, generation: u64) -> Result<Vec<Video
             params![
                 since,
                 crate::Skip::Deleted.id(),
-                crate::Skip::Unavailable.id()
+                crate::Skip::Unavailable.id(),
+                crate::Skip::Expired.id()
             ],
             |r| Ok(VideoId(r.get(0)?)),
         )
@@ -331,35 +378,100 @@ pub(crate) fn skipped(conn: &Connection) -> Result<Vec<(Skip, u64)>, Refusal> {
     Ok(counts)
 }
 
-/// Every channel, by score, best first.
+/// The columns of a channel, in [`channel_of`]'s order.
+const CHANNEL_ROW: &str = "c.id, c.handle, c.title, c.url, c.avatar_url, c.score, c.added_at,
+    c.reference_at, c.last_try_at, c.last_error, c.block_shorts,
+    (SELECT count(*) FROM videos v WHERE v.channel = c.id), c.keep_days";
+
+/// How many columns [`CHANNEL_ROW`] has.
+const CHANNEL_COLUMNS: usize = 13;
+
+/// A channel, from [`CHANNEL_ROW`]. A keep this build cannot read is
+/// refused, never read as "as everywhere".
+fn channel_of(r: &Row<'_>) -> Result<Channel, Refusal> {
+    let keep = match r.get::<_, Option<i64>>(12).map_err(sql)? {
+        None => None,
+        Some(n) => Some(Keep::of_number(n).ok_or(Refusal::of(Why::Unreadable))?),
+    };
+    let plain = || -> rusqlite::Result<Channel> {
+        Ok(Channel {
+            id: ChannelId(r.get(0)?),
+            handle: r.get(1)?,
+            title: r.get(2)?,
+            url: r.get(3)?,
+            avatar_url: r.get(4)?,
+            score: r.get(5)?,
+            added_at_s: r.get(6)?,
+            reference_at_s: r.get(7)?,
+            last_try_at_s: r.get(8)?,
+            last_error: r.get(9)?,
+            block_shorts: r.get(10)?,
+            keep,
+            videos: u64::try_from(r.get::<_, i64>(11)?).unwrap_or(0),
+        })
+    };
+    plain().map_err(sql)
+}
+
+/// Every channel of the catalogue, by score, best first — a channel of an
+/// imported list (`staged`) is not one until it is registered.
 pub(crate) fn channels(conn: &Connection) -> Result<Vec<Channel>, Refusal> {
     let mut statement = conn
-        .prepare_cached(
-            "SELECT c.id, c.handle, c.title, c.url, c.avatar_url, c.score, c.added_at,
-               c.reference_at, c.last_try_at, c.last_error, c.block_shorts,
-               (SELECT count(*) FROM videos v WHERE v.channel = c.id)
-             FROM channels c ORDER BY c.score DESC, c.title, c.id",
+        .prepare_cached(&format!(
+            "SELECT {CHANNEL_ROW} FROM channels c WHERE c.staged IS NULL
+             ORDER BY c.score DESC, c.title, c.id"
+        ))
+        .map_err(sql)?;
+    let mut rows = statement.query([]).map_err(sql)?;
+    let mut channels = Vec::new();
+    while let Some(row) = rows.next().map_err(sql)? {
+        channels.push(channel_of(row)?);
+    }
+    Ok(channels)
+}
+
+/// Every channel of an imported list not registered yet, by title (accents
+/// and case folded, [`crate::score::fold`]), then id — never grouped by
+/// decision: the cursor is a channel, and a row that jumped away while the
+/// person decided would take it along. Sorted HERE and not by SQLite's
+/// `NOCASE`, which folds ASCII only and would put a title begun `É` after
+/// every one begun `Z`.
+pub(crate) fn staged(conn: &Connection) -> Result<Vec<Staged>, Refusal> {
+    let mut statement = conn
+        .prepare_cached(&format!(
+            "SELECT {CHANNEL_ROW}, c.staged FROM channels c WHERE c.staged IS NOT NULL"
+        ))
+        .map_err(sql)?;
+    let mut rows = statement.query([]).map_err(sql)?;
+    let mut staged = Vec::new();
+    while let Some(row) = rows.next().map_err(sql)? {
+        let decision: String = row.get(CHANNEL_COLUMNS).map_err(sql)?;
+        staged.push(Staged {
+            channel: channel_of(row)?,
+            // A DECISION THIS BUILD DOES NOT KNOW is refused, never undecided.
+            decision: Decision::of(&decision).ok_or(Refusal::of(Why::Unreadable))?,
+        });
+    }
+    staged.sort_by_cached_key(|s| (crate::score::fold(&s.channel.title), s.channel.id.0.clone()));
+    Ok(staged)
+}
+
+/// How many videos a scan at `now` takes out for their time
+/// ([`crate::edit::EXPIRED`], under the keep the settings say now).
+pub(crate) fn expiring(conn: &Connection, now: i64) -> Result<u64, Refusal> {
+    let days = db::settings(conn)?.keep.number();
+    let n: i64 = conn
+        .query_row(
+            &format!(
+                "SELECT count(*) FROM videos v JOIN channels c ON c.id = v.channel
+                 WHERE {}",
+                crate::edit::EXPIRED
+            ),
+            named_params! { ":days": days, ":now": now },
+            |r| r.get(0),
         )
         .map_err(sql)?;
-    let rows = statement
-        .query_map([], |r| {
-            Ok(Channel {
-                id: ChannelId(r.get(0)?),
-                handle: r.get(1)?,
-                title: r.get(2)?,
-                url: r.get(3)?,
-                avatar_url: r.get(4)?,
-                score: r.get(5)?,
-                added_at_s: r.get(6)?,
-                reference_at_s: r.get(7)?,
-                last_try_at_s: r.get(8)?,
-                last_error: r.get(9)?,
-                block_shorts: r.get(10)?,
-                videos: u64::try_from(r.get::<_, i64>(11)?).unwrap_or(0),
-            })
-        })
-        .map_err(sql)?;
-    rows.collect::<Result<_, _>>().map_err(sql)
+    Ok(u64::try_from(n).unwrap_or(0))
 }
 
 /// The last scan's record, when there was one.

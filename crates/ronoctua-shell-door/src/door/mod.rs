@@ -261,6 +261,20 @@ pub enum Launching {
     },
     /// An entry of the launcher, by its desktop id.
     Entry(String),
+    /// An entry of the launcher, by its desktop id, OPENING one web address
+    /// appended to its command (`launch::argv_opening`) — Nyxt on a video's
+    /// page (`launch::in_nyxt`). Only a web address is ever handed to it
+    /// (`launch::is_web_address`); anything else is said and nothing starts.
+    EntryOpening {
+        /// The entry, by its desktop id.
+        id: String,
+        /// The address it opens, as its last word.
+        address: String,
+        /// The text key said where the launcher has no entry by `id`: a
+        /// program the person declined, or not installed yet, is no failure
+        /// of the launch but a fact about the machine, said in its words.
+        absent: &'static str,
+    },
 }
 
 /// Who a paste read off the loop is for.
@@ -322,9 +336,30 @@ enum Back {
     Launched(crate::foreign::Launch),
     /// The launcher has no entry by the id this window asked to open.
     NotInLauncher,
+    /// The launcher has no entry by the id this window asked to open an
+    /// address with — said in the launch's own sentence (`absent`).
+    Absent(&'static str),
+    /// What an entry was to open is no web address: nothing started.
+    NotAnAddress(String),
     /// A thread the window left something for woke the loop
     /// ([`Wiring::wake`]): [`Content::woken`].
     Woken,
+}
+
+/// What the launcher's thread hands back for an entry it was asked to open
+/// ([`Launching::Entry`], [`Launching::EntryOpening`]) — `absent` the
+/// launch's own sentence for an entry the launcher has not, when it has one.
+///
+/// THE LAUNCH'S SENTENCE WINS over "not in the launcher yet": Nyxt declined
+/// is no program installed a moment ago, and the generic sentence would
+/// promise it soon. An entry opening nothing has no sentence of its own, and
+/// says the generic one.
+fn back_of(opened: crate::launch::Opened, absent: Option<&'static str>) -> Back {
+    match opened {
+        crate::launch::Opened::Started(verdict) => Back::Launched(verdict),
+        crate::launch::Opened::NotInLauncher => absent.map_or(Back::NotInLauncher, Back::Absent),
+        crate::launch::Opened::NotAnAddress(address) => Back::NotAnAddress(address),
+    }
 }
 
 impl Ui {
@@ -3441,6 +3476,11 @@ impl<C: Content> Door<C> {
                 self.ui
                     .say(self.ui.texts.t(crate::key::SOFTWARE_NOT_IN_LAUNCHER));
             }
+            Back::Absent(absent) => self.ui.say(self.ui.texts.t(absent)),
+            Back::NotAnAddress(address) => {
+                let said = crate::launch::not_a_web_address(&self.ui.texts, &address);
+                self.ui.say(said);
+            }
         }
     }
 
@@ -3473,10 +3513,19 @@ impl<C: Content> Door<C> {
             Launching::Entry(desktop_id) => {
                 let language = self.ui.texts.language().to_owned();
                 crate::launch::launch_entry(&desktop_id, &language, move |opened| {
-                    let _ = back.send(match opened {
-                        crate::launch::Opened::Started(verdict) => Back::Launched(verdict),
-                        crate::launch::Opened::NotInLauncher => Back::NotInLauncher,
-                    });
+                    let _ = back.send(back_of(opened, None));
+                });
+            }
+            // AN ENTRY OPENING AN ADDRESS: the launcher's lack of it is the
+            // launch's own sentence (`back_of`).
+            Launching::EntryOpening {
+                id,
+                address,
+                absent,
+            } => {
+                let language = self.ui.texts.language().to_owned();
+                crate::launch::launch_entry_opening(&id, &address, &language, move |opened| {
+                    let _ = back.send(back_of(opened, Some(absent)));
                 });
             }
         }
@@ -4472,6 +4521,10 @@ mod tests {
         let mut ui = ui();
         ui.launch("/bin/gimp", &["-n".to_owned()], Some("/srv"));
         ui.launch_entry("org.gimp.GIMP.desktop");
+        // AN ADDRESS IN NYXT, by the doorway every view is handed: the
+        // window starts it itself, as it starts the rest.
+        let video = "https://www.youtube.com/watch?v=x";
+        crate::region::Doorway::launch(&mut ui, crate::launch::in_nyxt(video));
         assert_eq!(
             ui.launches(),
             [
@@ -4481,6 +4534,11 @@ mod tests {
                     cwd: Some("/srv".to_owned()),
                 },
                 Launching::Entry("org.gimp.GIMP.desktop".to_owned()),
+                Launching::EntryOpening {
+                    id: crate::launch::NYXT.to_owned(),
+                    address: video.to_owned(),
+                    absent: crate::key::DOOR_NYXT_ABSENT,
+                },
             ]
         );
         assert!(ui.orders().is_empty(), "the footer was asked to open it");
@@ -4495,6 +4553,39 @@ mod tests {
             program: "/bin/gimp".to_owned(),
         };
         assert_eq!(launch_said(&opened, &ui.texts), None);
+    }
+
+    /// FAILS IF: an entry the launcher has not is said by the generic
+    /// "not in the launcher yet" where its launch brought a sentence of its
+    /// own — a declined Nyxt promised soon — or by that sentence where the
+    /// launch had none; or a start, or an address that is no web one, comes
+    /// back as anything but itself.
+    #[test]
+    fn an_absent_entry_is_said_in_its_launchs_words() {
+        use crate::launch::Opened;
+        let nyxt = crate::key::DOOR_NYXT_ABSENT;
+        assert!(matches!(
+            back_of(Opened::NotInLauncher, Some(nyxt)),
+            Back::Absent(k) if k == nyxt
+        ));
+        assert!(matches!(
+            back_of(Opened::NotInLauncher, None),
+            Back::NotInLauncher
+        ));
+        for absent in [None, Some(nyxt)] {
+            assert!(matches!(
+                back_of(Opened::NotAnAddress("-x".to_owned()), absent),
+                Back::NotAnAddress(a) if a == "-x"
+            ));
+            let started = crate::foreign::Launch::WithScope {
+                scope: "a-scope".to_owned(),
+                program: "/bin/nyxt".to_owned(),
+            };
+            assert!(matches!(
+                back_of(Opened::Started(started.clone()), absent),
+                Back::Launched(v) if v == started
+            ));
+        }
     }
 
     /// `C-v` ASKS THE DOOR for the clipboard, and what comes back is typed

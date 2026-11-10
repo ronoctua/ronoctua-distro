@@ -122,13 +122,34 @@ pub fn scan(language: &str, sender: calloop::channel::Sender<Catalogue>) {
 /// way, so a program that needs a terminal gets one whichever door opened it.
 #[must_use]
 pub fn argv_of(e: &ronoctua_apps::DesktopEntry) -> Option<(String, Vec<String>, Option<String>)> {
-    let (program, args) = &e.command;
+    argv_running(e, e.command.clone())
+}
+
+/// [`argv_of`] for an entry OPENING `word` — a web address handed to a
+/// browser ([`in_nyxt`]) — appended to its command as a file is
+/// ([`command_with`]): after the entry's own words, inside the terminal for
+/// an entry that needs one, as everything else it runs.
+#[must_use]
+pub fn argv_opening(
+    e: &ronoctua_apps::DesktopEntry,
+    word: &str,
+) -> Option<(String, Vec<String>, Option<String>)> {
+    argv_running(e, command_with(e, word))
+}
+
+/// How entry `e` runs `command` — its own, or its own with a word added:
+/// bare, or inside this binary's terminal.
+fn argv_running(
+    e: &ronoctua_apps::DesktopEntry,
+    command: (String, Vec<String>),
+) -> Option<(String, Vec<String>, Option<String>)> {
+    let (program, args) = command;
     if !e.terminal {
-        return Some((program.clone(), args.clone(), e.working_directory.clone()));
+        return Some((program, args, e.working_directory.clone()));
     }
     let me = std::env::current_exe().ok()?;
-    let mut inside = vec!["terminal".to_owned(), program.clone()];
-    inside.extend_from_slice(args);
+    let mut inside = vec!["terminal".to_owned(), program];
+    inside.extend(args);
     // THE ENTRY'S `Path=` IS THE TERMINAL'S FOLDER TOO: the terminal starts
     // its program where it was itself started, so the folder rides on the
     // launch and not on a flag of ours.
@@ -148,6 +169,9 @@ pub enum Opened {
     /// No entry of the launcher has that id: installed a moment ago and not
     /// in the catalogue yet, or gone.
     NotInLauncher,
+    /// What the entry was to open is no web address ([`is_web_address`]):
+    /// nothing was started, and the catalogue was not read.
+    NotAnAddress(String),
 }
 
 /// Starts the launcher's entry `desktop_id` FROM A WINDOW, off the loop: the
@@ -161,6 +185,35 @@ pub enum Opened {
 /// to the footer, whose refusal then appeared on the FOOTER's line, and the
 /// window the person was using said nothing.
 pub fn launch_entry(desktop_id: &str, language: &str, done: impl FnOnce(Opened) + Send + 'static) {
+    start_entry(desktop_id, language, None, done);
+}
+
+/// [`launch_entry`] for an entry OPENING `address` — Nyxt on a video's page
+/// ([`in_nyxt`]) — appended to its command ([`argv_opening`]). An address
+/// that is no web one ([`is_web_address`]) is refused at once, on the
+/// caller's thread, before any catalogue is read: [`Opened::NotAnAddress`].
+pub fn launch_entry_opening(
+    desktop_id: &str,
+    address: &str,
+    language: &str,
+    done: impl FnOnce(Opened) + Send + 'static,
+) {
+    if !is_web_address(address) {
+        done(Opened::NotAnAddress(address.to_owned()));
+        return;
+    }
+    start_entry(desktop_id, language, Some(address.to_owned()), done);
+}
+
+/// The thread of [`launch_entry`] and [`launch_entry_opening`]: the
+/// catalogue read, the entry found, started with `word` added when there is
+/// one.
+fn start_entry(
+    desktop_id: &str,
+    language: &str,
+    word: Option<String>,
+    done: impl FnOnce(Opened) + Send + 'static,
+) {
     let desktop_id = desktop_id.to_owned();
     let language = language.replace('-', "_");
     let born = std::thread::Builder::new()
@@ -173,13 +226,17 @@ pub fn launch_entry(desktop_id: &str, language: &str, done: impl FnOnce(Opened) 
                 done(Opened::NotInLauncher);
                 return;
             };
-            let opened = match argv_of(&entry) {
+            let argv = match word.as_deref() {
+                Some(word) => argv_opening(&entry, word),
+                None => argv_of(&entry),
+            };
+            let opened = match argv {
                 Some((program, args, cwd)) => {
                     tracing::info!(app = %entry.id, program, "opening the application");
                     crate::foreign::launch_now(&program, &args, cwd.as_deref())
                 }
                 None => crate::foreign::Launch::Failed {
-                    program: entry.id.clone(),
+                    program: entry.id,
                     error: "this binary cannot name itself for the terminal".to_owned(),
                 },
             };
@@ -187,6 +244,70 @@ pub fn launch_entry(desktop_id: &str, language: &str, done: impl FnOnce(Opened) 
         });
     if let Err(e) = born {
         tracing::error!(error = %e, "could not create the launch thread");
+    }
+}
+
+/// NYXT'S DESKTOP ID — the entry `nix/modules/nyxt.nix` declares.
+///
+/// By its id, and never by a store path through `option_env!`: baked in, the
+/// path is a reference every closure carries whatever the machine chose (the
+/// icon superpack's lesson, `superpack`), and a person may decline Nyxt
+/// (`software/declined.json`). The launcher is what knows whether it is
+/// here; where it is not, the door says so ([`in_nyxt`]'s `absent`).
+pub const NYXT: &str = "nyxt.desktop";
+
+/// Whether `address` is a WEB ADDRESS a browser may be handed as its last
+/// word: `https://` or `http://` with something after it, and no whitespace
+/// or control character anywhere.
+///
+/// # Why so narrow
+///
+/// The address rides at the END of a command line ([`argv_opening`]), and a
+/// catalogue's address is data that came from outside: one that began with
+/// `-` would be read as a flag of the program's own, and `file://`,
+/// `javascript:` and the rest are no page of the web. Each of those opens
+/// nothing, and the door says why (`door-not-a-web-address`).
+#[must_use]
+pub fn is_web_address(address: &str) -> bool {
+    let rest = address
+        .strip_prefix("https://")
+        .or_else(|| address.strip_prefix("http://"));
+    rest.is_some_and(|rest| !rest.is_empty())
+        && !address.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// What a door says of `address` when it is no web one
+/// (`door-not-a-web-address`) — the window's foot and the footer's
+/// minibuffer alike, so the two doors say the same thing.
+///
+/// THE ADDRESS IS SAID ESCAPED: a line break, a tab or any other control
+/// character in it — one of the reasons it was refused — is written as its
+/// escape (`\n`, `\u{1b}`), and so is every space but the plain one. Said as
+/// it came, a `\n` would break the minibuffer's ONE line, and the refusal
+/// would carry into the footer the very characters it refused.
+#[must_use]
+pub fn not_a_web_address(texts: &ronoctua_i18n::Texts, address: &str) -> String {
+    let mut said = String::with_capacity(address.len());
+    for c in address.chars() {
+        if c.is_control() || (c.is_whitespace() && c != ' ') {
+            said.extend(c.escape_default());
+        } else {
+            said.push(c);
+        }
+    }
+    texts.t_with(crate::key::DOOR_NOT_A_WEB_ADDRESS, &[("address", &said)])
+}
+
+/// The launch that opens `address` in Nyxt ([`NYXT`]) — what a video's page,
+/// a channel's `/videos` and the player's `⋯` ask, each door through its own
+/// `Doorway::launch`. Where the launcher has no Nyxt — declined, or not
+/// installed yet — the door says `door-nyxt-absent`.
+#[must_use]
+pub fn in_nyxt(address: &str) -> crate::door::Launching {
+    crate::door::Launching::EntryOpening {
+        id: NYXT.to_owned(),
+        address: address.to_owned(),
+        absent: crate::key::DOOR_NYXT_ABSENT,
     }
 }
 
@@ -587,28 +708,35 @@ pub fn opens_by<'a>(
 /// The prefix of this system's own desktop entries.
 pub const OURS: &str = "br.ronoctua.";
 
-/// The command line for opening `path` with this entry.
-///
-/// It re-assembles the entry's `Exec=` with the path in the field codes, rather
-/// than appending it: an `Exec=` of `foo --open %f --window` puts the file in
-/// the MIDDLE, and appending would hand `--window` the filename.
+/// [`command_with`] for a file's `path`.
 #[must_use]
 pub fn command_for(
     entry: &ronoctua_apps::DesktopEntry,
     path: &std::path::Path,
 ) -> (String, Vec<String>) {
-    let open = vec![path.to_string_lossy().into_owned()];
-    // The raw `Exec=` is not kept on the entry — only the assembled command is
-    // — so a line with no field code at all gets the path appended, which is
-    // what the spec says to do with an entry that declares a type and no
-    // placeholder.
+    command_with(entry, &path.to_string_lossy())
+}
+
+/// The command line for this entry with ONE word to open — a file's path
+/// ([`command_for`]) or a web address ([`argv_opening`]) — APPENDED after the
+/// entry's own words.
+///
+/// # Why appended, and not where the field code was
+///
+/// The raw `Exec=` is not kept on the entry: the catalogue's sweep assembled
+/// it with nothing to open (`ronoctua_apps::exec::assemble`), and the field
+/// codes vanished there. So an `Exec=` of `foo --open %f --window` hands
+/// `--window` the word — what the spec asks of an entry that declares a type
+/// and no placeholder, and the price of not keeping the line.
+#[must_use]
+pub fn command_with(entry: &ronoctua_apps::DesktopEntry, word: &str) -> (String, Vec<String>) {
     let (program, mut args) = entry.command.clone();
     if args.iter().any(|a| a.contains('%')) {
         // Should not happen: `assemble` consumed the codes at scan time. If it
         // ever does, appending is still better than passing a literal `%f`.
         tracing::debug!(id = %entry.id, "a field code was left over in the command");
     }
-    args.extend(open);
+    args.push(word.to_owned());
     (program, args)
 }
 
@@ -735,5 +863,177 @@ mod tests {
         );
         assert_eq!(editor_command(None, file), None);
         assert_eq!(editor_command(Some(""), file), None);
+    }
+
+    /// An entry as the catalogue holds it: `program` with `args`, in a
+    /// terminal or not.
+    fn entry(program: &str, args: &[&str], terminal: bool) -> ronoctua_apps::DesktopEntry {
+        ronoctua_apps::DesktopEntry {
+            id: "nyxt".to_owned(),
+            name: "Nyxt".to_owned(),
+            description: String::new(),
+            icon: String::new(),
+            categories: Vec::new(),
+            mime_types: Vec::new(),
+            command: (
+                program.to_owned(),
+                args.iter().map(|a| (*a).to_owned()).collect(),
+            ),
+            terminal,
+            working_directory: Some("/srv".to_owned()),
+            startup_wm_class: None,
+            key: "nyxt".to_owned(),
+            fallback: true,
+        }
+    }
+
+    /// FAILS IF: the word an entry opens — a file's path, a web address — is
+    /// put anywhere but after the entry's own words, a path and an address
+    /// stop being appended alike, or an entry that needs a terminal opens it
+    /// outside its program's words.
+    #[test]
+    fn an_entry_opens_its_word_after_its_own() {
+        let bare = entry("/bin/nyxt", &["--profile", "nosave"], false);
+        let address = "https://www.youtube.com/watch?v=x";
+        assert_eq!(
+            command_with(&bare, address),
+            (
+                "/bin/nyxt".to_owned(),
+                vec![
+                    "--profile".to_owned(),
+                    "nosave".to_owned(),
+                    address.to_owned()
+                ],
+            )
+        );
+        assert_eq!(
+            command_for(&bare, Path::new("/tmp/a b.html")),
+            command_with(&bare, "/tmp/a b.html"),
+            "a path and an address are appended alike"
+        );
+        assert_eq!(
+            argv_opening(&bare, address),
+            Some((
+                "/bin/nyxt".to_owned(),
+                vec![
+                    "--profile".to_owned(),
+                    "nosave".to_owned(),
+                    address.to_owned()
+                ],
+                Some("/srv".to_owned()),
+            ))
+        );
+        let (_, inside, cwd) =
+            argv_opening(&entry("/bin/lynx", &["-nopause"], true), address).expect("this binary");
+        assert_eq!(
+            inside,
+            ["terminal", "/bin/lynx", "-nopause", address],
+            "the terminal runs the entry's words, then the address"
+        );
+        assert_eq!(cwd.as_deref(), Some("/srv"));
+        assert_eq!(
+            argv_of(&bare),
+            Some((
+                "/bin/nyxt".to_owned(),
+                vec!["--profile".to_owned(), "nosave".to_owned()],
+                Some("/srv".to_owned()),
+            )),
+            "an entry opening nothing gained a word"
+        );
+    }
+
+    /// FAILS IF: Nyxt's launch names another entry than the one its module
+    /// declares, carries another address than it was given, or says nothing
+    /// in some language where the launcher has no Nyxt.
+    #[test]
+    fn nyxt_is_its_entry_and_says_when_it_is_absent() {
+        let address = "https://www.youtube.com/@someone/videos";
+        assert_eq!(
+            in_nyxt(address),
+            crate::door::Launching::EntryOpening {
+                id: "nyxt.desktop".to_owned(),
+                address: address.to_owned(),
+                absent: crate::key::DOOR_NYXT_ABSENT,
+            }
+        );
+        assert!(
+            same_desktop(NYXT, "nyxt"),
+            "the launcher's id is the bare one"
+        );
+        for language in ronoctua_i18n::LANGUAGES {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            let absent = texts.t(crate::key::DOOR_NYXT_ABSENT);
+            assert!(
+                !absent.is_empty() && absent != crate::key::DOOR_NYXT_ABSENT,
+                "{language}: {absent}"
+            );
+            let refused = texts.t_with(crate::key::DOOR_NOT_A_WEB_ADDRESS, &[("address", "-x")]);
+            assert!(refused.contains("-x"), "{language}: {refused}");
+        }
+    }
+
+    /// FAILS IF: anything but a page of the web — a flag, a file, a script,
+    /// a scheme with nothing after it, an address with a space or a line
+    /// break in it — is handed to a browser as its last word, or a page of
+    /// the web is refused.
+    #[test]
+    fn only_a_web_address_is_handed_to_a_browser() {
+        for refused in [
+            "-x",
+            "--remote-debugging-port=9222",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://",
+            "http://",
+            "ftp://example.org/",
+            "www.youtube.com/watch?v=x",
+            " https://www.youtube.com/",
+            "https://www.youtube.com/watch?v=x --flag",
+            "https://www.youtube.com/\n-x",
+            "",
+        ] {
+            assert!(!is_web_address(refused), "{refused:?} was taken");
+        }
+        for taken in [
+            "https://www.youtube.com/watch?v=x",
+            "http://example.org/",
+            "https://www.youtube.com/channel/UC0123456789abcdefghijkl/videos",
+        ] {
+            assert!(is_web_address(taken), "{taken:?} was refused");
+        }
+    }
+
+    /// FAILS IF: what a door says of a refused address carries a line break,
+    /// a tab or another control character into the window's foot or the
+    /// footer's one line — or loses the address, a plain space of it
+    /// included — in some language.
+    #[test]
+    fn a_refused_address_is_said_on_one_line() {
+        for language in ronoctua_i18n::LANGUAGES {
+            let texts = ronoctua_i18n::Texts::fresh(language).expect(language);
+            let said = not_a_web_address(&texts, "https://www.youtube.com/\n-x\t\u{1b}[2J\u{2028}");
+            assert!(
+                !said.chars().any(|c| c.is_control() || c == '\u{2028}'),
+                "{language}: {said:?}"
+            );
+            assert!(
+                said.contains(r"https://www.youtube.com/\n-x\t\u{1b}[2J\u{2028}"),
+                "{language}: {said:?}"
+            );
+            let said = not_a_web_address(&texts, "a b");
+            assert!(said.contains("a b"), "{language}: {said:?}");
+        }
+    }
+
+    /// FAILS IF: an address that is no web one reaches the catalogue's
+    /// thread — it is refused at once, with the address, and nothing is
+    /// started.
+    #[test]
+    fn an_entry_is_never_started_on_what_is_no_address() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        launch_entry_opening(NYXT, "-x", "en-GB", move |opened| {
+            let _ = tx.send(opened);
+        });
+        assert_eq!(rx.try_recv(), Ok(Opened::NotAnAddress("-x".to_owned())));
     }
 }

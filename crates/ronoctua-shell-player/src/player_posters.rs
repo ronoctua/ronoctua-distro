@@ -309,11 +309,57 @@ fn line(
     }
 }
 
+/// A CONTROL BESIDE A TILE'S WORDS — a quick mark's glyph, the `⋯` that
+/// opens more of it: what it shows, whether what it marks is on (drawn in
+/// the accent, else quiet), what a click on it does AT ONCE, and the command
+/// whose sentence the pointer resting on it says (`cmd-<id>`, else
+/// `about-<id>`: `chrome::hint_sentence`). Each takes a glyph's own cells,
+/// `space.player.queueGlyph`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Control {
+    /// What it shows.
+    pub glyph: char,
+    /// What it marks is on: the accent, else the quiet register.
+    pub lit: bool,
+    /// What a click on it does.
+    pub target: Target,
+    /// The command whose sentence it says under the pointer.
+    pub about: &'static str,
+}
+
+/// ONE LINE SAID UNDER A TILE'S TITLE: its words in their PARTS (a channel,
+/// a score) — data — joined on one line when they fit there, else a line
+/// each, so a number is never parted from its unit; the controls that follow
+/// the words (`after`: a video's ratings beside its score), and the ones at
+/// the line's right edge (`end`: its marks). Glyphs that would leave the
+/// words less than their first part — or half the line, for a long one — are
+/// not drawn: they go before the words do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Said {
+    /// The words, in their parts — data.
+    pub parts: Vec<String>,
+    /// The controls right after the words.
+    pub after: Vec<Control>,
+    /// The controls at the line's right edge.
+    pub end: Vec<Control>,
+}
+
+impl Said {
+    /// Words alone, in their parts.
+    #[must_use]
+    pub fn words(parts: Vec<String>) -> Self {
+        Self {
+            parts,
+            ..Self::default()
+        }
+    }
+}
+
 /// ONE ITEM OF A GRID, OR OF A STRIP: its picture when it is decoded (the
 /// texture's key and its size), the glyph its box stands with while it is
-/// not, its title, the lines said under it — data, each one line — what a
-/// click on it does, its spot, and the `⋯` CONTROL at its end that opens
-/// more of it, with the command whose sentence says so.
+/// not, its title, the lines said under it — data, with their controls —
+/// what a click on it does, its spot, and the `⋯` CONTROL at its end that
+/// opens more of it.
 #[derive(Debug, Clone)]
 pub struct Tile {
     /// The decoded picture: its texture's key, and its size in pixels.
@@ -322,16 +368,109 @@ pub struct Tile {
     pub glyph: char,
     /// Its title — data.
     pub title: String,
-    /// What is said under the title, a line each — and each line in its
-    /// PARTS (a channel, a score): joined on one line when they fit there,
-    /// else a line each, so a number is never parted from its unit.
-    pub under: Vec<Vec<String>>,
+    /// What is said under the title, a line each ([`Said`]).
+    pub under: Vec<Said>,
     /// What `RET` and the second click do.
     pub target: Target,
     /// Its spot — the cursor keeps it.
     pub spot: String,
-    /// The control at its end, and the command it is.
-    pub more: Option<(Target, &'static str)>,
+    /// The control at its end — never dropped, however narrow the box: it
+    /// opens what every glyph beside the words does.
+    pub more: Option<Control>,
+}
+
+/// How many cells `controls` take, side by side.
+fn cells_of(controls: &[Control]) -> u16 {
+    u16::try_from(controls.len())
+        .unwrap_or(u16::MAX)
+        .saturating_mul(tokens::space::PLAYER_QUEUEGLYPH)
+}
+
+/// The least of its words a line keeps before its glyphs go: its first part
+/// whole — a score is never cut for a glyph — or, for a long one, half of
+/// `room`.
+fn least_words(said: &Said, room: u16) -> u16 {
+    said.parts
+        .first()
+        .map_or(0, |p| ronoctua_render::layout::width(p).min(room / 2))
+}
+
+/// Control `c` drawn at cell `from` of a tile spotted `spot`: its glyph — in
+/// the accent when what it marks is on — and the cell a click takes there.
+/// The one drawing of a control beside a tile's words, in a grid and a
+/// strip.
+fn control_at(c: &Control, from: u16, spot: &str) -> (crate::fields::Field, Cell) {
+    let colour = if c.lit {
+        tokens::color::STATE_ACCENT
+    } else {
+        tokens::color::TEXT_DIM
+    };
+    (
+        Builder::piece(from, c.glyph.to_string(), colour),
+        Cell {
+            from,
+            width: tokens::space::PLAYER_QUEUEGLYPH,
+            target: c.target.clone(),
+            spot: format!("{spot}-{}", c.about),
+            control: true,
+            about: Some(c.about),
+        },
+    )
+}
+
+/// ONE LINE SAID, in a box `room` cells wide from its words' first, the last
+/// `reserve` of them another's (the `⋯`, on its line): the words, cut to what
+/// is left, and where the glyphs that follow them and the ones at the right
+/// edge begin — from the words' first cell. Glyphs that would leave the words
+/// less than [`least_words`] are none: they drop before the words do.
+struct Laid<'s> {
+    /// The words, cut to their room.
+    words: String,
+    /// The controls after them, and their first cell.
+    after: (&'s [Control], u16),
+    /// The controls at the right edge, and their first cell.
+    end: (&'s [Control], u16),
+}
+
+/// [`Laid`], for `said` in a box of `room` cells.
+fn laid<'s>(said: &'s Said, joiner: &str, room: u16, reserve: u16) -> Laid<'s> {
+    let air = tokens::space::PLAYER_QUEUEAIR;
+    // WHAT THE GLYPHS TAKE beside the words: the right edge's group with the
+    // `⋯`, and the group after the words — each with a cell of air between
+    // it and the words.
+    let taken = |after: &[Control], end: &[Control]| {
+        let right = reserve.saturating_add(cells_of(end));
+        let mut n = if right > 0 {
+            right.saturating_add(air)
+        } else {
+            0
+        };
+        if !after.is_empty() {
+            n = n.saturating_add(cells_of(after)).saturating_add(air);
+        }
+        n
+    };
+    let least = least_words(said, room);
+    let (after, end): (&[Control], &[Control]) =
+        if room >= least.saturating_add(taken(&said.after, &said.end)) {
+            (said.after.as_slice(), said.end.as_slice())
+        } else {
+            (&[], &[])
+        };
+    let words = ronoctua_render::layout::elide_end(
+        &said.parts.join(joiner),
+        room.saturating_sub(taken(after, end)),
+    );
+    let after_at = match ronoctua_render::layout::width(&words) {
+        0 => 0,
+        w => w.saturating_add(air),
+    };
+    let end_at = room.saturating_sub(reserve.saturating_add(cells_of(end)));
+    Laid {
+        words,
+        after: (after, after_at),
+        end: (end, end_at),
+    }
 }
 
 /// A picture's box and its title's lines, in cells and lines of the rows'
@@ -403,8 +542,9 @@ fn wrapped(text: &str, cells: u16, most: u16) -> Vec<String> {
 /// and — when a tile says something under its title, or has a control —
 /// those lines under the titles. The picture's and the title's lines are
 /// the tile's row (a click there is a click on it); the lines under them are
-/// INERT, as a title's line is, and the control on them acts on the click —
-/// so the `⋯` is taken where it is drawn and nowhere else of the box.
+/// INERT, as a title's line is, and each control on them acts on the click —
+/// so the `⋯` and every glyph beside the words are taken where they are
+/// drawn and nowhere else of the box.
 pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
     if tiles.is_empty() {
         return;
@@ -431,9 +571,11 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
         let on_shelf: Vec<&(u16, u16, &Tile)> =
             placed.iter().filter(|(l, _, _)| *l == shelf).collect();
         let first = b.out.len();
-        let focused = b.cursor == first;
+        // THE CURSOR'S PLACE says the shelf's target; its colour and the
+        // selection are drawn only while the cursor is (`Builder::lit_at`).
+        let focused = b.lit_at(first);
         let here = b.cell.min(on_shelf.len().saturating_sub(1));
-        let row_target = if focused {
+        let row_target = if b.at_cursor(first) {
             on_shelf
                 .get(here)
                 .map_or(Target::Nothing, |(_, _, t)| t.target.clone())
@@ -525,9 +667,12 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 spot.clone(),
             ));
         }
-        // WHAT IS SAID UNDER THE TITLES, in the quiet register — and the
-        // `⋯` at the end of the first of those lines, a glyph's own cells
-        // from the box's right edge, the said line cut before them.
+        // WHAT IS SAID UNDER THE TITLES, in the quiet register, with its
+        // glyphs — the ones after its words and the ones at the box's right
+        // edge — and the `⋯` at the end of the first of those lines, a
+        // glyph's own cells from the box's right edge: the words cut before
+        // them, and a box too narrow for both keeps the words and drops the
+        // glyphs, never the `⋯` (`laid`).
         let glyph = tokens::space::PLAYER_QUEUEGLYPH;
         let joiner = b.texts.t(crate::key::PLAYER_META_JOINER);
         for u in 0..under {
@@ -535,33 +680,42 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
             let mut controls = Vec::new();
             for (_, at, t) in &on_shelf {
                 let left = b.left + at;
-                let control = t.more.as_ref().filter(|_| u == 0);
-                let room = if control.is_some() {
-                    cells.saturating_sub(glyph + tokens::space::PLAYER_QUEUEAIR)
-                } else {
-                    cells
-                };
+                let more = t.more.as_ref().filter(|_| u == 0);
+                let reserve = if more.is_some() { glyph } else { 0 };
                 if let Some(said) = t.under.get(usize::from(u)) {
-                    fields.push(Builder::piece(
-                        left,
-                        ronoctua_render::layout::elide_end(&said.join(&joiner), room),
-                        tokens::color::TEXT_DIM,
-                    ));
+                    let Laid {
+                        words,
+                        after: (after, after_at),
+                        end: (end, end_at),
+                    } = laid(said, &joiner, cells, reserve);
+                    fields.push(Builder::piece(left, words, tokens::color::TEXT_DIM));
+                    let placed = after
+                        .iter()
+                        .zip((0..).map(|k: u16| left + after_at + k * glyph))
+                        .chain(
+                            end.iter()
+                                .zip((0..).map(|k: u16| left + end_at + k * glyph)),
+                        );
+                    for (c, from) in placed {
+                        let (field, cell) = control_at(c, from, &t.spot);
+                        fields.push(field);
+                        controls.push(cell);
+                    }
                 }
-                if let Some((target, about)) = control {
+                if let Some(more) = more {
                     let from = left + cells.saturating_sub(glyph);
                     fields.push(Builder::piece(
                         from,
-                        tokens::icon::ELLIPSIS.to_string(),
+                        more.glyph.to_string(),
                         tokens::color::TEXT_SECONDARY,
                     ));
                     controls.push(Cell {
                         from,
                         width: glyph,
-                        target: target.clone(),
+                        target: more.target.clone(),
                         spot: format!("{}-more", t.spot),
                         control: true,
-                        about: Some(*about),
+                        about: Some(more.about),
                     });
                 }
             }
@@ -588,13 +742,13 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
 /// THE STRIP: a row each [`Tile`], its picture at the head — `shape.cells`
 /// by `shape.lines`, when the row holds it beside a title as wide again —
 /// and beside it its title, wrapped to `shape.titles` lines, the lines said
-/// under it, wrapped whole, and the `⋯` control at the end of its first
-/// line. Every line of a tile continues its row: a click anywhere on it is a
-/// click on it — the `⋯` but taken on its own line, where it is drawn
-/// (`player_rows::controls_under`). The pointer LIGHTS THE WORDS, on every
-/// line of the tile, and never the picture's box ([`Lit::From`]), the same
-/// whether the picture came or not. Too narrow for a picture, the rows are
-/// its words alone, and light whole.
+/// under it, wrapped whole, with their glyphs ([`said_lines`]), and the `⋯`
+/// control at the end of its first line. Every line of a tile continues its
+/// row: a click anywhere on it is a click on it — each control but taken on
+/// its own line, where it is drawn (`player_rows::controls_under`). The
+/// pointer LIGHTS THE WORDS, on every line of the tile, and never the
+/// picture's box ([`Lit::From`]), the same whether the picture came or not.
+/// Too narrow for a picture, the rows are its words alone, and light whole.
 pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
     let glyph = tokens::space::PLAYER_QUEUEGLYPH;
     let air = ronoctua_design::GAP;
@@ -622,7 +776,9 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
             .saturating_sub(more_cells)
             .max(1);
         let title = wrapped(&t.title, room, shape.titles);
-        let said = said_lines(&t.under, &joiner, room);
+        // WHAT IS SAID wraps in the title's room, and the glyphs at a line's
+        // right edge stand at the row's own, under the `⋯`.
+        let said = said_lines(&t.under, &joiner, room, end.saturating_sub(text_at));
         let words = title.len() + said.len();
         let lines = if pictured {
             words.max(usize::from(shape.lines))
@@ -630,18 +786,39 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
             words
         };
         let first = b.out.len();
-        let focused = b.cursor == first;
+        let focused = b.lit_at(first);
         let (label, _) = crate::chrome::Kind::of(true).tones(focused);
         for l in 0..lines {
             let mut fields = Vec::new();
+            let mut cells = Vec::new();
             if let Some(text) = title.get(l) {
                 fields.push(Builder::piece(text_at, text.clone(), label));
-            } else if let Some(text) = said.get(l - title.len()) {
-                fields.push(Builder::piece(
-                    text_at,
-                    text.clone(),
-                    tokens::color::TEXT_DIM,
-                ));
+            } else if let Some(under) = said.get(l - title.len()) {
+                if !under.text.is_empty() {
+                    fields.push(Builder::piece(
+                        text_at,
+                        under.text.clone(),
+                        tokens::color::TEXT_DIM,
+                    ));
+                }
+                // ITS GLYPHS, each a control of this line: after the words —
+                // at the line's head when it is theirs alone — and at the
+                // row's right edge.
+                let after_at = match ronoctua_render::layout::width(&under.text) {
+                    0 => text_at,
+                    w => text_at + w + tokens::space::PLAYER_QUEUEAIR,
+                };
+                let end_at = end.saturating_sub(cells_of(under.end));
+                let placed = under
+                    .after
+                    .iter()
+                    .zip((0..).map(|k: u16| after_at + k * glyph))
+                    .chain(under.end.iter().zip((0..).map(|k: u16| end_at + k * glyph)));
+                for (c, from) in placed {
+                    let (field, cell) = control_at(c, from, &t.spot);
+                    fields.push(field);
+                    cells.push(cell);
+                }
             }
             // THE PICTURE ON THE LINES OF ITS BOX, and on no other.
             let in_the_box = l < usize::from(shape.lines);
@@ -664,14 +841,13 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 }
                 _ => Vec::new(),
             };
-            let mut cells = Vec::new();
             if l == 0
-                && let Some((target, about)) = &t.more
+                && let Some(more) = &t.more
             {
                 let from = end.saturating_sub(glyph);
                 fields.push(Builder::piece(
                     from,
-                    tokens::icon::ELLIPSIS.to_string(),
+                    more.glyph.to_string(),
                     if focused {
                         tokens::color::TEXT_HERE_ACTS
                     } else {
@@ -681,10 +857,10 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 cells.push(Cell {
                     from,
                     width: glyph,
-                    target: target.clone(),
+                    target: more.target.clone(),
                     spot: format!("{}-more", t.spot),
                     control: true,
-                    about: Some(*about),
+                    about: Some(more.about),
                 });
             }
             let mut row = line(
@@ -713,26 +889,96 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
     }
 }
 
-/// The lines said under a strip's title in `room` cells: each line's parts
-/// joined by `joiner` when the whole fits, else a line each, wrapped —
-/// WRAPPED, never cut (a score cut to `70…` is no score), and a part kept
-/// whole where it fits (a score parted from its unit, `7000` / `points`,
-/// reads as two things).
-fn said_lines(under: &[Vec<String>], joiner: &str, room: u16) -> Vec<String> {
-    under
-        .iter()
-        .flat_map(|parts| {
-            let whole = parts.join(joiner);
-            if ronoctua_render::layout::width(&whole) <= room {
-                vec![whole]
-            } else {
-                parts
-                    .iter()
-                    .flat_map(|p| crate::chrome::note_lines(p, room))
-                    .collect()
+/// One line said under a strip's title: its words, the glyphs right after
+/// them — at the line's head when the line is theirs alone — and the ones at
+/// the row's right edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SaidLine<'s> {
+    /// The words.
+    text: String,
+    /// The controls after them.
+    after: &'s [Control],
+    /// The controls at the right edge.
+    end: &'s [Control],
+}
+
+/// The lines said under a strip's title, its words in `room` cells and the
+/// row's right edge `full` cells from them: each line's parts joined by
+/// `joiner` when the whole fits, else a line each, wrapped — WRAPPED, never
+/// cut (a score cut to `70…` is no score), and a part kept whole where it
+/// fits (a score parted from its unit, `7000` / `points`, reads as two
+/// things).
+///
+/// ITS GLYPHS: the ones at the right edge on the FIRST line the [`Said`]
+/// gives, its words wrapped to the room they leave; the ones after the words
+/// beside the last of them, as a part that never breaks — on a line of their
+/// own when they do not fit there. Glyphs that would leave the words less
+/// than [`least_words`] are not drawn: they drop before the words do.
+fn said_lines<'s>(under: &'s [Said], joiner: &str, room: u16, full: u16) -> Vec<SaidLine<'s>> {
+    let air = tokens::space::PLAYER_QUEUEAIR;
+    let mut out = Vec::new();
+    for said in under {
+        let least = least_words(said, room);
+        let mut end: &[Control] = &said.end;
+        let mut words_room = room;
+        if !end.is_empty() {
+            words_room = full
+                .saturating_sub(cells_of(end).saturating_add(air))
+                .min(room);
+            if words_room < least {
+                end = &[];
+                words_room = room;
             }
+        }
+        let whole = said.parts.join(joiner);
+        let mut lines: Vec<SaidLine<'s>> = if said.parts.is_empty() {
+            Vec::new()
+        } else if ronoctua_render::layout::width(&whole) <= words_room {
+            vec![whole]
+        } else {
+            said.parts
+                .iter()
+                .flat_map(|p| crate::chrome::note_lines(p, words_room))
+                .collect()
+        }
+        .into_iter()
+        .map(|text| SaidLine {
+            text,
+            after: &[],
+            end: &[],
         })
-        .collect()
+        .collect();
+        let after: &[Control] = &said.after;
+        let after_cells = cells_of(after);
+        if !after.is_empty() && after_cells <= words_room {
+            match lines.last_mut() {
+                Some(last)
+                    if ronoctua_render::layout::width(&last.text)
+                        .saturating_add(air)
+                        .saturating_add(after_cells)
+                        <= words_room =>
+                {
+                    last.after = after;
+                }
+                _ => lines.push(SaidLine {
+                    text: String::new(),
+                    after,
+                    end: &[],
+                }),
+            }
+        }
+        match lines.first_mut() {
+            Some(first) => first.end = end,
+            None if !end.is_empty() => lines.push(SaidLine {
+                text: String::new(),
+                after: &[],
+                end,
+            }),
+            None => {}
+        }
+        out.extend(lines);
+    }
+    out
 }
 
 /// THE COMPACT COLUMNS: titles alone, each after its kind's glyph, in the
@@ -809,10 +1055,187 @@ mod tests {
             picture,
             glyph: tokens::icon::PLAYER_LANE_PICTURE,
             title: format!("Tile number {n}"),
-            under: vec![vec!["Slow Kitchen".into(), "7000 points".into()]],
+            under: vec![Said::words(vec![
+                "Slow Kitchen".into(),
+                "7000 points".into(),
+            ])],
             target: Target::Nothing,
             spot: format!("tile-{n}"),
             more: None,
+        }
+    }
+
+    /// Video `n`'s quick marks, as the ranking draws them: the four ratings
+    /// (the second lit) and the four marks, each a target of its own.
+    fn marks(n: u32) -> (Vec<Control>, Vec<Control>) {
+        use crate::player_seam::ranking::Quick;
+        let id = ronoctua_video_metrics::VideoId(format!("v{n}"));
+        let control = |k: usize, q: Quick| Control {
+            glyph: tokens::icon::VIDEO_FOREVER,
+            lit: k == 1,
+            target: Target::RankedQuick(id.clone(), q),
+            about: q.command(),
+        };
+        let (rates, marks) = Quick::ALL.split_at(4);
+        (
+            rates
+                .iter()
+                .enumerate()
+                .map(|(k, q)| control(k, *q))
+                .collect(),
+            marks
+                .iter()
+                .enumerate()
+                .map(|(k, q)| control(k, *q))
+                .collect(),
+        )
+    }
+
+    /// A tile as the ranking draws it, its words long enough to be cut: its
+    /// score with its ratings after it, its channel with its marks at the
+    /// edge, and the `⋯`.
+    fn marked(n: u32, grid: bool) -> Tile {
+        let (rates, marks) = marks(n);
+        let more = Control {
+            glyph: tokens::icon::ELLIPSIS,
+            lit: false,
+            target: Target::RankedMore(ronoctua_video_metrics::VideoId(format!("v{n}"))),
+            about: crate::player_seam::ranking::MORE,
+        };
+        let channel = "A channel with a long name".to_owned();
+        let under = if grid {
+            vec![
+                Said {
+                    parts: vec!["7300".into()],
+                    after: rates,
+                    end: Vec::new(),
+                },
+                Said {
+                    parts: vec![channel],
+                    after: Vec::new(),
+                    end: marks,
+                },
+            ]
+        } else {
+            vec![
+                Said {
+                    parts: vec![channel, "7300".into()],
+                    after: rates,
+                    end: Vec::new(),
+                },
+                Said {
+                    parts: vec!["3 days ago".into(), "10:00".into()],
+                    after: Vec::new(),
+                    end: marks,
+                },
+            ]
+        };
+        Tile {
+            picture: None,
+            glyph: tokens::icon::PLAYER_LANE_PICTURE,
+            title: format!("A video worth watching, number {n}"),
+            under,
+            target: Target::Nothing,
+            spot: format!("tile-{n}"),
+            more: Some(more),
+        }
+    }
+
+    /// FAILS IF: a glyph beside a tile's words is taken — by a click, or
+    /// said under the pointer — anywhere but on the line and in the cells it
+    /// is drawn in; or anything is drawn past the room; or the words run
+    /// under a glyph; or a box too narrow for both drops the words before the
+    /// glyphs — or ever drops the `⋯`, which opens everything they do. In a
+    /// strip and in a grid, from a narrow room to a wide one.
+    #[test]
+    fn tile_controls_are_taken_where_drawn() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let shape = Shape {
+            cells: tokens::space::VIDEOMETRICS_THUMBCELLS,
+            lines: tokens::space::VIDEOMETRICS_THUMBLINES,
+            titles: tokens::space::VIDEOMETRICS_TITLELINES,
+        };
+        for room in [12_u16, 20, 28, 60] {
+            for grid in [false, true] {
+                let tiles: Vec<Tile> = (0..3).map(|n| marked(n, grid)).collect();
+                let built = Builder::build(1, room, 0, 0, &texts, |b| {
+                    if grid {
+                        tiled(&tiles, shape, b);
+                    } else {
+                        strip(&tiles, shape, b);
+                    }
+                });
+                let at = format!("room {room}, grid {grid}");
+                let mut mores = 0;
+                let mut glyphs = 0;
+                for (n, r) in built.iter().enumerate() {
+                    for f in &r.fields {
+                        let w = ronoctua_render::layout::width(&f.text);
+                        assert!(
+                            f.at + w <= 1 + room,
+                            "{at}: {:?} on line {n} runs past the room",
+                            f.text
+                        );
+                    }
+                    for c in r.cells.iter().filter(|c| c.control) {
+                        assert!(
+                            c.from + c.width <= 1 + room,
+                            "{at}: a control past the room"
+                        );
+                        // DRAWN WHERE IT IS TAKEN, and said there.
+                        assert!(
+                            r.fields
+                                .iter()
+                                .any(|f| f.at == c.from && f.text.chars().count() == 1),
+                            "{at}: line {n} takes a control at {} it does not draw",
+                            c.from
+                        );
+                        assert_eq!(
+                            crate::player_rows::control_under(&built, n, c.from),
+                            c.about,
+                            "{at}: line {n}"
+                        );
+                        // AND NO WORD RUNS UNDER IT.
+                        for f in r
+                            .fields
+                            .iter()
+                            .filter(|f| f.color == tokens::color::TEXT_DIM)
+                        {
+                            let w = ronoctua_render::layout::width(&f.text);
+                            if w > 1 {
+                                assert!(
+                                    f.at + w <= c.from || c.from + c.width <= f.at,
+                                    "{at}: {:?} on line {n} runs under a glyph at {}",
+                                    f.text,
+                                    c.from
+                                );
+                            }
+                        }
+                        if c.about == Some(crate::player_seam::ranking::MORE) {
+                            mores += 1;
+                        } else {
+                            glyphs += 1;
+                        }
+                    }
+                }
+                assert_eq!(mores, tiles.len(), "{at}: a `⋯` was dropped");
+                // THE GLYPHS GO BEFORE THE WORDS in the narrowest box, and
+                // every one is there in a wide one.
+                if room == 60 {
+                    assert_eq!(glyphs, tiles.len() * 8, "{at}");
+                }
+                if room == 12 {
+                    assert!(glyphs < tiles.len() * 8, "{at}: no glyph went");
+                    let words: String = built
+                        .iter()
+                        .flat_map(|r| r.fields.iter().map(|f| f.text.clone()))
+                        .collect();
+                    assert!(
+                        words.contains("7300"),
+                        "{at}: the score was cut for a glyph"
+                    );
+                }
+            }
         }
     }
 
@@ -842,15 +1265,53 @@ mod tests {
     }
 
     /// FAILS IF: what is said under a strip's title is cut, or parted inside
-    /// a part — a score from its unit — where its parts fit a line each.
+    /// a part — a score from its unit — where its parts fit a line each; or
+    /// the glyphs after the words stop joining the last of them where they
+    /// fit, a line of their own where they do not; or the glyphs at the edge
+    /// leave the words less than their first part.
     #[test]
     fn a_said_line_parts_between_its_parts() {
-        let said = vec![vec!["Slow Kitchen".to_owned(), "7000 points".to_owned()]];
-        assert_eq!(said_lines(&said, " · ", 40), ["Slow Kitchen · 7000 points"]);
+        let words = |lines: Vec<SaidLine<'_>>| -> Vec<String> {
+            lines.into_iter().map(|l| l.text).collect()
+        };
+        let parts = vec!["Slow Kitchen".to_owned(), "7000 points".to_owned()];
+        let said = vec![Said::words(parts.clone())];
         assert_eq!(
-            said_lines(&said, " · ", 20),
+            words(said_lines(&said, " · ", 40, 40)),
+            ["Slow Kitchen · 7000 points"]
+        );
+        assert_eq!(
+            words(said_lines(&said, " · ", 20, 20)),
             ["Slow Kitchen", "7000 points"]
         );
+        // THE GROUP AFTER THE WORDS: beside the last part, or on its own.
+        let (rates, marks) = marks(0);
+        let said = vec![Said {
+            parts,
+            after: rates.clone(),
+            end: Vec::new(),
+        }];
+        let lines = said_lines(&said, " · ", 40, 40);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].after, rates.as_slice());
+        let lines = said_lines(&said, " · ", 30, 30);
+        assert_eq!(words(lines.clone()), ["Slow Kitchen · 7000 points", ""]);
+        assert_eq!(lines[1].after, rates.as_slice());
+        // THE GROUP AT THE EDGE, on the first line — and gone where it would
+        // leave the words less than their first part, or half the room.
+        let said = vec![Said {
+            parts: vec!["Slow Kitchen".to_owned()],
+            after: Vec::new(),
+            end: marks.clone(),
+        }];
+        let lines = said_lines(&said, " · ", 30, 33);
+        assert_eq!(lines[0].end, marks.as_slice());
+        assert_eq!(words(lines), ["Slow Kitchen"]);
+        let lines = said_lines(&said, " · ", 14, 17);
+        assert_eq!(lines[0].end, marks.as_slice(), "half the room is kept");
+        let lines = said_lines(&said, " · ", 10, 13);
+        assert!(lines.iter().all(|l| l.end.is_empty()), "{lines:?}");
+        assert_eq!(words(lines), ["Slow", "Kitchen"]);
     }
 
     /// FAILS IF: a poster is cached under a key that does not change with

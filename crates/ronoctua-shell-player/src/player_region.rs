@@ -230,6 +230,11 @@ const OF_THE_OPEN_VIEW: &[&str] = &[
     "player-stop",
     "player-swap",
     "player-fold",
+    // `TAB` TO THE PICTURE'S CONTROLS beside the rows, and their keys there.
+    "player-cross",
+    "player-pane-previous",
+    "player-pane-next",
+    "player-pane-press",
     "player-also",
     "player-lane-shown",
     "player-earlier",
@@ -287,8 +292,9 @@ const PAGES: &[&str] = &[
     "player-channels",
     // THE WEBSITE PAGE — `LEADER p h`.
     "player-website",
-    // THE RANKING — `LEADER p k`.
+    // THE RANKING — `LEADER p k` — and its videos set aside, `LEADER p K`.
     "player-ranking",
+    "player-set-aside",
 ];
 
 /// The view's own questions — a new name, when a lane begins and ends, its
@@ -451,6 +457,9 @@ struct Hand {
     button_under: Option<&'static str>,
     /// The panel's time bar is held.
     dragging_track: bool,
+    /// The pointer rests on the panel's time bar: said on the message line,
+    /// as the window's says it.
+    track_under: bool,
     /// What a press on a line of a DECK holds until it is let go, the
     /// deck's first cell in the row and the row.
     deck: Option<(crate::player_timeline::Grip, f64, usize)>,
@@ -688,6 +697,12 @@ impl Door<'_> {
     fn door(&mut self, id: &str, argument: Option<&str>, way: &mut dyn Doorway) {
         match (id, argument) {
             ("player-window", None) => way.open_window(vec!["player".to_owned()]),
+            // A WINDOW ON A PAGE of the ranking — what the video catalogue's
+            // door asks for its videos by score: a window of its own, even
+            // with one open (`player_window::opening_of`).
+            ("player-window", Some(word)) if crate::player_window::opening_of(word).is_some() => {
+                way.open_window(vec!["player".to_owned(), word.to_owned()]);
+            }
             // THE COLUMN OF THIS WORKSPACE: closed when it is here, and
             // brought here from wherever it is otherwise.
             // A PHOTOGRAPH'S DOOR raises no column and ends none
@@ -833,6 +848,15 @@ impl Door<'_> {
             // A VIDEO OF THE RANKING IN THE CHROME KIOSK — this footer's own
             // `kiosk-open`.
             Err(Errand::Kiosk(url)) => way.run("kiosk-open", Some(url)),
+            // A VIDEO IN NYXT, started by its entry in the launcher. CLOSE
+            // BEFORE IT OPENS, the launcher's rule: a view left open over the
+            // window that just opened keeps its keyboard.
+            Err(Errand::Nyxt(url)) => {
+                if self.open.is_some() {
+                    way.close();
+                }
+                way.launch(crate::launch::in_nyxt(&url));
+            }
             // THE PICTURE FOLDED AWAY beside the rows, or back: the view
             // told, the picture's thread following, and the region sized
             // again.
@@ -1003,12 +1027,13 @@ impl Player {
     }
 
     /// The width the rows are laid out at in a region `screen` cells wide:
-    /// what the panel beside them leaves, or the whole width — and the whole
-    /// width under Only, where the rows are not drawn but still answer the
-    /// keys.
+    /// THE ROWS' PANE, what the panel beside them leaves less the air
+    /// between the two (`player_media::rows_end`), or the whole width — and
+    /// the whole width under Only, where the rows are not drawn but still
+    /// answer the keys.
     fn columns_for(&self, screen: u16) -> u16 {
         match self.panel_for(screen) {
-            Some(p) if !self.only => p.from,
+            Some(p) if !self.only => crate::player_media::rows_end(p),
             _ => screen,
         }
     }
@@ -1109,17 +1134,34 @@ impl Player {
     /// control is taken where it was drawn.
     fn lay_out(&mut self, laid: &Laid, shown: bool, hand: &mut Hand) {
         let before = self.drawn.clone();
+        // THE FOLD STANDS AT THE END OF THE TIME BAR, the picture's control
+        // in the picture's pane — beside the rows, where there is a picture
+        // to fold: not under Only, which is the picture's stage, nor with a
+        // globe in its place.
+        let fold = (!self.only && !self.globe).then(|| self.kept.borrow().folded);
         self.drawn = match (shown, self.panel()) {
             (true, Some(panel)) => {
                 let state = self.state();
                 if self.folded_now() {
-                    crate::player_media::drawn_folded(panel, laid.first, laid.lines, state.as_ref())
+                    crate::player_media::drawn_folded(
+                        panel,
+                        laid.first,
+                        laid.lines,
+                        state.as_ref(),
+                        fold,
+                    )
                 } else {
-                    crate::player_media::drawn(panel, laid.first, laid.lines, state.as_ref())
+                    crate::player_media::drawn(panel, laid.first, laid.lines, state.as_ref(), fold)
                 }
             }
             _ => crate::player_media::Drawn::default(),
         };
+        // AND THE KEYBOARD'S STOPS AMONG THEM, out of what was just placed:
+        // `TAB` reaches what the pointer takes.
+        self.view.pane_is(crate::player_media::stops(
+            &self.drawn.buttons,
+            self.drawn.track.map(|t| (t.line, t.from)),
+        ));
         // THE BOX THE PICTURES ARE LAID OUT IN, as the paint places them,
         // told to the view: its Layout page draws what this door shows.
         let room = match (self.drawn.panel, self.drawn.picture) {
@@ -1171,15 +1213,16 @@ impl Player {
         frame.is_some_and(|f| panel_track_at(&self.drawn, f, x, y))
     }
 
-    /// Whether `(x, y)` is on the panel at all — its picture, its title card,
-    /// its transport or its time bar.
-    fn panel_at(&self, frame: Option<crate::chrome::Frame>, x: f64, y: f64) -> bool {
+    /// Whether `(x, y)` is PAST THE ROWS' PANE, where the last frame drew
+    /// the panel: on the panel — its picture, its title card, its transport
+    /// or its time bar — or in the air before it (`player_media::rows_end`),
+    /// which is nobody's. Under Only the panel is the whole region.
+    fn pane_at(&self, frame: Option<crate::chrome::Frame>, x: f64, y: f64) -> bool {
         let (Some(panel), Some(f)) = (self.drawn.panel, frame) else {
             return false;
         };
-        let left = f64::from(f.x_of(panel.from));
-        let right = left + f64::from(panel.cells) * f64::from(f.cell());
-        (left..right).contains(&x) && y >= f64::from(f.y_of(f.first))
+        x >= f64::from(f.x_of(crate::player_media::rows_end(panel)))
+            && y >= f64::from(f.y_of(f.first))
     }
 
     /// Whether `(x, y)` is on the picture — or on the title card in its
@@ -1243,14 +1286,20 @@ impl Player {
 
     /// A key in the view.
     fn press(&mut self, press: Press, way: &mut dyn Doorway) {
+        // `RET` ON A BUTTON OF THE PANE that is a key of the view is that
+        // key, as its click is (`button_pressed`) — before the rule for the
+        // rows Only does not draw, which then reads it as the click's.
+        let press = self.view.pane_press(press);
         // `Esc` CALLS A DECK'S DRAG OFF first: the band stays where it was.
         if press == Press::Escape && self.dragged.take().is_some() {
             way.repaint();
             return;
         }
         // UNDER ONLY THE ROWS ARE NOT DRAWN: a key that needs them gives them
-        // back first — and one that opens a page opens it there.
-        if self.only && press.unseen() != Unseen::Acts {
+        // back first — and one that opens a page opens it there. THE ARROWS
+        // AND `RET` WITH THE PICTURE'S CONTROLS AT HAND are theirs: they walk
+        // and press the stage's transport, which is drawn.
+        if self.only && press.unseen() != Unseen::Acts && !self.view.pane_takes(press) {
             self.only = false;
             self.room_follows(way.texts());
             way.resized();
@@ -1696,6 +1745,13 @@ impl Player {
                         // own cells).
                         takes: crate::player_rows::takes(&rows, n),
                     },
+                    // WHAT A ROW THAT IS ONE THING SAYS UNDER THE POINTER —
+                    // a row of a video's own page (`Target::about`) — the
+                    // window's sentence on the footer's line.
+                    about: r
+                        .target
+                        .about()
+                        .and_then(|id| crate::chrome::hint_sentence(id, seen.texts)),
                     chips: r.chips.iter().map(|c| c.at).collect(),
                     caret: r.caret,
                     covers: r.covers.clone(),
@@ -1718,9 +1774,45 @@ impl Region for Player {
         ID
     }
 
-    /// NOT `TAB` FROM SECTION TO SECTION (`section_ring`): its `TAB` folds a group.
+    /// NOT THE FOOTER'S `TAB` FROM SECTION TO SECTION (`section_ring`): its
+    /// `TAB` crosses to the picture's controls beside the rows — the
+    /// agents' columns' precedent — and with none, the view walks the
+    /// sections itself (`Press::Cross`).
     fn walks_sections(&self) -> bool {
         false
+    }
+
+    /// THE BAND STOPS AT THE ROWS' PANE (`player_media::rows_end`): beside
+    /// the panel the band under the pointer is the rows', from the band's
+    /// edge to where the air before the picture starts — a function of the
+    /// width alone (`the-footer-does-not-ask-itself`). The whole row under
+    /// Only, where no row is drawn, and with no panel.
+    fn hover_span(&self, _: usize, _: u16, seen: &Seen<'_>) -> Option<(u16, u16)> {
+        let panel = self.panel_for(seen.columns).filter(|_| !self.only)?;
+        Some((
+            0,
+            crate::player_media::rows_end(panel).saturating_sub(crate::chrome::FIELDS_LEAD),
+        ))
+    }
+
+    /// A SWEEP STAYS IN THE ROWS' PANE beside the picture, as the band does
+    /// — asked of a region whose held button sweeps text, which this one's
+    /// does not yet ([`Region::sweeps_text`]): the two panes are kept apart
+    /// in both answers.
+    fn text_area(
+        &self,
+        _: usize,
+        _: u16,
+        area: &crate::region::Area,
+        seen: &Seen<'_>,
+    ) -> Option<crate::text_select::Area> {
+        let panel = self.panel_for(seen.columns).filter(|_| !self.only)?;
+        Some(crate::text_select::Area {
+            left: 0,
+            right: crate::player_media::rows_end(panel),
+            top: area.first,
+            bottom: area.first.saturating_add(area.lines),
+        })
     }
 
     /// The region's rows — its fields, and whether each takes a click
@@ -1761,6 +1853,8 @@ impl Region for Player {
         // door is not owed to come before what is drawn next.
         if key.sym == ronoctua_keymap::Sym::Esc && self.only {
             self.only = false;
+            // AND THE KEYBOARD BACK ON THE ROWS that come back.
+            self.view.leave_pane();
             self.room_follows(way.texts());
             way.resized();
             way.follow();
@@ -1974,8 +2068,10 @@ impl Region for Player {
 
     fn owns_point(&self, at: (f64, f64), frame: Option<crate::chrome::Frame>) -> bool {
         // THE PANEL IS NO ROW: its picture, its transport and its time bar
-        // are controls of their own.
-        self.panel_at(frame, at.0, at.1)
+        // are controls of their own — AND THE AIR BEFORE IT IS NOBODY'S
+        // (`player_media::rows_end`): no band lights there, and no click
+        // takes a row, from where the rows' pane ends.
+        self.pane_at(frame, at.0, at.1)
     }
 
     fn hovered(
@@ -1985,8 +2081,15 @@ impl Region for Player {
         way: &mut dyn Doorway,
     ) -> bool {
         let hand = hand_of(hand);
-        let before = (hand.button_under, hand.deck_under, self.control_under);
+        let before = (
+            hand.button_under,
+            hand.deck_under,
+            self.control_under,
+            hand.track_under,
+        );
         hand.button_under = self.button_at(under.frame, under.at.0, under.at.1);
+        // AND THE PANEL'S TIME BAR, which says what it does there too.
+        hand.track_under = self.track_at(under.frame, under.at.0, under.at.1);
         // AND A CONTROL OF A DECK among the rows: said on the message line.
         hand.deck_under =
             self.deck_at(under, way.texts())
@@ -1996,7 +2099,13 @@ impl Region for Player {
         self.control_under = self.control_at(under);
         // AND THE GLOBE: the group under the hand lit, and held, turned.
         self.globe_moved(under.at, hand, way);
-        before != (hand.button_under, hand.deck_under, self.control_under)
+        before
+            != (
+                hand.button_under,
+                hand.deck_under,
+                self.control_under,
+                hand.track_under,
+            )
     }
 
     fn dragged(
@@ -2082,6 +2191,7 @@ impl Region for Player {
         hand.dragging = None;
         hand.dragging_track = false;
         hand.button_under = None;
+        hand.track_under = false;
         // A DECK'S DRAG THAT LEFT is called off: nothing is asked.
         if hand.deck.take().is_some() {
             self.dragged = None;
@@ -2116,12 +2226,16 @@ impl Region for Player {
     }
 
     /// What the message line says under the pointer: a button of the panel
-    /// — the sentence its window says too — a control of a title, a control
-    /// of a deck.
+    /// — the sentence its window says too — its time bar, a control of a
+    /// title, a control of a deck.
     fn said_under(&self, hand: Option<&dyn Any>, texts: &ronoctua_i18n::Texts) -> Option<String> {
         let hand = hand.and_then(|h| h.downcast_ref::<Hand>());
         hand.and_then(|h| h.button_under)
             .and_then(|id| Self::control_sentence(id, texts))
+            .or_else(|| {
+                hand.is_some_and(|h| h.track_under)
+                    .then(|| texts.t(crate::key::ABOUT_PLAYER_DECK_SEEK))
+            })
             .or_else(|| {
                 self.control_under
                     .and_then(|id| Self::control_sentence(id, texts))
@@ -2175,6 +2289,16 @@ impl Region for Player {
             muted: s.muted,
         });
         let frame = easel.area.frame();
+        // THE PICTURE'S PANE FIRST, under everything the region paints: its
+        // own ground beside the rows, after the air (`pane_ground`) — and on
+        // it the keyboard's stop, when `TAB` took the keyboard there
+        // (`stop_ground`).
+        easel
+            .under
+            .extend(pane_ground(&self.drawn, self.only, &easel.area));
+        easel
+            .under
+            .extend(stop_ground(&self.drawn, self.view.pane(), frame));
         let placed = easel.placed;
         let row_at = |i: usize| placed.get(i).and_then(|p| rows.get(p.row));
         // THE CONTROLS OF THE ROWS, where this frame puts them — for the
@@ -2494,10 +2618,58 @@ impl Region for Player {
     }
 }
 
+/// THE PICTURE'S PANE'S GROUND beside the rows — `surface.shelf`, the
+/// smallest step off the footer's own (`chrome::shelf_ground`) — over every
+/// line of the region, folded too: the pane is a column, set apart by the
+/// air before it and a ground of its own, never by a rule or an outline
+/// (invariant 15; the owner, 2026-11-09). `None` under Only, where the region
+/// is the picture's stage, and with no panel.
+fn pane_ground(
+    drawn: &crate::player_media::Drawn,
+    only: bool,
+    area: &crate::region::Area,
+) -> Option<ronoctua_render::quad::Quad> {
+    let panel = drawn.panel.filter(|_| !only)?;
+    Some(crate::chrome::shelf_ground(
+        crate::chrome::ShelfBox {
+            from: panel.from,
+            cells: panel.cells,
+            room: panel.cells,
+        },
+        area.first,
+        usize::from(area.lines),
+        area.width,
+        area.bottom,
+    ))
+}
+
+/// THE KEYBOARD'S STOP among the pane's controls (`View::pane`): a ground of
+/// `surface.selection` under the control it is on — the very box the pointer
+/// takes it in (`player_media::stop_place`). A GROUND AND NOT A COLOUR, the
+/// owner's exception of 2026-11-09 to "the cursor is a colour": a lit switch,
+/// a glyph under the pointer and the played part of the track are
+/// `state.accent` there, which is `text.here.acts`'s own colour, and a cursor
+/// drawn as a colour would read as one of them.
+fn stop_ground(
+    drawn: &crate::player_media::Drawn,
+    stop: Option<crate::player_media::Stop>,
+    f: crate::chrome::Frame,
+) -> Option<ronoctua_render::quad::Quad> {
+    let (line, from, to) = crate::player_media::stop_place(stop?, &drawn.buttons, drawn.track)?;
+    Some(ronoctua_render::quad::Quad {
+        x: f.x_of(from),
+        y: f.y_of(line),
+        width: f32::from(to.saturating_sub(from)) * f.cell(),
+        height: f.line(),
+        color: tokens::color::SURFACE_SELECTION,
+    })
+}
+
 /// The glyphs of the player's panel transport, where `drawn` placed them —
-/// the one under the pointer and a switch that is on in the accent. What the
-/// region paints, and what [`panel_button_at`] answers for, read off the SAME
-/// placement.
+/// the one under the pointer and a switch that is on in the accent — and the
+/// FOLD at the end of its time bar, drawn as what a press does: unfold while
+/// the picture is folded away. What the region paints, and what
+/// [`panel_button_at`] answers for, read off the SAME placement.
 fn panel_glyphs(
     drawn: &crate::player_media::Drawn,
     state: Option<&ronoctua_player::wire::State>,
@@ -2513,15 +2685,19 @@ fn panel_glyphs(
             } else {
                 tokens::color::TEXT_PRIMARY
             };
-            ronoctua_render::Span {
-                size: ronoctua_render::Size::Grid,
-                text: crate::player_transport::glyph_of(
+            let glyph = match (*id, drawn.fold) {
+                (crate::player_media::FOLD, Some(true)) => tokens::icon::PLAYER_PICTURE_UNFOLD,
+                (crate::player_media::FOLD, _) => tokens::icon::PLAYER_PICTURE_FOLD,
+                _ => crate::player_transport::glyph_of(
                     id,
                     state,
                     stage,
                     crate::player_window::Door::Footer,
-                )
-                .to_string(),
+                ),
+            };
+            ronoctua_render::Span {
+                size: ronoctua_render::Size::Grid,
+                text: glyph.to_string(),
                 column: *at,
                 line: *line,
                 color,
@@ -2598,6 +2774,64 @@ mod tests {
         assert!(user.unlogged && !user.secret, "{user:?}");
         assert!(asked(Question::plain(PAIR_CODE, true)).secret);
         assert!(!asked(Question::plain(SEARCH_RADIO, false)).unlogged);
+    }
+
+    /// FAILS IF: the window the video catalogue's door asks for — the player
+    /// on its videos by score, or on the ones set aside — opens no window, or
+    /// one that is not on that page; or a word that names no page stops being
+    /// refused in words, or is read as the plain window.
+    #[test]
+    fn a_window_on_a_page_of_the_ranking_is_opened_by_its_word() {
+        use crate::player_seam::ranking::{OPEN_RANKING, OPEN_SET_ASIDE};
+        use crate::region::Effect;
+        for word in [OPEN_RANKING, OPEN_SET_ASIDE] {
+            let mut w = way();
+            assert_eq!(closed("player-window", Some(word), &mut w), Closed::Taken);
+            assert!(
+                w.owed
+                    .iter()
+                    .any(|e| matches!(e, Effect::OpenWindow(args) if *args == ["player", word])),
+                "{word}: {:?}",
+                w.owed
+            );
+        }
+        let mut w = way();
+        let _ = closed("player-window", Some("bogus"), &mut w);
+        assert!(!w.owed.iter().any(|e| matches!(e, Effect::OpenWindow(_))));
+        assert!(
+            w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Say(said, _) if said.contains("bogus"))),
+            "{:?}",
+            w.owed
+        );
+    }
+
+    /// FAILS IF: a video sent to Nyxt from the footer's view leaves the view
+    /// open over the window that opens — which keeps the keyboard — or is
+    /// started by another entry than Nyxt's, or with another address.
+    #[test]
+    fn nyxt_closes_the_view_before_it_opens() {
+        use crate::region::Effect;
+        let url = "https://www.youtube.com/watch?v=video000001".to_owned();
+        let mut w = way();
+        let mut region = opened(&mut w);
+        let kept = Rc::clone(&region.kept);
+        let mut door = Door {
+            kept: &kept,
+            open: Some(&mut region),
+        };
+        door.errand(Errand::Nyxt(url.clone()), &mut w);
+        let close = w.owed.iter().position(|e| *e == Effect::Close);
+        let launch = w
+            .owed
+            .iter()
+            .position(|e| *e == Effect::Launch(crate::launch::in_nyxt(&url)));
+        assert!(
+            matches!((close, launch), (Some(c), Some(l)) if c < l),
+            "{:?}",
+            w.owed
+        );
     }
 
     /// FAILS IF: a footer with NO LOOP — a photograph's, a test's — hands
@@ -2692,26 +2926,299 @@ mod tests {
             .state = Some(crate::player::fixture::playing());
         way.residence = Some(resident);
         let mut player = opened(&mut way);
-        let folds = |p: &Player| {
+        // THE FOLD IS THE PANE'S, at the end of its time bar: never on "Now"
+        // beside it, and there to be drawn while the view knows a picture.
+        let on_now = |p: &Player| {
             p.rows_now(&texts).iter().any(|r| {
                 r.cells
                     .iter()
                     .any(|c| c.about == Some("player-picture-fold"))
             })
         };
+        let folds = |p: &mut Player| {
+            p.lay_out(&laid(160), true, &mut Hand::default());
+            p.view.picture_fold.is_some() && p.drawn.fold.is_some()
+        };
         assert!(
-            folds(&player),
-            "no fold on \"Now\" beside the panel to begin with"
+            folds(&mut player),
+            "no fold in the pane beside the rows to begin with"
         );
+        assert!(!on_now(&player), "the fold is on \"Now\" beside its pane");
         let key = |k: &str| ronoctua_keymap::Key::parse(k).expect("a key");
         let _ = player.key(key("o"), &mut way);
         assert!(player.only, "`o` did not leave the picture alone");
         let _ = player.key(key("ESC"), &mut way);
         assert!(!player.only, "`Esc` did not give the rows back");
         assert!(
-            folds(&player),
-            "the rows came back with no fold on \"Now\": the panel was not told"
+            player.view.picture_fold.is_some(),
+            "the rows came back with no picture to fold: the panel was not told"
         );
+        assert!(folds(&mut player), "the pane came back with no fold");
+        assert!(!on_now(&player));
+    }
+
+    /// A frame of the footer `columns` wide, the region from line 4 and
+    /// twelve lines tall, shown — what `Region::laid_out` is handed.
+    fn laid(columns: u16) -> Laid {
+        Laid {
+            first: 4,
+            lines: 12,
+            columns,
+            offset: 0,
+            room: 12,
+            shown: true,
+            ranked: true,
+            screens: Vec::new(),
+            frame: None,
+            pointer: None,
+        }
+    }
+
+    /// The footer's region `columns` wide, opened on a song that plays — and
+    /// its doorway.
+    fn a_footer_playing(columns: u16) -> (Player, crate::region::Recorder) {
+        let mut way = crate::region::Recorder::new(
+            Rc::new(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB")),
+            columns,
+            true,
+            crate::sudo::Gate::window(),
+            crate::wake::Wake::new(|| {}),
+        );
+        way.has_a_loop = false;
+        let resident = make();
+        resident
+            .as_a::<Kept>()
+            .expect("the player's resident")
+            .borrow_mut()
+            .state = Some(crate::player::fixture::playing());
+        way.residence = Some(resident);
+        let player = opened(&mut way);
+        (player, way)
+    }
+
+    /// FAILS IF: the band under the pointer crosses into the picture's pane
+    /// — it stops where the rows' pane does, the air's cells before the
+    /// picture — or a point in the air or the pane is taken as a row's, or
+    /// one a pixel before the air stops being one; or under Only, or with no
+    /// panel, the band is cut at all.
+    #[test]
+    fn the_band_stops_at_the_rows_pane() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let columns = f.columns();
+        let (mut player, _) = a_footer_playing(columns);
+        let seen = Seen {
+            texts: &texts,
+            columns,
+            lines: 12,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        let panel = crate::player_media::footer_panel(columns, false).expect("a panel");
+        let end = crate::player_media::rows_end(panel);
+        assert_eq!(
+            player.hover_span(0, 0, &seen),
+            Some((0, end - crate::chrome::FIELDS_LEAD))
+        );
+        // THE BAND'S PIXELS END WHERE THE AIR BEGINS, a row placed at the
+        // footer's edge: the lead its fields start after, and the span.
+        let (_, to) = player.hover_span(3, 7, &seen).expect("a span");
+        assert_eq!(crate::chrome::FIELDS_LEAD + to, end);
+        // THE ROWS ARE LAID OUT IN THEIR PANE.
+        assert_eq!(player.columns_for(columns), end);
+        player.lay_out(&laid(columns), true, &mut Hand::default());
+        let y = f64::from(f.y_of(f.first)) + 1.0;
+        let x_end = f64::from(f.x_of(end));
+        assert!(
+            !player.owns_point((x_end - 1.0, y), Some(f)),
+            "the rows' last pixel"
+        );
+        for x in [
+            x_end,
+            x_end + f64::from(f.cell()),
+            f64::from(f.x_of(panel.from)) + 1.0,
+            f64::from(f.x_of(panel.from + panel.cells)) - 1.0,
+        ] {
+            assert!(player.owns_point((x, y), Some(f)), "{x} is a row's");
+        }
+        // UNDER ONLY the whole region is the stage, and no band is cut.
+        player.only = true;
+        assert_eq!(player.hover_span(0, 0, &seen), None);
+        player.only = false;
+        // NOTHING LOADED, no panel: the rows whole.
+        player.kept.borrow_mut().state = Some(crate::player::fixture::idle());
+        assert_eq!(player.hover_span(0, 0, &seen), None);
+        assert_eq!(player.columns_for(columns), columns);
+    }
+
+    /// FAILS IF: the picture's pane stops wearing a ground of its own —
+    /// `surface.shelf`, over its column alone and every line of the region,
+    /// folded or not — or wears one under Only; or the keyboard's stop is
+    /// painted anywhere but over the box its control is taken in, in
+    /// `surface.selection`.
+    #[test]
+    fn the_pane_s_ground_is_its_column_alone() {
+        use crate::player_media::{FOLD, Stop, drawn, drawn_folded, footer_panel};
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let area = crate::region::Area {
+            width: 1500.0,
+            bottom: 900.0,
+            first: 4,
+            lines: 12,
+            columns: f.columns(),
+        };
+        let panel = footer_panel(f.columns(), false).expect("a panel");
+        let state = crate::player::fixture::playing();
+        for d in [
+            drawn(panel, area.first, area.lines, Some(&state), Some(false)),
+            drawn_folded(panel, area.first, area.lines, Some(&state), Some(true)),
+        ] {
+            let ground = pane_ground(&d, false, &area).expect("the pane's ground");
+            assert_eq!(ground.color, tokens::color::SURFACE_SHELF);
+            assert!((ground.x - f.x_of(panel.from)).abs() < 0.01);
+            assert!((ground.width - f32::from(panel.cells) * f.cell()).abs() < 0.01);
+            assert!((ground.y - f.y_of(area.first)).abs() < 0.01);
+            assert!((ground.height - f32::from(area.lines) * f.line()).abs() < 0.01);
+            assert!(
+                pane_ground(&d, true, &area).is_none(),
+                "a ground on the stage"
+            );
+            // THE STOP'S GROUND, on the box its click takes.
+            for stop in [Stop::Button("player-next"), Stop::Button(FOLD), Stop::Track] {
+                let (line, from, to) =
+                    crate::player_media::stop_place(stop, &d.buttons, d.track).expect("placed");
+                let q = stop_ground(&d, Some(stop), f).expect("a stop's ground");
+                assert_eq!(q.color, tokens::color::SURFACE_SELECTION);
+                assert!((q.x - f.x_of(from)).abs() < 0.01, "{stop:?}");
+                assert!((q.width - f32::from(to - from) * f.cell()).abs() < 0.01);
+                assert!((q.y - f.y_of(line)).abs() < 0.01);
+                if let Stop::Button(id) = stop {
+                    let middle = (
+                        f64::from(q.x + q.width / 2.0),
+                        f64::from(q.y + q.height / 2.0),
+                    );
+                    assert_eq!(panel_button_at(&d, f, middle.0, middle.1), Some(id));
+                } else {
+                    assert!(panel_track_at(
+                        &d,
+                        f,
+                        f64::from(q.x) + 0.5,
+                        f64::from(q.y + q.height / 2.0)
+                    ));
+                }
+            }
+            assert!(stop_ground(&d, None, f).is_none());
+        }
+        assert!(pane_ground(&crate::player_media::Drawn::default(), false, &area).is_none());
+    }
+
+    /// FAILS IF: the pointer resting on the pane's time bar says nothing on
+    /// the message line — the window's sentence for it — or keeps saying it
+    /// once it left.
+    #[test]
+    fn the_track_says_what_it_does_under_the_pointer() {
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let (mut player, mut way) = a_footer_playing(f.columns());
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let track = player.drawn.track.expect("a time bar");
+        let at = (
+            f64::from(f.x_of(track.from)) + 3.5 * f64::from(f.cell()),
+            f64::from(f.y_of(track.line)) + f64::from(f.line()) / 2.0,
+        );
+        let under = Under {
+            at,
+            line: None,
+            row: None,
+            cell: None,
+            base: 0,
+            ctrl: false,
+            shift: false,
+            frame: Some(f),
+        };
+        let mut hand: Option<Box<dyn Any>> = None;
+        assert!(player.hovered(&under, &mut hand, &mut way), "no frame owed");
+        assert_eq!(
+            player.said_under(hand.as_deref(), &texts),
+            Some(texts.t(crate::key::ABOUT_PLAYER_DECK_SEEK))
+        );
+        player.left(&mut hand, &mut way);
+        assert_eq!(player.said_under(hand.as_deref(), &texts), None);
+    }
+
+    /// FAILS IF: `TAB` in the footer stops taking the keyboard to the
+    /// pane's controls, the arrows stop walking them and `RET` pressing one
+    /// — or, under the picture alone, the arrows give the rows back instead
+    /// of walking the stage's transport; or a key that needs the rows keeps
+    /// the keyboard in the pane.
+    #[test]
+    fn tab_takes_the_footer_s_keyboard_to_the_pane() {
+        use crate::player_media::Stop;
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let (mut player, mut way) = a_footer_playing(f.columns());
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let key = |k: &str| ronoctua_keymap::Key::parse(k).expect("a key");
+        let first = player.view.pane_stops.first().copied();
+        assert_eq!(first, Some(Stop::Button("player-previous")));
+        let _ = player.key(key("TAB"), &mut way);
+        assert_eq!(player.view.pane(), first);
+        let _ = player.key(key("<right>"), &mut way);
+        assert_eq!(player.view.pane(), Some(Stop::Button("player-toggle")));
+        // UNDER ONLY the arrows walk the stage's transport.
+        let _ = player.key(key("o"), &mut way);
+        assert!(player.only);
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let _ = player.key(key("<down>"), &mut way);
+        assert!(player.only, "an arrow in the pane gave the rows back");
+        assert_eq!(player.view.pane(), Some(Stop::Button("player-next")));
+        // `Esc` under Only gives the rows back, and the keyboard with them.
+        let _ = player.key(key("ESC"), &mut way);
+        assert!(!player.only);
+        assert_eq!(player.view.pane(), None);
+        // A KEY THAT NEEDS THE ROWS takes the keyboard back to them first.
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let _ = player.key(key("TAB"), &mut way);
+        assert!(player.view.pane().is_some());
+        let _ = player.key(key("d"), &mut way);
+        assert_eq!(player.view.pane(), None);
+    }
+
+    /// FAILS IF: `RET` on the media's button, under the picture alone, does
+    /// other than its click — which gives the rows back and opens the
+    /// media's page there, in front of the person: read as the pane's `RET`,
+    /// it opened the page behind the picture, the transport's cursor gone
+    /// and nothing seen to open.
+    #[test]
+    fn under_only_ret_on_the_media_opens_its_page_in_front() {
+        use crate::player_media::Stop;
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let (mut player, mut way) = a_footer_playing(f.columns());
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let key = |k: &str| ronoctua_keymap::Key::parse(k).expect("a key");
+        let _ = player.key(key("o"), &mut way);
+        assert!(player.only);
+        player.lay_out(&laid(f.columns()), true, &mut Hand::default());
+        let media = Stop::Button("player-tracks");
+        assert!(
+            player.view.pane_stops.contains(&media),
+            "no media's button in {:?}",
+            player.view.pane_stops
+        );
+        let _ = player.key(key("TAB"), &mut way);
+        while player.view.pane() != Some(media) {
+            let _ = player.key(key("<down>"), &mut way);
+        }
+        assert!(player.only, "an arrow in the pane gave the rows back");
+        let _ = player.key(key("RET"), &mut way);
+        assert!(!player.only, "the page opened behind the picture");
+        assert!(
+            matches!(player.view.page(), crate::player::PageId::Tracks(_)),
+            "{:?}",
+            player.view.page()
+        );
+        assert_eq!(player.view.pane(), None);
     }
 
     /// FAILS IF: the resident says it hears what is not the player's watch
@@ -2797,7 +3304,7 @@ mod tests {
                 ],
             )
         };
-        let drawn = crate::player_media::drawn(panel, f.first, 12, Some(&state));
+        let drawn = crate::player_media::drawn(panel, f.first, 12, Some(&state), Some(false));
         let glyphs = super::panel_glyphs(
             &drawn,
             Some(&state),
@@ -2805,7 +3312,16 @@ mod tests {
             Some("player-next"),
         );
         assert_eq!(glyphs.len(), drawn.buttons.len());
-        assert_eq!(glyphs.len(), crate::player_transport::BUTTONS.len());
+        // THE ELEVEN, AND THE FOLD at the end of the time bar, drawn as what
+        // a press does.
+        assert_eq!(glyphs.len(), crate::player_transport::BUTTONS.len() + 1);
+        let fold = glyphs.last().expect("the fold");
+        assert_eq!(
+            drawn.buttons.last().map(|b| b.3),
+            Some(crate::player_media::FOLD)
+        );
+        assert_eq!(fold.text, tokens::icon::PLAYER_PICTURE_FOLD.to_string());
+        assert_eq!(fold.line, drawn.track.expect("a time bar").line);
         let (cell, line) = (f64::from(f.cell()), f64::from(f.line()));
         for (g, (_, _, _, id)) in glyphs.iter().zip(&drawn.buttons) {
             // THE GLYPH'S OWN CELL AND THE AIR AFTER IT, and the gap beyond.
