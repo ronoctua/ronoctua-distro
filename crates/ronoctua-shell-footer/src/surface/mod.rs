@@ -19733,10 +19733,22 @@ impl Footer {
                             visible.get(k).filter(|l| l.region_row.is_some()).map_or(
                                 Some((band_at, band_wide)),
                                 |l| match &l.lit {
-                                    crate::region::LineLights::Glyphs { cells, alone } => cells
-                                        .iter()
-                                        .find(|c| !alone.contains(c))
-                                        .map(|&(from, width)| across.band_of(from, width)),
+                                    // THE CELL UNDER THE POINTER'S `x` that
+                                    // is not a glyph — a shelf's video, on
+                                    // the line of its glyphs — else the
+                                    // row's words there.
+                                    crate::region::LineLights::Glyphs { cells, alone } => {
+                                        let words: Vec<(u16, u16)> = cells
+                                            .iter()
+                                            .filter(|c| !alone.contains(c))
+                                            .copied()
+                                            .collect();
+                                        x_p.and_then(|x| across.band(&words, x)).or_else(|| {
+                                            words
+                                                .first()
+                                                .map(|&(from, width)| across.band_of(from, width))
+                                        })
+                                    }
                                     crate::region::LineLights::From(column) => {
                                         let (at, _) = across.band_of(*column, 1);
                                         Some((at, (row_band.0 + row_band.1 - at).max(0.0)))

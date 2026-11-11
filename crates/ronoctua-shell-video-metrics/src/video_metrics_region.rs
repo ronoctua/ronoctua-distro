@@ -322,8 +322,15 @@ impl VideoMetrics {
                     .get(owner)
                     .map_or(crate::region::LineLights::Nothing, |o| {
                         if !r.controls.is_empty() {
+                            // ON A SHELF, past its glyphs, the cell under
+                            // the pointer — lit over the shelf, as on its
+                            // picture (`View::on_the_words`).
                             crate::region::LineLights::Glyphs {
-                                cells: r.lit_cells(left, o.has_words()),
+                                cells: r
+                                    .lit_cells(left, o.has_words())
+                                    .into_iter()
+                                    .chain(o.cells.iter().map(|c| (c.from, c.width)))
+                                    .collect(),
                                 alone: r.controls.iter().map(|c| (c.from, c.width)).collect(),
                             }
                         } else if !o.cells.is_empty() {
@@ -1342,11 +1349,12 @@ mod tests {
             .map(|c| region.about_at(shelf, Some(c.from + 1), &seen))
             .collect();
         assert!(said.iter().all(Option::is_some), "{said:?}");
-        let gap = rows[shelf].cells[0].from + rows[shelf].cells[0].width;
+        let last = rows[shelf].cells.last().expect("a cell");
+        let gap = last.from + last.width;
         assert_eq!(
             region.about_at(shelf, Some(gap), &seen),
             None,
-            "the air said a video"
+            "the air past the last video said a video"
         );
         // THE AIR OF A SHELF UNDER THE POINTER explains nothing: the line
         // says the cursor's thing, as the window's foot does there — and a
@@ -1483,15 +1491,22 @@ mod tests {
             assert!(!lines.is_empty(), "{layout:?}: no line of glyphs");
             for &n in &lines {
                 let row = &rows[n];
-                let owner = &rows[crate::video_metrics::Row::owner(&rows, n)];
+                let owner_n = crate::video_metrics::Row::owner(&rows, n);
+                let owner = &rows[owner_n];
                 assert_eq!(
                     told[n].about, None,
                     "{layout:?}: line {n} says one thing for its glyphs"
                 );
+                // ITS WORDS' BOX AND ITS GLYPHS — and on a shelf, past the
+                // glyphs, its videos' cells.
                 assert_eq!(
                     told[n].lights,
                     crate::region::LineLights::Glyphs {
-                        cells: row.lit_cells(left, owner.has_words()),
+                        cells: row
+                            .lit_cells(left, owner.has_words())
+                            .into_iter()
+                            .chain(owner.cells.iter().map(|c| (c.from, c.width)))
+                            .collect(),
                         alone: row.controls.iter().map(|c| (c.from, c.width)).collect(),
                     },
                     "{layout:?}: line {n} lights other boxes"
@@ -1515,12 +1530,23 @@ mod tests {
                             "{layout:?}: `{said}` lacks `{f}`"
                         );
                     }
+                    // THE AIR AFTER A GLYPH: nobody's on a row, and on a
+                    // shelf the video's, as a line of it with no glyph says.
                     if row.controls.get(i + 1).is_some() {
-                        assert_eq!(
-                            region.about_at(n, Some(c.from + c.width), &seen),
-                            None,
-                            "{layout:?}: the air after glyph {i} of line {n} says something"
-                        );
+                        let air = region.about_at(n, Some(c.from + c.width), &seen);
+                        if owner.cells.is_empty() {
+                            assert_eq!(
+                                air, None,
+                                "{layout:?}: the air after glyph {i} of line {n} says something"
+                            );
+                        } else {
+                            let video = region.about_at(owner_n + 2, Some(c.from + c.width), &seen);
+                            assert!(video.is_some(), "{layout:?}: a shelf's video says nothing");
+                            assert_eq!(
+                                air, video,
+                                "{layout:?}: the air after glyph {i} of line {n} is not the video's"
+                            );
+                        }
                     }
                 }
             }
@@ -1890,7 +1916,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let catalogue = dir.join(ronoctua_video_metrics::FILE);
-        crate::video_metrics_feed::holding(&catalogue, 27);
+        // A SHORT LAST PAGE: two videos past the first.
+        crate::video_metrics_feed::holding(&catalogue, crate::paging::PerPage::default().get() + 2);
         // THE MOST THE REGION HOLDS, and the lines it shows while the
         // explanation under the hint takes one of them.
         let most = 14;

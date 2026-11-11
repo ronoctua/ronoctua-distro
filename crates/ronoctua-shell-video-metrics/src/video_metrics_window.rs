@@ -1077,7 +1077,13 @@ fn lights_at(rows: &[Row], n: usize, column: u16, left: u16) -> Lights {
             }
         }
     };
-    if !line.controls.is_empty() {
+    // ON A SHELF, the glyph under the pointer is its own, and anywhere else
+    // the cell's video ([`crate::video_metrics::View::on_the_words`]).
+    let on_a_glyph = line
+        .controls
+        .iter()
+        .any(|c| crate::chrome::in_cell(column, c.from, c.width));
+    if !line.controls.is_empty() && (row.cells.is_empty() || on_a_glyph) {
         let words = line.words_box(left, row.has_words());
         match line
             .lit_cells(left, row.has_words())
@@ -1835,7 +1841,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let catalogue = dir.join(ronoctua_video_metrics::FILE);
-        crate::video_metrics_feed::holding(&catalogue, 27);
+        // A SHORT LAST PAGE: two videos past the first.
+        crate::video_metrics_feed::holding(&catalogue, crate::paging::PerPage::default().get() + 2);
         let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
         ui.columns = COLUMNS;
         let window = VideoMetricsWindow::detached(catalogue, Page::Videos, String::new());

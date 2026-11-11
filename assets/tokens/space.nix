@@ -1462,17 +1462,17 @@
   # sides (twenty-two left two cells of slack on the right only). Then the
   # title's two lines under it, the size a picture is decoded at (the
   # `mqdefault` is 320 wide; nothing is scaled up), and the most a page puts
-  # on screen: the largest page the person may ask for (owner, 2026-11-10:
-  # 25, 50 or 100 videos a page), under the file manager's grid ceiling
-  # (`files.thumbMost`), which is the room the renderer's frame keeps for
-  # pictures while the grid is up. A hundred `mqdefault`s are 320 × 180 ×
-  # 4 bytes each, about 23 MB a door.
+  # on screen: the largest page the person may ask for (owner, 2026-11-11:
+  # 12, 16, 18, 20, 32, 40 or 64 videos a page), under the file manager's
+  # grid ceiling (`files.thumbMost`), which is the room the renderer's frame
+  # keeps for pictures while the grid is up. Sixty-four `mqdefault`s are
+  # 320 × 180 × 4 bytes each, about 15 MB a door.
   videoMetrics = {
     thumbCells = 20;
     thumbLines = 5;
     titleLines = 2;
     thumbPx = 320;
-    thumbsMost = 100;
+    thumbsMost = 64;
   };
 
   # THE CONTAINERS' VIEW (`crate::containers`): three columns side by side —

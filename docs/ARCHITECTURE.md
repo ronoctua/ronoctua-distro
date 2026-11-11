@@ -15025,9 +15025,9 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   `video-metrics-readers-are-read-only`, que só deixa os arquivos da porta nomearem `person`.
 - **O cursor é uma identidade** (um `spot`), nunca um índice: a varredura que reordena a lista não
   tira o cursor do vídeo. Numa página recém-aberta ele é desenhado onde uma tecla agiria.
-- **Quatro disposições num anel** (`Layout`, decisão do dono de 2026-11-10; `←`/`→`, o clique e `L`
-  na linha "Disposição", só na sessão): lista, lista com miniaturas, miniaturas e miniaturas com
-  canal. A lista tem duas linhas por vídeo: o título na largura toda, quebrado, e embaixo pontuação,
+- **Cinco disposições num anel** (`Layout`, decisão do dono de 2026-11-10 e 2026-11-11; `←`/`→`, o
+  clique e `L` na linha "Disposição", só na sessão): lista, lista com miniaturas, miniaturas,
+  miniaturas com canal e miniaturas largas. A lista tem duas linhas por vídeo: o título na largura toda, quebrado, e embaixo pontuação,
   canal e idade (como rótulo e valor, a coluna do rótulo dobrava o título em três pedaços curtos). A
   lista com miniaturas (`Layout::Strip`, `strip_entry`) é a tira do player nas linhas desta vista: a
   miniatura à cabeça, o título inteiro quebrado ao lado e a linha de meta com os glifos sob ele, da
@@ -15035,11 +15035,15 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   começam (`Row::words_at`), e a luz e o clique valem dali, nunca sobre a figura. Estreita demais para
   figura e título (`strip_holds_a_picture`), ela é a lista. A grade de miniaturas é a
   `ronoctua_design::Grid`; o realce do ponteiro na grade é a CÉLULA, nunca uma faixa na prateleira
-  (nas duas portas). A célula é a miniatura com um `GAP` de ar dos DOIS lados (`video_metrics::TILE`),
-  e o clique pega a mesma caixa: o ar entre duas células não é de ninguém. A pontuação e a idade de
-  um vídeo da grade são uma linha cada: juntas não cabem na largura. O canal sob o título de cada
-  miniatura era um interruptor ao lado ("Canal nas miniaturas"); virou a quarta disposição, para uma
-  escolha ter um caminho só.
+  (nas duas portas). As miniaturas ficam a um `GAP` uma da outra desde a coluna do texto, a conta das
+  do player: a mesma janela cabe tantas quanto lá (o dono viu três contra quatro). A célula é a
+  miniatura com um `GAP` de ar dos dois lados (`TILE_AIR`); duas vizinhas dividem o ar entre elas, que
+  é da primeira, e o clique pega a mesma caixa. Numa linha de glifos da prateleira, o glifo é dele e o
+  resto da célula é do vídeo. A pontuação e a idade de um vídeo da grade são uma linha cada: juntas
+  não cabem na largura. O canal sob o título de cada miniatura era um interruptor ao lado ("Canal nas
+  miniaturas"); virou a quarta disposição, para uma escolha ter um caminho só. A quinta
+  (`Layout::Wide`) tem a largura de duas miniaturas (`tile_cells`): a figura, ao lado as linhas da
+  pontuação e da idade, e embaixo o título em duas linhas da largura toda e o canal.
 - **Um nome que a lista corta diz-se inteiro sob o ponteiro** (pedido do dono, 2026-11-11): o título
   de um vídeo e o nome do canal — na miniatura, cortados com `…`; na tira do player, o título em duas
   linhas — guardam as células das palavras em cada linha (`player_rows::Whole`, um tipo para as duas
@@ -15057,11 +15061,11 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   lista ("canal · idade · pontuação") é achado onde a língua o pôs (`Texts::t_args_marked`,
   `Arg::Name`), nunca procurando as palavras dele na frase.
 - **As páginas de uma lista de vídeos** (`paging.rs`, do catálogo e do ranking do player; pedidos do
-  dono de 2026-11-10). Uma página tem 25, 50 ou 100 vídeos (`PER_PAGES`; a linha "Por página" depois
-  de "Página"), um anel só da sessão, como os filtros; trocar o tamanho fica na página que contém o
-  primeiro vídeo da página em que se estava (`paging::resized`), e não volta à primeira como um
-  filtro. Eram 24, e o teto de miniaturas (`videoMetrics.thumbsMost`) subiu de 48 para 100: a maior
-  página é desenhada inteira, sob o `files.thumbMost` (uns 23 MB de miniaturas por porta). O título
+  dono de 2026-11-10 e 2026-11-11). Uma página tem 12, 16 (o padrão), 18, 20, 32, 40 ou 64 vídeos
+  (`PER_PAGES`; a linha "Por página" depois de "Página"), um anel só da sessão, como os filtros;
+  trocar o tamanho fica na página que contém o primeiro vídeo da página em que se estava
+  (`paging::resized`), e não volta à primeira como um filtro. O teto de miniaturas
+  (`videoMetrics.thumbsMost`) é a maior página, desenhada inteira sob o `files.thumbMost`. O título
   da lista ("Por pontuação") leva a marca "1 de 2" em `text.dim` e, na borda, as setas ‹ ›
   (`list-page-earlier`/`later`, os chevrons horizontais da calculadora e do acesso rápido); o fim da
   lista repete marca e setas numa linha sem tinta de título, que o cursor pula e as setas alcançam.
@@ -15950,9 +15954,9 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   INERTES sob o título: um controle na linha que é a do vídeo valeria para a coluna dele em toda a
   altura da caixa, e o clique na figura abriria a página. Essas linhas acendem só o glifo sob o
   ponteiro (`Lit::Controls`), porque o clique só pega ele.
-- **As páginas são as do catálogo** ("As páginas de uma lista de vídeos", acima): 25, 50 ou 100 por
-  página ("Vídeos por página"), as mesmas teclas, e as setas no título e no fim (`heading_paged`,
-  `pager`). O título "1–25 de 230" já diz a página e ganha só as setas. Virar põe o título no topo
+- **As páginas são as do catálogo** ("As páginas de uma lista de vídeos", acima): o mesmo anel de
+  tamanhos ("Vídeos por página"), as mesmas teclas, e as setas no título e no fim (`heading_paged`,
+  `pager`). O título "1–16 de 230" já diz a página e ganha só as setas. Virar põe o título no topo
   com o cursor na › dele (`View::bring_to_top`), e o `RET` vira de novo; ele fica em primeiro
   enquanto a página está na tela, numa última página curta também, e no gesto seguinte que deixa o
   cursor sob ele (`Level::held_top`, `View::kept_top`; "Uma página virada traz o título ao topo, e

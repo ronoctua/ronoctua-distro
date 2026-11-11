@@ -1704,7 +1704,7 @@ impl RankingView for View {
         let to = from + u64::try_from(listed.rows.len()).unwrap_or(0);
         // THE TITLE JUST ABOVE THE VIDEOS, with the arrows of the pages at
         // its edge (the owner, 2026-11-10) — of the page ASKED, so they never
-        // jump when its reading lands; "1–25 of 230" says the page already,
+        // jump when its reading lands; "1–16 of 230" says the page already,
         // and takes no mark. One page draws no arrow.
         let arrows = crate::paging::arrows(shown.page, self.ranking().pages(list));
         let controls = page_arrows(arrows);
@@ -1980,7 +1980,7 @@ impl RankingView for View {
             // and so is the turn: the other list keeps the page holding the
             // first video it showed, or a page number kept under the new
             // size showed it other videos — page 2 of the ones set aside,
-            // 50 on at 25 a page, 200 on at 100.
+            // 32 on at 16 a page, 128 on at 64.
             (Target::RankingPerPage, Press::Enter | Press::Less | Press::More) => {
                 List::of(self.page())?;
                 let r = self.ranking_mut();
@@ -2524,7 +2524,7 @@ pub(crate) mod tests {
             (0..crate::paging::PerPage::default().get())
                 .map(video)
                 .collect(),
-            60,
+            40,
         );
         assert_eq!(v.ranking().pages(List::Ranking), 3);
         v.key(Press::Ranking(RankingKey::Earlier), Some(&s), 100, &t);
@@ -2605,7 +2605,7 @@ pub(crate) mod tests {
             (0..crate::paging::PerPage::default().get())
                 .map(video)
                 .collect(),
-            60,
+            40,
         );
         assert_eq!(
             v.press_of_key(ronoctua_keymap::Key::simple(ronoctua_keymap::Sym::Char(
@@ -2642,7 +2642,8 @@ pub(crate) mod tests {
 
     /// FAILS IF: the ranking's title brought up by a turn loses the room
     /// under it when the short page turned to LANDS — the owner's 27 videos,
-    /// "26–27 of 27" over two of them (2026-11-11): the page held stays
+    /// "26–27 of 27" over two of them at 25 a page (2026-11-11), here a page
+    /// of 16 and two more: the page held stays
     /// drawn while the next one is read, so a door puts the title first on
     /// the long page, and the short one, arriving later, pulled it back
     /// down as far as the list's end, the filters above in sight — or the
@@ -2653,10 +2654,12 @@ pub(crate) mod tests {
         let t = texts("en-GB");
         let s = fixture::idle();
         let lines = 30;
+        let per = crate::paging::PerPage::default().get();
         for layout in [Layout::List, Layout::Grid] {
-            let mut v = on_the_ranking(25);
+            let mut v = on_the_ranking(per);
             v.ranking_mut().layout = layout;
-            v.ranking_mut().given((0..25).map(video).collect(), 27);
+            v.ranking_mut()
+                .given((0..per).map(video).collect(), u64::from(per) + 2);
             v.page_is(lines);
             v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
             // THE PAGE HELD, still drawn while the next one is read.
@@ -2665,12 +2668,13 @@ pub(crate) mod tests {
             assert_eq!(v.take_top(), Some(title), "{layout:?}");
             assert!(held.len() >= title + lines, "{layout:?}: a page too short");
             // THE SHORT PAGE LANDS.
-            v.ranking_mut().given(vec![video(25), video(26)], 27);
+            v.ranking_mut()
+                .given(vec![video(per), video(per + 1)], u64::from(per) + 2);
             let rows = v.rows(Some(&s), 100, &t);
             assert!(
                 rows.iter()
-                    .any(|r| r.fields.iter().any(|f| f.text == "26–27 of 27")),
-                "{layout:?}: not the owner's last page"
+                    .any(|r| r.fields.iter().any(|f| f.text == "17–18 of 18")),
+                "{layout:?}: not the last page"
             );
             assert_eq!(row_at(&rows, crate::paging::LIST_TITLE), title);
             assert_eq!(
@@ -2695,7 +2699,7 @@ pub(crate) mod tests {
             (0..crate::paging::PerPage::default().get())
                 .map(video)
                 .collect(),
-            60,
+            40,
         );
         let turns = |rows: &[crate::player_rows::Row], n: usize| -> Vec<Target> {
             rows[n].cells.iter().map(|c| c.target.clone()).collect()
@@ -2726,8 +2730,8 @@ pub(crate) mod tests {
         assert_eq!(one.ranking().ranking.page, 0);
     }
 
-    /// FAILS IF: the ranking's page size stops turning round 25, 50 and 100
-    /// on its row — `RET` and `→` on, `←` back — or a new size is not asked
+    /// FAILS IF: the ranking's page size stops turning round its ring from
+    /// 16 on its row — `RET` and `→` on, `←` back — or a new size is not asked
     /// of the catalogue, or its page loses the first video that was on
     /// screen; or THE OTHER LIST, which the size is also of, keeps its page
     /// number under the new size, and shows other videos when it is opened.
@@ -2747,33 +2751,33 @@ pub(crate) mod tests {
         let rows = v.rows(Some(&s), 100, &t);
         v.top_mut().cursor = row_at(&rows, "ranking-per-page");
         v.key(Press::More, Some(&s), 100, &t);
-        assert_eq!(v.ranking().per_page.get(), 50);
+        assert_eq!(v.ranking().per_page.get(), 18);
         assert_eq!(
             v.ranking().ranking.page,
-            1,
-            "75 is on the second page of fifty"
+            2,
+            "the 49th is on the third page of eighteen"
         );
         assert_eq!(
             v.ranking().aside.page,
             1,
-            "50 set aside is on the second page of fifty"
+            "the 33rd set aside is on the second page of eighteen"
         );
-        assert_eq!(v.ranking().asked(List::Ranking).per_page, 50);
+        assert_eq!(v.ranking().asked(List::Ranking).per_page, 18);
         assert!(v.take_top().is_some(), "a new size owes its title the top");
         let rows = v.rows(Some(&s), 100, &t);
         v.top_mut().cursor = row_at(&rows, "ranking-per-page");
         v.key(Press::Less, Some(&s), 100, &t);
-        assert_eq!(v.ranking().per_page.get(), 25);
+        assert_eq!(v.ranking().per_page.get(), 16);
         let rows = v.rows(Some(&s), 100, &t);
         v.top_mut().cursor = row_at(&rows, "ranking-per-page");
         v.key(Press::Enter, Some(&s), 100, &t);
         v.top_mut().cursor = row_at(&v.rows(Some(&s), 100, &t), "ranking-per-page");
         v.key(Press::Enter, Some(&s), 100, &t);
-        assert_eq!(v.ranking().per_page.get(), 100);
+        assert_eq!(v.ranking().per_page.get(), 20);
         assert_eq!(
             v.ranking().aside.page,
             0,
-            "50 set aside is on the first page of a hundred"
+            "the first page set aside stays the first"
         );
     }
 
@@ -2793,7 +2797,7 @@ pub(crate) mod tests {
                 (0..crate::paging::PerPage::default().get())
                     .map(video)
                     .collect(),
-                60,
+                40,
             );
             v.ranking_mut().ranking.page = 1;
             let rows = v.rows(Some(&s), 100, &t);
@@ -3583,11 +3587,11 @@ pub(crate) mod tests {
             (0..crate::paging::PerPage::default().get())
                 .map(video)
                 .collect(),
-            60,
+            40,
         );
         v.key(Press::Ranking(RankingKey::Last), Some(&s), 100, &t);
         assert_eq!(v.ranking().ranking.page, 2);
-        v.ranking_mut().given(vec![video(0)], 60);
+        v.ranking_mut().given(vec![video(0)], 40);
         v.key(Press::Ranking(RankingKey::Shorts), Some(&s), 100, &t);
         assert_eq!(v.ranking().ranking.page, 0, "a new filter, its first page");
         // THE RING'S ROW, `RET` on and `←` back — the cursor stays on it.

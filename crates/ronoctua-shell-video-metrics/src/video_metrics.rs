@@ -595,10 +595,11 @@ pub enum Page {
     Video(VideoId),
 }
 
-/// HOW THE VIDEOS ARE LAID OUT — a ring of four (the owner, 2026-11-10),
-/// turned by the "Layout" row's `←`/`→`, its click and `L`: the channel under
-/// a thumbnail is a layout of the ring and not a switch beside it, so one
-/// choice has one way to it. Kept for the session, as the filters are.
+/// HOW THE VIDEOS ARE LAID OUT — a ring of five (the owner, 2026-11-10 and
+/// 2026-11-11), turned by the "Layout" row's `←`/`→`, its click and `L`: the
+/// channel under a thumbnail is a layout of the ring and not a switch beside
+/// it, so one choice has one way to it. Kept for the session, as the filters
+/// are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layout {
     /// One row a video: its title on the whole width, what it scores under.
@@ -612,11 +613,22 @@ pub enum Layout {
     Grid,
     /// The grid, each thumbnail saying its channel under its title.
     GridWithChannel,
+    /// WIDE THUMBNAILS (the owner, 2026-11-11): a tile as wide as two of the
+    /// grid's, its picture the grid's, what it scores, its age and its marks
+    /// beside the picture, and under it the title on two lines of the whole
+    /// tile and the channel on one — a title read nearly whole.
+    Wide,
 }
 
 impl Layout {
-    /// The four, in the ring's order.
-    pub const ALL: [Self; 4] = [Self::List, Self::Strip, Self::Grid, Self::GridWithChannel];
+    /// The five, in the ring's order.
+    pub const ALL: [Self; 5] = [
+        Self::List,
+        Self::Strip,
+        Self::Grid,
+        Self::GridWithChannel,
+        Self::Wide,
+    ];
 
     /// Its words, the "Layout" row's value.
     const fn key(self) -> &'static str {
@@ -625,6 +637,7 @@ impl Layout {
             Self::Strip => key::VIDEO_METRICS_LAYOUT_LIST_THUMBNAILS,
             Self::Grid => key::VIDEO_METRICS_LAYOUT_GRID,
             Self::GridWithChannel => key::VIDEO_METRICS_LAYOUT_GRID_CHANNEL,
+            Self::Wide => key::VIDEO_METRICS_LAYOUT_WIDE,
         }
     }
 
@@ -639,13 +652,13 @@ impl Layout {
     /// cell by cell.
     #[must_use]
     pub const fn grid(self) -> bool {
-        matches!(self, Self::Grid | Self::GridWithChannel)
+        matches!(self, Self::Grid | Self::GridWithChannel | Self::Wide)
     }
 
     /// Whether a grid's thumbnail says its channel under its title.
     #[must_use]
     pub const fn channel(self) -> bool {
-        matches!(self, Self::GridWithChannel)
+        matches!(self, Self::GridWithChannel | Self::Wide)
     }
 }
 
@@ -1371,7 +1384,10 @@ pub struct Cell {
     /// Its first cell, as a field's `at`.
     pub from: u16,
     /// How many cells it takes: the tile and the air on both sides of it
-    /// ([`TILE`]); the air between two cells is nobody's.
+    /// ([`TILE_AIR`]). Two cells side by side share the air between their
+    /// tiles, and THE CELL BEFORE IT TAKES IT — every door finds a cell as
+    /// the first of the shelf's under the pointer, for the light and the
+    /// click alike; past the last, nothing.
     pub width: u16,
     /// What it is.
     pub target: Target,
@@ -1606,22 +1622,37 @@ pub fn extent(columns: u16) -> (u16, u16) {
     crate::chrome::extent(columns)
 }
 
-/// The air a tile keeps inside its cell on EACH side — the grid's own gap
+/// The air a tile's cell keeps on EACH side of the tile — the grid's own gap
 /// (`ronoctua_design::GAP`): the hover lights the cell, and a picture, a
 /// title and a score that touched its left edge with all the air on the
-/// right read as cut.
+/// right read as cut. THE TILES STAND AS THE PLAYER'S DO, a gap apart from
+/// the page's own left edge on (`ronoctua_design::Grid`), so a window as
+/// wide holds as many side by side (the owner, 2026-11-11: the player's
+/// listing held four where this one held three) — and two cells side by
+/// side SHARE the air between their tiles, which the pointer finds in the
+/// cell before it ([`Cell`]).
 pub const TILE_AIR: u16 = ronoctua_design::GAP;
 
-/// A cell of the grid: the thumbnail's box, `space.videoMetrics.thumbCells`
-/// wide, and its air on both sides.
-pub const TILE: u16 = tokens::space::VIDEOMETRICS_THUMBCELLS + 2 * TILE_AIR;
-
-/// The grid's shelves, at a width: how many cells side by side, each
-/// [`TILE`] wide — through `ronoctua_design::Grid`, the one grid arithmetic
-/// of the tree.
+/// HOW WIDE A TILE IS, without its cell's air: the thumbnail's box,
+/// `space.videoMetrics.thumbCells` — and a wide one ([`Layout::Wide`]) the
+/// room of two of them side by side, the gap between included, so a shelf
+/// of wide tiles holds exactly half the thumbnails a shelf of the grid
+/// does.
 #[must_use]
-pub fn grid_of(room: u16, channel: bool) -> ronoctua_design::grid::Grid {
-    ronoctua_design::grid::Grid::fitted(room, TILE, 0, u16::MAX, shelf_lines(channel))
+pub const fn tile_cells(layout: Layout) -> u16 {
+    let thumb = tokens::space::VIDEOMETRICS_THUMBCELLS;
+    match layout {
+        Layout::Wide => thumb * 2 + ronoctua_design::GAP,
+        Layout::List | Layout::Strip | Layout::Grid | Layout::GridWithChannel => thumb,
+    }
+}
+
+/// The grid's shelves, at a width: how many tiles side by side, each
+/// [`tile_cells`] wide and a gap apart — through `ronoctua_design::Grid`,
+/// the one grid arithmetic of the tree, and the player's listing's.
+#[must_use]
+pub fn grid_of(room: u16, layout: Layout) -> ronoctua_design::grid::Grid {
+    ronoctua_design::grid::Grid::fitted(room, tile_cells(layout), 0, u16::MAX, shelf_lines(layout))
 }
 
 /// How many lines a grid's shelf takes: the picture's, two for the title,
@@ -1629,12 +1660,17 @@ pub fn grid_of(room: u16, channel: bool) -> ronoctua_design::grid::Grid {
 /// for what it scores and the arrows of its rating, one for when it was
 /// published and its marks, one of air. The score and the age are a line
 /// EACH: each carries its glyphs, and a tile never cuts a score for them.
+/// A WIDE TILE says the score and the age beside its picture, so its
+/// shelf is the picture's lines, the title's, the channel's and the air.
 #[must_use]
-pub const fn shelf_lines(channel: bool) -> u16 {
-    tokens::space::VIDEOMETRICS_THUMBLINES
-        + tokens::space::VIDEOMETRICS_TITLELINES
-        + channel as u16
-        + 3
+pub const fn shelf_lines(layout: Layout) -> u16 {
+    let under = tokens::space::VIDEOMETRICS_THUMBLINES + tokens::space::VIDEOMETRICS_TITLELINES;
+    match layout {
+        Layout::Wide => under + 2,
+        Layout::List | Layout::Strip | Layout::Grid | Layout::GridWithChannel => {
+            under + layout.channel() as u16 + 3
+        }
+    }
 }
 
 /// The air between two glyphs of a strip, and between a strip and the
@@ -2416,6 +2452,12 @@ impl View {
     /// figura"): a click on it once took the video on the title's lines and
     /// nothing on the line of glyphs — a picture clickable but for a stripe
     /// through it.
+    ///
+    /// ON A SHELF, a line's glyphs are theirs and every other cell of it is
+    /// its videos' — the cell under the pointer is the video, on the line of
+    /// glyphs as on the picture's (the owner, 2026-11-11): a wide tile says
+    /// its score beside its picture, and a stripe of nobody's would cut the
+    /// picture.
     #[must_use]
     pub fn on_the_words(&self, rows: &[Row], n: usize, column: Option<u16>) -> bool {
         let Some(line) = rows.get(n) else {
@@ -2425,6 +2467,17 @@ impl View {
             return line
                 .words_at
                 .is_none_or(|at| column.is_none_or(|c| c >= at));
+        }
+        if rows
+            .get(Row::owner(rows, n))
+            .is_some_and(|o| !o.cells.is_empty())
+        {
+            return column.is_none_or(|c| {
+                !line
+                    .controls
+                    .iter()
+                    .any(|g| crate::chrome::in_cell(c, g.from, g.width))
+            });
         }
         let owner_stops = rows.get(Row::owner(rows, n)).is_some_and(Row::has_words);
         line.words_box(self.left.get(), owner_stops)
@@ -4207,14 +4260,21 @@ impl View {
                     items.push(Item::Strip(tile_of(v, r, texts)));
                 }
             }
-            Layout::Grid | Layout::GridWithChannel => {
-                let channel = self.layout.channel();
-                let grid = grid_of(room, channel);
+            // WIDE TILES WHERE THE DOOR HOLDS ONE; narrower, the grid with
+            // the channel, whose tile is a thumbnail's — as the list with
+            // thumbnails is the list where a picture does not fit.
+            Layout::Grid | Layout::GridWithChannel | Layout::Wide => {
+                let layout = if self.layout == Layout::Wide && room < tile_cells(Layout::Wide) {
+                    Layout::GridWithChannel
+                } else {
+                    self.layout
+                };
+                let grid = grid_of(room, layout);
                 for shelf in listed.rows.chunks(usize::from(grid.across.max(1))) {
                     items.push(Item::Shelf(
                         shelf.iter().map(|v| tile_of(v, r, texts)).collect(),
                         grid,
-                        channel,
+                        layout,
                     ));
                 }
             }
@@ -5070,8 +5130,8 @@ enum Item {
     /// picture at its head ([`strip_entry`]) — the list's own entry where
     /// the door is too narrow to hold the picture beside a title.
     Strip(Tile),
-    /// A shelf of the grid, and whether its tiles say their channel.
-    Shelf(Vec<Tile>, ronoctua_design::grid::Grid, bool),
+    /// A shelf of the grid, and the layout its tiles are drawn in.
+    Shelf(Vec<Tile>, ronoctua_design::grid::Grid, Layout),
     /// A picture on its own, `thumbLines` tall.
     Figure(PathBuf),
     /// A LIST'S TITLE THAT SAYS ITS PAGE ("By score 1 of 2", the owner,
@@ -6931,8 +6991,8 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                 entry_line(&mut row, &t, value, left, end);
                 out.push(row);
             }
-            Item::Shelf(tiles, grid, channel) => {
-                shelf(&mut out, &tiles, grid, channel, left, at, &mut spot);
+            Item::Shelf(tiles, grid, layout) => {
+                shelf(&mut out, &tiles, grid, layout, left, at, &mut spot);
             }
         }
     }
@@ -7178,66 +7238,76 @@ fn named(row: &mut Row, whole: &str) {
 }
 
 /// One shelf of the grid: the pictures' lines, the titles' two, the
-/// channels' when `channel` says so, the line that says what each scores
+/// channels' when the layout says so, the line that says what each scores
 /// with the arrows of its rating, the one that says when with its marks, and
-/// a line of air. Each tile sits [`TILE_AIR`] inside its cell, so the hover
-/// that lights the cell has the same air on both sides of it. The FIRST line
-/// carries the cells a click takes — the box the hover lights, never the air
-/// between two — and every line after it continues it: a click on a line of
-/// glyphs takes the glyph under it ([`View::click_control`]) and nothing
-/// else, for the shelf's words are its videos' ([`Row::has_words`]).
+/// a line of air. A WIDE TILE ([`Layout::Wide`]) says its score and its age
+/// beside its picture, on the picture's first two lines and a gap after it,
+/// as wide as a thumbnail — and its title and its channel under the
+/// picture, the whole tile wide. Each tile's cell keeps [`TILE_AIR`] on both
+/// sides of it, so the hover that lights the cell has the same air on both
+/// sides of the tile. The FIRST line carries the cells a click takes — the
+/// box the hover lights — and every line after it continues it: a click on
+/// a glyph takes the glyph under it ([`View::click_control`]), and anywhere
+/// else in a cell its video, on any line of the shelf, for the shelf's words
+/// are its videos' ([`Row::has_words`]).
 fn shelf(
     out: &mut Vec<Row>,
     tiles: &[Tile],
     grid: ronoctua_design::grid::Grid,
-    channel: bool,
+    layout: Layout,
     left: u16,
     at: &str,
     spot: &mut impl FnMut(&str) -> String,
 ) {
     let lines = tokens::space::VIDEOMETRICS_THUMBLINES;
     let title_lines = tokens::space::VIDEOMETRICS_TITLELINES;
-    let width = tokens::space::VIDEOMETRICS_THUMBCELLS;
+    let thumb = tokens::space::VIDEOMETRICS_THUMBCELLS;
+    let width = tile_cells(layout);
     let first = out.len();
-    // WHERE EACH CELL STARTS, and its tile one air inside it.
+    // WHERE EACH TILE STARTS.
     let placed: Vec<(u16, &Tile)> = tiles
         .iter()
         .enumerate()
         .filter_map(|(i, t)| grid.at(i).map(|(_, column)| (left + column, t)))
         .collect();
-    let inside = |from: u16| from + TILE_AIR;
-    let total = shelf_lines(channel);
-    // THE LINES UNDER THE TITLE: its channel, when the grid says it; the
-    // score with the arrows of its rating; the age with its marks.
-    let channel_line = channel.then_some(lines + title_lines);
-    let score_line = lines + title_lines + u16::from(channel);
+    let total = shelf_lines(layout);
+    // THE LINES OF ITS WORDS: the title's under the picture, and its channel
+    // when the layout says it; the score with the arrows of its rating and
+    // the age with its marks — under them on a tile of the grid, the tile's
+    // width; beside the picture on a wide one, from `facts` cells on.
+    let channel_line = layout.channel().then_some(lines + title_lines);
+    let (score_line, facts) = match layout {
+        Layout::Wide => (0, thumb + ronoctua_design::GAP),
+        Layout::List | Layout::Strip | Layout::Grid | Layout::GridWithChannel => {
+            (lines + title_lines + u16::from(layout.channel()), 0)
+        }
+    };
+    let facts_cells = width - facts;
     let age_line = score_line + 1;
     for line in 0..total {
         let mut row = plain(Vec::new(), false, spot("shelf"));
         row.continues = line > 0;
         for (from, t) in &placed {
+            let from = *from;
             let focused = t.spot == at;
             if line < lines {
                 if let Some(file) = &t.file {
                     row.thumbs.push(Thumb {
                         line,
                         lines,
-                        left: inside(*from),
-                        cells: width,
+                        left: from,
+                        cells: thumb,
                         file: file.clone(),
                     });
                 } else if line == lines / 2 {
                     // NO PICTURE YET: the glyph of a video in its place,
                     // centred, until the scan fetches one.
                     let glyph = tokens::icon::VIDEO_NO_THUMB.to_string();
-                    row.fields.push(piece(
-                        inside(*from) + width / 2,
-                        glyph,
-                        tokens::color::TEXT_DIM,
-                        1,
-                    ));
+                    row.fields
+                        .push(piece(from + thumb / 2, glyph, tokens::color::TEXT_DIM, 1));
                 }
-            } else if line < lines + title_lines {
+            }
+            if (lines..lines + title_lines).contains(&line) {
                 let k = usize::from(line - lines);
                 let wrapped = crate::chrome::note_lines(&t.title, width);
                 let text = if k + 1 == usize::from(title_lines) && wrapped.len() > k + 1 {
@@ -7253,53 +7323,55 @@ fn shelf(
                     } else {
                         Kind::ListedSetting.tones(focused)
                     };
-                    row.fields.push(piece(inside(*from), text, label, width));
+                    row.fields.push(piece(from, text, label, width));
                     named(&mut row, &t.title);
                 }
-            } else if channel_line == Some(line) {
+            }
+            if channel_line == Some(line) {
                 row.fields.push(piece(
-                    inside(*from),
+                    from,
                     t.channel.clone(),
                     Kind::ListedFact.tones(focused).1,
                     width,
                 ));
                 named(&mut row, &t.channel);
-            } else if line == score_line {
+            }
+            let facts_at = from + facts;
+            if line == score_line {
                 // THE SCORE, never cut for a glyph — and the arrows of its
                 // rating a cell after it, where they fit whole.
                 let number = ronoctua_render::layout::width(&t.score);
                 row.fields.push(piece(
-                    inside(*from),
+                    facts_at,
                     t.score.clone(),
                     Kind::ListedFact.tones(focused).1,
-                    width,
+                    facts_cells,
                 ));
-                let arrows = inside(*from) + number + GLYPH_AIR;
-                if number + GLYPH_AIR + strip_cells(&t.ratings) <= width {
-                    put_strip(&mut row, &t.ratings, arrows);
+                if number + GLYPH_AIR + strip_cells(&t.ratings) <= facts_cells {
+                    put_strip(&mut row, &t.ratings, facts_at + number + GLYPH_AIR);
                 }
             } else if line == age_line {
                 // ITS MARKS against the tile's right edge, and its age in
                 // the room they leave, cut there.
-                let marks = strip_cells(&t.marks).min(width);
-                let room = width.saturating_sub(marks + GLYPH_AIR);
+                let marks = strip_cells(&t.marks).min(facts_cells);
+                let room = facts_cells.saturating_sub(marks + GLYPH_AIR);
                 if room > 0 && !t.age.is_empty() {
                     row.fields.push(piece(
-                        inside(*from),
+                        facts_at,
                         t.age.clone(),
                         Kind::ListedFact.tones(focused).1,
                         room,
                     ));
                 }
-                put_strip(&mut row, &t.marks, inside(*from) + width - marks);
+                put_strip(&mut row, &t.marks, facts_at + facts_cells - marks);
             }
         }
         if line == 0 {
             row.cells = placed
                 .iter()
                 .map(|(from, t)| Cell {
-                    from: *from,
-                    width: TILE,
+                    from: from.saturating_sub(TILE_AIR),
+                    width: width + 2 * TILE_AIR,
                     target: t.target.clone(),
                     spot: t.spot.clone(),
                     name: t.title.clone(),
@@ -7971,9 +8043,13 @@ pub(crate) mod tests {
         assert!(across >= 2);
         let first = shelves[0].cells[0].clone();
         let n = row_of(&rows, &shelves[0].spot);
-        // A CLICK ON THE SECOND CELL, on a lower line of the shelf.
+        // A CLICK ON THE SECOND CELL, on a lower line of the shelf — on its
+        // tile: the air before it is the first cell's ([`Cell::width`]).
         let second = shelves[0].cells[1].clone();
-        assert!(!v.clicked(n + 2, second.from, &rows), "a first click acted");
+        assert!(
+            !v.clicked(n + 2, second.from + TILE_AIR, &rows),
+            "a first click acted"
+        );
         assert_eq!(v.at, second.spot);
         assert!(
             v.clicked(n + 1, second.from + 1, &rows),
@@ -8408,7 +8484,10 @@ pub(crate) mod tests {
     fn on_page(page: u32, total: u64) -> (View, Readings) {
         let (mut v, _) = View::fresh(Page::Videos);
         v.page = page;
-        (v, paged(page, 25, total))
+        (
+            v,
+            paged(page, crate::paging::PerPage::default().get(), total),
+        )
     }
 
     /// The arrows of a row: what each turns, and where it is drawn.
@@ -8419,36 +8498,42 @@ pub(crate) mod tests {
             .collect()
     }
 
-    /// FAILS IF: a page's size does not turn round 25, 50 and 100, a new
-    /// size is not what the feed is asked for, or the page it lands on does
-    /// not hold the first video of the one that was on screen — or its
-    /// title is not owed the top of the door.
+    /// FAILS IF: a page's size does not turn round 12, 16, 18, 20, 32, 40
+    /// and 64 from 16, a new size is not what the feed is asked for, or the
+    /// page it lands on does not hold the first video of the one that was on
+    /// screen — or its title is not owed the top of the door.
     #[test]
     fn a_page_size_turns_in_a_ring_and_keeps_the_first_video() {
         let (mut v, r) = on_page(3, 230);
-        assert_eq!(v.per_page.get(), 25);
+        assert_eq!(v.per_page.get(), 16);
         onto(&mut v, &r, "per-page");
         let Errand::Look(look) = press(&mut v, &r, Press::More) else {
             panic!("a new size asked nothing");
         };
-        assert_eq!(look.query.map(|q| (q.page, q.per_page)), Some((1, 50)));
+        // THE 49TH VIDEO, the first of the fourth page of sixteen, is on the
+        // third of eighteen.
+        assert_eq!(look.query.map(|q| (q.page, q.per_page)), Some((2, 18)));
         assert!(v.top_owed, "a new size owed its title nothing");
         let rows = v.rows(&r, COLUMNS, &texts("en-GB"));
         let size = row_of(&rows, "per-page");
         assert!(
-            rows[size].fields.iter().any(|f| f.text == "50"),
+            rows[size].fields.iter().any(|f| f.text == "18"),
             "the row does not say the size"
         );
         press(&mut v, &r, Press::More);
-        assert_eq!((v.per_page.get(), v.page), (100, 0));
+        assert_eq!((v.per_page.get(), v.page), (20, 1));
+        for size in [32, 40, 64, 12] {
+            press(&mut v, &r, Press::More);
+            assert_eq!((v.per_page.get(), v.page), (size, 0));
+        }
         press(&mut v, &r, Press::More);
         assert_eq!(
             (v.per_page.get(), v.page),
-            (25, 0),
+            (16, 0),
             "the ring did not go round"
         );
         press(&mut v, &r, Press::Less);
-        assert_eq!(v.per_page.get(), 100, "back, round the ring");
+        assert_eq!(v.per_page.get(), 12, "back, round the ring");
     }
 
     /// FAILS IF: the list's title stops saying its page beside it in the
@@ -8463,7 +8548,7 @@ pub(crate) mod tests {
             let rows = v.rows(&r, COLUMNS, &t);
             rows[row_of(&rows, crate::paging::LIST_TITLE)].clone()
         };
-        let middle = title(1, 60);
+        let middle = title(1, 40);
         assert_eq!(middle.fields[0].text, t.t(key::VIDEO_METRICS_BY_SCORE));
         assert_eq!(middle.fields[0].color, tokens::color::TEXT_HEADING);
         let mark = middle
@@ -8479,9 +8564,9 @@ pub(crate) mod tests {
         );
         assert!(middle.takes(), "the arrows take no click");
         // THE FIRST PAGE: no `‹`, and the `›` where it was.
-        assert_eq!(turns_of(&title(0, 60)), [both[1].clone()]);
+        assert_eq!(turns_of(&title(0, 40)), [both[1].clone()]);
         // THE LAST: no `›`, and the `‹` where it was.
-        assert_eq!(turns_of(&title(2, 60)), [both[0].clone()]);
+        assert_eq!(turns_of(&title(2, 40)), [both[0].clone()]);
         // ONE PAGE: the title alone, and no arrows at the end.
         let (v, r) = on_page(0, 10);
         let rows = v.rows(&r, COLUMNS, &t);
@@ -8498,7 +8583,7 @@ pub(crate) mod tests {
     #[test]
     fn the_list_ends_with_its_arrows_in_no_title_ink() {
         let t = texts("en-GB");
-        let (mut v, r) = on_page(1, 60);
+        let (mut v, r) = on_page(1, 40);
         let rows = v.rows(&r, COLUMNS, &t);
         let end = row_of(&rows, crate::paging::LIST_PAGER);
         let last_video = rows
@@ -8544,7 +8629,7 @@ pub(crate) mod tests {
     fn a_turned_page_puts_its_title_first_and_the_cursor_on_its_first_video() {
         let t = texts("en-GB");
         for layout in Layout::ALL {
-            let (mut v, mut r) = on_page(0, 60);
+            let (mut v, mut r) = on_page(0, 40);
             v.layout = layout;
             let entries = row_of(&v.rows(&r, COLUMNS, &t), crate::paging::LIST_TITLE);
             onto(&mut v, &r, "filter-shorts");
@@ -8652,7 +8737,7 @@ pub(crate) mod tests {
     /// page anywhere but on the videos.
     #[test]
     fn home_and_end_go_to_the_first_and_last_page() {
-        let (mut v, r) = on_page(1, 60);
+        let (mut v, r) = on_page(1, 40);
         assert_eq!(press_of_key(Key::simple(Sym::Home)), Some(Press::PageFirst));
         assert_eq!(press_of_key(Key::simple(Sym::End)), Some(Press::PageLast));
         assert_eq!(
@@ -8682,7 +8767,7 @@ pub(crate) mod tests {
     /// — or a language leaves one of them unsaid.
     #[test]
     fn the_page_row_teaches_its_keys_in_each_door() {
-        let (mut v, r) = on_page(0, 60);
+        let (mut v, r) = on_page(0, 40);
         let footer = v.page_keys();
         assert_eq!(footer[0], ("earlier", "[".to_owned()));
         assert_eq!(footer[1], ("prior", "<prior>".to_owned()));
@@ -8969,8 +9054,11 @@ pub(crate) mod tests {
     /// FAILS IF: every way a scan was or was not asked has no sentence of
     /// its own, a download handed over does not open the queue, or a grid
     /// tile touches its cell's edge — the hover lights the cell, and a
-    /// picture flush with its left edge reads as cut — or a click in the air
-    /// between two cells takes one.
+    /// picture flush with its left edge reads as cut — or the tiles stand
+    /// further apart than the player's (a picture and a gap, from the page's
+    /// left edge on: the owner's window held three where the player's held
+    /// four), or the air two cells share is not the first's, or a click past
+    /// the last cell takes one.
     #[test]
     fn what_errands_came_to_is_said_and_a_tile_keeps_its_air() {
         let r = readings();
@@ -9006,7 +9094,7 @@ pub(crate) mod tests {
             .position(|x| !x.cells.is_empty())
             .expect("a shelf");
         let cells = rows[shelf].cells.clone();
-        for line in &rows[shelf..shelf + usize::from(shelf_lines(false))] {
+        for line in &rows[shelf..shelf + usize::from(shelf_lines(Layout::Grid))] {
             for f in &line.fields {
                 let cell = cells
                     .iter()
@@ -9021,14 +9109,32 @@ pub(crate) mod tests {
             }
         }
         assert!(cells.len() >= 2);
-        let gap = cells[0].from + cells[0].width;
-        assert!(gap < cells[1].from, "no air between two cells");
+        let (left, _) = extent(100);
+        assert_eq!(
+            cells[0].from + TILE_AIR,
+            left,
+            "the first tile is not at the page's edge"
+        );
+        assert_eq!(
+            cells[1].from - cells[0].from,
+            tokens::space::VIDEOMETRICS_THUMBCELLS + ronoctua_design::GAP,
+            "the tiles stand further apart than the player's"
+        );
+        let shared = cells[1].from;
+        assert_eq!(shared + 1, cells[0].from + cells[0].width, "no air shared");
+        assert!(!v.clicked(shelf, shared, &rows));
+        assert_eq!(
+            v.at, cells[0].spot,
+            "the shared air is not the first cell's"
+        );
+        let last = cells.last().expect("a cell");
+        let past = last.from + last.width;
         let at = v.at.clone();
         assert!(
-            !v.clicked(shelf, gap, &rows),
-            "the air between two cells acted"
+            !v.clicked(shelf, past, &rows),
+            "the air past the last cell acted"
         );
-        assert_eq!(v.at, at, "the air between two cells took the cursor");
+        assert_eq!(v.at, at, "the air past the last cell took the cursor");
     }
 
     /// The names a said sentence quotes, as they read in it.
@@ -9790,7 +9896,7 @@ pub(crate) mod tests {
                         .iter()
                         .position(|x| !x.cells.is_empty())
                         .expect("a shelf");
-                    let lines = &rows[shelf..shelf + usize::from(shelf_lines(false))];
+                    let lines = &rows[shelf..shelf + usize::from(shelf_lines(Layout::Grid))];
                     let glyphs: Vec<&Row> =
                         lines.iter().filter(|l| !l.controls.is_empty()).collect();
                     assert_eq!(glyphs.len(), 2, "{what}: the score's line and the age's");
@@ -10464,13 +10570,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// FAILS IF: the layouts stop turning as a ring of four — `→`, a click
+    /// FAILS IF: the layouts stop turning as a ring of five — `→`, a click
     /// and `RET` the next, `←` the one before, `L` the next — or say one
     /// layout in another's words, or two in the same; the list reads the page
     /// again for anything but the thumbnails coming or going; a switch of the
     /// channel comes back beside the ring (the owner, 2026-11-10: one way to
-    /// one choice); or the grid with the channel does not put it under each
-    /// title, its shelves a line taller, while the grid without says none.
+    /// one choice); or the grid with the channel, or the wide thumbnails, do
+    /// not put it under each title, while the grid without says none.
     #[test]
     fn the_layouts_turn_in_a_ring_and_one_says_the_channel() {
         let r = readings();
@@ -10485,7 +10591,11 @@ pub(crate) mod tests {
             let mut distinct = said.clone();
             distinct.sort();
             distinct.dedup();
-            assert_eq!(distinct.len(), 4, "{language}: two layouts alike: {said:?}");
+            assert_eq!(
+                distinct.len(),
+                Layout::ALL.len(),
+                "{language}: two layouts alike: {said:?}"
+            );
         }
         let t = texts("en-GB");
         onto(&mut v, &r, "layout");
@@ -10512,12 +10622,17 @@ pub(crate) mod tests {
                 (Some(true), Layout::Strip),
                 (None, Layout::Grid),
                 (None, Layout::GridWithChannel),
+                (None, Layout::Wide),
                 (Some(false), Layout::List),
             ]
         );
         // ←: the one before; `L` and `RET`: the next.
         press(&mut v, &r, Press::Less);
+        assert_eq!(v.layout, Layout::Wide);
+        press(&mut v, &r, Press::Less);
         assert_eq!(v.layout, Layout::GridWithChannel);
+        press(&mut v, &r, Press::Layout);
+        assert_eq!(v.layout, Layout::Wide);
         press(&mut v, &r, Press::Layout);
         assert_eq!(v.layout, Layout::List);
         press(&mut v, &r, Press::Enter);
@@ -10538,10 +10653,59 @@ pub(crate) mod tests {
                 .count();
             (Row::lines_of(&rows, shelf), channel)
         };
-        assert_eq!(said(Layout::Grid), (usize::from(shelf_lines(false)), 0));
-        let (lines, channel) = said(Layout::GridWithChannel);
-        assert_eq!(lines, usize::from(shelf_lines(true)));
-        assert_eq!(channel, 10, "not every tile says its channel");
+        assert_eq!(
+            said(Layout::Grid),
+            (usize::from(shelf_lines(Layout::Grid)), 0)
+        );
+        for layout in [Layout::GridWithChannel, Layout::Wide] {
+            let (lines, channel) = said(layout);
+            assert_eq!(lines, usize::from(shelf_lines(layout)), "{layout:?}");
+            assert_eq!(channel, 10, "{layout:?}: not every tile says its channel");
+        }
+    }
+
+    /// FAILS IF: wide thumbnails draw past a door too narrow for one, or are
+    /// not the grid with the channel there — or a shelf of them holds
+    /// anything but half the thumbnails a shelf of the grid does, the room of
+    /// a wide tile being two of the grid's.
+    #[test]
+    fn wide_thumbnails_are_two_of_the_grid_and_the_grid_where_one_does_not_fit() {
+        let r = readings();
+        let t = texts("en-GB");
+        let shelf_of = |layout: Layout, columns: u16| {
+            let (mut v, _) = View::fresh(Page::Videos);
+            v.layout = layout;
+            let rows = v.rows(&r, columns, &t);
+            for row in &rows {
+                for f in &row.fields {
+                    let end = f.at + ronoctua_render::layout::width(&f.text);
+                    assert!(
+                        end <= columns,
+                        "{layout:?} at {columns}: `{}` ends at {end}",
+                        f.text
+                    );
+                }
+            }
+            let shelf = rows
+                .iter()
+                .position(|x| !x.cells.is_empty())
+                .expect("a shelf");
+            (rows[shelf].cells.clone(), Row::lines_of(&rows, shelf))
+        };
+        let wide = tile_cells(Layout::Wide);
+        let narrow = (wide..)
+            .find(|&c| extent(c).1 >= wide)
+            .expect("a door that holds a wide tile")
+            - 1;
+        let (cells, lines) = shelf_of(Layout::Wide, narrow);
+        assert_eq!(cells[0].width, tile_cells(Layout::Grid) + 2 * TILE_AIR);
+        assert_eq!(lines, usize::from(shelf_lines(Layout::GridWithChannel)));
+        for columns in [narrow + 1, 120, 200] {
+            let (two, _) = shelf_of(Layout::Wide, columns);
+            let (four, _) = shelf_of(Layout::Grid, columns);
+            assert_eq!(two[0].width, wide + 2 * TILE_AIR, "at {columns}");
+            assert_eq!(four.len() / 2, two.len(), "at {columns}");
+        }
     }
 
     /// A video's title longer than a tile's two lines, for the tests of a
@@ -10646,11 +10810,13 @@ pub(crate) mod tests {
                 }
                 assert!(titles >= 10, "{what}: {titles} titles");
                 // THE LIST SAYS EVERY CHANNEL, the grid with the channel
-                // under each title too — and the grid's tile cuts both.
+                // under each title too — and the grid's tile cuts both; a
+                // wide one, whose two lines are twice a tile's, holds this
+                // title whole.
                 if layout != Layout::Grid {
                     assert!(channels >= 10, "{what}: {channels} channels");
                 }
-                assert_eq!(cut, layout.grid(), "{what}: cut");
+                assert_eq!(cut, layout.grid() && layout != Layout::Wide, "{what}: cut");
             }
         }
     }
