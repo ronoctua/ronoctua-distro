@@ -783,6 +783,220 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
     }
 }
 
+/// THE WIDE TILES (the owner, 2026-11-11): each [`Tile`] as wide as two of
+/// the grid's ([`wide_cells`]), its picture the grid's `shape`, and BESIDE
+/// IT, a gap after it, the lines it says ([`Tile::under`]) — one a line of
+/// the picture's, from its first, with their glyphs and the `⋯` at the end
+/// of the first — and its title under the picture, the whole tile wide, on
+/// `shape.titles` lines: a title read nearly whole. A line of air after the
+/// shelf. A room narrower than one wide tile is the grid's ([`tiled`]).
+///
+/// The picture's lines are the tile's row, as in the grid: the first carries
+/// the tiles' cells — and the glyphs beside the first picture line, which a
+/// click takes before the tile they stand in (`View::clicked_at`) — and the
+/// rest continue it, each glyph taken on its own line.
+pub fn wide(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
+    if tiles.is_empty() {
+        return;
+    }
+    let Shape {
+        cells,
+        lines,
+        titles,
+    } = shape;
+    let width = wide_cells(cells);
+    if b.room < width {
+        tiled(tiles, shape, b);
+        return;
+    }
+    let glyph = tokens::space::PLAYER_QUEUEGLYPH;
+    let beside = cells + ronoctua_design::GAP;
+    let facts = width - beside;
+    let g = Grid::fitted(b.room, width, 0, u16::MAX, lines + titles + 1);
+    let placed: Vec<(u16, u16, &Tile)> = tiles
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| g.at(i).map(|(at_line, at_cell)| (at_line, at_cell, t)))
+        .collect();
+    let shelves: BTreeSet<u16> = placed.iter().map(|(l, _, _)| *l).collect();
+    let joiner = b.texts.t(crate::key::PLAYER_META_JOINER);
+    for shelf in shelves {
+        let on_shelf: Vec<&(u16, u16, &Tile)> =
+            placed.iter().filter(|(l, _, _)| *l == shelf).collect();
+        let first = b.out.len();
+        let focused = b.lit_at(first);
+        let here = b.cell.min(on_shelf.len().saturating_sub(1));
+        let row_target = if b.at_cursor(first) {
+            on_shelf
+                .get(here)
+                .map_or(Target::Nothing, |(_, _, t)| t.target.clone())
+        } else {
+            on_shelf
+                .first()
+                .map_or(Target::Nothing, |(_, _, t)| t.target.clone())
+        };
+        let spot = on_shelf
+            .first()
+            .map_or_else(String::new, |(_, _, t)| format!("shelf-{}", t.spot));
+        // THE TILES FIRST among the first line's cells: the cursor's `cell`
+        // counts them, and the glyphs come after.
+        let shelf_cells: Vec<Cell> = on_shelf
+            .iter()
+            .map(|(_, at, t)| Cell {
+                from: b.left + at,
+                width: g.step,
+                target: t.target.clone(),
+                spot: t.spot.clone(),
+                control: false,
+                about: None,
+            })
+            .collect();
+        for l in 0..lines {
+            let mut covers = Vec::new();
+            let mut fields = Vec::new();
+            let mut controls = Vec::new();
+            let mut wholes = Vec::new();
+            for (_, at, t) in &on_shelf {
+                let left = b.left + at;
+                match &t.picture {
+                    Some((key, size)) => covers.push(CoverRow {
+                        line: l,
+                        lines,
+                        left,
+                        cells,
+                        key: std::rc::Rc::from(key.as_str()),
+                        size: *size,
+                    }),
+                    None if l == lines / 2 => fields.push(Builder::piece(
+                        left + cells / 2,
+                        t.glyph.to_string(),
+                        tokens::color::TEXT_DIM,
+                    )),
+                    None => {}
+                }
+                // WHAT IT SAYS, A LINE BESIDE EACH LINE OF THE PICTURE.
+                let words_at = left + beside;
+                let more = t.more.as_ref().filter(|_| l == 0);
+                let reserve = if more.is_some() { glyph } else { 0 };
+                if let Some(said) = t.under.get(usize::from(l)) {
+                    let Laid {
+                        words,
+                        named,
+                        after: (after, after_at),
+                        end: (end, end_at),
+                    } = laid(said, &joiner, facts, reserve);
+                    if let Some(name) = said.parts.first().filter(|_| named > 0) {
+                        wholes.push(Whole {
+                            from: words_at,
+                            width: named,
+                            text: name.clone(),
+                        });
+                    }
+                    if !words.is_empty() {
+                        fields.push(Builder::piece(words_at, words, tokens::color::TEXT_DIM));
+                    }
+                    let glyphs = after
+                        .iter()
+                        .zip((0..).map(|k: u16| words_at + after_at + k * glyph))
+                        .chain(
+                            end.iter()
+                                .zip((0..).map(|k: u16| words_at + end_at + k * glyph)),
+                        );
+                    for (c, from) in glyphs {
+                        let (field, cell) = control_at(c, from, &t.spot);
+                        fields.push(field);
+                        controls.push(cell);
+                    }
+                }
+                if let Some(more) = more {
+                    let from = left + width.saturating_sub(glyph);
+                    fields.push(Builder::piece(
+                        from,
+                        more.glyph.to_string(),
+                        tokens::color::TEXT_SECONDARY,
+                    ));
+                    controls.push(Cell {
+                        from,
+                        width: glyph,
+                        target: more.target.clone(),
+                        spot: format!("{}-more", t.spot),
+                        control: true,
+                        about: Some(more.about),
+                    });
+                }
+            }
+            let owner = l == 0;
+            let mut row_cells = if owner {
+                shelf_cells.clone()
+            } else {
+                Vec::new()
+            };
+            row_cells.extend(controls);
+            let mut row = line(
+                fields,
+                covers,
+                row_cells,
+                (owner, owner && focused),
+                row_target.clone(),
+                spot.clone(),
+            );
+            row.wholes = wholes;
+            b.out.push(row);
+        }
+        // THE TITLES, wrapped across the whole tile under its picture, the
+        // one the cursor is on in the cursor's colour, each line saying the
+        // title whole under the pointer on its words.
+        let wrapped: Vec<Vec<String>> = on_shelf
+            .iter()
+            .map(|(_, _, t)| wrapped(&t.title, width, titles))
+            .collect();
+        for k in 0..titles {
+            let (fields, wholes): (Vec<_>, Vec<_>) = on_shelf
+                .iter()
+                .zip(&wrapped)
+                .enumerate()
+                .filter_map(|(n, ((_, at, t), words))| {
+                    let text = words.get(usize::from(k))?.clone();
+                    let colour = if focused && n == here {
+                        tokens::color::TEXT_HERE_ACTS
+                    } else {
+                        tokens::color::TEXT_PRIMARY
+                    };
+                    let whole = Whole {
+                        from: b.left + at,
+                        width: ronoctua_render::layout::width(&text),
+                        text: t.title.clone(),
+                    };
+                    Some((Builder::piece(b.left + at, text, colour), whole))
+                })
+                .unzip();
+            let mut row = line(
+                fields,
+                Vec::new(),
+                Vec::new(),
+                (false, false),
+                row_target.clone(),
+                spot.clone(),
+            );
+            row.wholes = wholes;
+            b.out.push(row);
+        }
+        // AND A LINE OF AIR before the next shelf's pictures.
+        b.inert(crate::chrome::AIR);
+        if let Some(row) = b.out.last_mut() {
+            row.lit = Lit::Controls;
+        }
+    }
+}
+
+/// How wide a WIDE TILE is ([`wide`]): two of the grid's pictures of
+/// `cells` and the grid's gap between them — so a shelf of wide tiles holds
+/// half as many as the grid's at any width.
+#[must_use]
+pub const fn wide_cells(cells: u16) -> u16 {
+    cells * 2 + ronoctua_design::GAP
+}
+
 /// THE STRIP: a row each [`Tile`], its picture at the head — `shape.cells`
 /// by `shape.lines`, when the row holds it beside a title as wide again —
 /// and beside it its title, wrapped to `shape.titles` lines, the lines said

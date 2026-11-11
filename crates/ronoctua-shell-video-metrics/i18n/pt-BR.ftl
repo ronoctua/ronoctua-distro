@@ -62,6 +62,7 @@ ask-video-metrics-days = Apaga-se em quantos dias
 ask-video-metrics-band = De quanto a quanto (4:00-20:00)
 ask-video-metrics-words = Palavras a procurar
 ask-video-metrics-search = Buscar nos vídeos
+ask-player-ranking-search = Buscar nos vídeos
 ask-video-metrics-second-tags = Suas etiquetas, separadas por vírgulas
 ask-video-metrics-weight = Pontos para esta nota
 video-metrics-heading-scan = Varredura
@@ -215,6 +216,8 @@ video-metrics-rating-positive = Positiva
 video-metrics-rating-very-positive = Muito positiva
 video-metrics-channel = Canal
 video-metrics-every-channel = todos os canais
+video-metrics-channel-choose = Mostrar os vídeos de
+video-metrics-channel-chosen = em exibição
 video-metrics-filter-shorts = Shorts
 video-metrics-shorts-any = com e sem
 video-metrics-shorts-only = só Shorts
@@ -349,7 +352,8 @@ about-video-metrics-term-match = Como as palavras são achadas: inteiras, em ord
 about-video-metrics-term-field = Se as palavras são procuradas nesta parte do vídeo.
 about-video-metrics-rule-on = Se esta regra conta; desligada, não soma nada.
 about-video-metrics-remove-rule = Remove esta regra, depois de perguntar.
-about-video-metrics-filter-channel = Os vídeos de todos os canais, ou de um.
+about-video-metrics-filter-channel = Os vídeos de todos os canais, ou de um — escolhido entre os canais, que tomam o lugar dos vídeos até a escolha.
+about-video-metrics-channel-choice = Mostra os vídeos deste canal — ou de todos — e a lista de vídeos de novo.
 about-video-metrics-filter-shorts = Shorts e o resto, só Shorts, ou sem Shorts.
 about-video-metrics-filter-rating = Qualquer nota sua, ou só uma.
 about-video-metrics-filter-hidden = Os ocultos fora, junto, ou só eles.
@@ -558,7 +562,18 @@ player-ranking-empty = Nenhum vídeo pontuado ainda: as varreduras não acharam 
 player-ranking-empty-filtered = Nenhum vídeo pontuado com Shorts em “{ $shorts }”: as varreduras não acharam nenhum, ou a linha dos Shorts os deixa de fora.
 player-ranking-aside-empty = Nada separado ainda: o marcador ao lado de um vídeo o separa.
 player-ranking-aside-empty-filtered = Nada separado com Shorts em “{ $shorts }”: nada foi separado ainda, ou a linha dos Shorts deixa de fora o que foi.
+player-ranking-empty-filters = Nenhum vídeo nesta lista com as opções como estão: as varreduras não acharam nenhum, ou as opções acima os deixam de fora.
 player-ranking-layout-grid = Miniaturas
+player-ranking-layout-wide = Miniaturas largas
+# A LIST'S OPTIONS ON THE PLAYER'S PAGE, in words of its own beside the
+# list set aside ("Set aside") and the repeat's "nothing": the ranking keeps
+# its order by score with only the ones set aside, so "only those" says no
+# order.
+player-ranking-set-aside-filter = Vídeos separados
+player-ranking-set-aside-any = separados ou não
+player-ranking-set-aside-only = só eles
+player-ranking-set-aside-without = não separados
+player-ranking-search-none = nenhuma palavra
 player-ranking-added = Adicionado: { $title }
 player-ranking-title = Título do vídeo
 player-ranking-channel = Canal

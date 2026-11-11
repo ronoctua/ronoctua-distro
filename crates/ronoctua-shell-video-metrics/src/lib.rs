@@ -19,8 +19,8 @@
 use ronoctua_shell_door::{door, file_picker, launch, region};
 use ronoctua_shell_kit::{aim, bars, bindings, chrome, echo, fields, line, wake, when};
 use ronoctua_shell_player::{
-    player, player_find, player_metadata, player_posters, player_rows, player_seam, player_window,
-    text_area,
+    player, player_find, player_metadata, player_posters, player_question, player_rows,
+    player_seam, player_window, text_area,
 };
 // The tests hand a root gesture to a fake gate.
 #[cfg(test)]

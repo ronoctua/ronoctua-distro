@@ -1531,7 +1531,9 @@ mod tests {
                         );
                     }
                     // THE AIR AFTER A GLYPH: nobody's on a row, and on a
-                    // shelf the video's, as a line of it with no glyph says.
+                    // shelf the video's, as a line of it with no glyph — and
+                    // no name: a wide tile's channel is beside its picture
+                    // on its third line — says.
                     if row.controls.get(i + 1).is_some() {
                         let air = region.about_at(n, Some(c.from + c.width), &seen);
                         if owner.cells.is_empty() {
@@ -1540,7 +1542,7 @@ mod tests {
                                 "{layout:?}: the air after glyph {i} of line {n} says something"
                             );
                         } else {
-                            let video = region.about_at(owner_n + 2, Some(c.from + c.width), &seen);
+                            let video = region.about_at(owner_n + 3, Some(c.from + c.width), &seen);
                             assert!(video.is_some(), "{layout:?}: a shelf's video says nothing");
                             assert_eq!(
                                 air, video,

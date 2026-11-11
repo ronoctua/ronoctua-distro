@@ -93,40 +93,23 @@ impl View {
         crate::player_metadata::section(self, s, b);
     }
 
-    /// The "Now" title — with the glyph that FOLDS THE PICTURE away, or
-    /// back, while the door shows one ([`View::picture_foldable`]), and the
-    /// swap's glyph at its edge in the footer while no media panel stands
-    /// beside the rows to carry it in its transport. THE FOOTER'S PANEL
-    /// CARRIES THE FOLD TOO, at the end of its time bar
-    /// (`player_media::FOLD`): the picture's control in the picture's pane,
-    /// and "Now" bare beside it.
+    /// The "Now" title — with the swap's glyph at its edge in the footer
+    /// while no media panel stands beside the rows to carry it in its
+    /// transport. THE FOLD IS THE PLAYER'S CONTROLS' (the owner, 2026-11-11:
+    /// "essa opção deve aparecer junto aos controles do próprio player"):
+    /// the window's transport carries it on every page
+    /// (`player_media::buttons`), and the footer's panel at the end of its
+    /// time bar (`player_media::FOLD`) — never this title.
     fn now_heading(&self, b: &mut Builder<'_>) {
-        // THE FOLD'S GLYPH IS DRAWN AS WHAT A PRESS DOES: fold, or unfold.
-        let fold = self.picture_fold.map(|folded| {
-            if folded {
-                tokens::icon::PLAYER_PICTURE_UNFOLD
-            } else {
-                tokens::icon::PLAYER_PICTURE_FOLD
-            }
-        });
-        // EACH CASE ITS OWN LITERAL CONTROLS, which the hint check reads. A
-        // PICTURE TO FOLD stands in a panel, and the footer's panel carries
-        // the swap in its transport: the title never draws both.
-        match (fold, self.swap && !self.panel) {
-            (Some(glyph), _) if !self.panel => b.heading_with(
-                key::PLAYER_HEADING_NOW,
-                glyph,
-                Target::FoldPicture,
-                "player-picture-fold",
-            ),
-            (Some(_), _) => b.heading(key::PLAYER_HEADING_NOW),
-            (None, true) => b.heading_with(
+        if self.swap && !self.panel && self.picture_fold.is_none() {
+            b.heading_with(
                 key::PLAYER_HEADING_NOW,
                 tokens::icon::PLAYER_WINDOW,
                 Target::Swap,
                 "player-swap",
-            ),
-            (None, false) => b.heading(key::PLAYER_HEADING_NOW),
+            );
+        } else {
+            b.heading(key::PLAYER_HEADING_NOW);
         }
     }
 }
@@ -1295,13 +1278,13 @@ mod tests {
         assert!(position(&footer, &alone));
     }
 
-    /// FAILS IF: the "Now" title stops carrying the glyph that folds the
-    /// picture while a door shows one — drawn as what a press does, saying
-    /// so under the pointer — or carries it where there is none; or `z` and
-    /// the glyph stop being the door's errand, or say nothing where there
-    /// is no picture; or the swap stops standing at the edge in the footer.
+    /// FAILS IF: the "Now" title carries the fold again, where the owner
+    /// took it off for the player's own controls (2026-11-11) — or `z`
+    /// stops being the door's errand while a door shows a picture, or says
+    /// nothing where there is none; or the swap stops standing at the
+    /// title's edge in the footer with no panel to carry it.
     #[test]
-    fn the_now_title_folds_the_picture() {
+    fn the_now_title_leaves_the_fold_to_the_controls() {
         let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
         let s = playing();
         let now_title = |v: &View| {
@@ -1315,29 +1298,18 @@ mod tests {
                 })
                 .expect("the Now title")
         };
+        let abouts = |v: &View| -> Vec<&'static str> {
+            now_title(v).cells.iter().filter_map(|c| c.about).collect()
+        };
         let mut v = View::blank(None);
-        assert!(now_title(&v).cells.is_empty(), "no picture, no glyph");
+        assert_eq!(abouts(&v), Vec::<&str>::new());
         assert_eq!(
             v.key(Press::FoldPicture, Some(&s), 80, &t),
             Errand::Said(t.t(key::PLAYER_NO_PICTURE_TO_FOLD).into())
         );
-        for (folded, glyph) in [
-            (false, tokens::icon::PLAYER_PICTURE_FOLD),
-            (true, tokens::icon::PLAYER_PICTURE_UNFOLD),
-        ] {
+        for folded in [false, true] {
             assert!(v.picture_foldable(Some(folded)));
-            let title = now_title(&v);
-            let cell = title
-                .cells
-                .iter()
-                .find(|c| c.about == Some("player-picture-fold"))
-                .expect("the fold's glyph");
-            assert!(
-                title
-                    .fields
-                    .iter()
-                    .any(|f| f.text == glyph.to_string() && f.at == cell.from)
-            );
+            assert_eq!(abouts(&v), Vec::<&str>::new(), "the fold is on Now");
             assert!(crate::chrome::hint_sentence("player-picture-fold", &t).is_some());
             assert_eq!(
                 v.key(Press::FoldPicture, Some(&s), 80, &t),
@@ -1348,9 +1320,6 @@ mod tests {
         // in its transport and the fold at the end of its time bar
         // (`player_media::FOLD`), and "Now" neither; with no panel, no
         // picture folds, and "Now" carries the swap.
-        let abouts = |v: &View| -> Vec<&'static str> {
-            now_title(v).cells.iter().filter_map(|c| c.about).collect()
-        };
         let mut footer = View::blank(None).in_the_footer();
         footer.beside_the_panel(true);
         footer.picture_foldable(Some(false));

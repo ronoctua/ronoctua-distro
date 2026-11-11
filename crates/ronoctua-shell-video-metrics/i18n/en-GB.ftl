@@ -62,6 +62,7 @@ ask-video-metrics-days = Fades over how many days
 ask-video-metrics-band = From how long to how long (4:00-20:00)
 ask-video-metrics-words = Words to look for
 ask-video-metrics-search = Search the videos for
+ask-player-ranking-search = Search the videos for
 ask-video-metrics-second-tags = Your tags, separated by commas
 ask-video-metrics-weight = Points for this rating
 video-metrics-heading-scan = Scanning
@@ -215,6 +216,8 @@ video-metrics-rating-positive = Positive
 video-metrics-rating-very-positive = Very positive
 video-metrics-channel = Channel
 video-metrics-every-channel = every channel
+video-metrics-channel-choose = Show the videos of
+video-metrics-channel-chosen = shown now
 video-metrics-filter-shorts = Shorts
 video-metrics-shorts-any = with and without
 video-metrics-shorts-only = only Shorts
@@ -349,7 +352,8 @@ about-video-metrics-term-match = How the words are found: whole, in order, or as
 about-video-metrics-term-field = Whether the words are looked for in this part of a video.
 about-video-metrics-rule-on = Whether this rule counts; off, it adds nothing.
 about-video-metrics-remove-rule = Removes this rule, after asking.
-about-video-metrics-filter-channel = Every channel's videos, or one channel's.
+about-video-metrics-filter-channel = Every channel's videos, or one channel's — chosen from the channels, which take the videos' place until one is chosen.
+about-video-metrics-channel-choice = Shows this channel's videos — or every channel's — and the list of the videos again.
 about-video-metrics-filter-shorts = Shorts and the rest, only Shorts, or no Shorts.
 about-video-metrics-filter-rating = Whatever your rating, or only one rating.
 about-video-metrics-filter-hidden = Hidden videos left out, shown too, or only them.
@@ -558,7 +562,18 @@ player-ranking-empty = No video ranks yet: the scans found none, or every one is
 player-ranking-empty-filtered = No video ranks with Shorts as “{ $shorts }”: the scans found none, or the Shorts row leaves them out.
 player-ranking-aside-empty = Nothing is set aside yet: the bookmark beside a video sets it aside.
 player-ranking-aside-empty-filtered = Nothing set aside with Shorts as “{ $shorts }”: nothing is set aside yet, or the Shorts row leaves out what is.
+player-ranking-empty-filters = No video is on this list with its options as they are: the scans found none, or the options above leave them out.
 player-ranking-layout-grid = Thumbnails
+player-ranking-layout-wide = Wide thumbnails
+# A LIST'S OPTIONS ON THE PLAYER'S PAGE, in words of its own beside the
+# list set aside ("Set aside") and the repeat's "nothing": the ranking keeps
+# its order by score with only the ones set aside, so "only those" says no
+# order.
+player-ranking-set-aside-filter = Set-aside videos
+player-ranking-set-aside-any = set aside or not
+player-ranking-set-aside-only = only those
+player-ranking-set-aside-without = not set aside
+player-ranking-search-none = no words
 player-ranking-added = Added: { $title }
 player-ranking-title = Video title
 player-ranking-channel = Channel

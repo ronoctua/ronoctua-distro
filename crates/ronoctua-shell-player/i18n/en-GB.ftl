@@ -1049,24 +1049,27 @@ about-player-ranking-set-aside = Sets this video aside for later, in the list of
 about-player-ranking-forever = Marks this video never to be deleted when its time is up — its own mark, which holds whatever its channel keeps — or takes the mark off.
 about-player-ranking-hide = Hides this video from the ranking, or shows a hidden one in it again; it stays in the catalogue.
 about-player-ranking-delete = Deletes this video from the catalogue for good, after a question; it never comes back, not even in a scan.
-# AND WHAT THE PAGE ROW OF A LIST DOES, said under the pointer.
-# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
-about-player-ranking-page = { $earlier } { $prior } go back, { $later } { $next } on, { $first } { $last } to the first and the last page. Pressing it goes on to the next one, and from the last back to the first.
+# AND WHAT THE SIZE OF A LIST'S PAGE DOES, said under the pointer.
 about-player-ranking-per-page = How many videos a page of the list shows: pressing it gives the next size, and round again. It holds while the view is open.
+# AND WHAT ITS FILTERS DO, said under the pointer.
+about-player-ranking-filter-channel = Every channel's videos, or one channel's — chosen from the channels, which take the videos' place until one is chosen.
+about-player-ranking-channel-choice = Shows this channel's videos — or every channel's — and the list of the videos again.
+about-player-ranking-filter-set-aside = The videos set aside and the rest, only them, or none of them.
+about-player-ranking-search = Only the videos with these words in their title, description or tags — yours too; with none, every one.
 # THE RANKING'S KEYS.
 cmd-player-ranking-more = This video's own page: play, add, Chrome, Nyxt, download, rate, set aside, keep, hide, delete
 cmd-player-ranking-earlier = The ranking's page before
 cmd-player-ranking-later = The ranking's page after
 cmd-player-ranking-first = The ranking's first page
 cmd-player-ranking-last = The ranking's last page
-cmd-player-ranking-layout = The ranking as a list, or as thumbnails
+cmd-player-ranking-layout = The ranking as a list, as thumbnails, or as wide thumbnails
 # THE RANKING'S KEYS, AS THE HINT LINE SAYS THEM.
 player-ranking-more = more
 player-ranking-earlier = page before
 player-ranking-later = page after
 player-ranking-first = first page
 player-ranking-last = last page
-player-ranking-layout = list or thumbnails
+player-ranking-layout = list, thumbnails or wide
 # THE RANKING'S SHORTS, AND THE QUICK MARKS ON A VIDEO OF IT — the glyphs
 # beside its words, and the keys that press them.
 cmd-player-ranking-shorts = The list with Shorts, without them, or only them

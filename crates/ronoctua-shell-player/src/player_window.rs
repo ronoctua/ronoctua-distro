@@ -404,6 +404,7 @@ fn wired<C: PlayerHost>(
             if let channel::Event::Msg(()) = event {
                 let (p, ui, _) = C::player(d);
                 p.view.settle_in(p.player.as_ref(), ui.columns, &ui.texts);
+                p.owed_top(ui);
                 ui.ask_paint();
             }
         })
@@ -1714,6 +1715,7 @@ impl Player {
         self.view.push(page, None);
         self.view
             .settle_in(self.player.as_ref(), ui.columns, &ui.texts);
+        self.owed_top(ui);
         ui.ask_paint();
     }
 
@@ -2572,13 +2574,20 @@ impl Player {
             .key(press, self.player.as_ref(), ui.columns, &ui.texts);
         let rows = self.rows(ui).len();
         self.follow(ui, rows);
-        // A ROW THE VIEW BROUGHT TO THE TOP — a list's title, its page turned
-        // — goes first AFTER the follow, whose margin would put it a line
-        // back (`View::bring_to_top`), as far as the list's end lets it.
+        self.owed_top(ui);
+        self.apply(ui, errand);
+    }
+
+    /// A ROW THE VIEW BROUGHT TO THE TOP — a list's title, its page turned,
+    /// or the list's count as its page opened — goes first, as far as the
+    /// list's end lets it: AFTER a key's follow, whose margin would put it a
+    /// line back (`View::bring_to_top`), and after a reading that landed off
+    /// the loop.
+    fn owed_top(&mut self, ui: &mut Ui) {
         if let Some(top) = self.view.take_top() {
+            let rows = self.rows(ui).len();
             ui.offset = top.min(rows.saturating_sub(self.room(ui)));
         }
-        self.apply(ui, errand);
     }
 
     /// Where `x` is among the rows' own cells — a field's `at`, in fractions
@@ -2660,8 +2669,10 @@ impl Player {
             .and_then(|id| self.sentence_here(id, &ui.texts))
             .or_else(|| self.whole_at(ui, rows, x, y))
             .or_else(|| {
-                let row = rows.get(self.row_at(ui, x, y)?)?;
-                self.sentence_here(row.target.about()?, &ui.texts)
+                let row = self.row_at(ui, x, y)?;
+                let column = column_at(x).saturating_sub(MARGIN);
+                let about = crate::player_rows::about_under(rows, row, column)?;
+                self.sentence_here(about, &ui.texts)
             })
     }
 
@@ -2696,10 +2707,13 @@ impl Player {
         if !shown {
             return (Vec::new(), None);
         }
+        // THE FOLD AMONG THEM whenever the door shows a picture it can fold
+        // (`View::picture_foldable`) — on every page, and not only "Now"'s.
         crate::player_media::transport(
             Self::transport_panel(ui),
             self.layout.transport,
             self.player.as_ref(),
+            self.view.picture_fold.is_some(),
         )
     }
 
@@ -3747,7 +3761,7 @@ impl Player {
     /// `[` reaches the player, and `⌥[` taught a key that does nothing while
     /// the one that turns the page went unsaid.
     fn sentence_here(&self, id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
-        crate::player::sentence_of(id, texts, self.door == Door::Window)
+        crate::player::sentence_of(id, texts)
     }
 
     /// One frame of the view — the window's whole surface, or a column's
@@ -3986,12 +4000,17 @@ impl Player {
             } else {
                 tokens::color::TEXT_PRIMARY
             };
-            canvas.spans.push(span(
-                glyph_of(id, s, self.stage, self.door).to_string(),
-                *at,
-                *line,
-                colour,
-            ));
+            // THE FOLD SAYS WHAT A PRESS DOES: unfold while it is folded.
+            let glyph = match *id {
+                crate::player_media::FOLD if self.picture_folded => {
+                    tokens::icon::PLAYER_PICTURE_UNFOLD
+                }
+                crate::player_media::FOLD => tokens::icon::PLAYER_PICTURE_FOLD,
+                _ => glyph_of(id, s, self.stage, self.door),
+            };
+            canvas
+                .spans
+                .push(span(glyph.to_string(), *at, *line, colour));
         }
         // THE CLOCK WHERE `transport` PUT IT — between its two seeks, or
         // alone where they do not fit, or not at all: the footer's panel's
@@ -4547,18 +4566,23 @@ mod tests {
             from: MARGIN,
             cells,
         };
-        let small = crate::player_media::buttons(panel(tokens::space::COLUMN_SMALL), 0, Some(&s));
+        let small =
+            crate::player_media::buttons(panel(tokens::space::COLUMN_SMALL), 0, Some(&s), false);
         assert_eq!(small.len(), 11, "{small:?}");
         // ZERO SLACK: the eleventh ends on the last cell, a twelfth is out.
         assert_eq!(
             small.last().map(|b| b.2),
             Some(MARGIN + tokens::space::COLUMN_SMALL)
         );
-        let short =
-            crate::player_media::buttons(panel(tokens::space::COLUMN_SMALL - 1), 0, Some(&s));
+        let short = crate::player_media::buttons(
+            panel(tokens::space::COLUMN_SMALL - 1),
+            0,
+            Some(&s),
+            false,
+        );
         assert_eq!(short.len(), 10, "a button cut at the edge");
         assert_eq!(
-            crate::player_media::buttons(panel(27), 0, Some(&s)).len(),
+            crate::player_media::buttons(panel(27), 0, Some(&s), false).len(),
             9
         );
     }
@@ -4696,25 +4720,6 @@ mod tests {
         let (event, mods) = crate::door::keys::event_of(key);
         crate::column::Tenant::typed(&mut c, &mut ui, &event, mods, &column(Size::Bar));
         assert!(ui.quit, "the column stayed");
-    }
-
-    /// FAILS IF: the ranking's page row, under the pointer in the COLUMN,
-    /// teaches its keys after `LEADER Alt` — `⌥[`, which never reaches a
-    /// column (it gates no key), while the bare `[` that turns the page there
-    /// goes unsaid — or a WINDOW stops teaching them after `LEADER Alt`, the
-    /// only way its keys reach it.
-    #[test]
-    fn each_door_teaches_the_page_keys_as_it_reaches_them() {
-        let page = "player-ranking-page";
-        let glyph = crate::chrome::leader_alt_text("", false);
-        let (c, ui) = a_photographs(Door::Column, State::default());
-        let said = c.sentence_here(page, &ui.texts).expect("a sentence");
-        assert!(said.starts_with('['), "the column's `[` unsaid: {said}");
-        assert!(!said.contains(&glyph), "`LEADER Alt` in a column: {said}");
-        let (w, ui) = a_photographs(Door::Window, State::default());
-        let said = w.sentence_here(page, &ui.texts).expect("a sentence");
-        let reached = crate::chrome::leader_alt_text("[", false);
-        assert!(said.contains(&reached), "`{reached}` untaught: {said}");
     }
 
     /// A window onto a player that answered, with no daemon, no compositor,

@@ -1044,24 +1044,27 @@ about-player-ranking-set-aside = Separa este vídeo para depois, na lista dos v�
 about-player-ranking-forever = Marca este vídeo para nunca ser apagado quando o tempo dele acabar — a marca dele, que vale seja o que for que o canal mantenha — ou tira a marca.
 about-player-ranking-hide = Oculta este vídeo do ranking, ou mostra nele de novo um oculto; ele fica no catálogo.
 about-player-ranking-delete = Apaga este vídeo do catálogo para sempre, depois de uma pergunta; ele não volta, nem numa varredura.
-# AND WHAT THE PAGE ROW OF A LIST DOES, said under the pointer.
-# THE KEYS FIRST, and few words: the footer says it on one line, cut at its end.
-about-player-ranking-page = { $earlier } { $prior } voltam, { $later } { $next } avançam, { $first } { $last } vão à primeira e à última página. Apertá-la vai para a seguinte, e da última de volta para a primeira.
+# AND WHAT THE SIZE OF A LIST'S PAGE DOES, said under the pointer.
 about-player-ranking-per-page = Quantos vídeos uma página da lista mostra: apertá-la dá o próximo tamanho, e recomeça. Vale enquanto a vista está aberta.
+# AND WHAT ITS FILTERS DO, said under the pointer.
+about-player-ranking-filter-channel = Os vídeos de todos os canais, ou de um — escolhido entre os canais, que tomam o lugar dos vídeos até a escolha.
+about-player-ranking-channel-choice = Mostra os vídeos deste canal — ou de todos — e a lista de vídeos de novo.
+about-player-ranking-filter-set-aside = Os vídeos separados e o resto, só eles, ou nenhum deles.
+about-player-ranking-search = Só os vídeos com estas palavras no título, na descrição ou nas etiquetas — as suas também; sem nenhuma, todos.
 # THE RANKING'S KEYS.
 cmd-player-ranking-more = A página deste vídeo: tocar, pôr na fila, Chrome, Nyxt, baixar, avaliar, separar, manter, ocultar, apagar
 cmd-player-ranking-earlier = A página anterior do ranking
 cmd-player-ranking-later = A página seguinte do ranking
 cmd-player-ranking-first = A primeira página do ranking
 cmd-player-ranking-last = A última página do ranking
-cmd-player-ranking-layout = O ranking em lista, ou em miniaturas
+cmd-player-ranking-layout = O ranking em lista, em miniaturas, ou em miniaturas largas
 # THE RANKING'S KEYS, AS THE HINT LINE SAYS THEM.
 player-ranking-more = mais
 player-ranking-earlier = página anterior
 player-ranking-later = página seguinte
 player-ranking-first = primeira página
 player-ranking-last = última página
-player-ranking-layout = lista ou miniaturas
+player-ranking-layout = lista, miniaturas ou largas
 # THE RANKING'S SHORTS, AND THE QUICK MARKS ON A VIDEO OF IT — the glyphs
 # beside its words, and the keys that press them.
 cmd-player-ranking-shorts = A lista com Shorts, sem eles, ou só eles

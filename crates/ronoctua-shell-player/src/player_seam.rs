@@ -559,6 +559,19 @@ pub trait Page: Sync {
         Errand::Nothing
     }
 
+    /// `Esc` on one of its pages: `true` when it took it — something of the
+    /// page's own closed first, a list of choices standing in for its rows —
+    /// and the page stays.
+    fn escaped(
+        &self,
+        view: &mut View,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        false
+    }
+
     /// The door's line was let go: its question with it.
     fn let_go(&self, view: &mut View) {}
 
@@ -845,6 +858,18 @@ impl View {
             Some(page) => page.answered(self, id, said, state, columns, texts),
             None => Errand::Nothing,
         }
+    }
+
+    /// `Esc`, offered to every page first: whether one took it.
+    pub(crate) fn pages_escaped(
+        &mut self,
+        state: Option<&State>,
+        columns: u16,
+        texts: &ronoctua_i18n::Texts,
+    ) -> bool {
+        self.pages()
+            .into_iter()
+            .any(|page| page.escaped(self, state, columns, texts))
     }
 
     /// The door's line was let go: told to every page.

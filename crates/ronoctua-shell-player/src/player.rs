@@ -292,41 +292,10 @@ pub fn keys_said<'a>(
 }
 
 /// WHAT A ROW OR A CONTROL WHOSE SENTENCE IS `id` SAYS UNDER THE POINTER
-/// (`chrome::hint_sentence`) — and THE RANKING'S PAGE ROW with the keys that
-/// turn its pages, as the door it is said in reaches them (`windowed`,
-/// [`keys_said`]): `[`/`]` in the footer and the column, which gate no key,
-/// `⌥[`/`⌥]` in a window, and the page keys in all three.
+/// (`chrome::hint_sentence`), in every door.
 #[must_use]
-pub fn sentence_of(id: &str, texts: &ronoctua_i18n::Texts, windowed: bool) -> Option<String> {
-    if id != "player-ranking-page" {
-        return crate::chrome::hint_sentence(id, texts);
-    }
-    let keys = |id: &str| {
-        keys_said(
-            OF_THE_VIEW.iter().map(|(k, i, _)| (*k, *i)),
-            id,
-            &[LEADER_ALT_KEYS],
-            windowed,
-        )
-    };
-    let [back, on, first, last] = [
-        "player-ranking-earlier",
-        "player-ranking-later",
-        "player-ranking-first",
-        "player-ranking-last",
-    ]
-    .map(keys);
-    let nth = |keys: &[String], n: usize| keys.get(n).cloned().unwrap_or_default();
-    let args = [
-        ("earlier", nth(&back, 0)),
-        ("prior", nth(&back, 1)),
-        ("later", nth(&on, 0)),
-        ("next", nth(&on, 1)),
-        ("first", nth(&first, 0)),
-        ("last", nth(&last, 0)),
-    ];
-    let args: Vec<(&str, &str)> = args.iter().map(|(n, v)| (*n, v.as_str())).collect();
-    Some(texts.t_with(crate::key::ABOUT_PLAYER_RANKING_PAGE, &args))
+pub fn sentence_of(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
+    crate::chrome::hint_sentence(id, texts)
 }
 
 /// THE KEYS WHILE THE PICTURE'S CONTROLS HAVE THE KEYBOARD ([`View::pane`]):
@@ -1181,8 +1150,6 @@ pub enum Target {
     RankedMore(ronoctua_video_metrics::VideoId),
     /// How the ranking is drawn — a ring, and the title's glyph.
     RankingLayout,
-    /// Its page — a ring.
-    RankingPage,
     /// How many videos its page holds — a ring.
     RankingPerPage,
     /// AN ARROW OF ITS PAGES, beside the list's title and at its end: the
@@ -1190,6 +1157,16 @@ pub enum Target {
     RankingTurn(bool),
     /// Its Shorts — with them, without them, only them: a ring.
     RankingShorts,
+    /// ITS CHANNEL: `RET` lists every channel in place of the videos, to
+    /// choose from; the arrows turn it as a ring.
+    RankingChannel,
+    /// A CHANNEL OF THAT LIST — or every channel (`None`): its videos, and
+    /// the list of the videos again.
+    RankingChannelChoice(Option<ronoctua_video_metrics::ChannelId>),
+    /// Its videos set aside or not, only them, or none of them: a ring.
+    RankingSetAside,
+    /// The words its videos are searched by, asked on the door's line.
+    RankingSearch,
     /// A QUICK MARK's glyph beside a video's words — a control a click acts
     /// on at once: the video, and what it marks.
     RankedQuick(
@@ -1215,12 +1192,15 @@ impl Target {
         match self {
             Self::RankedDo(act) => Some(act.about()),
             Self::RankedRating => Some(RankedAct::Rate.about()),
-            Self::RankingPage => Some("player-ranking-page"),
             Self::RankingPerPage => Some("player-ranking-per-page"),
             Self::RankingTurn(false) => Some("player-ranking-earlier"),
             Self::RankingTurn(true) => Some("player-ranking-later"),
             Self::RankingLayout => Some(LAYOUT),
             Self::RankingShorts => Some("player-ranking-shorts"),
+            Self::RankingChannel => Some("player-ranking-filter-channel"),
+            Self::RankingChannelChoice(_) => Some("player-ranking-channel-choice"),
+            Self::RankingSetAside => Some("player-ranking-filter-set-aside"),
+            Self::RankingSearch => Some("player-ranking-search"),
             _ => None,
         }
     }
@@ -1298,9 +1278,10 @@ impl Target {
                 // THE RANKING'S RINGS (`ronoctua_shell_video_metrics::player_ranking`), and
                 // a video's rating on its own page.
                 | Self::RankingLayout
-                | Self::RankingPage
                 | Self::RankingPerPage
                 | Self::RankingShorts
+                | Self::RankingChannel
+                | Self::RankingSetAside
                 | Self::RankedRating
         )
     }
@@ -3549,10 +3530,11 @@ impl View {
         }
     }
 
-    /// The column a click at pixel `x` on row `n` takes: on a GRID row the
-    /// first column of the cell under `x` — `None` where the hover lights
-    /// none — and elsewhere the column under `x`, the row's left margin its
-    /// first.
+    /// The column a click at pixel `x` on row `n` takes: a CONTROL drawn
+    /// under `x` on that line — a wide tile's glyph beside its picture —
+    /// where it is; else on a GRID row the first column of the cell under
+    /// `x` — `None` where the hover lights none — and elsewhere the column
+    /// under `x`, the row's left margin its first.
     fn column_px(
         &self,
         n: usize,
@@ -3560,6 +3542,11 @@ impl View {
         across: crate::chrome::Across,
         rows: &[Row],
     ) -> Option<u16> {
+        if let Some(column) = across.column(x)
+            && crate::player_rows::control_on(rows, n, column)
+        {
+            return Some(column);
+        }
         let cells = crate::player_rows::grid_cells(rows, Row::owner(rows, n));
         if cells.is_empty() || self.editing.is_some() {
             return Some(across.column(x).unwrap_or(0));
@@ -3642,11 +3629,18 @@ impl View {
             return true;
         }
         // THE ROW'S OWN CELLS are its first line's: a control among them is
-        // taken there, and under it, on the rest of the row, the click is the
-        // row's (`player_rows::controls_under`).
-        let cell = row.cells.iter().position(|c| {
-            (line == n || !c.control) && crate::chrome::in_cell(column, c.from, c.width)
-        });
+        // taken there — before the entry it stands in, a wide tile's glyphs
+        // beside its picture — and under it, on the rest of the row, the
+        // click is the row's (`player_rows::controls_under`).
+        let cell = row
+            .cells
+            .iter()
+            .position(|c| c.control && line == n && crate::chrome::in_cell(column, c.from, c.width))
+            .or_else(|| {
+                row.cells
+                    .iter()
+                    .position(|c| !c.control && crate::chrome::in_cell(column, c.from, c.width))
+            });
         // A CONTROL ON A TITLE'S LINE acts on the click: a title is not a
         // place the cursor stops, so there is no first click to spend on it.
         if row.heading {
@@ -4062,7 +4056,7 @@ impl View {
                 top.cursor = at;
                 top.moved = true;
                 top.on_title = rows[at].heading;
-                top.cell = top.cell.min(rows[at].cells.len().saturating_sub(1));
+                top.cell = top.cell.min(rows[at].entries().saturating_sub(1));
                 return;
             }
         }
@@ -4071,20 +4065,26 @@ impl View {
     /// Across a grid: `←`/`→` move between its columns, and past the foot
     /// of one column `↓` goes on at the head of the next — the order the
     /// names are read in, which is down each column (`Builder::grid`).
+    /// PAIRS SIDE BY SIDE are walked the same way down their two columns,
+    /// and `←`/`→` turn the pair's value instead ([`View::down_the_pairs`]).
     fn across(&mut self, rows: &[Row], press: Press) -> bool {
+        if rows.get(self.cursor()).is_some_and(Row::pairs) {
+            return self.down_the_pairs(rows, press);
+        }
         let top = self.top_mut();
         let Some(row) = rows.get(top.cursor) else {
             return false;
         };
-        if row.cells.len() < 2 && !matches!(press, Press::Up | Press::Down) {
+        if row.entries() < 2 && !matches!(press, Press::Up | Press::Down) {
             return false;
         }
         // A GRID IS ITS ENTRIES: a row's controls — a triangle, a glyph at
-        // its end — make no row one.
+        // its end — make no row one; nor do pairs side by side, which are
+        // walked on their own.
         let grid: Vec<usize> = rows
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.cells.iter().any(|c| !c.control) && !r.heading)
+            .filter(|(_, r)| r.cells.iter().any(|c| !c.control) && !r.heading && !r.pairs())
             .map(|(i, _)| i)
             .collect();
         let (Some(&first), Some(&last)) = (grid.first(), grid.last()) else {
@@ -4095,8 +4095,8 @@ impl View {
         }
         match press {
             Press::Less if top.cell > 0 => top.cell -= 1,
-            Press::More if top.cell + 1 < row.cells.len() => top.cell += 1,
-            Press::Down if top.cursor == last && top.cell + 1 < rows[first].cells.len() => {
+            Press::More if top.cell + 1 < row.entries() => top.cell += 1,
+            Press::Down if top.cursor == last && top.cell + 1 < rows[first].entries() => {
                 top.cursor = first;
                 top.cell += 1;
             }
@@ -4109,8 +4109,39 @@ impl View {
                     .iter()
                     .rev()
                     .copied()
-                    .find(|&i| rows[i].cells.len() > cell)
+                    .find(|&i| rows[i].entries() > cell)
                     .unwrap_or(first);
+            }
+            _ => return false,
+        }
+        top.moved = true;
+        true
+    }
+
+    /// DOWN THE PAIRS SIDE BY SIDE (`Builder::pairs_across`) — the run of
+    /// them the cursor is on: `↓` at the foot of the left column goes on at
+    /// the head of the right, `↑` at the head of the right back to the foot
+    /// of the left; every other step is the walk's, which keeps the column.
+    /// `←`/`→` are the pair's: they turn its value, as on a pair alone.
+    fn down_the_pairs(&mut self, rows: &[Row], press: Press) -> bool {
+        let top = self.top_mut();
+        let at = top.cursor;
+        let mut first = at;
+        while first > 0 && rows[first - 1].pairs() {
+            first -= 1;
+        }
+        let mut last = at;
+        while last + 1 < rows.len() && rows[last + 1].pairs() {
+            last += 1;
+        }
+        match press {
+            Press::Down if at == last && top.cell == 0 && rows[first].entries() > 1 => {
+                top.cursor = first;
+                top.cell = 1;
+            }
+            Press::Up if at == first && top.cell == 1 => {
+                top.cell = 0;
+                top.cursor = last;
             }
             _ => return false,
         }
@@ -4267,6 +4298,11 @@ impl View {
             // marks narrowed them — and then goes back one page.
             Press::Escape if self.top().only.is_some() => {
                 self.top_mut().only = None;
+                return Errand::Nothing;
+            }
+            // `Esc` CLOSES WHAT A PAGE STANDS IN FOR ITS ROWS first — a
+            // list's channels to choose from (`player_seam::Page::escaped`).
+            Press::Escape if self.pages_escaped(state, columns, texts) => {
                 return Errand::Nothing;
             }
             // `Esc` GOES BACK ONE PAGE, the cursor on the row that opened
@@ -9719,8 +9755,7 @@ mod tests {
     /// FAILS IF: after `LEADER Alt` in the window the globe stops being
     /// `9` nearer and `8` further, or `[` and `]` stop being the ranking's
     /// pages — the owner's quick keys (2026-11-10), which took the globe's
-    /// old keys; or the ranking's page row stops teaching them as each door
-    /// reaches them, the page keys alike in both.
+    /// old keys.
     #[test]
     fn the_globe_and_the_pages_after_leader_alt() {
         let rows: Vec<(&str, &str)> = OF_THE_VIEW.iter().map(|r| (r.0, r.1)).collect();
@@ -9735,26 +9770,6 @@ mod tests {
         assert_eq!(key_of("player-further"), Some("8"));
         assert_eq!(key_of("player-ranking-earlier"), Some("["));
         assert_eq!(key_of("player-ranking-later"), Some("]"));
-        let t = ronoctua_i18n::Texts::fresh("pt-BR").expect("pt-BR");
-        let footer = sentence_of("player-ranking-page", &t, false).expect("a sentence");
-        let window = sentence_of("player-ranking-page", &t, true).expect("a sentence");
-        for k in ["[", "]", "<prior>", "<next>", "<home>", "<end>"] {
-            assert!(footer.contains(k), "`{k}` untaught in the footer: {footer}");
-        }
-        // THE KEYS LEAD: the footer's one line is cut at its end, and the
-        // clause about pressing the row comes after them.
-        assert!(footer.starts_with('['), "{footer}");
-        for k in ["[", "]"] {
-            let reached = crate::chrome::leader_alt_text(k, false);
-            assert!(
-                window.contains(&reached),
-                "`{reached}` untaught in a window: {window}"
-            );
-        }
-        assert!(
-            window.contains("<prior>") && !window.contains('{'),
-            "{window}"
-        );
     }
 
     #[test]

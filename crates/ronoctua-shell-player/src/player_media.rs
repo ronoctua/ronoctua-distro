@@ -179,12 +179,21 @@ pub type Placed = (u16, u16, u16, &'static str);
 /// The transport's buttons on `line` of `panel`: the window's, the ones the
 /// state shows, three cells apart from the panel's first column — a glyph
 /// and its air, both answering the click — and only the ones whole inside it.
+/// With `fold`, THE FOLD among them, after the picture's stages
+/// ([`FOLD_AFTER`]): the window's transport carries it whenever it has a
+/// picture to fold (the owner, 2026-11-11: "junto aos controles do próprio
+/// player"); the footer's panel has its own at the end of its time bar
+/// ([`drawn`]).
 #[must_use]
-pub fn buttons(panel: Panel, line: u16, state: Option<&State>) -> Vec<Placed> {
+pub fn buttons(panel: Panel, line: u16, state: Option<&State>, fold: bool) -> Vec<Placed> {
     let end = panel.from + panel.cells;
     let mut at = panel.from;
     let mut out = Vec::new();
-    for id in BUTTONS.into_iter().filter(|id| shown(id, state)) {
+    let ids = BUTTONS
+        .into_iter()
+        .filter(|id| shown(id, state))
+        .flat_map(|id| std::iter::once(id).chain((fold && id == FOLD_AFTER).then_some(FOLD)));
+    for id in ids {
         if at + 2 > end {
             break;
         }
@@ -286,8 +295,9 @@ pub fn transport(
     panel: Panel,
     line: u16,
     state: Option<&State>,
+    fold: bool,
 ) -> (Vec<Placed>, Option<(u16, u16)>) {
-    let mut placed = buttons(panel, line, state);
+    let mut placed = buttons(panel, line, state, fold);
     let Some(cells) = state
         .and_then(clock_text)
         .map(|c| ronoctua_protocol::cells(&c))
@@ -470,6 +480,10 @@ pub struct Drawn {
 /// ([`Drawn::fold`]): the command `z` runs, whose sentence it says.
 pub const FOLD: &str = "player-picture-fold";
 
+/// The button the window's fold follows in its transport ([`buttons`]): the
+/// last of the picture's stages — folding it away is one more of them.
+pub const FOLD_AFTER: &str = "player-maximize";
+
 /// The panel laid out in a region whose first line is `first` and which is
 /// `lines` tall: [`shape`]'s lines, the [`buttons`] on the transport's and the
 /// [`Track`] on the bar's — and, `fold` given, THE FOLD at the end of the
@@ -503,7 +517,7 @@ pub fn drawn(
     };
     let (mut buttons, clock) = s
         .transport
-        .map(|line| self::transport(transport, line, state))
+        .map(|line| self::transport(transport, line, state, false))
         .unwrap_or_default();
     let end = panel.from + panel.cells;
     let (track, fold) = match (s.bar, fold) {
@@ -813,7 +827,7 @@ mod tests {
             cells: tokens::space::COLUMN_SMALL,
         };
         let s = playing(vec![audio(1), audio(2)]);
-        let placed = buttons(small, 9, Some(&s));
+        let placed = buttons(small, 9, Some(&s), false);
         // ELEVEN IN THE SMALL STEP, with a choice: the room is exact.
         assert_eq!(placed.len(), BUTTONS.len());
         assert!(placed.iter().any(|(_, _, _, id)| *id == "player-tracks"));
@@ -827,12 +841,12 @@ mod tests {
             assert_eq!(button_at(&placed, line + 1, *a), None, "another line");
         }
         // NO CHOICE, NO GLYPH — and the ones after it close up.
-        let plain = buttons(small, 9, Some(&playing(vec![audio(1)])));
+        let plain = buttons(small, 9, Some(&playing(vec![audio(1)])), false);
         assert_eq!(plain.len(), BUTTONS.len() - 1);
         assert!(!plain.iter().any(|(_, _, _, id)| *id == "player-tracks"));
         // A PANEL NARROWER THAN THE TRANSPORT keeps the ones that are whole.
         let narrow = Panel { from: 0, cells: 10 };
-        let few = buttons(narrow, 0, Some(&s));
+        let few = buttons(narrow, 0, Some(&s), false);
         assert_eq!(few.len(), 3);
         assert!(few.iter().all(|(_, _, b, _)| *b <= 10));
         // THE CLOCK after the last button, or not at all.
@@ -840,11 +854,49 @@ mod tests {
             from: 0,
             cells: tokens::space::COLUMN_MEDIUM,
         };
-        let placed = buttons(medium, 0, Some(&s));
+        let placed = buttons(medium, 0, Some(&s), false);
         let at = clock_at(medium, &placed, 11).expect("room for the clock");
         assert!(at > placed.last().map_or(0, |p| p.2));
         assert_eq!(at + 11, medium.cells);
-        assert_eq!(clock_at(small, &buttons(small, 0, Some(&s)), 5), None);
+        assert_eq!(
+            clock_at(small, &buttons(small, 0, Some(&s), false), 5),
+            None
+        );
+    }
+
+    /// FAILS IF: a transport that carries THE FOLD — the window's, whenever
+    /// it has a picture to fold (the owner, 2026-11-11) — stops placing it
+    /// right after the picture's stages, the rest after it; or one that
+    /// does not — the footer's panel, whose fold is at the end of its time
+    /// bar — places it.
+    #[test]
+    fn the_window_s_transport_carries_the_fold() {
+        let large = Panel {
+            from: 0,
+            cells: tokens::space::COLUMN_LARGE,
+        };
+        let s = playing(vec![audio(1), audio(2)]);
+        let ids = |fold: bool| -> Vec<&str> {
+            buttons(large, 0, Some(&s), fold)
+                .into_iter()
+                .map(|(_, _, _, id)| id)
+                .collect()
+        };
+        let with = ids(true);
+        let after = with
+            .iter()
+            .position(|id| *id == FOLD_AFTER)
+            .expect("the stages");
+        assert_eq!(with.get(after + 1), Some(&FOLD));
+        assert_eq!(with.len(), BUTTONS.len() + 1);
+        assert_eq!(with.last(), Some(&"player-swap"));
+        assert!(!ids(false).contains(&FOLD));
+        let (drawn, _) = transport(large, 0, Some(&s), true);
+        assert!(drawn.iter().any(|(_, _, _, id)| *id == FOLD));
+        assert_eq!(
+            crate::player_transport::button_press(FOLD),
+            Some(crate::player::Press::FoldPicture)
+        );
     }
 
     /// FAILS IF: the seeks stop standing around the clock at the transport's
@@ -861,14 +913,14 @@ mod tests {
         let panel = |cells| Panel { from: 0, cells };
         // 32, the small step: eleven buttons fill it, and neither fits.
         let small = panel(tokens::space::COLUMN_SMALL);
-        let placed = buttons(small, 3, Some(&s));
+        let placed = buttons(small, 3, Some(&s), false);
         assert_eq!(clock_group(small, 3, &placed, cells), None);
-        let (all, at) = transport(small, 3, Some(&s));
+        let (all, at) = transport(small, 3, Some(&s), false);
         assert_eq!(all, placed, "no seek in the small step");
         assert_eq!(at, None, "no clock in the small step");
         // 72, the large: the three, flush right, and nothing overlaps.
         let large = panel(tokens::space::COLUMN_LARGE);
-        let placed = buttons(large, 3, Some(&s));
+        let placed = buttons(large, 3, Some(&s), false);
         let g = clock_group(large, 3, &placed, cells).expect("room for the three");
         assert_eq!(g.back.3, "player-rewind");
         assert_eq!(g.ahead.3, "player-forward");
@@ -881,7 +933,7 @@ mod tests {
         assert_eq!(g.back.2, g.clock_from, "the back's air is before the clock");
         let last = placed.last().expect("buttons").2;
         assert!(g.back.1 > last, "the back seek overlaps the buttons");
-        let (all, at) = transport(large, 3, Some(&s));
+        let (all, at) = transport(large, 3, Some(&s), false);
         assert_eq!(at, Some((3, g.clock_from)));
         assert_eq!(all.len(), placed.len() + 2);
         // PAINT, CLICK AND HOVER READ THE SAME BOXES: every cell of a seek
@@ -900,18 +952,18 @@ mod tests {
         // 48, the medium: with the media's glyph the three do not fit, and
         // the clock alone does — as it always did; without it, the three.
         let medium = panel(tokens::space::COLUMN_MEDIUM);
-        let placed = buttons(medium, 3, Some(&s));
+        let placed = buttons(medium, 3, Some(&s), false);
         assert_eq!(clock_group(medium, 3, &placed, cells), None);
-        let (all, at) = transport(medium, 3, Some(&s));
+        let (all, at) = transport(medium, 3, Some(&s), false);
         assert_eq!(all, placed);
         assert_eq!(at, clock_at(medium, &placed, cells).map(|c| (3, c)));
         assert!(at.is_some(), "the clock alone fits the medium step");
         let plain = playing(vec![audio(1)]);
-        let (all, at) = transport(medium, 3, Some(&plain));
+        let (all, at) = transport(medium, 3, Some(&plain), false);
         assert!(all.iter().any(|p| p.3 == "player-forward"));
         assert!(at.is_some());
         // NOTHING LOADED: no clock, no seek.
-        let (all, at) = transport(large, 3, Some(&crate::player::fixture::idle()));
+        let (all, at) = transport(large, 3, Some(&crate::player::fixture::idle()), false);
         assert!(at.is_none() && !all.iter().any(|p| p.3 == "player-rewind"));
     }
 

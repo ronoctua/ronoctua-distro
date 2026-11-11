@@ -614,9 +614,9 @@ pub enum Layout {
     /// The grid, each thumbnail saying its channel under its title.
     GridWithChannel,
     /// WIDE THUMBNAILS (the owner, 2026-11-11): a tile as wide as two of the
-    /// grid's, its picture the grid's, what it scores, its age and its marks
-    /// beside the picture, and under it the title on two lines of the whole
-    /// tile and the channel on one — a title read nearly whole.
+    /// grid's, its picture the grid's, what it scores, its age, its marks and
+    /// its channel beside the picture, and under it the title on two lines
+    /// of the whole tile — a title read nearly whole.
     Wide,
 }
 
@@ -655,7 +655,8 @@ impl Layout {
         matches!(self, Self::Grid | Self::GridWithChannel | Self::Wide)
     }
 
-    /// Whether a grid's thumbnail says its channel under its title.
+    /// Whether a grid's thumbnail says its channel — under its title, or
+    /// beside its picture on a wide one.
     #[must_use]
     pub const fn channel(self) -> bool {
         matches!(self, Self::GridWithChannel | Self::Wide)
@@ -1273,8 +1274,12 @@ pub enum Target {
     RemoveRule(RuleId),
     /// A rating's weight, as it is now.
     Weight(Rating),
-    /// The list's channel.
+    /// The list's channel: `RET` lists every channel in place of the
+    /// videos to choose from, the arrows turn it as a ring.
     FilterChannel,
+    /// A CHANNEL OF THAT LIST — or every channel (`None`): its videos, and
+    /// the list of the videos again.
+    ChannelChoice(Option<ChannelId>),
     /// The list's Shorts.
     FilterShorts,
     /// The list's rating.
@@ -1660,13 +1665,13 @@ pub fn grid_of(room: u16, layout: Layout) -> ronoctua_design::grid::Grid {
 /// for what it scores and the arrows of its rating, one for when it was
 /// published and its marks, one of air. The score and the age are a line
 /// EACH: each carries its glyphs, and a tile never cuts a score for them.
-/// A WIDE TILE says the score and the age beside its picture, so its
-/// shelf is the picture's lines, the title's, the channel's and the air.
+/// A WIDE TILE says the score, the age and the channel beside its picture,
+/// so its shelf is the picture's lines, the title's and the air.
 #[must_use]
 pub const fn shelf_lines(layout: Layout) -> u16 {
     let under = tokens::space::VIDEOMETRICS_THUMBLINES + tokens::space::VIDEOMETRICS_TITLELINES;
     match layout {
-        Layout::Wide => under + 2,
+        Layout::Wide => under + 1,
         Layout::List | Layout::Strip | Layout::Grid | Layout::GridWithChannel => {
             under + layout.channel() as u16 + 3
         }
@@ -1691,6 +1696,10 @@ const _: () = assert!(
 const _: () = assert!(
     crate::paging::PER_PAGES[crate::paging::PER_PAGES.len() - 1] <= PICTURES_MOST,
     "a page of thumbnails is a page of the list: all of it must be drawable, at its largest"
+);
+const _: () = assert!(
+    tokens::space::VIDEOMETRICS_THUMBLINES >= 3,
+    "a wide tile says its score, its age and its channel beside its picture, a line each"
 );
 
 /// The texture a thumbnail goes up under: its file, the size it was decoded
@@ -1727,6 +1736,11 @@ pub struct View {
     left_at: HashMap<Page, (String, usize)>,
     /// What the list shows.
     filter: Filter,
+    /// THE CHANNELS TO CHOOSE FROM stand in place of the videos — `RET` on
+    /// the Channel row (the owner, 2026-11-11: "deverá mostrar no lugar da
+    /// listagem de vídeos … o nome de todos os canais"), until one is
+    /// chosen or `Esc`.
+    choosing_channel: bool,
     /// How far back the list reaches.
     since: Since,
     /// Which page of the list.
@@ -2830,6 +2844,13 @@ impl View {
 
     /// One page back — the question first, and the home page closes.
     fn back(&mut self) -> Errand {
+        // THE CHANNELS TO CHOOSE FROM go first, and the videos are back as
+        // they were.
+        if self.choosing_channel {
+            self.choosing_channel = false;
+            self.at = CHANNEL_ROW.to_owned();
+            return Errand::Nothing;
+        }
         if self.trail.len() <= 1 {
             return Errand::Close;
         }
@@ -2848,8 +2869,10 @@ impl View {
         if let Some(page) = self.trail.pop() {
             self.left_at.remove(&page);
         }
-        // THE TITLE HELD IS THE PAGE'S, and goes with it.
+        // THE TITLE HELD IS THE PAGE'S, and goes with it — and so do the
+        // channels to choose from.
         self.title_held = false;
+        self.choosing_channel = false;
         let here = self.page().clone();
         (self.at, self.last) = self.left_at.remove(&here).unwrap_or_default();
     }
@@ -2862,6 +2885,7 @@ impl View {
         self.left_at
             .insert(self.page().clone(), (self.at.clone(), self.last));
         self.title_held = false;
+        self.choosing_channel = false;
         self.trail.push(page);
         self.at.clear();
         self.last = 0;
@@ -2948,6 +2972,21 @@ impl View {
             Target::AddTerm(_) => self.ask(Ask::Words, None, Some(target.clone())),
             Target::FilterText => {
                 self.ask(Ask::Search, self.filter.text.clone(), Some(target.clone()))
+            }
+            // THE CHANNELS TO CHOOSE FROM, in place of the videos, the cursor
+            // on the one shown now.
+            Target::FilterChannel => {
+                self.choosing_channel = true;
+                self.at = channel_choice_spot(self.filter.channel.as_ref());
+                Errand::Nothing
+            }
+            // ONE CHOSEN: its videos, from their first page, and the cursor
+            // back on the row that listed the channels.
+            Target::ChannelChoice(id) => {
+                self.filter.channel.clone_from(id);
+                self.choosing_channel = false;
+                self.at = CHANNEL_ROW.to_owned();
+                self.refiltered()
             }
             Target::SecondTags(_, now) => self.ask(
                 Ask::SecondTags,
@@ -4133,7 +4172,7 @@ impl View {
             .map_or(key::VIDEO_METRICS_RATING_ANY, words::rating_key);
         items.extend([
             setting(
-                "filter-channel",
+                CHANNEL_ROW,
                 texts.t(key::VIDEO_METRICS_CHANNEL),
                 channel,
                 Target::FilterChannel,
@@ -4184,6 +4223,12 @@ impl View {
                 Target::Layout,
             ),
         ]);
+        // THE CHANNELS TO CHOOSE FROM, in place of the list and its pages,
+        // while the Channel row asked for them.
+        if self.choosing_channel {
+            channel_choices(items, r, self.filter.channel.as_ref(), texts);
+            return;
+        }
         // THE FILTER ASKED, and no other: a reading of the filter before is
         // not this list, and says "reading" until this one arrives. ANOTHER
         // PAGE OF IT, or another size, is: the page still drawn stays drawn
@@ -4507,6 +4552,7 @@ const fn about_of(target: &Target) -> Option<&'static str> {
         Target::On(_) => key::ABOUT_VIDEO_METRICS_RULE_ON,
         Target::RemoveRule(_) => key::ABOUT_VIDEO_METRICS_REMOVE_RULE,
         Target::FilterChannel => key::ABOUT_VIDEO_METRICS_FILTER_CHANNEL,
+        Target::ChannelChoice(_) => key::ABOUT_VIDEO_METRICS_CHANNEL_CHOICE,
         Target::FilterShorts => key::ABOUT_VIDEO_METRICS_FILTER_SHORTS,
         Target::FilterRating => key::ABOUT_VIDEO_METRICS_FILTER_RATING,
         Target::FilterHidden => key::ABOUT_VIDEO_METRICS_FILTER_HIDDEN,
@@ -4617,7 +4663,11 @@ const fn does_of(target: &Target) -> Option<&'static str> {
         | Target::Staged(..)
         | Target::Takeout
         | Target::PickImport
-        | Target::PickExport => key::VIDEO_METRICS_ACT_OPENS,
+        | Target::PickExport
+        // THE CHANNEL'S ROW opens the channels to choose from; the arrows
+        // still turn it as a ring.
+        | Target::FilterChannel => key::VIDEO_METRICS_ACT_OPENS,
+        Target::ChannelChoice(_) => key::VIDEO_METRICS_ACT_TAKES,
         Target::Scan
         | Target::Player(_)
         | Target::Kiosk(_)
@@ -4668,7 +4718,6 @@ const fn does_of(target: &Target) -> Option<&'static str> {
         Target::ChannelShorts(..)
         | Target::Match(_)
         | Target::Rating(..)
-        | Target::FilterChannel
         | Target::FilterShorts
         | Target::FilterRating
         | Target::FilterHidden
@@ -5202,6 +5251,53 @@ fn fact(spot: &str, label: String, value: String) -> Item {
         controls: Vec::new(),
         default: None,
     })
+}
+
+/// THE CHANNELS TO CHOOSE FROM, where the list of videos was: every channel
+/// first, then each by its name, A to Z, the one shown now saying so — a
+/// row each, which `RET` and the second click take.
+fn channel_choices(
+    items: &mut Vec<Item>,
+    r: &Readings,
+    now: Option<&ChannelId>,
+    texts: &ronoctua_i18n::Texts,
+) {
+    items.push(Item::Heading(texts.t(key::VIDEO_METRICS_CHANNEL_CHOOSE)));
+    let mut channels: Vec<&Channel> = r.channels.iter().collect();
+    channels.sort_by_cached_key(|c| c.title.to_lowercase());
+    let shown = |id: Option<&ChannelId>| {
+        if id == now {
+            texts.t(key::VIDEO_METRICS_CHANNEL_CHOSEN)
+        } else {
+            String::new()
+        }
+    };
+    items.push(setting(
+        &channel_choice_spot(None),
+        texts.t(key::VIDEO_METRICS_EVERY_CHANNEL),
+        shown(None),
+        Target::ChannelChoice(None),
+    ));
+    for c in channels {
+        items.push(setting(
+            &channel_choice_spot(Some(&c.id)),
+            c.title.clone(),
+            shown(Some(&c.id)),
+            Target::ChannelChoice(Some(c.id.clone())),
+        ));
+    }
+}
+
+/// The Channel row's spot, where the cursor comes back to from the
+/// channels to choose from.
+const CHANNEL_ROW: &str = "filter-channel";
+
+/// The spot of a channel to choose from — or of every channel.
+fn channel_choice_spot(id: Option<&ChannelId>) -> String {
+    id.map_or_else(
+        || "channel-choice".to_owned(),
+        |id| format!("channel-choice:{}", id.0),
+    )
 }
 
 /// A row that acts.
@@ -7240,10 +7336,10 @@ fn named(row: &mut Row, whole: &str) {
 /// One shelf of the grid: the pictures' lines, the titles' two, the
 /// channels' when the layout says so, the line that says what each scores
 /// with the arrows of its rating, the one that says when with its marks, and
-/// a line of air. A WIDE TILE ([`Layout::Wide`]) says its score and its age
-/// beside its picture, on the picture's first two lines and a gap after it,
-/// as wide as a thumbnail — and its title and its channel under the
-/// picture, the whole tile wide. Each tile's cell keeps [`TILE_AIR`] on both
+/// a line of air. A WIDE TILE ([`Layout::Wide`]) says its score, its age and
+/// its channel beside its picture, on the picture's first three lines and a
+/// gap after it, as wide as a thumbnail — and its title under the picture,
+/// the whole tile wide. Each tile's cell keeps [`TILE_AIR`] on both
 /// sides of it, so the hover that lights the cell has the same air on both
 /// sides of the tile. The FIRST line carries the cells a click takes — the
 /// box the hover lights — and every line after it continues it: a click on
@@ -7271,11 +7367,11 @@ fn shelf(
         .filter_map(|(i, t)| grid.at(i).map(|(_, column)| (left + column, t)))
         .collect();
     let total = shelf_lines(layout);
-    // THE LINES OF ITS WORDS: the title's under the picture, and its channel
-    // when the layout says it; the score with the arrows of its rating and
-    // the age with its marks — under them on a tile of the grid, the tile's
-    // width; beside the picture on a wide one, from `facts` cells on.
-    let channel_line = layout.channel().then_some(lines + title_lines);
+    // THE LINES OF ITS WORDS: the title's under the picture; the score with
+    // the arrows of its rating, the age with its marks and the channel when
+    // the layout says it — under the title on a tile of the grid, the
+    // tile's width, the channel first; beside the picture on a wide one,
+    // from `facts` cells on, the channel last.
     let (score_line, facts) = match layout {
         Layout::Wide => (0, thumb + ronoctua_design::GAP),
         Layout::List | Layout::Strip | Layout::Grid | Layout::GridWithChannel => {
@@ -7284,6 +7380,10 @@ fn shelf(
     };
     let facts_cells = width - facts;
     let age_line = score_line + 1;
+    let channel_line = match layout {
+        Layout::Wide => Some(age_line + 1),
+        _ => layout.channel().then_some(lines + title_lines),
+    };
     for line in 0..total {
         let mut row = plain(Vec::new(), false, spot("shelf"));
         row.continues = line > 0;
@@ -7327,16 +7427,16 @@ fn shelf(
                     named(&mut row, &t.title);
                 }
             }
+            let facts_at = from + facts;
             if channel_line == Some(line) {
                 row.fields.push(piece(
-                    from,
+                    facts_at,
                     t.channel.clone(),
                     Kind::ListedFact.tones(focused).1,
-                    width,
+                    facts_cells,
                 ));
                 named(&mut row, &t.channel);
             }
-            let facts_at = from + facts;
             if line == score_line {
                 // THE SCORE, never cut for a glyph — and the arrows of its
                 // rating a cell after it, where they fit whole.
@@ -10287,6 +10387,79 @@ pub(crate) mod tests {
         );
     }
 
+    /// FAILS IF: `RET` on the Channel row stops listing the channels — every
+    /// channel first, then each by its name — IN PLACE OF the videos and
+    /// their pages, the cursor on the one shown now (the owner, 2026-11-11);
+    /// or a channel chosen does not bring its videos back from their first
+    /// page, `Esc` does not close the choice first and change nothing, or
+    /// the arrows no longer turn the row as a ring.
+    #[test]
+    fn the_channel_row_lists_the_channels_in_place_of_the_videos() {
+        let t = texts("en-GB");
+        let r = readings();
+        let (mut v, _) = View::fresh(Page::Videos);
+        v.page = 2;
+        onto(&mut v, &r, CHANNEL_ROW);
+        assert_eq!(press(&mut v, &r, Press::Enter), Errand::Nothing);
+        let rows = v.rows(&r, COLUMNS, &t);
+        // EVERY CHANNEL FIRST, then each by its name, A to Z; no video, no
+        // page, and the cursor on the one shown now.
+        let choices: Vec<&str> = rows
+            .iter()
+            .filter(|x| matches!(x.target, Target::ChannelChoice(_)))
+            .map(|x| x.fields[0].text.as_str())
+            .collect();
+        assert_eq!(choices, ["every channel", "Channel 1", "Channel 2"]);
+        assert!(
+            !rows
+                .iter()
+                .any(|x| matches!(x.target, Target::Video(_) | Target::PageOf)
+                    || x.cells.iter().any(|c| matches!(c.target, Target::Video(_)))),
+            "the videos stay drawn"
+        );
+        assert_eq!(v.at, channel_choice_spot(None));
+        assert!(
+            rows[row_of(&rows, &channel_choice_spot(None))]
+                .fields
+                .iter()
+                .any(|f| f.text == t.t(key::VIDEO_METRICS_CHANNEL_CHOSEN)),
+            "the channel shown now does not say so"
+        );
+        // ONE CHOSEN: its videos from their first page, the list back, the
+        // cursor on the Channel row.
+        let second = channel(2).id;
+        onto(&mut v, &r, &channel_choice_spot(Some(&second)));
+        assert!(matches!(press(&mut v, &r, Press::Enter), Errand::Look(_)));
+        assert_eq!(
+            (v.filter.channel.clone(), v.page, v.choosing_channel),
+            (Some(second.clone()), 0, false)
+        );
+        assert_eq!(v.at, CHANNEL_ROW);
+        // `Esc` CLOSES THE CHOICE first, and changes nothing.
+        press(&mut v, &r, Press::Enter);
+        assert!(v.choosing_channel);
+        assert_eq!(v.at, channel_choice_spot(Some(&second)));
+        assert_eq!(press(&mut v, &r, Press::Escape), Errand::Nothing);
+        assert_eq!(
+            (
+                v.filter.channel.clone(),
+                v.choosing_channel,
+                v.page().clone()
+            ),
+            (Some(second), false, Page::Videos)
+        );
+        // THE ARROWS STILL TURN IT as a ring; and the row says what `RET`
+        // does now.
+        onto(&mut v, &r, CHANNEL_ROW);
+        press(&mut v, &r, Press::More);
+        assert_eq!(v.filter.channel, None);
+        assert!(!v.choosing_channel);
+        assert_eq!(
+            does_of(&Target::FilterChannel),
+            Some(key::VIDEO_METRICS_ACT_OPENS)
+        );
+    }
+
     /// FAILS IF: the set-aside videos are not a filter of the list — any,
     /// only them with the last set aside first, none of them — the list by
     /// score when they are not only them, the home page's way to them does
@@ -10701,11 +10874,45 @@ pub(crate) mod tests {
         assert_eq!(cells[0].width, tile_cells(Layout::Grid) + 2 * TILE_AIR);
         assert_eq!(lines, usize::from(shelf_lines(Layout::GridWithChannel)));
         for columns in [narrow + 1, 120, 200] {
-            let (two, _) = shelf_of(Layout::Wide, columns);
+            let (two, lines) = shelf_of(Layout::Wide, columns);
             let (four, _) = shelf_of(Layout::Grid, columns);
             assert_eq!(two[0].width, wide + 2 * TILE_AIR, "at {columns}");
             assert_eq!(four.len() / 2, two.len(), "at {columns}");
+            assert_eq!(
+                lines,
+                usize::from(shelf_lines(Layout::Wide)),
+                "at {columns}"
+            );
         }
+        // THE CHANNEL BESIDE THE PICTURE, under the age, and no line of it
+        // under the title: the shelf is the picture's lines, the title's and
+        // the air.
+        assert_eq!(
+            shelf_lines(Layout::Wide),
+            tokens::space::VIDEOMETRICS_THUMBLINES + tokens::space::VIDEOMETRICS_TITLELINES + 1
+        );
+        let (mut v, _) = View::fresh(Page::Videos);
+        v.layout = Layout::Wide;
+        let rows = v.rows(&r, 120, &t);
+        let shelf = rows
+            .iter()
+            .position(|x| !x.cells.is_empty())
+            .expect("a shelf");
+        let first = &r.listed.as_ref().expect("a page").rows[0];
+        let from = rows[shelf].cells[0].from + TILE_AIR;
+        let beside = from + tokens::space::VIDEOMETRICS_THUMBCELLS + ronoctua_design::GAP;
+        let said_at: Vec<(usize, u16)> = rows
+            [shelf..shelf + usize::from(shelf_lines(Layout::Wide))]
+            .iter()
+            .enumerate()
+            .flat_map(|(n, row)| {
+                row.fields
+                    .iter()
+                    .filter(|f| f.text == first.channel && f.at < from + wide)
+                    .map(move |f| (n, f.at))
+            })
+            .collect();
+        assert_eq!(said_at, vec![(2, beside)], "the channel's place");
     }
 
     /// A video's title longer than a tile's two lines, for the tests of a

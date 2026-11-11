@@ -11018,7 +11018,11 @@ pela guarda de profundidade (`ronoctua_xml::parse`, veja "Grafo de crates").
 vez que a forma dela muda, e o `player.json` guarda o caminho da folha atual NA ÁRVORE, a posição, o
 volume, repetir e aleatório — por evento (troca de folha, pausa, parada, volume, fechar), nunca por
 relógio. O id não é gravado: um caminho na árvore continua valendo quando o próximo daemon dá ids
-novos. A versão 1 (a fila plana e um índice) é importada uma vez.
+novos. A versão 1 (a fila plana e um índice) é importada uma vez. **Numa sessão nova o player abre
+fechado** (pedido do dono, 2026-11-11): a fila volta, mas a folha só volta atual — e o par na
+modeline com ela — num daemon reiniciado na MESMA sessão, que acha a marca que o primeiro deixou no
+diretório de execução (`player-session`); depois de um boot ela é só de onde o primeiro play segue
+(`resume`).
 
 **O nome de uma entrada.** Um arquivo é o título que uma lista ou quem o pôs deu a ele, senão o
 nome do arquivo; uma playlist, o nome dela; um conjunto, o nome salvo, senão o do `.rset` de onde
@@ -14840,8 +14844,10 @@ num lado salta dez segundos, e cada clique a mais no mesmo lado salta de novo se
 (`player_media::PictureClicks`, a mesma leitura na janela, na coluna e no rodapé).
 
 **Recolher a imagem é da porta.** O glifo (e `z`) aparece só na porta que mostra uma imagem que dá
-para recolher (`View::picture_foldable`, dito pela porta) — no título "Agora" da janela e da coluna,
-e no rodapé no fim da barra de tempo do painel ("Dois painéis, e ar entre eles", acima): a janela e
+para recolher (`View::picture_foldable`, dito pela porta), junto dos controles do player e em toda
+página (pedido do dono, 2026-11-11) — no transporte da janela e da coluna, depois dos palcos da
+imagem (`player_media::FOLD_AFTER`), e no rodapé no fim da barra de tempo do painel ("Dois painéis,
+e ar entre eles", acima); nunca no título "Agora": a janela e
 a coluna guardam o próprio `picture_folded` e o layout fica sem faixa; o rodapé guarda
 `player_folded`, que o `metric` lê (duas linhas, transporte e barra — `player_media::FOLDED_LINES`),
 e nenhuma imagem é pedida enquanto está recolhida. Numa página do mundo o globo ocupa o lugar da
@@ -15043,7 +15049,9 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   não cabem na largura. O canal sob o título de cada miniatura era um interruptor ao lado ("Canal nas
   miniaturas"); virou a quarta disposição, para uma escolha ter um caminho só. A quinta
   (`Layout::Wide`) tem a largura de duas miniaturas (`tile_cells`): a figura, ao lado as linhas da
-  pontuação e da idade, e embaixo o título em duas linhas da largura toda e o canal.
+  pontuação, da idade e do canal, e embaixo o título em duas linhas da largura toda. A linha
+  "Canal" (`RET`) lista todos os canais no lugar dos vídeos, e escolher um traz a lista de volta
+  (pedido do dono, 2026-11-11); as setas ainda giram o anel.
 - **Um nome que a lista corta diz-se inteiro sob o ponteiro** (pedido do dono, 2026-11-11): o título
   de um vídeo e o nome do canal — na miniatura, cortados com `…`; na tira do player, o título em duas
   linhas — guardam as células das palavras em cada linha (`player_rows::Whole`, um tipo para as duas
@@ -15914,8 +15922,12 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   rodando. Sem banco, a página é uma frase que ensina onde se adicionam canais (a sequência que a
   leader ensina); banco ilegível diz por quê.
 - **Duas listas**: o ranking e os vídeos SEPARADOS para depois (`PageId::SetAside`, `LEADER p K`),
-  só eles, os últimos separados primeiro, ocultos inclusive. Cada uma guarda a página e os Shorts
-  dela (`S` ou o anel: com, sem, só eles), só enquanto a porta vive: o ranking abre SEM eles — uma
+  só eles, os últimos separados primeiro, ocultos inclusive. Cada uma guarda a página e os filtros
+  dela — os Shorts (`S` ou o anel: com, sem, só eles), o canal, a busca e, no ranking, os separados
+  (separados ou não, só eles, nenhum; a ordem continua a pontuação) —, só enquanto a porta vive. As
+  opções ficam em DUAS COLUNAS de três (pedido do dono, 2026-11-11; `Builder::pairs_across`, onde
+  todo par cabe inteiro, senão uma por linha), e a linha "Canal" lista os canais no lugar da
+  contagem e dos vídeos (`Esc` fecha antes). O ranking abre SEM Shorts — uma
   varredura os traz às dúzias, e eles empurram os vídeos longos para fora das primeiras páginas —;
   os separados, com eles, porque a pessoa escolheu cada um. Uma thread e uma página guardada servem as
   duas, e o que está guardado diz a que lista responde: uma lista nunca desenha as linhas da outra.
@@ -15945,9 +15957,10 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   composto do que foi lido, um segundo toque antes da releitura gravava a mesma nota duas vezes. O
   `e` é da página: a entrada dele no ranking deixava a linha decidir, a linha nunca decidia, e ele
   caía em renomear o que toca.
-- **Lista ou miniaturas** (`L`, o glifo do título): a lista é uma linha por vídeo com a miniatura à
-  cabeça (`player_posters::strip`), a grade são as caixas do catálogo de canais
-  (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas). As duas listas
+- **Lista, miniaturas ou miniaturas largas** (`L`, o glifo na contagem): a lista é uma linha por
+  vídeo com a miniatura à cabeça (`player_posters::strip`), a grade são as caixas do catálogo de
+  canais (`player_posters::tiled`, as medidas `space.videoMetrics.*`, as mesmas miniaturas), e as
+  largas as do catálogo de vídeos (`player_posters::wide`). As duas listas
   abrem em miniaturas, nas duas portas (decisão do dono, 2026-11-10: o `Default` do `Ranking`, já
   escrito à mão, abre em `Layout::Grid`; o padrão do `Layout` continua a lista, em que nada abre).
   Na grade, a pontuação com as setas e o `⋯`, e embaixo o canal com as marcas, ficam em linhas
@@ -15956,7 +15969,9 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   ponteiro (`Lit::Controls`), porque o clique só pega ele.
 - **As páginas são as do catálogo** ("As páginas de uma lista de vídeos", acima): o mesmo anel de
   tamanhos ("Vídeos por página"), as mesmas teclas, e as setas no título e no fim (`heading_paged`,
-  `pager`). O título "1–16 de 230" já diz a página e ganha só as setas. Virar põe o título no topo
+  `pager`). A contagem "1–16 de 230" já diz a página e ganha as setas e o glifo da disposição — não
+  há linha "Página" —, e a lista ABRE com ela no topo e o cursor no primeiro vídeo
+  (`ranking_align`, uma vez por abertura). Virar põe o título no topo
   com o cursor na › dele (`View::bring_to_top`), e o `RET` vira de novo; ele fica em primeiro
   enquanto a página está na tela, numa última página curta também, e no gesto seguinte que deixa o
   cursor sob ele (`Level::held_top`, `View::kept_top`; "Uma página virada traz o título ao topo, e

@@ -1041,6 +1041,9 @@
   catalog-layout-columns = "md-view_column";
   catalog-layout-posters = "md-view_grid";
   catalog-layout-big = "md-view_module";
+  # THE RANKING'S WIDE THUMBNAILS (`player_ranking::Layout::Wide`): two wide
+  # cards, one over the other — a tile as wide as two of the grid's.
+  ranking-layout-wide = "md-view_agenda";
   catalog-fullscreen = "md-fullscreen";
   catalog-live = "md-television_classic";
   catalog-locked = "md-lock";

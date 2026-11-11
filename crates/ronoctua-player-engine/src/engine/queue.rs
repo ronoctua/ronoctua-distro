@@ -327,6 +327,43 @@ fn remembered() -> ronoctua_store::Store<Remembered> {
     ronoctua_store::Store::at(ronoctua_store::state_dir(), WHERE_FILE)
 }
 
+/// The runtime directory's leaf that says this session's player has run.
+const SESSION_MARK: &str = "player-session";
+
+/// WHETHER THIS IS THE SESSION'S FIRST PLAYER — the machine booted, or the
+/// person logged in again — marking it so for the next one: the runtime
+/// directory lives as long as the session, so a player restarted inside it
+/// (a crash, a switch of the system) finds the mark, and one started after a
+/// boot does not. With no runtime directory there is no session to go on
+/// with, and every start is a first.
+fn first_of_the_session() -> bool {
+    let Some(mark) = ronoctua_xdg::runtime_file(SESSION_MARK) else {
+        return true;
+    };
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&mark)
+    {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not mark the session's player");
+            true
+        }
+    }
+}
+
+/// What a start does with the leaf that was current: `Some` — current again,
+/// where it was — inside the session it played in; in a NEW SESSION the
+/// player opens closed, nothing current and nothing on the modeline (the
+/// owner, 2026-11-11: "não quero que o player fique aberto ao reiniciar"),
+/// and the leaf and how far in are only where the first play goes on from.
+/// Pure.
+const fn current_after_start(leaf: Option<EntryId>, first: bool) -> Option<EntryId> {
+    if first { None } else { leaf }
+}
+
 /// One entry of mpv's playlist, as its `playlist` property says it.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct MpvEntry {
@@ -475,15 +512,15 @@ impl Engine {
             );
             Queue::new()
         });
-        let current = at
+        let leaf = at
             .and_then(|p| self.queue.at_path(&p))
             .filter(|e| e.body.is_leaf())
             .map(|e| e.id);
-        self.state.current = current;
-        if let Some(c) = current
-            && r.position > 0.0
-        {
-            self.resume = Some((c, r.position));
+        self.state.current = current_after_start(leaf, first_of_the_session());
+        // WHERE IT WAS, for the first play — of the same leaf, current again,
+        // or of the one a new session left closed ([`Engine::play`]).
+        if let Some(c) = leaf {
+            self.resume = Some((c, r.position.max(0.0)));
         }
         if r.shuffle {
             self.shuffle(true);
@@ -544,15 +581,20 @@ impl Engine {
     }
 
     /// Writes where the queue is: this machine's own place while it follows
-    /// another.
+    /// another — and, with nothing current, the leaf the first play goes on
+    /// from (`resume`): a session that opened closed and was never played
+    /// keeps the place for the next.
     pub(super) fn remember_where(&self) {
         if self.leaving {
             return;
         }
-        let (current, position) = self
-            .following
-            .as_ref()
-            .map_or((self.state.current, self.state.position), |f| f.resume);
+        let (current, position) = self.following.as_ref().map_or_else(
+            || match (self.state.current, self.resume) {
+                (None, Some((leaf, at))) => (Some(leaf), at),
+                (current, _) => (current, self.state.position),
+            },
+            |f| f.resume,
+        );
         let r = Remembered {
             version: WHERE_VERSION,
             at: current.and_then(|c| self.queue.path_of(c)),
@@ -714,14 +756,17 @@ impl Engine {
         Ok(())
     }
 
-    /// Plays the current leaf, else the first in the order.
+    /// Plays the current leaf, else the one a new session left closed, else
+    /// the first in the order.
     pub(super) fn play(&mut self, mpv: &Mpv) -> Result<(), Refused> {
         // THE CURRENT — or its first leaf, when what was current became a
-        // playlist (read from the network, or opened by mpv) — else the
-        // first of the order.
+        // playlist (read from the network, or opened by mpv) — else WHERE
+        // THE LAST SESSION WAS, from how far in (`resume`), else the first
+        // of the order.
         let leaf = self
             .state
             .current
+            .or_else(|| self.resume.map(|(leaf, _)| leaf))
             .and_then(|c| self.queue.find(c))
             .and_then(first_leaf)
             .or_else(|| self.queue.order(self.order.as_deref()).first().copied());
@@ -1759,6 +1804,61 @@ mod tests {
             Keep::Now,
             "never written this run"
         );
+    }
+
+    /// FAILS IF: a player started in a new session — the machine booted —
+    /// has the leaf it played current again (the modeline would show it
+    /// open), forgets the queue or where it was, or a player restarted
+    /// inside the same session no longer has its leaf current.
+    #[test]
+    fn a_new_session_opens_the_player_closed_with_its_queue() {
+        assert_eq!(current_after_start(Some(EntryId(4)), true), None);
+        assert_eq!(
+            current_after_start(Some(EntryId(4)), false),
+            Some(EntryId(4))
+        );
+        crate::engine::alone::run(module_path!(), "a_new_session_alone", &[]);
+    }
+
+    /// The half of [`a_new_session_opens_the_player_closed_with_its_queue`]
+    /// that runs alone: a queue kept with a leaf current, then the engine
+    /// started again in a new session (the mark gone) and in the same one.
+    #[test]
+    fn a_new_session_alone() {
+        if !crate::engine::alone::is_alone() {
+            return;
+        }
+        let single = |n: u8| Item::Single {
+            location: format!("/m/{n}.flac"),
+            title: None,
+            seconds: None,
+        };
+        let leaf = {
+            let mut e = Engine::new();
+            e.queue = Queue::from_file(QueueFile {
+                name: None,
+                entries: vec![single(1), single(2), single(3)],
+            })
+            .expect("a queue");
+            let leaf = e.queue.leaves()[1];
+            e.set_current(Some(leaf));
+            e.state.position = 42.0;
+            e.keep_queue();
+            leaf
+        };
+        let mark = ronoctua_xdg::runtime_file(SESSION_MARK).expect("a runtime directory");
+        assert!(mark.exists(), "the first player marks its session");
+        std::fs::remove_file(&mark).expect("the session over");
+        // A NEW SESSION: closed, the queue whole, and where it was kept.
+        let fresh = Engine::new();
+        assert_eq!(fresh.state.current, None);
+        assert_eq!(fresh.queue.leaf_count(), 3);
+        assert_eq!(fresh.resume, Some((leaf, 42.0)));
+        fresh.remember_where();
+        // THE SAME SESSION, the player restarted: its leaf current again.
+        let again = Engine::new();
+        assert_eq!(again.state.current, Some(leaf));
+        assert_eq!(again.resume, Some((leaf, 42.0)));
     }
 
     /// FAILS IF: a lane's last change — a meter let go a moment after the

@@ -1480,7 +1480,17 @@ impl Player {
             return None;
         }
         under.line?;
-        crate::player_rows::whole_under(rows, under.row?, under.cell?).map(str::to_owned)
+        let (row, cell) = (under.row?, under.cell?);
+        crate::player_rows::whole_under(rows, row, cell)
+            .map(str::to_owned)
+            // AND THE PAIR UNDER IT on a line of pairs side by side, by its
+            // sentence's id: a move to the other pair says another sentence.
+            .or_else(|| {
+                rows.get(row)
+                    .filter(|r| r.pairs())
+                    .and_then(|_| crate::player_rows::about_under(rows, row, cell))
+                    .map(str::to_owned)
+            })
     }
 
     /// The row whose BAR is under the pointer, when a press lands on one.
@@ -1720,7 +1730,7 @@ impl Player {
     fn control_sentence(id: &str, texts: &ronoctua_i18n::Texts) -> Option<String> {
         match id {
             "player-swap" => Some(texts.t(crate::key::PLAYER_SWAP_FOOTER)),
-            id => crate::player::sentence_of(id, texts, false),
+            id => crate::player::sentence_of(id, texts),
         }
     }
 
@@ -1791,9 +1801,9 @@ impl Player {
                     }
                 };
                 // A GRID'S CURSOR CELL wears the selection, by the arithmetic
-                // its click takes it with.
-                let chosen = r
-                    .focused
+                // its click takes it with — and a pair side by side its own
+                // colour, as every pair.
+                let chosen = (r.focused && !r.pairs())
                     .then(|| {
                         r.cells
                             .iter()
@@ -1812,11 +1822,14 @@ impl Player {
                     },
                     // WHAT A ROW THAT IS ONE THING SAYS UNDER THE POINTER —
                     // a row of a video's own page (`Target::about`) — the
-                    // window's sentence on the footer's line.
+                    // window's sentence on the footer's line. A LINE OF
+                    // PAIRS says the one under the pointer, cell by cell
+                    // ([`Region::about_at`]).
                     about: r
                         .target
                         .about()
-                        .and_then(|id| crate::player::sentence_of(id, seen.texts, false)),
+                        .filter(|_| !r.pairs())
+                        .and_then(|id| crate::player::sentence_of(id, seen.texts)),
                     chips: r.chips.iter().map(|c| c.at).collect(),
                     caret: r.caret,
                     covers: r.covers.clone(),
@@ -2076,6 +2089,11 @@ impl Region for Player {
             let state = self.kept.borrow().state.clone();
             self.view.settle_in(state.as_ref(), columns, way.texts());
             way.resized();
+            // A ROW THE READING BROUGHT TO THE TOP — a list's count, as its
+            // page opened (`View::bring_to_top`).
+            if let Some(top) = self.view.take_top() {
+                way.page(crate::region::Paging::Top(top));
+            }
             way.repaint();
         }
     }
@@ -2356,7 +2374,17 @@ impl Region for Player {
             self.columns_for(seen.columns),
             seen.texts,
         );
-        crate::player_rows::whole_under(&rows, row, cell?).map(str::to_owned)
+        let cell = cell?;
+        crate::player_rows::whole_under(&rows, row, cell)
+            .map(str::to_owned)
+            .or_else(|| {
+                // AND THE PAIR UNDER THE POINTER, on a line of pairs side by
+                // side: the row says none of its own.
+                rows.get(row)
+                    .filter(|r| r.pairs())
+                    .and_then(|_| crate::player_rows::about_under(&rows, row, cell))
+                    .and_then(|id| crate::player::sentence_of(id, seen.texts))
+            })
     }
 
     /// WHETHER THE PICTURE HAS ROOM BESIDE THE ROWS, before the shape is

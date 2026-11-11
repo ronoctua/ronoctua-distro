@@ -11,6 +11,10 @@ use crate::player::{Errand, Target, VOLUME_MOST};
 use ronoctua_player::wire::{Ask, State};
 use ronoctua_tokens as tokens;
 
+/// AN OPTION OF A LIST, as [`Builder::pairs_across`] stands it beside
+/// another: its label, its value, what it does and its spot.
+pub type ListOption<'s> = (String, String, Target, &'s str);
+
 /// One drawn line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -137,6 +141,11 @@ pub enum Lit {
     /// cells are all controls — nothing else on it is taken by a click, so
     /// nothing else is lit (`player_posters::tiled`, the `⋯`).
     Controls,
+    /// A LINE OF PAIRS SIDE BY SIDE ([`Builder::pairs_across`]): the pair
+    /// under the pointer lit alone, as a grid's cell — and the cursor is its
+    /// pair's colour, as on every row of pairs, and never a grid's selection
+    /// ([`grid_cursor`]); the arrows turn its value ([`Row::pairs`]).
+    Pairs,
 }
 
 /// What the pointer resting on line `n` lights ([`Row::lit`]).
@@ -183,7 +192,7 @@ pub fn lighting(rows: &[Row], n: usize) -> Lighting {
                 })
                 .unwrap_or_default(),
         ),
-        Some(Lit::Row) | None => {
+        Some(Lit::Row | Lit::Pairs) | None => {
             let cells = grid_cells(rows, n);
             if cells.is_empty() {
                 Lighting::Whole
@@ -268,6 +277,24 @@ pub struct DeckRow {
 }
 
 impl Row {
+    /// A line of PAIRS SIDE BY SIDE ([`Lit::Pairs`]).
+    #[must_use]
+    pub const fn pairs(&self) -> bool {
+        matches!(self.lit, Lit::Pairs)
+    }
+
+    /// How many ENTRIES the line holds — its cells a click chooses among, a
+    /// grid's tiles or its pairs, and not the controls beside them; with
+    /// none, its controls (a title's, a pager's), which the arrows choose
+    /// among: what the cursor's `cell` counts.
+    #[must_use]
+    pub fn entries(&self) -> usize {
+        match self.cells.iter().filter(|c| !c.control).count() {
+            0 => self.cells.len(),
+            n => n,
+        }
+    }
+
     /// Whether the cursor stops on it: a row of its own, not a title and not
     /// the rest of the row above.
     #[must_use]
@@ -507,6 +534,36 @@ pub fn control_under(rows: &[Row], n: usize, column: u16) -> Option<&'static str
         .and_then(|c| c.about)
 }
 
+/// Whether a CONTROL is drawn at cell `column` of line `n` — what a click
+/// there takes before the entry under it ([`control_under`]'s cells, with a
+/// sentence or not).
+#[must_use]
+pub fn control_on(rows: &[Row], n: usize, column: u16) -> bool {
+    rows.get(n).is_some_and(|row| {
+        row.cells
+            .iter()
+            .any(|c| c.control && crate::chrome::in_cell(column, c.from, c.width))
+    })
+}
+
+/// WHAT THE POINTER AT CELL `column` OF LINE `n` SAYS of the row's own
+/// target — the id of its sentence (`chrome::hint_sentence`): on a line of
+/// pairs side by side ([`Lit::Pairs`]) the pair under it, and none in the
+/// air between them; on any other, the row's ([`Target::about`]). Both doors
+/// read it, after a control and a name whole.
+#[must_use]
+pub fn about_under(rows: &[Row], n: usize, column: u16) -> Option<&'static str> {
+    let row = rows.get(n)?;
+    if row.pairs() {
+        return row
+            .cells
+            .iter()
+            .find(|c| !c.control && crate::chrome::in_cell(column, c.from, c.width))
+            .and_then(|c| c.target.about());
+    }
+    row.target.about()
+}
+
 /// The cells of row `n` that are entries of a GRID — `(first column,
 /// columns)` each — and none for a row that is one thing, or whose cells are
 /// only its controls: what the hover lights one of (`chrome::hover_cells`),
@@ -530,7 +587,7 @@ pub fn grid_cursor(rows: &[Row]) -> Option<(usize, (u16, u16))> {
     rows.iter().enumerate().find_map(|(n, r)| {
         r.cells
             .iter()
-            .filter(|c| !c.control)
+            .filter(|c| !c.control && !r.pairs())
             .find(|c| r.focused && c.target == r.target)
             .map(|c| (n, (c.from, c.width)))
     })
@@ -1061,6 +1118,113 @@ impl Builder<'_> {
         }
     }
 
+    /// PAIRS IN TWO COLUMNS — a list's options (the owner, 2026-11-11: "duas
+    /// colunas, 3 de cada lado"): the first half down the left column and
+    /// the rest down the right, `space.player.paneGap` cells of air between
+    /// the two, each column's values in one column of its own after its
+    /// widest label (`chrome::section_column`). A line is ONE row of two
+    /// cells, each a pair a click chooses and the second click — or `RET` —
+    /// presses; the pointer lights the pair under it alone and says its
+    /// sentence ([`about_under`]), and the cursor is the pair's colour, never
+    /// a band ([`Lit::Pairs`]). `↑`/`↓` walk down a column and on at the head
+    /// of the next, `←`/`→` turn the pair's value (`View::across`).
+    ///
+    /// NEVER A WORD CUT: where a column is narrower than a column of names
+    /// (`space.player.browseColumn`), or than its widest label, the two
+    /// cells of air and its widest value, the pairs stand one a row, as
+    /// [`Builder::pair`] puts them — a label wrapped there, and a value too.
+    pub fn pairs_across(&mut self, pairs: &[ListOption]) {
+        let wide = |t: &str| ronoctua_render::layout::width(t);
+        let gap = tokens::space::PLAYER_PANEGAP;
+        let half = self.room.saturating_sub(gap) / 2;
+        let down = pairs.len().div_ceil(2);
+        let columns: [(u16, &[ListOption]); 2] = [
+            (self.left, &pairs[..down]),
+            (self.left + half + gap, &pairs[down..]),
+        ];
+        let labels = |these: &[ListOption]| these.iter().map(|(l, ..)| wide(l)).max().unwrap_or(0);
+        let values =
+            |these: &[ListOption]| these.iter().map(|(_, v, ..)| wide(v)).max().unwrap_or(0);
+        let whole = columns
+            .iter()
+            .all(|(_, these)| labels(these) + 2 + values(these) <= half);
+        if half < tokens::space::PLAYER_BROWSECOLUMN || !whole {
+            for (label, value, target, spot) in pairs {
+                self.pair(label.clone(), value.clone(), target.clone(), spot);
+            }
+            return;
+        }
+        // EACH COLUMN'S VALUES IN ONE COLUMN, after its widest label — the
+        // section's column (`chrome::section_column`), and never so far
+        // along that its widest value is cut.
+        let value_at: Vec<u16> = columns
+            .iter()
+            .map(|(from, these)| {
+                let measured: Vec<(u16, u16, u16)> = these
+                    .iter()
+                    .map(|(l, v, ..)| (*from, wide(l), wide(v)))
+                    .collect();
+                crate::chrome::section_column(*from, half, &measured)
+                    .min(from + half - values(these))
+            })
+            .collect();
+        for line in 0..down {
+            let at = self.out.len();
+            let on = self.at_cursor(at);
+            let lit = self.lit_at(at);
+            let here = self.cell.min(1);
+            let mut fields = Vec::new();
+            let mut cells = Vec::new();
+            for (k, (from, these)) in columns.iter().enumerate() {
+                let Some((label, value, target, spot)) = these.get(line) else {
+                    continue;
+                };
+                let focused = lit && k == here;
+                let (label_tone, value_tone) =
+                    crate::chrome::Kind::of(target.acts()).tones(focused);
+                // WHOLE, both: the column was laid out for its widest.
+                fields.push(Self::piece(*from, label.clone(), label_tone));
+                if !value.is_empty() {
+                    fields.push(Self::piece(value_at[k], value.clone(), value_tone));
+                }
+                cells.push(Cell {
+                    from: *from,
+                    width: half,
+                    target: target.clone(),
+                    spot: (*spot).to_owned(),
+                    control: false,
+                    about: None,
+                });
+            }
+            let target = if on {
+                cells.get(here.min(cells.len().saturating_sub(1)))
+            } else {
+                cells.first()
+            }
+            .map_or(Target::Nothing, |c| c.target.clone());
+            let spot = cells.first().map(|c| c.spot.clone()).unwrap_or_default();
+            self.out.push(Row {
+                fields,
+                focused: lit,
+                heading: false,
+                target,
+                spot,
+                cells,
+                slider: None,
+                continues: false,
+                chips: Vec::new(),
+                deck: None,
+                schematic: None,
+                covers: Vec::new(),
+                globe: None,
+                caret: None,
+                lit: Lit::Pairs,
+                ground: None,
+                wholes: Vec::new(),
+            });
+        }
+    }
+
     /// A pair whose value is a BAR, `filled` per cent of it, and `text` after
     /// it — the bar is a control, and the row says where it was drawn.
     pub fn slider_pair(
@@ -1289,16 +1453,18 @@ impl Builder<'_> {
     }
 
     /// A LIST'S TITLE WITH THE ARROWS OF ITS PAGES at the end of its line,
-    /// `[earlier, later]` — [`Builder::heading_controls_said`], but a `None`
-    /// keeps its place EMPTY (an arrow that cannot move is not drawn, and the
-    /// one beside it stays in its own cells: the owner, 2026-11-10), and the
-    /// row is found by `spot`, its own: the row a turned page brings to the
-    /// top of the door (`View::bring_to_top`). A mark set before it
+    /// `[earlier, later]`, and any control before them — the layout's glyph,
+    /// on a list's count (the owner, 2026-11-11) —
+    /// [`Builder::heading_controls_said`], but a `None` keeps its place EMPTY
+    /// (an arrow that cannot move is not drawn, and the one beside it stays
+    /// in its own cells: the owner, 2026-11-10), and the row is found by
+    /// `spot`, its own: the row a turned page brings to the top of the door
+    /// (`View::bring_to_top`). A mark set before it
     /// ([`Builder::title_mark`]) is taken by it.
     pub fn heading_paged(
         &mut self,
         text: String,
-        controls: &[Option<(char, Target, &'static str)>; 2],
+        controls: &[Option<(char, Target, &'static str)>],
         spot: &str,
     ) {
         let mark = self.mark.take();
