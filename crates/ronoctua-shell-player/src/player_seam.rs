@@ -961,6 +961,99 @@ mod tests {
     static FAKE: Fake = Fake;
     const PAGES: &[&dyn Page] = &[&FAKE];
 
+    /// The rows of view `v` at 80 columns, and the line of its list's title.
+    fn titled(v: &View, t: &ronoctua_i18n::Texts) -> (Vec<crate::player_rows::Row>, usize) {
+        let rows = v.rows(None, 80, t);
+        let title = rows
+            .iter()
+            .position(|r| r.spot == paged::TITLE)
+            .expect("the list's title");
+        (rows, title)
+    }
+
+    /// FAILS IF: a list whose page turned does not keep, under its title,
+    /// the room a page of the door's lines takes — so no door can put a
+    /// short last page's title first (the owner's "26–27 of 27", 2026-11-11)
+    /// — or keeps it from the lines the door told before, not the ones it
+    /// tells now; or that room is anything but air: a line a click takes or
+    /// the pointer lights, a stop of the cursor or of the arrows, a section's
+    /// title for `TAB`; or a page never turned to is given any.
+    #[test]
+    fn a_turned_short_page_keeps_room_for_its_title_and_the_room_is_air() {
+        use crate::player_rows::{Lighting, lighting, takes};
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let lines = 20;
+        let mut v = with_pages(paged::PAGES, || View::blank(None));
+        v.push(PageId::Ranking, None);
+        v.page_is(lines);
+        // A SHORT PAGE NEVER TURNED TO is drawn as it was, to its arrows.
+        v.plugged_mut::<paged::Shown>()
+            .expect("the page's state")
+            .page = 1;
+        let (own, title) = titled(&v, &t);
+        assert!(own.len() < title + lines, "a page too long to tell");
+        assert_eq!(
+            own.last().map(|r| r.spot.as_str()),
+            Some("list-pager"),
+            "a page never turned to was given room"
+        );
+        // TURNED TO, it keeps a page of room under its title.
+        v.plugged_mut::<paged::Shown>()
+            .expect("the page's state")
+            .page = 0;
+        v.key(Press::Ranking(RankingKey::Later), None, 80, &t);
+        assert_eq!(v.take_top(), Some(title), "the title was not brought up");
+        let (rows, _) = titled(&v, &t);
+        assert_eq!(rows.len(), title + lines, "no room for the title");
+        assert_eq!(rows[own.len() - 1].spot, "list-pager");
+        for n in own.len()..rows.len() {
+            assert!(rows[n].fields.is_empty(), "line {n} says something");
+            assert!(!takes(&rows, n), "line {n} takes a click");
+            assert_eq!(lighting(&rows, n), Lighting::Cell(Vec::new()), "line {n}");
+            assert!(!rows[n].walked_onto(), "the cursor stops on line {n}");
+            assert!(
+                !crate::section_ring::is_title(&rows[n].fields, false),
+                "line {n} begins a section"
+            );
+        }
+        // A DOOR TALLER NOW keeps the page it has now.
+        v.page_is(lines + 5);
+        assert_eq!(titled(&v, &t).0.len(), title + lines + 5);
+    }
+
+    /// FAILS IF: a gesture that began with a turned page's title first, and
+    /// left the cursor on its arrows or on the list under it within the
+    /// page, does not keep the title there (`View::kept_top`) — or one that
+    /// began with another row first, or left the cursor above the title or
+    /// its row past the page, does: those are followed as always.
+    #[test]
+    fn a_title_brought_up_is_kept_while_the_cursor_is_under_it() {
+        let t = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let lines = 20;
+        let mut v = with_pages(paged::PAGES, || View::blank(None));
+        v.push(PageId::Ranking, None);
+        v.page_is(lines);
+        let (_, title) = titled(&v, &t);
+        assert_eq!(v.kept_top(&v.rows(None, 80, &t), title, lines), None);
+        v.key(Press::Ranking(RankingKey::Later), None, 80, &t);
+        let (rows, _) = titled(&v, &t);
+        assert_eq!(v.cursor(), title, "not on the title's arrow");
+        assert_eq!(v.kept_top(&rows, title, lines), Some(title), "on its arrow");
+        assert_eq!(
+            v.kept_top(&rows, title - 1, lines),
+            None,
+            "it was not first"
+        );
+        v.key(Press::Down, None, 80, &t);
+        assert_eq!(v.cursor(), title + 1, "not on the first video");
+        assert_eq!(v.kept_top(&rows, title, lines), Some(title), "on the list");
+        assert_eq!(v.kept_top(&rows, title, 1), None, "past the page");
+        v.key(Press::Up, None, 80, &t);
+        v.key(Press::Up, None, 80, &t);
+        assert!(v.cursor() < title, "not above the title");
+        assert_eq!(v.kept_top(&rows, title, lines), None, "above the title");
+    }
+
     /// FAILS IF: a view made inside `with_pages` does not hold the page, or
     /// one made outside it does — a test's page would leak into another
     /// thread's views.
@@ -1029,5 +1122,247 @@ mod tests {
             assert_ne!(act.key_when(true), act.key_when(false), "{act:?}");
         }
         assert_eq!(RankedAct::Delete.key_when(true), RankedAct::Delete.key());
+    }
+}
+
+/// A LIST OF TWO PAGES for the doors' tests of a turned page — the owner's
+/// case (2026-11-11): filters over a list's title, a first page of 25 and a
+/// last page of two, "26–27 of 27". It draws on the ranking's page and turns
+/// on its keys, as the ranking does (`ronoctua-shell-video-metrics`), which
+/// this crate cannot hold: the title brought to the top after a turn
+/// ([`View::bring_to_top`]), the cursor on its arrow.
+#[cfg(test)]
+pub(crate) mod paged {
+    use super::*;
+    use crate::player_seam::RankingKey;
+
+    /// The list's title's spot — the row a turn brings to the top.
+    pub(crate) const TITLE: &str = "list-title";
+
+    /// How many rows stand above the list's title on its page: the filters.
+    pub(crate) const FILTERS: usize = 4;
+
+    /// The videos of each page.
+    pub(crate) const VIDEOS: [usize; 2] = [25, 2];
+
+    /// The arrows' commands, which their cells' spots are made of.
+    const EARLIER: &str = "player-ranking-earlier";
+    const LATER: &str = "player-ranking-later";
+
+    /// Which page is shown.
+    #[derive(Debug, Default)]
+    pub(crate) struct Shown {
+        pub(crate) page: usize,
+    }
+
+    pub(crate) struct Paged;
+
+    pub(crate) static PAGED: Paged = Paged;
+
+    /// The pages a test's view holds ([`with_pages`]).
+    pub(crate) const PAGES: &[&dyn Page] = &[&PAGED];
+
+    impl Page for Paged {
+        fn name(&self) -> &'static str {
+            "paged"
+        }
+        fn state(&self, _: bool) -> Box<dyn Any> {
+            Box::new(Shown::default())
+        }
+        fn rows(&self, view: &View, page: PageId, _: Option<&State>, b: &mut Builder<'_>) -> bool {
+            if page != PageId::Ranking {
+                return false;
+            }
+            let Some(shown) = view.plugged::<Shown>() else {
+                return false;
+            };
+            for k in 0..FILTERS {
+                b.pair(
+                    format!("filter {k}"),
+                    "any".to_owned(),
+                    Target::Nothing,
+                    &format!("filter-{k}"),
+                );
+            }
+            let arrows = [
+                (shown.page > 0).then_some(('‹', Target::RankingTurn(false), EARLIER)),
+                (shown.page == 0).then_some(('›', Target::RankingTurn(true), LATER)),
+            ];
+            b.heading_paged(format!("page {}", shown.page + 1), &arrows, TITLE);
+            for n in 0..VIDEOS[shown.page] {
+                b.pair(
+                    format!("video {n}"),
+                    String::new(),
+                    Target::Nothing,
+                    &format!("video-{n}"),
+                );
+            }
+            b.pager(format!("{} of 2", shown.page + 1), &arrows, "list-pager");
+            true
+        }
+        fn pressed(
+            &self,
+            view: &mut View,
+            press: Press,
+            state: Option<&State>,
+            columns: u16,
+            texts: &ronoctua_i18n::Texts,
+        ) -> Option<Errand> {
+            let Press::Ranking(key) = press else {
+                return None;
+            };
+            let shown = view.plugged_mut::<Shown>()?;
+            let was = shown.page;
+            shown.page = match key {
+                RankingKey::Later | RankingKey::Last => 1,
+                RankingKey::Earlier | RankingKey::First => 0,
+                _ => was,
+            };
+            if shown.page != was {
+                let onto = [format!("control-{LATER}"), format!("control-{EARLIER}")];
+                view.bring_to_top(
+                    TITLE,
+                    &[onto[0].as_str(), onto[1].as_str()],
+                    state,
+                    columns,
+                    texts,
+                );
+            }
+            view.settle_in(state, columns, texts);
+            Some(Errand::Nothing)
+        }
+        /// AN ARROW OF THE TITLE, `RET` on it — what its click does.
+        fn turned(
+            &self,
+            view: &mut View,
+            target: &Target,
+            press: Press,
+            state: Option<&State>,
+            columns: u16,
+            texts: &ronoctua_i18n::Texts,
+        ) -> Option<Errand> {
+            let (Target::RankingTurn(on), Press::Enter) = (target, press) else {
+                return None;
+            };
+            let key = if *on {
+                RankingKey::Later
+            } else {
+                RankingKey::Earlier
+            };
+            self.pressed(view, Press::Ranking(key), state, columns, texts)
+        }
+    }
+}
+
+/// A PAGE OF TILES for the doors' tests of what the pointer says on them —
+/// the ranking's own, which this crate cannot hold
+/// (`ronoctua-shell-video-metrics`): two videos on the ranking's page, each a
+/// title longer than its box and a channel too long for a tile — a name
+/// ([`crate::player_posters::Said::named`]) — with a rating's arrow after its
+/// score and a mark beside its channel, and the `⋯`; in the grid, or in the
+/// strip ([`Shown::strip`]).
+#[cfg(test)]
+pub(crate) mod tiles {
+    use super::*;
+    use crate::player_posters::{Control, Said, Shape, Tile};
+    use ranking::Quick;
+    use ronoctua_tokens as tokens;
+
+    /// Every video's title — longer than a tile's two lines.
+    pub(crate) const TITLE: &str =
+        "A video whose title runs on far longer than any tile's two lines can hold";
+
+    /// Every video's channel — longer than a tile is wide.
+    pub(crate) const CHANNEL: &str = "A channel whose name is longer than a tile";
+
+    /// Every video's title on the page after ([`Shown::turned`]) — another
+    /// name in the same cells.
+    pub(crate) const TURNED: &str =
+        "Another video on the page after, whose title is not the first page's";
+
+    /// The layout the page is drawn in, and which page of it.
+    #[derive(Debug, Default)]
+    pub(crate) struct Shown {
+        /// The strip — a row each — and not the grid.
+        pub(crate) strip: bool,
+        /// The page after: its videos titled [`TURNED`], as a key, the
+        /// wheel or the daemon turns one under a resting pointer.
+        pub(crate) turned: bool,
+    }
+
+    pub(crate) struct Tiles;
+
+    pub(crate) static TILES: Tiles = Tiles;
+
+    /// The pages a test's view holds ([`with_pages`]).
+    pub(crate) const PAGES: &[&dyn Page] = &[&TILES];
+
+    /// A glyph of video `id` that acts on the click: `q`.
+    fn control(id: &ronoctua_video_metrics::VideoId, q: Quick) -> Control {
+        Control {
+            glyph: tokens::icon::VIDEO_FOREVER,
+            lit: false,
+            target: Target::RankedQuick(id.clone(), q),
+            about: q.command(),
+        }
+    }
+
+    impl Page for Tiles {
+        fn name(&self) -> &'static str {
+            "tiles"
+        }
+        fn state(&self, _: bool) -> Box<dyn Any> {
+            Box::new(Shown::default())
+        }
+        fn rows(&self, view: &View, page: PageId, _: Option<&State>, b: &mut Builder<'_>) -> bool {
+            if page != PageId::Ranking {
+                return false;
+            }
+            let Some(shown) = view.plugged::<Shown>() else {
+                return false;
+            };
+            let tiles: Vec<Tile> = (0..2)
+                .map(|n| {
+                    let id = ronoctua_video_metrics::VideoId(format!("v{n}"));
+                    let score = Said {
+                        parts: vec!["7300".to_owned()],
+                        after: vec![control(&id, Quick::ALL[0])],
+                        end: Vec::new(),
+                        named: false,
+                    };
+                    let channel = Said {
+                        parts: vec![CHANNEL.to_owned()],
+                        after: Vec::new(),
+                        end: vec![control(&id, Quick::Forever)],
+                        named: true,
+                    };
+                    Tile {
+                        picture: None,
+                        glyph: tokens::icon::PLAYER_LANE_PICTURE,
+                        title: if shown.turned { TURNED } else { TITLE }.to_owned(),
+                        under: vec![score, channel],
+                        target: Target::Ranked(id.clone()),
+                        spot: format!("ranked-v{n}"),
+                        more: Some(Control {
+                            glyph: tokens::icon::ELLIPSIS,
+                            lit: false,
+                            target: Target::RankedMore(id),
+                            about: ranking::MORE,
+                        }),
+                    }
+                })
+                .collect();
+            let shape = Shape {
+                cells: tokens::space::VIDEOMETRICS_THUMBCELLS,
+                lines: tokens::space::VIDEOMETRICS_THUMBLINES,
+                titles: tokens::space::VIDEOMETRICS_TITLELINES,
+            };
+            if shown.strip {
+                crate::player_posters::strip(&tiles, shape, b);
+            } else {
+                crate::player_posters::tiled(&tiles, shape, b);
+            }
+            true
+        }
     }
 }

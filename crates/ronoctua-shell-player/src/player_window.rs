@@ -584,6 +584,10 @@ pub struct PerPointer {
     /// The CONTROL of a row under the pointer — a title's glyph — by the
     /// command id whose sentence line 0 says (`player_rows::control_under`).
     control_under: Option<&'static str>,
+    /// The NAME under the pointer, whole — a tile's title, a video's channel
+    /// (`player_rows::whole_under`): a pointer moved from it onto the air
+    /// beside it on the same line asks a frame, which says it no more.
+    whole_under: Option<String>,
     /// A press on the GLOBE of a directory's page, held: where it was pressed,
     /// where the hand was last, and whether it has travelled far enough to
     /// be a drag that turns it rather than a click on a group of marks
@@ -1885,6 +1889,11 @@ impl Player {
     }
 
     fn rows(&self, ui: &Ui) -> Vec<crate::player_rows::Row> {
+        // THE PAGE IS TOLD WITH EVERY ROWS BUILT, and not only before a key:
+        // the room a turned page's title keeps under it is a page of this
+        // door (`View::page_is`), and a window made taller after the turn
+        // draws it with the room it has now.
+        self.view.page_is(self.room(ui));
         self.view.rows(self.player.as_ref(), ui.columns, &ui.texts)
     }
 
@@ -2323,6 +2332,7 @@ impl Player {
         if room == 0 {
             return;
         }
+        let was = ui.offset;
         let cursor = self.view.cursor();
         if cursor < ui.offset + EDGE {
             ui.offset = cursor.saturating_sub(EDGE);
@@ -2330,6 +2340,15 @@ impl Player {
             ui.offset = cursor + EDGE + 1 - room;
         }
         ui.offset = ui.offset.min(rows.saturating_sub(room));
+        // A LIST'S TITLE A TURN PUT FIRST STAYS FIRST while the cursor is
+        // under it on the page (`View::kept_top`): the margin above would
+        // scroll it back down on the next key, or on a click that only
+        // chose a video. The rows are built only while a title holds it.
+        if self.view.holds_a_top()
+            && let Some(top) = self.view.kept_top(&self.rows(ui), was, room)
+        {
+            ui.offset = top.min(rows.saturating_sub(room));
+        }
     }
 
     fn apply(&mut self, ui: &mut Ui, errand: crate::player::Errand) {
@@ -2609,6 +2628,43 @@ impl Player {
         crate::player_rows::control_under(rows, row, column_at(x).saturating_sub(MARGIN))
     }
 
+    /// The NAME WHOLE under `(x, y)` — a tile's title, a video's channel,
+    /// cut or wrapped where it is drawn — by the same row and column a click
+    /// there takes (`player_rows::whole_under`).
+    fn whole_at(
+        &self,
+        ui: &Ui,
+        rows: &[crate::player_rows::Row],
+        x: f64,
+        y: f64,
+    ) -> Option<String> {
+        let row = self.row_at(ui, x, y)?;
+        crate::player_rows::whole_under(rows, row, column_at(x).saturating_sub(MARGIN))
+            .map(str::to_owned)
+    }
+
+    /// WHAT THE ROWS SAY UNDER THE POINTER at `(x, y)`, read against `rows`
+    /// as a click there takes them: a control of a row — a title's glyph, a
+    /// tile's mark — then a NAME WHOLE on its words, a tile's title or a
+    /// video's channel the room cut (the owner, 2026-11-11), then a row that
+    /// is one thing and says what it does — a row of a video's own page
+    /// (`Target::about`); the ranking's page row with its keys as this door
+    /// reaches them (`Player::sentence_here`).
+    fn said_on_the_rows(
+        &self,
+        ui: &Ui,
+        rows: &[crate::player_rows::Row],
+        (x, y): (f64, f64),
+    ) -> Option<String> {
+        self.control_at(ui, rows, x, y)
+            .and_then(|id| self.sentence_here(id, &ui.texts))
+            .or_else(|| self.whole_at(ui, rows, x, y))
+            .or_else(|| {
+                let row = rows.get(self.row_at(ui, x, y)?)?;
+                self.sentence_here(row.target.about()?, &ui.texts)
+            })
+    }
+
     /// The transport button at `(x, y)`, where it was DRAWN.
     fn button_at(&self, x: f64, y: f64) -> Option<&'static str> {
         let (l, c) = (line_at(y), column_at(x));
@@ -2696,6 +2752,7 @@ impl Player {
             hand.extra.button_under,
             self.deck_under,
             hand.extra.control_under,
+            hand.extra.whole_under.clone(),
             lit_cell(&drawn, hand),
         );
         let total = drawn.len();
@@ -2784,6 +2841,7 @@ impl Player {
                     hand.extra.button_under = self.button_at(e.position.0, e.position.1);
                     hand.extra.control_under =
                         self.control_at(ui, &rows, e.position.0, e.position.1);
+                    hand.extra.whole_under = self.whole_at(ui, &rows, e.position.0, e.position.1);
                 }
                 PointerEventKind::Leave { .. } => {
                     self.pointer_at = None;
@@ -2797,6 +2855,7 @@ impl Player {
                     hand.x_under_pointer = None;
                     hand.extra.button_under = None;
                     hand.extra.control_under = None;
+                    hand.extra.whole_under = None;
                     hand.extra.globe = None;
                     if self.view.globe_pointed(None) {
                         ui.ask_paint();
@@ -3001,6 +3060,7 @@ impl Player {
                 hand.extra.button_under,
                 self.deck_under,
                 hand.extra.control_under,
+                hand.extra.whole_under.clone(),
                 lit_cell(&drawn, hand),
             )
         {
@@ -3755,26 +3815,19 @@ impl Player {
         // the last order said, or — with the pointer on a button or on a
         // control of a deck — what that does.
         let under_button = self.button_under;
-        // AND A CONTROL OF A ROW — a title's glyph — read against the rows
-        // just built, as the button is: what a click there would take.
-        let under_control = self
-            .pointer_at
-            .and_then(|(x, y)| self.control_at(ui, &rows, x, y));
+        // AND WHAT THE ROWS SAY there — a control of a row, a name whole on
+        // its words, a row that says what it does — read against the rows
+        // just built, as the button is: what a click there would take
+        // (`Player::said_on_the_rows`).
         let pointed = match under_button {
             Some(id) => crate::chrome::hint_sentence(id, &ui.texts),
             None => self.deck_under.and_then(|(_, _, hit)| {
                 crate::player_timeline::hover_sentence(hit, self.player.as_ref(), &ui.texts)
             }),
         }
-        .or_else(|| under_control.and_then(|id| self.sentence_here(id, &ui.texts)))
-        // AND A ROW THAT IS ONE THING AND SAYS WHAT IT DOES — a row of a
-        // video's own page (`Target::about`) — read off the same row a click
-        // there takes; the ranking's page row with its keys as this door
-        // reaches them (`Player::sentence_here`).
         .or_else(|| {
-            let (x, y) = self.pointer_at?;
-            let row = rows.get(self.row_at(ui, x, y)?)?;
-            self.sentence_here(row.target.about()?, &ui.texts)
+            self.pointer_at
+                .and_then(|at| self.said_on_the_rows(ui, &rows, at))
         });
         let question = crate::door::list::the_question(ui);
         let message = crate::door::list::said_named_on_line_zero(ui).cloned();
@@ -5210,6 +5263,166 @@ mod tests {
             panic!("a photograph's reach");
         };
         assert_eq!(out.stages, [Show::Listing]);
+    }
+
+    /// FAILS IF: a page turned in the window or the column — by `<next>`,
+    /// and by `RET` on the title's arrow, which is what its click does —
+    /// does not put the list's title first under the transport when the page
+    /// turned to is short (the owner's last page, two videos: the list's end
+    /// held the title where it was, the filters above it in sight); or the
+    /// next key — `]` on the last page, `↓` into the list, `↑` back onto the
+    /// arrow — scrolls it back down; or a key that takes the cursor above it
+    /// is not followed as always.
+    #[test]
+    fn a_turned_short_page_shows_its_title_first_and_keeps_it() {
+        use crate::player::PageId;
+        use crate::player_seam::paged;
+        use ronoctua_keymap::{Key, Sym};
+        let title = |w: &Player, ui: &Ui| {
+            w.rows(ui)
+                .iter()
+                .position(|r| r.spot == paged::TITLE)
+                .expect("the list's title")
+        };
+        for door in [Door::Window, Door::Column] {
+            let player = crate::player_seam::with_pages(paged::PAGES, || {
+                Player::detached(door, Outbox::default(), None)
+            });
+            let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+            let mut d = crate::door::Detached::new(Ui::for_tests(texts), player);
+            d.lay_out_at((760, 720));
+            d.content.open_page(&mut d.ui, PageId::Ranking);
+            let short = title(&d.content, &d.ui) + 1 + paged::VIDEOS[1] + 2;
+            assert!(
+                short < d.content.room(&d.ui) + title(&d.content, &d.ui),
+                "{door:?}: a door too short to tell"
+            );
+            d.press(Key::simple(Sym::PageDown));
+            assert_eq!(
+                d.ui.offset,
+                title(&d.content, &d.ui),
+                "{door:?}: `<next>` left the title where it was"
+            );
+            for key in [Sym::Char(']'), Sym::Down, Sym::Up] {
+                d.press(Key::simple(key));
+                assert_eq!(
+                    d.ui.offset,
+                    title(&d.content, &d.ui),
+                    "{door:?}: {key:?} scrolled the title back"
+                );
+            }
+            // `RET` ON ITS `‹`, back to the long page, and on its `›` again.
+            for page in ["page 1", "page 2"] {
+                d.press(Key::simple(Sym::Enter));
+                let rows = d.content.rows(&d.ui);
+                let at = title(&d.content, &d.ui);
+                assert_eq!(rows[at].fields[0].text, page, "{door:?}");
+                assert_eq!(d.ui.offset, at, "{door:?}: the arrow left the title");
+            }
+            // ABOVE THE TITLE, the cursor is followed as always.
+            d.press(Key::simple(Sym::Up));
+            assert!(
+                d.ui.offset < title(&d.content, &d.ui),
+                "{door:?}: the filter above the title is out of sight"
+            );
+        }
+    }
+
+    /// FAILS IF: the pointer resting on a tile's title, or on its channel —
+    /// in the window and in the column, in the grid and in the strip — says
+    /// anything but that name WHOLE, which the room cut (what the window's
+    /// line under the pointer says, and the footer's minibuffer with no
+    /// header: `Player::said_on_the_rows`); or an arrow of the rating, a
+    /// mark beside the channel or the `⋯` says the name instead of its own
+    /// sentence; or the picture, the score or the air past a name says one.
+    #[test]
+    fn a_cut_name_is_said_whole_under_the_pointer() {
+        use crate::player::PageId;
+        use crate::player_seam::tiles::{self, CHANNEL, TITLE};
+        let width = ronoctua_render::layout::width;
+        for door in [Door::Window, Door::Column] {
+            for strip in [false, true] {
+                let at = format!("{door:?}, strip {strip}");
+                let player = crate::player_seam::with_pages(tiles::PAGES, || {
+                    Player::detached(door, Outbox::default(), None)
+                });
+                let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+                let mut d = crate::door::Detached::new(Ui::for_tests(texts), player);
+                d.lay_out_at((760, 720));
+                d.content.open_page(&mut d.ui, PageId::Ranking);
+                d.content
+                    .view
+                    .plugged_mut::<tiles::Shown>()
+                    .expect("the page's state")
+                    .strip = strip;
+                let (w, ui) = (&d.content, &d.ui);
+                let rows = w.rows(ui);
+                // THE POINT at cell `column` of row `n`, as the window draws it.
+                let point = |n: usize, column: u16| {
+                    let line = w.layout.list + u16::try_from(n - ui.offset).expect("a line");
+                    at_cell(f32::from(MARGIN + column) + 0.5, line)
+                };
+                let said = |n: usize, column: u16| w.said_on_the_rows(ui, &rows, point(n, column));
+                let fields = |text: &dyn Fn(&str) -> bool| -> Vec<(usize, crate::fields::Field)> {
+                    rows.iter()
+                        .enumerate()
+                        .flat_map(|(n, r)| r.fields.iter().map(move |f| (n, f.clone())))
+                        .filter(|(_, f)| text(&f.text))
+                        .collect()
+                };
+                // THE TITLE, cut, on each of its lines' words, end to end.
+                // (a piece of the channel wrapped — "tile" — is no title's.)
+                let title = fields(&|t| {
+                    let t = t.trim_end_matches('…').trim_end();
+                    t.chars().count() > 1 && TITLE.contains(t) && !CHANNEL.contains(t)
+                });
+                assert!(title.len() >= 2, "{at}: the title's lines: {title:?}");
+                assert!(
+                    title.iter().all(|(_, f)| f.text != TITLE),
+                    "{at}: the title was not cut"
+                );
+                for (n, f) in &title {
+                    for column in [f.at, f.at + width(&f.text) - 1] {
+                        assert_eq!(said(*n, column).as_deref(), Some(TITLE), "{at}: line {n}");
+                    }
+                    // AND THE AIR PAST IT names nothing.
+                    let past = f.at + width(&f.text);
+                    assert_ne!(
+                        said(*n, past).as_deref(),
+                        Some(TITLE),
+                        "{at}: past the words"
+                    );
+                }
+                // THE CHANNEL, on its words.
+                let channel = fields(&|t| t.starts_with("A channel"));
+                assert!(!channel.is_empty(), "{at}: no channel drawn");
+                for (n, f) in &channel {
+                    assert_eq!(said(*n, f.at).as_deref(), Some(CHANNEL), "{at}: line {n}");
+                }
+                // THE SCORE, and the picture's glyph, name nothing.
+                for (n, f) in
+                    fields(&|t| t == "7300" || t == tokens::icon::PLAYER_LANE_PICTURE.to_string())
+                {
+                    let s = said(n, f.at);
+                    assert!(
+                        s.as_deref() != Some(TITLE) && s.as_deref() != Some(CHANNEL),
+                        "{at}: `{}` on line {n} says {s:?}",
+                        f.text
+                    );
+                }
+                // EVERY GLYPH says its own sentence.
+                let mut glyphs = 0;
+                for (n, r) in rows.iter().enumerate() {
+                    for c in r.cells.iter().filter(|c| c.control) {
+                        let own = c.about.and_then(|id| w.sentence_here(id, &ui.texts));
+                        assert!(own.is_some(), "{at}: a glyph with no sentence");
+                        assert_eq!(said(n, c.from), own, "{at}: the glyph at {}", c.from);
+                        glyphs += 1;
+                    }
+                }
+                assert!(glyphs >= 6, "{at}: {glyphs} glyphs");
+            }
+        }
     }
 
     fn a_photographs(door: Door, state: State) -> (Player, Ui) {

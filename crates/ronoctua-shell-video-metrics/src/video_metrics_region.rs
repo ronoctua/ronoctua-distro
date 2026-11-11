@@ -289,10 +289,11 @@ impl VideoMetrics {
     /// window's answer too).
     ///
     /// WHAT A LINE SAYS under the pointer is the window's foot, joined
-    /// (`View::explained_at`) — and nothing on a line of cells or glyphs:
-    /// the footer asks a row's sentence before the cell's
-    /// ([`Region::about_at`]), and one said for the line would hide the
-    /// video's, or the glyph's, under the pointer.
+    /// (`View::explained_at`) — and nothing on a line of cells or glyphs, or
+    /// of NAMES (a video's title, its channel: `Row::wholes`): the footer
+    /// asks a row's sentence before the cell's ([`Region::about_at`]), and
+    /// one said for the line would hide the video's, the glyph's or the
+    /// name's under the pointer.
     fn told_whole(&self, seen: &Seen<'_>) -> Vec<Told> {
         let kept = self.kept.borrow();
         let rows = self.view.rows(&kept.readings, seen.columns, seen.texts);
@@ -345,7 +346,8 @@ impl VideoMetrics {
                 let several = rows
                     .get(owner)
                     .is_some_and(|o| !o.cells.is_empty() || !o.controls.is_empty())
-                    || !r.controls.is_empty();
+                    || !r.controls.is_empty()
+                    || !r.wholes.is_empty();
                 let about = if several {
                     None
                 } else {
@@ -467,11 +469,12 @@ impl VideoMetrics {
     /// until the pointer moves.
     fn press(&mut self, press: Press, way: &mut dyn Doorway) {
         self.pointed = None;
+        let page = self.page_found(way);
         let rows = self.view_rows(way.columns(), way.texts());
         let errand = self.view.press(press, &rows, &self.kept.borrow().readings);
         self.errand(errand, way);
         way.follow();
-        self.place_the_title(way);
+        self.place_the_title(way, Some(page));
         way.repaint();
     }
 
@@ -517,14 +520,34 @@ impl VideoMetrics {
     /// AFTER the follow, which the footer carries out in the order asked and
     /// which would put the title a line back by its margin: at the end of a
     /// key and of a glyph's click, and when the thread brought the page.
-    fn place_the_title(&mut self, way: &mut dyn Doorway) {
+    ///
+    /// AND A TITLE ALREADY FIRST STAYS FIRST after a gesture that began with
+    /// it there — `was`, the footer's page as the gesture found it — while
+    /// the cursor's row is on the page under it (`View::title_kept`): the
+    /// follow's margin would scroll it back down a line.
+    fn place_the_title(&mut self, way: &mut dyn Doorway, was: Option<crate::region::Page>) {
         let rows = self.view_rows(way.columns(), way.texts());
-        let top = self
+        let paid = self
             .view
             .settle_on_list(&rows, &self.kept.borrow().readings);
+        let top = paid.or_else(|| was.and_then(|p| self.view.title_kept(&rows, p.offset, p.lines)));
         if let Some(top) = top {
             way.page(crate::region::Paging::Top(top));
         }
+    }
+
+    /// The footer's page as a gesture finds it — its lines told to the view
+    /// first (`View::page_is`: the footer tells them before a key, and not
+    /// before a click), and the most it can hold, the room a turned page's
+    /// title keeps under it (`View::page_holds`: the region grows back to
+    /// it between gestures, the explanation's row given back).
+    fn page_found(&self, way: &dyn Doorway) -> crate::region::Page {
+        let page = way.page_shown();
+        if page.lines > 0 {
+            self.view.page_is(page.lines);
+        }
+        self.view.page_holds(page.most);
+        page
     }
 
     /// What was typed for one of the view's questions — or, with no argument
@@ -585,13 +608,17 @@ impl Region for VideoMetrics {
     /// What the pointer on row `row` says at cell `cell` — a video of a
     /// shelf, a glyph — as the window's foot says it, joined into one
     /// sentence; any other row says its own on its line (`Told::about`).
+    /// LED BY ITS NAME on a glyph, which is a picture, and on a NAME'S WORDS
+    /// — a video's title, its channel, which a tile cuts —: the name whole,
+    /// as the window's foot names it (`View::name_at`).
     fn about_at(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> Option<String> {
         let rows = self.view_rows(seen.columns, seen.texts);
-        let glyph = self.view.on_a_glyph(&rows, row, cell);
+        let named =
+            self.view.on_a_glyph(&rows, row, cell) || self.view.name_at(&rows, row, cell).is_some();
         self.view
             .explained_at(&rows, row, cell, seen.texts)
             .and_then(|e| {
-                if glyph {
+                if named {
                     e.joined_named(seen.texts)
                 } else {
                     e.joined()
@@ -759,13 +786,14 @@ impl Region for VideoMetrics {
             return;
         }
         // A GLYPH ACTS ON THE FIRST CLICK, as the window's does.
+        let page = self.page_found(way);
         let glyph = self
             .view
             .click_control(n, column, &rows, &self.kept.borrow().readings);
         if let Some(errand) = glyph {
             self.errand(errand, way);
             way.follow();
-            self.place_the_title(way);
+            self.place_the_title(way, Some(page));
             way.repaint();
             return;
         }
@@ -818,7 +846,7 @@ impl Region for VideoMetrics {
             }
             return;
         }
-        self.place_the_title(way);
+        self.place_the_title(way, None);
     }
 
     /// CAPS LOCK MEANS CAPITALS while the second description is edited.
@@ -1343,6 +1371,77 @@ mod tests {
         );
     }
 
+    /// FAILS IF: the footer's explanation line, with the pointer on a
+    /// video's title or on its channel, does not LEAD with that name whole —
+    /// a tile cuts both (the owner, 2026-11-11), as the window's foot names
+    /// the thing — or a line of a name says one sentence for the whole line,
+    /// which the footer asks before the thing under the pointer and which
+    /// would hide the name; or the score or the age after the channel leads
+    /// with the channel. In every layout.
+    #[test]
+    fn the_line_leads_with_a_name_whole() {
+        use crate::video_metrics::tests::{LONG_CHANNEL, LONG_TITLE, long_names};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let seen = Seen {
+            texts: &texts,
+            columns: COLUMNS,
+            lines: 40,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        for layout in Layout::ALL {
+            let region = over(&Page::Videos, layout);
+            long_names(&mut region.kept.borrow_mut().readings);
+            let rows = region.view_rows(COLUMNS, &texts);
+            let told = region.told_whole(&seen);
+            let (mut titles, mut channels) = (0, 0);
+            for (n, row) in rows.iter().enumerate() {
+                // THE VIDEOS' LINES, and not the filters over them.
+                let owner = &rows[crate::video_metrics::Row::owner(&rows, n)];
+                if !matches!(owner.target, crate::video_metrics::Target::Video(_))
+                    && owner.cells.is_empty()
+                {
+                    continue;
+                }
+                for f in &row.fields {
+                    let text = f.text.trim_end_matches('…').trim_end();
+                    let name = if text.chars().count() > 1
+                        && LONG_TITLE.contains(text)
+                        && !LONG_CHANNEL.contains(text)
+                    {
+                        titles += 1;
+                        LONG_TITLE
+                    } else if f.text.starts_with("A channel") {
+                        channels += 1;
+                        LONG_CHANNEL
+                    } else {
+                        continue;
+                    };
+                    assert_eq!(told[n].about, None, "{layout:?}: line {n} says one thing");
+                    let said = region
+                        .about_at(n, Some(f.at), &seen)
+                        .unwrap_or_else(|| panic!("{layout:?}: line {n} says nothing"));
+                    assert!(
+                        said.starts_with(name) && said.len() > name.len(),
+                        "{layout:?}: line {n} says `{said}`"
+                    );
+                    // THE SCORE after the channel, the video's.
+                    let last = f.at + ronoctua_render::layout::width(&f.text) - 1;
+                    if name == LONG_CHANNEL && !f.text.ends_with('…') {
+                        let said = region.about_at(n, Some(last), &seen).unwrap_or_default();
+                        assert!(!said.starts_with(LONG_CHANNEL), "{layout:?}: `{said}`");
+                    }
+                }
+            }
+            assert!(titles >= 10, "{layout:?}: {titles} titles");
+            if layout != Layout::Grid {
+                assert!(channels >= 10, "{layout:?}: {channels} channels");
+            }
+        }
+    }
+
     /// FAILS IF: a line of glyphs says one sentence for the whole line — the
     /// footer asks a row's before the thing's under the pointer
     /// (`Region::about_at`), and it would hide every glyph's —; a glyph under
@@ -1765,6 +1864,111 @@ mod tests {
                 "`{key}`: the cursor is not on the first video"
             );
         }
+        drop(region);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a page turned in the footer's region to a SHORT last page —
+    /// the owner's 27 videos, two on the second — leaves too few rows after
+    /// its title for the footer to put it first (it pages only as far as the
+    /// list's end, and the filters above stayed in sight) — at the most
+    /// lines the region holds, and not only at the lines it showed as the
+    /// key came: turned with the explanation under the hint taking a row,
+    /// the room was a row short once the pointer left the hint, and the line
+    /// above the title slid back into sight; or, with the title first, the
+    /// next key that leaves the cursor under it — `]` on the last page, `↓`,
+    /// `↑` back to the first video — does not keep it there after the
+    /// follow; or a key that takes the cursor above it does.
+    #[test]
+    fn a_turned_short_page_keeps_its_title_first_in_the_region() {
+        use crate::region::{Page as Shown, Paging};
+        use ronoctua_keymap::{Key, Sym};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-region-short-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let catalogue = dir.join(ronoctua_video_metrics::FILE);
+        crate::video_metrics_feed::holding(&catalogue, 27);
+        // THE MOST THE REGION HOLDS, and the lines it shows while the
+        // explanation under the hint takes one of them.
+        let most = 14;
+        let explaining = most - 1;
+        let mut w = way();
+        w.has_a_loop = false;
+        w.residence = Some(Residence::of(Kept {
+            catalogue: Some(catalogue),
+            ..fresh()
+        }));
+        let opens = crate::video_metrics::OPEN_COMMAND;
+        let mut region = opening(opens, Some("videos"), &mut w);
+        assert_eq!(region.command(opens, Some("videos"), &mut w), Taken::Yes);
+        let placed_first = |w: &Recorder, title: usize| {
+            let follow = w.owed.iter().rposition(|e| matches!(e, Effect::Follow));
+            let top = w
+                .owed
+                .iter()
+                .rposition(|e| *e == Effect::Page(Paging::Top(title)));
+            top.is_some() && follow < top
+        };
+        // THE FOOTER TELLS ITS PAGE before a key, from the list's top — the
+        // explanation's row up, the pointer on the hint.
+        region.page_is(explaining);
+        w = w.with_page(Shown {
+            offset: 0,
+            lines: explaining,
+            most,
+        });
+        w.owed.clear();
+        assert_eq!(region.key(Key::simple(Sym::Char(']')), &mut w), Taken::Yes);
+        assert_eq!(region.view.look().query.map(|q| q.page), Some(1));
+        let rows = region.view_rows(COLUMNS, &texts);
+        let title = rows
+            .iter()
+            .position(|r| r.spot == crate::paging::LIST_TITLE)
+            .expect("the list's title");
+        assert!(placed_first(&w, title), "not put first: {:?}", w.owed);
+        // THE ROW GIVEN BACK — the pointer off the hint — the footer shows
+        // all it holds, and holds its first row at the list's end less that.
+        assert!(
+            rows.len() >= title + most,
+            "the list ends too soon for its title to stay first at {most} lines: {} rows, \
+             the title on {title}",
+            rows.len()
+        );
+        for (key, lines) in [
+            (Sym::Char(']'), most),
+            (Sym::Down, explaining),
+            (Sym::Up, most),
+        ] {
+            w = w.with_page(Shown {
+                offset: title,
+                lines,
+                most,
+            });
+            w.owed.clear();
+            region.key(Key::simple(key), &mut w);
+            assert!(placed_first(&w, title), "{key:?} let it go: {:?}", w.owed);
+            assert!(
+                region.view_rows(COLUMNS, &texts).len() >= title + most,
+                "{key:?} at {lines} lines left too little room"
+            );
+        }
+        w = w.with_page(Shown {
+            offset: title,
+            lines: most,
+            most,
+        });
+        w.owed.clear();
+        region.key(Key::simple(Sym::Up), &mut w);
+        assert!(
+            !w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Page(Paging::Top(_)))),
+            "the cursor above the title, the title was kept: {:?}",
+            w.owed
+        );
         drop(region);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -297,8 +297,11 @@ impl VideoMetricsWindow {
         ui.ask_paint();
     }
 
-    /// The rows, at this window's width, in its language.
+    /// The rows, at this window's width, in its language — the page told
+    /// first: the room a turned page's title keeps under it is a page of this
+    /// window (`View::page_is`), the one it has now.
     fn view_rows(&self, ui: &Ui) -> Vec<Row> {
+        self.view.page_is(ui.room_for_rows());
         self.view.rows(&self.readings, ui.columns, &ui.texts)
     }
 
@@ -312,12 +315,25 @@ impl VideoMetricsWindow {
     /// grid — the last line first, then the first, so a shelf taller than
     /// the room shows its top.
     fn follow(&self, ui: &mut Ui) {
+        let was = ui.offset;
         let rows = self.view_rows(ui);
         let at = self.cursor_of(&rows);
         self.cursor_row.set(Some(at));
         let last = at + Row::lines_of(&rows, at) - 1;
         ui.follow(last, rows.len());
         ui.follow(at, rows.len());
+        self.keep_the_title(ui, &rows, was);
+    }
+
+    /// THE LIST'S TITLE A TURN PUT FIRST STAYS FIRST after a gesture that
+    /// began with it there (`was`, the window's first row then) and left the
+    /// cursor's row on the page under it (`View::title_kept`) — and is kept
+    /// from the follow that ends the gesture (`Ui::place_top`): its margin
+    /// would scroll the title back down a line.
+    fn keep_the_title(&self, ui: &mut Ui, rows: &[Row], was: usize) {
+        if let Some(top) = self.view.title_kept(rows, was, ui.room_for_rows()) {
+            ui.place_top(top, rows.len());
+        }
     }
 
     /// A key of the view — from the keyboard, the hint, or `RET` from a
@@ -698,6 +714,10 @@ impl Content for VideoMetricsWindow {
         if self.view.clicked(row, column, &rows) {
             self.pressed(ui, crate::video_metrics::Press::Enter);
         } else {
+            // A CLICK THAT ONLY CHOSE — the first video under a title a turn
+            // put first — leaves the title there (`Self::keep_the_title`).
+            let rows = self.view_rows(ui);
+            self.keep_the_title(ui, &rows, ui.offset);
             ui.ask_paint();
         }
     }
@@ -1418,6 +1438,61 @@ mod tests {
         assert_eq!(w.explained(&ui).expect("the cursor's").subject, cursor);
     }
 
+    /// FAILS IF: the foot, with the pointer on a video's title or on its
+    /// channel, does not name the thing by that name WHOLE — a tile cuts
+    /// both (the owner, 2026-11-11), and the window's foot is where this
+    /// window says what is under the pointer, never the minibuffer — or the
+    /// channel's name stays once the pointer went on to the picture. In the
+    /// list and in the grid that says the channel.
+    #[test]
+    fn the_foot_names_a_title_and_a_channel_whole() {
+        use crate::video_metrics::tests::{LONG_CHANNEL, LONG_TITLE, long_names};
+        for layout in [Layout::List, Layout::GridWithChannel] {
+            let blocked = std::env::temp_dir().join(format!(
+                "ronoctua-video-metrics-window-names-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&blocked);
+            std::fs::write(&blocked, b"").expect("a file where the catalogue's folder would be");
+            let (mut w, mut ui) = a_window(&blocked, &Page::Videos, layout);
+            let _ = std::fs::remove_file(&blocked);
+            long_names(&mut w.readings);
+            let mut hand = Hand::<()>::default();
+            let rows = w.view_rows(&ui);
+            let at = |starts: &dyn Fn(&str) -> bool| {
+                rows.iter()
+                    .enumerate()
+                    .find_map(|(n, r)| r.fields.iter().find(|f| starts(&f.text)).map(|f| (n, f.at)))
+                    .expect("a name drawn")
+            };
+            let title = at(&|t| t.starts_with("A video whose"));
+            let channel = at(&|t| t.starts_with("A channel"));
+            over_at(&mut w, &mut ui, &mut hand, title, 0);
+            assert_eq!(w.explained(&ui).expect("the title").name, LONG_TITLE);
+            over_at(&mut w, &mut ui, &mut hand, channel, 10);
+            assert_eq!(
+                w.explained(&ui).expect("the channel").name,
+                LONG_CHANNEL,
+                "{layout:?}"
+            );
+            // ON THE GRID'S PICTURE, the video again — by its title.
+            if layout.grid() {
+                let shelf = rows
+                    .iter()
+                    .position(|r| !r.cells.is_empty())
+                    .expect("a shelf");
+                over_at(
+                    &mut w,
+                    &mut ui,
+                    &mut hand,
+                    (shelf, rows[shelf].cells[0].from + 1),
+                    20,
+                );
+                assert_eq!(w.explained(&ui).expect("the video").name, LONG_TITLE);
+            }
+        }
+    }
+
     /// FAILS IF: the rest the foot keeps is the LINE's and not the thing's,
     /// on the grid, where a line holds several videos and a video spans its
     /// shelf's lines: a pointer that rested on one video, went down its
@@ -1737,6 +1812,94 @@ mod tests {
         assert_eq!(
             d.ui.offset, title,
             "the end's arrow did not bring the title"
+        );
+        drop(d);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FAILS IF: a page turned in the window to a SHORT last page — the
+    /// owner's 27 videos, two on the second page — does not put the list's
+    /// title first (the window pages only as far as the list's end, and the
+    /// filters above stayed in sight); or, with the title first, the next
+    /// gesture that leaves the cursor under it — `]` on the last page, `↓`,
+    /// `↑` back to the first video, a click that only chooses a video —
+    /// scrolls it back down; or a key that takes the cursor above it is not
+    /// followed as always.
+    #[test]
+    fn a_turned_short_page_keeps_its_title_first_in_the_window() {
+        use ronoctua_keymap::{Key, Sym};
+        use smithay_client_toolkit::seat::pointer::PointerEventKind;
+        let dir = std::env::temp_dir().join(format!(
+            "ronoctua-video-metrics-short-page-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let catalogue = dir.join(ronoctua_video_metrics::FILE);
+        crate::video_metrics_feed::holding(&catalogue, 27);
+        let mut ui = Ui::for_tests(ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB"));
+        ui.columns = COLUMNS;
+        let window = VideoMetricsWindow::detached(catalogue, Page::Videos, String::new());
+        let mut d = crate::door::Detached::new(ui, window);
+        let line_of = |d: &crate::door::Detached<VideoMetricsWindow>, spot: &str| {
+            d.content
+                .view_rows(&d.ui)
+                .iter()
+                .position(|r| r.spot == spot)
+                .unwrap_or_else(|| panic!("no row `{spot}`"))
+        };
+        d.press(Key::simple(Sym::Char(']')));
+        assert_eq!(d.content.view.look().query.map(|q| q.page), Some(1));
+        let title = line_of(&d, crate::paging::LIST_TITLE);
+        assert!(
+            line_of(&d, crate::paging::LIST_PAGER) < title + d.ui.room_for_rows(),
+            "a page too long to tell"
+        );
+        assert_eq!(d.ui.offset, title, "the short page's title is not first");
+        for key in [Sym::Char(']'), Sym::Down, Sym::Up] {
+            d.press(Key::simple(key));
+            assert_eq!(d.ui.offset, title, "{key:?} scrolled the title back");
+        }
+        // A CLICK THAT ONLY CHOOSES the second video.
+        let second = title + 3;
+        let px = ronoctua_tokens::text::size();
+        #[allow(clippy::cast_precision_loss)]
+        let at = (
+            (f64::from(d.ui.margin + 4) + 0.5)
+                * f64::from(ronoctua_tokens::metrics::cell_width(px)),
+            ((usize::from(d.ui.first_of_list()) + second - d.ui.offset) as f64 + 0.5)
+                * f64::from(ronoctua_tokens::metrics::line_height(px)),
+        );
+        let click = [
+            PointerEventKind::Press {
+                time: 0,
+                button: crate::door::LEFT_BUTTON,
+                serial: 0,
+            },
+            PointerEventKind::Release {
+                time: 1,
+                button: crate::door::LEFT_BUTTON,
+                serial: 0,
+            },
+        ]
+        .map(|kind| event(&d.ui, at, kind));
+        d.pointer(&click);
+        let rows = d.content.view_rows(&d.ui);
+        assert_eq!(
+            d.content.view.cursor(&rows),
+            second,
+            "the click did not choose the second video"
+        );
+        assert_eq!(
+            d.ui.offset, title,
+            "a click that chose scrolled the title back"
+        );
+        // ABOVE THE TITLE, the cursor is followed as always.
+        for _ in 0..2 {
+            d.press(Key::simple(Sym::Up));
+        }
+        assert!(
+            d.ui.offset < title,
+            "the row above the title is out of sight"
         );
         drop(d);
         let _ = std::fs::remove_dir_all(&dir);

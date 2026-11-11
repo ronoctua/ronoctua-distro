@@ -130,6 +130,7 @@ impl Footer {
             crate::region::Page {
                 offset: self.current_offset(),
                 lines: self.grid().lines,
+                most: self.region_most_lines(),
             }
         } else {
             crate::region::Page::default()

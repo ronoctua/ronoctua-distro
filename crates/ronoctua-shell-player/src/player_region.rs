@@ -356,6 +356,12 @@ fn open(_: &str, _: Option<&str>, way: &mut dyn Doorway) -> Box<dyn Region> {
 
 /// [`open`], unboxed.
 fn opened(way: &mut dyn Doorway) -> Player {
+    opened_with(View::fresh(), way)
+}
+
+/// [`opened`] on `view` — a fresh one, this machine's; a test's reads
+/// nothing of it.
+fn opened_with(view: View, way: &mut dyn Doorway) -> Player {
     let kept = kept_of(way);
     let view_wake = {
         let mail = Arc::clone(&kept.borrow().mail);
@@ -366,7 +372,7 @@ fn opened(way: &mut dyn Doorway) -> Player {
         })
     };
     let (known, here) = known_of(way);
-    let mut view = View::fresh().in_the_footer();
+    let mut view = view.in_the_footer();
     // A DOOR WITH NO LOOP — a photograph's footer, a test's — reads in
     // place: a wake there would wake nothing, and a read off the loop would
     // never land (`View::waking`).
@@ -391,6 +397,7 @@ fn opened(way: &mut dyn Doorway) -> Player {
         globe_stage: None,
         controls_placed: RefCell::new(Vec::new()),
         control_under: None,
+        whole_under: None,
         globe: false,
         known,
         here,
@@ -517,6 +524,13 @@ pub struct Player {
     /// The CONTROL of a row under the pointer — a title's glyph — by the
     /// command whose sentence the message line says.
     control_under: Option<&'static str>,
+    /// The NAME under the pointer, whole — a tile's title, a video's channel
+    /// the room cut (`player_rows::whole_under`) — as the last MOTION found
+    /// it: only what tells a motion that moved from one name to another, or
+    /// off one, to repaint. The message line never says it: what it says is
+    /// read off the rows at paint ([`Region::about_at`]), which a key, the
+    /// wheel or a page from the daemon changes under a resting pointer.
+    whole_under: Option<String>,
     /// WHETHER A WORLD PAGE'S GLOBE stands in the panel, in the picture's
     /// place: no picture there to fold, and the fold kept for when one comes
     /// back.
@@ -1316,13 +1330,31 @@ impl Player {
         }
         let columns = self.player_columns();
         let state = self.kept.borrow().state.clone();
+        // THE FOOTER'S PAGE AS THE GESTURE FOUND IT: the lines it shows —
+        // told here too, for a click that acts, which the footer tells
+        // nothing before — and the most it can hold, the room a turned
+        // page's title keeps under it (`View::page_holds`: the region grows
+        // back to it between gestures, the explanation's row given back);
+        // its first row is where that title was.
+        let page = way.page_shown();
+        if page.lines > 0 {
+            self.view.page_is(page.lines);
+        }
+        self.view.page_holds(page.most);
         let errand = self.view.key(press, state.as_ref(), columns, way.texts());
         way.resized();
         way.follow();
         // A ROW THE VIEW BROUGHT TO THE TOP — a list's title, its page turned
         // — goes first AFTER the follow, which would put it a line back
-        // (`View::bring_to_top`).
-        if let Some(top) = self.view.take_top() {
+        // (`View::bring_to_top`); AND ONE ALREADY THERE STAYS, while the
+        // cursor is under it on the page (`View::kept_top`).
+        let top = self.view.take_top().or_else(|| {
+            self.view
+                .holds_a_top()
+                .then(|| self.rows_now(way.texts()))
+                .and_then(|rows| self.view.kept_top(&rows, page.offset, page.lines))
+        });
+        if let Some(top) = top {
             way.page(crate::region::Paging::Top(top));
         }
         self.carry(errand, way);
@@ -1415,18 +1447,40 @@ impl Player {
         under: &Under,
         texts: &ronoctua_i18n::Texts,
     ) -> Option<(usize, usize, f64, f64, Rc<crate::player_timeline::Deck>)> {
+        under.row.and(under.line)?;
+        self.deck_on(under, &self.rows_now(texts))
+    }
+
+    /// [`Player::deck_at`], among `rows` already built.
+    fn deck_on(
+        &self,
+        under: &Under,
+        rows: &[crate::player_rows::Row],
+    ) -> Option<(usize, usize, f64, f64, Rc<crate::player_timeline::Deck>)> {
         let n = under.row?;
         under.line?;
-        let rows = self.rows_now(texts);
         if !rows
             .get(n)
             .is_some_and(|r| !r.heading || !r.cells.is_empty())
         {
             return None;
         }
-        let (d, column) = crate::player_rows::deck_at(&rows, n, column_of(under.at.0))?;
+        let (d, column) = crate::player_rows::deck_at(rows, n, column_of(under.at.0))?;
         let origin = f64::from(crate::chrome::FIELDS_LEAD + d.left);
         Some((n, d.line, column, origin, d.deck.clone()))
+    }
+
+    /// The NAME WHOLE under the pointer among `rows` — a tile's title, a
+    /// video's channel (`player_rows::whole_under`) — on a line of the page
+    /// where the rows are drawn: none under the picture alone, which draws
+    /// no row. What a motion compares, to repaint (`Player::whole_under`);
+    /// the line says [`Region::about_at`]'s, read at paint.
+    fn whole_on(&self, under: &Under, rows: &[crate::player_rows::Row]) -> Option<String> {
+        if self.only && self.panel().is_some() {
+            return None;
+        }
+        under.line?;
+        crate::player_rows::whole_under(rows, under.row?, under.cell?).map(str::to_owned)
     }
 
     /// The row whose BAR is under the pointer, when a press lands on one.
@@ -2100,18 +2154,30 @@ impl Region for Player {
             hand.button_under,
             hand.deck_under,
             self.control_under,
+            self.whole_under.clone(),
             hand.track_under,
         );
         hand.button_under = self.button_at(under.frame, under.at.0, under.at.1);
         // AND THE PANEL'S TIME BAR, which says what it does there too.
         hand.track_under = self.track_at(under.frame, under.at.0, under.at.1);
+        // THE ROWS, built once for what the pointer is on among them — and
+        // only on a line of the page.
+        let rows = if under.row.and(under.line).is_some() {
+            self.rows_now(way.texts())
+        } else {
+            Vec::new()
+        };
         // AND A CONTROL OF A DECK among the rows: said on the message line.
-        hand.deck_under =
-            self.deck_at(under, way.texts())
-                .and_then(|(n, line, column, _, deck)| {
-                    deck.hit(line, column).map(|hit| (n, line, hit))
-                });
+        hand.deck_under = self
+            .deck_on(under, &rows)
+            .and_then(|(n, line, column, _, deck)| {
+                deck.hit(line, column).map(|hit| (n, line, hit))
+            });
         self.control_under = self.control_at(under);
+        // AND A NAME WHOLE on its words — a tile's title, a video's channel:
+        // kept only to tell a move onto another name, or off one, to repaint;
+        // what the line says is read at paint (`Region::about_at`).
+        self.whole_under = self.whole_on(under, &rows);
         // AND THE GLOBE: the group under the hand lit, and held, turned.
         self.globe_moved(under.at, hand, way);
         before
@@ -2119,6 +2185,7 @@ impl Region for Player {
                 hand.button_under,
                 hand.deck_under,
                 self.control_under,
+                self.whole_under.clone(),
                 hand.track_under,
             )
     }
@@ -2213,6 +2280,7 @@ impl Region for Player {
         }
         hand.deck_under = None;
         self.control_under = None;
+        self.whole_under = None;
         // AND THE GLOBE: nothing held, nothing lit by the hand.
         hand.globe = None;
         if self.view.globe_pointed(None) {
@@ -2242,7 +2310,9 @@ impl Region for Player {
 
     /// What the message line says under the pointer: a button of the panel
     /// — the sentence its window says too — its time bar, a control of a
-    /// title, a control of a deck.
+    /// title, a control of a deck. NOT A NAME on its words: that one is read
+    /// off the rows at paint ([`Region::about_at`]), never kept from the
+    /// last motion.
     fn said_under(&self, hand: Option<&dyn Any>, texts: &ronoctua_i18n::Texts) -> Option<String> {
         let hand = hand.and_then(|h| h.downcast_ref::<Hand>());
         hand.and_then(|h| h.button_under)
@@ -2260,6 +2330,33 @@ impl Region for Player {
                     crate::player_timeline::hover_sentence(hit, self.state().as_ref(), texts)
                 })
             })
+    }
+
+    /// What the pointer on row `row` says at cell `cell` that the row alone
+    /// cannot: a NAME WHOLE on its words — a tile's title, a video's channel
+    /// the room cut (`player_rows::whole_under`) — where one line of a grid
+    /// holds several tiles, so the cell decides; the window's minibuffer
+    /// says the same (`player_window::Player::said_on_the_rows`).
+    ///
+    /// # Read at paint
+    ///
+    /// Against the rows as they stand NOW, as the window reads its own and
+    /// the video catalogue's region its names: a name kept from the last
+    /// motion goes on naming a video a key (`]`, an arrow), the wheel or a
+    /// page from the daemon took from under a resting pointer — the page
+    /// turned, and the line kept a title of the page before. The footer asks
+    /// this with the row now drawn on the pointer's line, and its cell.
+    fn about_at(&self, row: usize, cell: Option<u16>, seen: &Seen<'_>) -> Option<String> {
+        // UNDER THE PICTURE ALONE no row is drawn: no name stands there.
+        if self.only && self.panel_for(seen.columns).is_some() {
+            return None;
+        }
+        let rows = self.view.rows(
+            self.state().as_ref(),
+            self.columns_for(seen.columns),
+            seen.texts,
+        );
+        crate::player_rows::whole_under(&rows, row, cell?).map(str::to_owned)
     }
 
     /// WHETHER THE PICTURE HAS ROOM BESIDE THE ROWS, before the shape is
@@ -2765,6 +2862,105 @@ mod tests {
         )
     }
 
+    /// FAILS IF: a page turned in the footer's region to a short last page
+    /// does not ask for its title first AFTER the follow that ends the key,
+    /// or leaves too few rows after the title for the footer to put it first
+    /// (it pages only as far as the list's end: the owner's two videos left
+    /// the filters above in sight) — at the most lines the region holds,
+    /// and not only at the lines it showed as the key came: turned with the
+    /// explanation under the hint taking a row, the room was a row short
+    /// once the pointer left the hint, and the line above the title slid
+    /// back into sight; or, with the title first, the next key — `]` on the
+    /// last page, `↓` into the list, `↑` back onto the arrow — does not keep
+    /// it there after the follow, or a key that takes the cursor above it
+    /// does.
+    #[test]
+    fn a_turned_short_page_shows_its_title_first_in_the_footer_and_keeps_it() {
+        use crate::player::PageId;
+        use crate::player_seam::paged;
+        use crate::region::{Effect, Page, Paging};
+        use ronoctua_keymap::{Key, Sym};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        // THE MOST THE REGION HOLDS, and the lines it shows while the
+        // explanation under the hint takes one of them.
+        let most = 14;
+        let explaining = most - 1;
+        let view = crate::player_seam::with_pages(paged::PAGES, || View::blank(None));
+        let mut w = way();
+        w.has_a_loop = false;
+        let mut r = opened_with(view, &mut w);
+        r.view.push(PageId::Ranking, None);
+        let placed_first = |w: &crate::region::Recorder, title: usize| {
+            let follow = w.owed.iter().rposition(|e| matches!(e, Effect::Follow));
+            let top = w
+                .owed
+                .iter()
+                .rposition(|e| *e == Effect::Page(Paging::Top(title)));
+            top.is_some() && follow < top
+        };
+        // THE FOOTER TELLS ITS PAGE before a key, and shows the long page
+        // from its top — the explanation's row up, the pointer on the hint.
+        Region::page_is(&r, explaining);
+        let mut w = way().with_page(Page {
+            offset: 0,
+            lines: explaining,
+            most,
+        });
+        assert_eq!(r.key(Key::simple(Sym::PageDown), &mut w), Taken::Yes);
+        let rows = r.rows_now(&texts);
+        let title = rows
+            .iter()
+            .position(|x| x.spot == paged::TITLE)
+            .expect("the list's title");
+        assert!(
+            placed_first(&w, title),
+            "the title is not put first after the follow: {:?}",
+            w.owed
+        );
+        // THE ROW GIVEN BACK — the pointer off the hint — the footer shows
+        // all it holds, and holds its first row at the list's end less that.
+        assert!(
+            rows.len() >= title + most,
+            "the list ends too soon for its title to stay first at {most} lines: {} rows, \
+             the title on {title}",
+            rows.len()
+        );
+        for (key, lines) in [
+            (Sym::Char(']'), most),
+            (Sym::Down, explaining),
+            (Sym::Up, most),
+        ] {
+            let mut w = way().with_page(Page {
+                offset: title,
+                lines,
+                most,
+            });
+            r.key(Key::simple(key), &mut w);
+            assert!(
+                placed_first(&w, title),
+                "{key:?} let the title go: {:?}",
+                w.owed
+            );
+            assert!(
+                r.rows_now(&texts).len() >= title + most,
+                "{key:?} at {lines} lines left too little room"
+            );
+        }
+        let mut w = way().with_page(Page {
+            offset: title,
+            lines: most,
+            most,
+        });
+        r.key(Key::simple(Sym::Up), &mut w);
+        assert!(
+            !w.owed
+                .iter()
+                .any(|e| matches!(e, Effect::Page(Paging::Top(_)))),
+            "the cursor above the title, the title was kept: {:?}",
+            w.owed
+        );
+    }
+
     /// FAILS IF: a question the region asks on the footer's line loses what
     /// its own line says — masked for a pairing's code, kept out of the log
     /// for the account's user name — so a name typed after the region closed
@@ -3212,6 +3408,191 @@ mod tests {
         );
         player.left(&mut hand, &mut way);
         assert_eq!(player.said_under(hand.as_deref(), &texts), None);
+    }
+
+    /// WHAT THE FOOTER'S EXPLANATION LINE SAYS of the shown player with
+    /// the pointer on cell `cell` of row `n`, in the footer's own order, at
+    /// paint: what the region has under the hand (`Region::said_under`), the
+    /// row's sentence (`Told::about`), then what the cell adds
+    /// (`Region::about_at`) — the two hooks between, which this region does
+    /// not answer, left out.
+    fn explained(
+        player: &Player,
+        hand: Option<&dyn Any>,
+        n: usize,
+        cell: u16,
+        seen: &Seen<'_>,
+    ) -> Option<String> {
+        player
+            .said_under(hand, seen.texts)
+            .or_else(|| player.told(seen, n, 1).into_iter().next()?.about)
+            .or_else(|| player.about_at(n, Some(cell), seen))
+    }
+
+    /// FAILS IF: the pointer resting on a tile's title, or on its channel,
+    /// in the footer's region says on the explanation line anything but
+    /// that name WHOLE, which the tile cut (`Region::about_at`, read at
+    /// paint — the window's minibuffer says the same); or the picture, the
+    /// score, an arrow of the rating, a mark or the air past a name says
+    /// one; or a control is still said once the pointer left. In the grid
+    /// and in the strip.
+    #[test]
+    fn the_region_says_a_cut_name_whole_under_the_pointer() {
+        use crate::player_seam::tiles::{self, CHANNEL, TITLE};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let width = ronoctua_render::layout::width;
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let seen = Seen {
+            texts: &texts,
+            columns: f.columns(),
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        for strip in [false, true] {
+            let (mut player, mut way) =
+                crate::player_seam::with_pages(tiles::PAGES, || a_footer_playing(f.columns()));
+            player.view.push(crate::player::PageId::Ranking, None);
+            player
+                .view
+                .plugged_mut::<tiles::Shown>()
+                .expect("the page's state")
+                .strip = strip;
+            let rows = player.rows_now(&texts);
+            let mut hand: Option<Box<dyn Any>> = None;
+            // WHAT THE MESSAGE LINE SAYS with the pointer on cell `cell` of
+            // row `n`, on the page's line `n`.
+            let mut said = |n: usize, cell: u16| {
+                let under = Under {
+                    at: (0.0, 0.0),
+                    line: Some(n),
+                    row: Some(n),
+                    cell: Some(cell),
+                    base: 0,
+                    ctrl: false,
+                    shift: false,
+                    frame: None,
+                };
+                player.hovered(&under, &mut hand, &mut way);
+                explained(&player, hand.as_deref(), n, cell, &seen)
+            };
+            let mut names = 0;
+            for (n, r) in rows.iter().enumerate() {
+                for field in &r.fields {
+                    let text = field.text.trim_end_matches('…').trim_end();
+                    let end = field.at + width(&field.text);
+                    let s = said(n, field.at);
+                    if text.chars().count() > 1 && TITLE.contains(text) {
+                        assert_eq!(s.as_deref(), Some(TITLE), "strip {strip}: line {n}");
+                        assert_eq!(said(n, end - 1).as_deref(), Some(TITLE));
+                        assert_eq!(said(n, end), None, "strip {strip}: past the title");
+                        names += 1;
+                    } else if text.starts_with("A channel") {
+                        assert_eq!(s.as_deref(), Some(CHANNEL), "strip {strip}: line {n}");
+                        names += 1;
+                    } else {
+                        // THE PICTURE'S GLYPH, THE SCORE, EVERY GLYPH: none.
+                        assert_eq!(s, None, "strip {strip}: `{}` on line {n}", field.text);
+                    }
+                }
+            }
+            assert!(names >= 3, "strip {strip}: {names} names");
+            // AND THE POINTER GONE, nothing.
+            let n = rows
+                .iter()
+                .position(|r| !r.wholes.is_empty())
+                .expect("a line with a name");
+            assert!(said(n, rows[n].wholes[0].from).is_some());
+            player.left(&mut hand, &mut way);
+            assert_eq!(player.said_under(hand.as_deref(), &texts), None);
+        }
+    }
+
+    /// FAILS IF: the explanation line, with the pointer resting on a tile's
+    /// title, goes on naming that video once the rows changed under the
+    /// hand with no motion — the page turned (`]`, an arrow, a page from the
+    /// daemon) or the region scrolled (the wheel: the pointer's line now
+    /// draws another row) — instead of the name now drawn there, or nothing
+    /// where no name is: a name kept from the last motion, and not read
+    /// off the rows at paint (the review, 2026-11-11: "26–50 of 160" with a
+    /// title of the first page on the line). In the grid and in the strip.
+    #[test]
+    fn a_name_is_read_off_the_rows_drawn_and_not_the_last_motion() {
+        use crate::player_seam::tiles::{self, TITLE, TURNED};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let zone = ronoctua_files::when::Zone::utc();
+        let f = crate::chrome::Frame::of(1500.0, 900.0, 4);
+        let seen = Seen {
+            texts: &texts,
+            columns: f.columns(),
+            lines: 30,
+            zone: &zone,
+            photographing: true,
+            lent: crate::region::Lent::none(),
+        };
+        for strip in [false, true] {
+            let (mut player, mut way) =
+                crate::player_seam::with_pages(tiles::PAGES, || a_footer_playing(f.columns()));
+            player.view.push(crate::player::PageId::Ranking, None);
+            player
+                .view
+                .plugged_mut::<tiles::Shown>()
+                .expect("the page's state")
+                .strip = strip;
+            let rows = player.rows_now(&texts);
+            let (n, cell) = rows
+                .iter()
+                .enumerate()
+                .find_map(|(n, r)| {
+                    r.wholes
+                        .iter()
+                        .find(|w| w.text == TITLE)
+                        .map(|w| (n, w.from))
+                })
+                .expect("a title's words");
+            // THE POINTER COMES TO REST on the title: it is said.
+            let mut hand: Option<Box<dyn Any>> = None;
+            let under = Under {
+                at: (0.0, 0.0),
+                line: Some(n),
+                row: Some(n),
+                cell: Some(cell),
+                base: 0,
+                ctrl: false,
+                shift: false,
+                frame: None,
+            };
+            player.hovered(&under, &mut hand, &mut way);
+            assert_eq!(
+                explained(&player, hand.as_deref(), n, cell, &seen).as_deref(),
+                Some(TITLE),
+                "strip {strip}"
+            );
+            // THE PAGE TURNS under it, the hand still: the new video's name.
+            player
+                .view
+                .plugged_mut::<tiles::Shown>()
+                .expect("the page's state")
+                .turned = true;
+            assert_eq!(
+                explained(&player, hand.as_deref(), n, cell, &seen).as_deref(),
+                Some(TURNED),
+                "strip {strip}: the page before's title"
+            );
+            // THE REGION SCROLLS under it: the pointer's line draws a row
+            // with no name at that cell, and the line says none.
+            let rows = player.rows_now(&texts);
+            let bare = (0..rows.len())
+                .find(|&m| crate::player_rows::whole_under(&rows, m, cell).is_none())
+                .expect("a row with no name at the cell");
+            assert_eq!(
+                explained(&player, hand.as_deref(), bare, cell, &seen),
+                None,
+                "strip {strip}: a name on row {bare}, which draws none there"
+            );
+        }
     }
 
     /// FAILS IF: `TAB` in the footer stops taking the keyboard to the

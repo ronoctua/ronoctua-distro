@@ -1884,6 +1884,14 @@ pub struct View {
     /// ([`View::bring_to_top`]): its line, for the door to put first after
     /// its own follow ([`View::take_top`]), once.
     top_owed: Option<usize>,
+    /// HOW MANY LINES OF ROWS THE DOOR SHOWS, as it last told
+    /// ([`View::page_is`]) — the room a row brought to the top keeps under it
+    /// ([`Level::held_top`]). Told by a `&self` door, so a cell.
+    page_lines: std::cell::Cell<usize>,
+    /// THE MOST LINES THE DOOR'S PAGE CAN HOLD, when it shows fewer now and
+    /// says so ([`View::page_holds`]) — the footer's region; that room is
+    /// never less.
+    page_most: std::cell::Cell<usize>,
     /// The home the picker's places are in, instead of this machine's own
     /// folders — a photograph's ([`View::blank`]).
     home: Option<std::path::PathBuf>,
@@ -2980,11 +2988,27 @@ impl View {
 
     /// How many lines of rows the door shows — told before a key is handed
     /// over, so the picker's `PgUp` and `PgDn` walk half a screen
-    /// (`FilePicker::page_is`).
+    /// (`FilePicker::page_is`), and the room a row brought to the top keeps
+    /// under it is the door's page ([`Level::held_top`]): a window tells it
+    /// again with every rows it builds, so a window made taller keeps it too.
     pub fn page_is(&self, lines: usize) {
+        self.page_lines.set(lines);
         if let Some(p) = self.top().picker.as_ref() {
             p.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
         }
+    }
+
+    /// The most lines the door's page can hold, when it shows fewer now —
+    /// the footer's region (`region::Page::most`), a row short while the
+    /// explanation under its hint is up, and as short as its rows under its
+    /// ceiling. The room a row brought to the top keeps under it is never
+    /// less (`View::room_for_the_top`): the region grows back between
+    /// gestures with nothing told, and room sized off the lines it showed
+    /// at the gesture let the row above the title slide back into sight.
+    /// The picker's half a screen is still the lines shown
+    /// ([`View::page_is`]).
+    pub fn page_holds(&self, most: usize) {
+        self.page_most.set(most);
     }
 
     /// What the picker knows of this door's machine: its home — a
@@ -3024,6 +3048,8 @@ impl View {
             asking: None,
             clicked_control: None,
             top_owed: None,
+            page_lines: std::cell::Cell::new(0),
+            page_most: std::cell::Cell::new(0),
             home: None,
             swap: false,
             panel: false,
@@ -3866,7 +3892,9 @@ impl View {
     /// 2026-11-10: "ao virar, a tela vai para o título logo antes da lista"):
     /// what the person turned to is what they see, and `RET` turns again.
     /// The door puts the row first AFTER its own follow, which would scroll
-    /// it back by its margin ([`View::take_top`]). Nothing where the row is
+    /// it back by its margin ([`View::take_top`]) — and the page holds it
+    /// there after ([`Level::held_top`]): the room under it however short the
+    /// page, and the next gestures leave it first. Nothing where the row is
     /// not drawn.
     pub fn bring_to_top(
         &mut self,
@@ -3893,6 +3921,7 @@ impl View {
         if let Some(k) = cell {
             top.cell = k;
         }
+        top.held_top = Some(spot.to_owned());
         self.top_owed = Some(n);
     }
 
@@ -3900,6 +3929,72 @@ impl View {
     /// — taken, once.
     pub fn take_top(&mut self) -> Option<usize> {
         self.top_owed.take()
+    }
+
+    /// Whether a row a turn brought to the top holds it on the page on screen
+    /// ([`Level::held_top`]) — what a door asks before it builds the rows
+    /// [`View::kept_top`] reads.
+    #[must_use]
+    pub fn holds_a_top(&self) -> bool {
+        self.top().held_top.is_some()
+    }
+
+    /// THE ROW A TURN BROUGHT TO THE TOP STAYS THERE — its line among `rows`,
+    /// for the door to put first again after the follow that ends a gesture —
+    /// when it was the first line drawn as the gesture began (`was`, the
+    /// door's first row then) and the cursor's whole row is still on a page
+    /// of `lines` lines that starts at it: on its title's arrows, or on the
+    /// list under it.
+    ///
+    /// # Why the follow does not have it
+    ///
+    /// The follow keeps two rows of margin over the cursor. With the title
+    /// first and the cursor on its arrows, or on the first video under it,
+    /// that margin scrolled the title back down a line or two on the very
+    /// next key — `]` on the last page, `←` between the arrows, `↓` into the
+    /// list — and on a click that only chose a video: the filters above came
+    /// back into sight and the list jumped under the person's eyes (the
+    /// owner, 2026-11-11: the list stays aligned on its count). What is above
+    /// the title is not the list's context. A cursor that goes above it, or
+    /// below the page, is followed as always; and a page scrolled away from
+    /// the title stays where it was put.
+    #[must_use]
+    pub fn kept_top(&self, rows: &[Row], was: usize, lines: usize) -> Option<usize> {
+        let spot = self.top().held_top.as_deref()?;
+        let at = rows.iter().position(|r| r.spot == spot)?;
+        let cursor = self.cursor();
+        let end = cursor + Row::lines_of(rows, cursor);
+        (was == at && cursor >= at && end <= at + lines).then_some(at)
+    }
+
+    /// THE ROOM A ROW BROUGHT TO THE TOP KEEPS UNDER IT ([`Level::held_top`]):
+    /// rows of plain air after the page's own, until a page of the door's
+    /// lines ([`View::page_is`]) — or of the most its page can hold, when it
+    /// says more ([`View::page_holds`]) — starts at it.
+    ///
+    /// # Why the list reserves it
+    ///
+    /// Every door puts a row first only as far as the list's end lets it — a
+    /// page may not scroll past its last row — so a short page could not
+    /// bring its title to the top: the owner's last page, "26–27 of 27", two
+    /// videos under it, stayed where it was and the filters above it stayed
+    /// in sight (2026-11-11). The air makes the end far enough, in every
+    /// door alike, and a door never scrolls past what the list holds. It is
+    /// nothing a click takes or the pointer lights, no stop of the cursor
+    /// and no section's title (`player_rows::takes`, `section_ring`) — and
+    /// only on a page whose title a turn brought up: a list never turned is
+    /// drawn as it was.
+    fn room_for_the_top(&self, b: &mut Builder<'_>) {
+        let Some(spot) = self.top().held_top.as_deref() else {
+            return;
+        };
+        let Some(at) = b.out.iter().position(|r| r.spot == spot) else {
+            return;
+        };
+        let lines = self.page_lines.get().max(self.page_most.get());
+        while b.len() < at + lines {
+            b.inert(crate::chrome::AIR);
+        }
     }
 
     /// The cursor stays on its row by identity.
@@ -5500,6 +5595,7 @@ impl View {
         }
         Builder::build_shown(left, room, (top.cursor, top.cell), shown, texts, |b| {
             self.page_rows(state, b);
+            self.room_for_the_top(b);
         })
     }
 
@@ -9762,6 +9858,7 @@ mod tests {
                 parts: vec!["Slow Kitchen".into()],
                 after: Vec::new(),
                 end: vec![mark.clone()],
+                named: true,
             }],
             target: Target::Ranked(id),
             spot: "ranked-v1".into(),

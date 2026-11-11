@@ -73,6 +73,50 @@ pub struct Row {
     /// cursor's (`chrome::row_grounds` in the window, `region::Told::ground`
     /// in the footer). `None`: the page's ground, as every row.
     pub ground: Option<tokens::Color>,
+    /// THE NAMES DRAWN ON THE LINE that its room may cut — a tile's title, a
+    /// video's channel ([`Whole`]): each says itself whole under the pointer,
+    /// in every door ([`whole_under`]). Several on a line of a grid, one a
+    /// tile.
+    pub wholes: Vec<Whole>,
+}
+
+/// A NAME DRAWN ON A LINE — a tile's title, a video's channel — that its
+/// room cuts with `…`, or wraps over the lines it has: the cells its words
+/// take on this line, as a field's `at`, and the name WHOLE, which the
+/// pointer resting on those cells says on the line the door says what is
+/// under the pointer on — the footer's minibuffer for a window with no
+/// header, the footer's explanation line for its region (the owner,
+/// 2026-11-11: "ao colocar o cursor do mouse em cima do título do vídeo ou
+/// nome do canal … seja mostrado o título ou nome completo no minibuffer").
+///
+/// # Only on the words
+///
+/// The cells are the words' own, never the box they stand in: the picture
+/// above them, the score and the arrows beside them, the `⋯` and the marks
+/// keep their own sentences, and the air past the words says nothing of a
+/// name. Placed ONCE, where the line is built (`player_posters`), so the
+/// window and the footer read the same cells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Whole {
+    /// The words' first cell, as a field's `at`.
+    pub from: u16,
+    /// How many cells they take on this line.
+    pub width: u16,
+    /// The name whole — data.
+    pub text: String,
+}
+
+/// The NAME WHOLE at cell `column` of line `n` of `rows` — a field's `at`
+/// — when the words of one are drawn there ([`Row::wholes`]): what the
+/// pointer resting there says, in every door, after a control under it and
+/// before the row's own sentence.
+#[must_use]
+pub fn whole_under(rows: &[Row], n: usize, column: u16) -> Option<&str> {
+    rows.get(n)?
+        .wholes
+        .iter()
+        .find(|w| crate::chrome::in_cell(column, w.from, w.width))
+        .map(|w| w.text.as_str())
 }
 
 /// How the pointer resting on a line lights it — the answer both doors paint
@@ -530,6 +574,7 @@ pub fn of_the_picker(r: crate::file_picker::Row) -> Row {
         caret: r.caret,
         lit: Lit::Row,
         ground: None,
+        wholes: Vec::new(),
     }
 }
 
@@ -780,6 +825,7 @@ impl Builder<'_> {
             caret: None,
             lit: Lit::Row,
             ground: None,
+            wholes: Vec::new(),
         });
     }
 
@@ -914,6 +960,7 @@ impl Builder<'_> {
                         caret: None,
                         lit: Lit::Row,
                         ground: None,
+                        wholes: Vec::new(),
                     });
                 }
             }
@@ -1009,6 +1056,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1177,6 +1225,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1570,6 +1619,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1709,6 +1759,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1771,6 +1822,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1847,6 +1899,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }
@@ -1970,6 +2023,7 @@ impl Builder<'_> {
                     caret: None,
                     lit: Lit::Row,
                     ground: None,
+                    wholes: Vec::new(),
                 }),
             }
         }
@@ -2179,6 +2233,7 @@ impl Builder<'_> {
             caret: None,
             lit: Lit::Row,
             ground: None,
+            wholes: Vec::new(),
         });
     }
 
@@ -2230,6 +2285,7 @@ impl Builder<'_> {
                 caret: None,
                 lit: Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
     }

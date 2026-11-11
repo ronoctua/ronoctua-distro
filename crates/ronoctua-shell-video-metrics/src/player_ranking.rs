@@ -1044,7 +1044,9 @@ pub fn spot_of(id: &VideoId) -> String {
 /// it runs, the marks at that line's end — or at the first's, with neither
 /// known. In a TILE of the grid, a box too narrow for both on a line: its
 /// score first — what the ranking is by, never cut — and its channel under
-/// it, the marks beside the channel.
+/// it, the marks beside the channel. THE CHANNEL IS A NAME on either
+/// (`Said::named`): cut to a tile, or parted over a row's lines, the pointer
+/// resting on it says it whole, as on the title.
 fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Texts) -> Vec<Said> {
     let score = crate::video_metrics_words::score_number(v.score, texts);
     if layout == Layout::Grid {
@@ -1053,11 +1055,13 @@ fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Tex
                 parts: vec![score],
                 after: ratings(v),
                 end: Vec::new(),
+                named: false,
             },
             Said {
                 parts: vec![v.channel.clone()],
                 after: Vec::new(),
                 end: marks(v),
+                named: true,
             },
         ];
     }
@@ -1071,6 +1075,7 @@ fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Tex
         parts: vec![v.channel.clone(), score],
         after: ratings(v),
         end: Vec::new(),
+        named: true,
     };
     if when.is_empty() {
         first.end = marks(v);
@@ -1082,6 +1087,7 @@ fn under(v: &RankedVideo, layout: Layout, now_s: i64, texts: &ronoctua_i18n::Tex
             parts: when,
             after: Vec::new(),
             end: marks(v),
+            named: false,
         },
     ]
 }
@@ -2632,6 +2638,48 @@ pub(crate) mod tests {
         // A KEY THAT TURNS NOTHING brings nothing.
         v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
         assert_eq!(v.take_top(), None, "the last page's `]` moved the door");
+    }
+
+    /// FAILS IF: the ranking's title brought up by a turn loses the room
+    /// under it when the short page turned to LANDS — the owner's 27 videos,
+    /// "26–27 of 27" over two of them (2026-11-11): the page held stays
+    /// drawn while the next one is read, so a door puts the title first on
+    /// the long page, and the short one, arriving later, pulled it back
+    /// down as far as the list's end, the filters above in sight — or the
+    /// title is not kept first under the cursor once the page is in. In both
+    /// layouts.
+    #[test]
+    fn a_short_ranking_page_that_lands_keeps_its_title_first() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        let lines = 30;
+        for layout in [Layout::List, Layout::Grid] {
+            let mut v = on_the_ranking(25);
+            v.ranking_mut().layout = layout;
+            v.ranking_mut().given((0..25).map(video).collect(), 27);
+            v.page_is(lines);
+            v.key(Press::Ranking(RankingKey::Later), Some(&s), 100, &t);
+            // THE PAGE HELD, still drawn while the next one is read.
+            let held = v.rows(Some(&s), 100, &t);
+            let title = row_at(&held, crate::paging::LIST_TITLE);
+            assert_eq!(v.take_top(), Some(title), "{layout:?}");
+            assert!(held.len() >= title + lines, "{layout:?}: a page too short");
+            // THE SHORT PAGE LANDS.
+            v.ranking_mut().given(vec![video(25), video(26)], 27);
+            let rows = v.rows(Some(&s), 100, &t);
+            assert!(
+                rows.iter()
+                    .any(|r| r.fields.iter().any(|f| f.text == "26–27 of 27")),
+                "{layout:?}: not the owner's last page"
+            );
+            assert_eq!(row_at(&rows, crate::paging::LIST_TITLE), title);
+            assert_eq!(
+                rows.len(),
+                title + lines,
+                "{layout:?}: the short page keeps no room for its title"
+            );
+            assert_eq!(v.kept_top(&rows, title, lines), Some(title), "{layout:?}");
+        }
     }
 
     /// FAILS IF: the arrows beside the ranking's list title stop turning its

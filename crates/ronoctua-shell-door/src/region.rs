@@ -858,6 +858,22 @@ pub struct Page {
     pub offset: usize,
     /// How many rows the page holds.
     pub lines: usize,
+    /// The most rows the page CAN hold — never fewer than `lines`. A
+    /// window's page holds what it shows; the footer's region shows fewer
+    /// than its ceiling while the explanation under the hint takes a row of
+    /// it, or while its rows are too few to reach it, and grows back by
+    /// itself, between gestures, with nothing told.
+    ///
+    /// # Why a door says it
+    ///
+    /// A row a view puts first keeps blank room under it, so a short page
+    /// can bring its title to the top (a door scrolls only as far as the
+    /// list's end). Sized off `lines` at the gesture, that room was a row
+    /// short as soon as the explanation went: the footer holds its first row
+    /// at the list's end less the lines it shows NOW, and the line above the
+    /// title slid back into sight. Sized off this, it is enough at every
+    /// height the page can take.
+    pub most: usize,
 }
 
 /// A FEATURE'S VIEW in the footer's region — see the module.
@@ -1938,6 +1954,7 @@ impl Recorder {
             page: Page {
                 offset: 0,
                 lines: 0,
+                most: 0,
             },
             orders: None,
             owed: Vec::new(),
@@ -4305,12 +4322,14 @@ mod tests {
         let mut w = w.with_page(Page {
             offset: 4,
             lines: 9,
+            most: 10,
         });
         assert_eq!(
             w.page_shown(),
             Page {
                 offset: 4,
-                lines: 9
+                lines: 9,
+                most: 10,
             }
         );
         w.clipboard(crate::clipboard_wire::Act::Pin { n: 2 }, 11);
@@ -4325,9 +4344,11 @@ mod tests {
             .with_page(Page {
                 offset: 1,
                 lines: 3,
+                most: 5,
             })
             .lending(Lent::none());
         assert_eq!(lending.page_shown().offset, 1);
+        assert_eq!(lending.page_shown().most, 5, "the most the page holds");
         lending.clipboard(crate::clipboard_wire::Act::Clear, 5);
         assert_eq!(
             lending.way.owed,

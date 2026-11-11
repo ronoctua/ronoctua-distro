@@ -65,6 +65,7 @@ use ronoctua_video_metrics::{
 
 use crate::chrome::Kind;
 use crate::fields::{Field, Hit as FilesHit, Ink};
+use crate::player_rows::Whole;
 use crate::video_metrics_words as words;
 
 /// The keys this view answers to, and where each one works. The hint line is
@@ -1512,6 +1513,12 @@ pub struct Row {
     /// box from there ([`Row::words_box`]).
     /// `None`: the words begin at the row's `left`, as every other line's.
     pub words_at: Option<u16>,
+    /// THE NAMES DRAWN ON THE LINE — a video's title, its channel, cut to a
+    /// tile or wrapped over a row's lines (`player_rows::Whole`, the player's
+    /// own): where the pointer rests on one, what explains the thing names it
+    /// by it, whole ([`View::explained_at`]) — the window's foot, the
+    /// footer's explanation line.
+    pub wholes: Vec<Whole>,
 }
 
 impl Row {
@@ -1697,6 +1704,21 @@ pub struct View {
     /// asked is in ([`View::settle_on_list`]), with the cursor on its first
     /// video.
     top_owed: bool,
+    /// THE LIST'S TITLE HOLDS THE TOP OF THE DOOR — put there by a turned
+    /// page ([`View::settle_on_list`]), for as long as the Videos page is on
+    /// screen: the list keeps the room under it that lets it be the first
+    /// line drawn, however short the page ([`View::rows`]), and a gesture
+    /// that began with it there leaves it there while the cursor stays under
+    /// it ([`View::title_kept`]). The player's ranking holds its own alike
+    /// (`player::View::kept_top`).
+    title_held: bool,
+    /// HOW MANY LINES OF ROWS THE DOOR SHOWS, as it last told
+    /// ([`View::page_is`]): the room a held title keeps under it.
+    page_lines: std::cell::Cell<usize>,
+    /// THE MOST LINES THE DOOR'S PAGE CAN HOLD, when it shows fewer now and
+    /// says so ([`View::page_holds`]) — the footer's region; that room is
+    /// never less.
+    page_most: std::cell::Cell<usize>,
     /// THE VIEW IS A WINDOW'S, where no keyboard reaches a shortcut and
     /// `LEADER Alt` does: a sentence that teaches a key teaches it so
     /// ([`View::page_keys`]). The footer's region teaches the bare key.
@@ -1906,6 +1928,7 @@ impl View {
         let title = rows
             .iter()
             .position(|x| x.spot == crate::paging::LIST_TITLE)?;
+        self.title_held = true;
         if let Some((i, row)) = rows
             .iter()
             .enumerate()
@@ -2004,11 +2027,26 @@ impl View {
     }
 
     /// How many lines of rows the door shows, for the file picker's `PgUp`
-    /// and `PgDn` — told before a key is handed over.
+    /// and `PgDn` — told before a key is handed over — and the room a held
+    /// title keeps under it ([`View::title_kept`]): a window tells it again
+    /// with every rows it builds, so a window made taller keeps it too.
     pub fn page_is(&self, lines: usize) {
+        self.page_lines.set(lines);
         if let Some(h) = self.picking.as_ref() {
             h.picker.page_is(u16::try_from(lines).unwrap_or(u16::MAX));
         }
+    }
+
+    /// The most lines the door's page can hold, when it shows fewer now —
+    /// the footer's region (`region::Page::most`), a row short while the
+    /// explanation under its hint is up, and as short as its rows under its
+    /// ceiling. The room a held title keeps under it is never less
+    /// ([`View::title_kept`]): the region grows back between gestures with
+    /// nothing told, and room sized off the lines it showed at the gesture
+    /// let the row above the title slide back into sight. The picker's half
+    /// a screen is still the lines shown ([`View::page_is`]).
+    pub fn page_holds(&self, most: usize) {
+        self.page_most.set(most);
     }
 
     /// Whether the file picker is up and takes `key` — the door hands it as
@@ -2235,6 +2273,8 @@ impl View {
     /// several things, and its line names none of them), and a glyph under
     /// it ([`Control`]) acts at once. `None` for a line no click takes — a
     /// title, a note, the air, a picture's line —, which explains nothing.
+    /// ON A NAME'S WORDS — a video's title, its channel ([`Row::wholes`]) —
+    /// the thing is named by that name whole ([`View::name_at`]).
     #[must_use]
     pub fn explained_at(
         &self,
@@ -2243,9 +2283,27 @@ impl View {
         column: Option<u16>,
         texts: &ronoctua_i18n::Texts,
     ) -> Option<crate::door::Explained> {
-        use crate::door::Gesture;
         let pointed = self.pointed(rows, n, column)?;
-        Some(match pointed {
+        let mut said = self.said_at(pointed, rows, texts);
+        // ON A NAME'S WORDS — a title, a channel — the thing is NAMED by it,
+        // whole: the room cut it, and the channel is not the video's title.
+        if !matches!(pointed, Pointed::Glyph(..))
+            && let Some(name) = whole_on(rows, n, column)
+        {
+            name.clone_into(&mut said.name);
+        }
+        Some(said)
+    }
+
+    /// [`View::explained_at`]'s thing, explained by what it is.
+    fn said_at(
+        &self,
+        pointed: Pointed<'_>,
+        rows: &[Row],
+        texts: &ronoctua_i18n::Texts,
+    ) -> crate::door::Explained {
+        use crate::door::Gesture;
+        match pointed {
             // A GLYPH acts on the first click — and says, quietly under its
             // sentence, what holds once it is switched off.
             Pointed::Glyph(_, _, c) => crate::door::Explained {
@@ -2276,7 +2334,19 @@ impl View {
                 };
                 self.explained_row(row, how, texts)
             }
-        })
+        }
+    }
+
+    /// THE NAME WHOLE at cell `column` of line `n` — a video's title, its
+    /// channel, cut to a tile or wrapped over a row's lines ([`Row::wholes`])
+    /// — where the pointer is on a thing that names itself by it: a video of
+    /// a shelf or a row, never a glyph, and only on the name's own cells.
+    #[must_use]
+    pub fn name_at<'r>(&self, rows: &'r [Row], n: usize, column: Option<u16>) -> Option<&'r str> {
+        match self.pointed(rows, n, column)? {
+            Pointed::Glyph(..) => None,
+            Pointed::Cell(_) | Pointed::Row(..) => whole_on(rows, n, column),
+        }
     }
 
     /// WHAT THE THING AT CELL `column` OF LINE `n` IS, by the identity the
@@ -2725,6 +2795,8 @@ impl View {
         if let Some(page) = self.trail.pop() {
             self.left_at.remove(&page);
         }
+        // THE TITLE HELD IS THE PAGE'S, and goes with it.
+        self.title_held = false;
         let here = self.page().clone();
         (self.at, self.last) = self.left_at.remove(&here).unwrap_or_default();
     }
@@ -2736,6 +2808,7 @@ impl View {
         }
         self.left_at
             .insert(self.page().clone(), (self.at.clone(), self.last));
+        self.title_held = false;
         self.trail.push(page);
         self.at.clear();
         self.last = 0;
@@ -3851,17 +3924,81 @@ impl View {
             .iter()
             .any(|x| x.spot == self.at || x.cells.iter().any(|c| c.spot == self.at))
         {
-            return rows;
+            return self.room_for_the_title(rows);
         }
         let near = rows.get(self.nearest(&rows)).map(|x| {
             x.cells
                 .first()
                 .map_or_else(|| x.spot.clone(), |c| c.spot.clone())
         });
-        match near {
+        self.room_for_the_title(match near {
             Some(spot) => lay_out(items, left, room, &spot),
             None => rows,
+        })
+    }
+
+    /// THE ROOM THE LIST KEEPS UNDER ITS HELD TITLE: rows of plain air after
+    /// the page's own, until a page of the door's lines ([`View::page_is`])
+    /// — or of the most its page can hold, when it says more
+    /// ([`View::page_holds`]) — starts at the title.
+    ///
+    /// # Why the list reserves it
+    ///
+    /// Every door puts a row first only as far as the list's end lets it — a
+    /// page may not scroll past its last row — so a short page could not
+    /// bring its title to the top: "By score 2 of 2" over two videos stayed
+    /// where it was, the filters above it in sight (the owner, 2026-11-11).
+    /// The air makes the end far enough, in both doors alike, and no door
+    /// scrolls past what the list holds. It is the air between sections —
+    /// nothing a click takes or the pointer lights, no stop of the cursor
+    /// and no section's title ([`Row::takes`], `section_ring`) — and only
+    /// while a turned page's title holds the top: a list never turned is
+    /// drawn as it was.
+    fn room_for_the_title(&self, mut rows: Vec<Row>) -> Vec<Row> {
+        if !self.title_held || *self.page() != Page::Videos {
+            return rows;
         }
+        let Some(at) = rows
+            .iter()
+            .position(|r| r.spot == crate::paging::LIST_TITLE)
+        else {
+            return rows;
+        };
+        let lines = self.page_lines.get().max(self.page_most.get());
+        for n in 0..(at + lines).saturating_sub(rows.len()) {
+            rows.push(plain(crate::chrome::AIR, true, format!("air#room-{n}")));
+        }
+        rows
+    }
+
+    /// THE LIST'S TITLE A TURN PUT FIRST STAYS THERE — its line among `rows`,
+    /// for the door to put first again after the follow that ends a gesture
+    /// — when it was the first line drawn as the gesture began (`was`, the
+    /// door's first row then) and the cursor's whole row is still on a page
+    /// of `lines` lines that starts at it.
+    ///
+    /// # Why the follow does not have it
+    ///
+    /// The follow keeps two rows of margin over the cursor, and the cursor
+    /// starts on the first video, right under the title: the next key that
+    /// left it there — `]` on the last page, a quick mark — and a click that
+    /// only chose that video, scrolled the title back down a line, and the
+    /// list jumped under the person's eyes (the owner, 2026-11-11: the list
+    /// stays aligned on its title). What is above the title is not the
+    /// list's context. A cursor that goes above it, or below the page, is
+    /// followed as always; and a page scrolled away from the title stays
+    /// where it was put.
+    #[must_use]
+    pub fn title_kept(&self, rows: &[Row], was: usize, lines: usize) -> Option<usize> {
+        if !self.title_held || *self.page() != Page::Videos {
+            return None;
+        }
+        let at = rows
+            .iter()
+            .position(|r| r.spot == crate::paging::LIST_TITLE)?;
+        let cursor = self.drawn_cursor(rows);
+        let end = cursor + Row::lines_of(rows, cursor);
+        (was == at && cursor >= at && end <= at + lines).then_some(at)
     }
 
     /// THE FILE PICKER'S ROWS, as the view's own while it is up: under its
@@ -3919,6 +4056,7 @@ impl View {
                     default: None,
                     ground: None,
                     words_at: None,
+                    wholes: Vec::new(),
                 }
             })
             .collect();
@@ -4649,6 +4787,11 @@ struct Tile {
     /// arrows of its rating — and its age and score alone, for a line too
     /// short for the channel ([`entry_line`]).
     said: [String; 2],
+    /// WHERE THE CHANNEL STANDS in the first of those, `(cells before it,
+    /// its cells)` — as the language put it there, read off the sentence
+    /// (`Texts::t_args_marked`, the name's own range), never by finding the
+    /// channel's words in it: the pointer resting there names it whole.
+    channel_in_said: Option<(u16, u16)>,
     /// How long ago it was published; empty when that is not known.
     age: String,
     /// What it scores, a bare number (`words::score_number`): the arrows of
@@ -4669,32 +4812,44 @@ struct Tile {
 fn tile_of(v: &RankedVideo, r: &Readings, texts: &ronoctua_i18n::Texts) -> Tile {
     let age = age_of(v, r, texts);
     let score = words::score_number(v.score, texts);
-    // WITH NO AGE, the channel and the score — and the score alone.
-    let said = if age.is_empty() {
-        [
-            texts.t_with(
+    // WITH NO AGE, the channel and the score — and the score alone. THE
+    // CHANNEL TRAVELS AS A NAME, so the sentence says where it landed.
+    let channel = Arg::Name(&v.channel);
+    let (with_channel, short) = if age.is_empty() {
+        (
+            texts.t_args_marked(
                 key::VIDEO_METRICS_VIDEO_ROW_UNDATED,
-                &[("channel", &v.channel), ("score", &score)],
+                &[("channel", channel), ("score", Arg::Text(&score))],
             ),
             score.clone(),
-        ]
+        )
     } else {
-        [
-            texts.t_with(
+        (
+            texts.t_args_marked(
                 key::VIDEO_METRICS_VIDEO_ROW,
-                &[("channel", &v.channel), ("age", &age), ("score", &score)],
+                &[
+                    ("channel", channel),
+                    ("age", Arg::Text(&age)),
+                    ("score", Arg::Text(&score)),
+                ],
             ),
             texts.t_with(
                 key::VIDEO_METRICS_VIDEO_ROW_SHORT,
                 &[("age", &age), ("score", &score)],
             ),
-        ]
+        )
     };
+    let channel_in_said = with_channel.names.first().and_then(|at| {
+        let width = ronoctua_render::layout::width;
+        let before = with_channel.text.get(..at.start)?;
+        Some((width(before), width(with_channel.text.get(at.clone())?)))
+    });
     Tile {
         spot: video_spot(&v.id),
         title: v.title.clone(),
         channel: v.channel.clone(),
-        said,
+        said: [with_channel.text, short],
+        channel_in_said,
         age,
         score,
         ratings: ratings_of(v, texts),
@@ -6483,6 +6638,7 @@ fn plain(fields: Vec<Field>, heading: bool, spot: String) -> Row {
         default: None,
         ground: None,
         words_at: None,
+        wholes: Vec::new(),
     }
 }
 
@@ -6697,6 +6853,7 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                         default: p.default.clone(),
                         ground: None,
                         words_at: None,
+                        wholes: Vec::new(),
                     };
                     if k == 0 && !p.controls.is_empty() {
                         put_strip(
@@ -6759,6 +6916,7 @@ fn lay_out(items: Vec<Item>, left: u16, room: u16, at: &str) -> Vec<Row> {
                         false,
                         if k == 0 { t.spot.clone() } else { spot("rest") },
                     );
+                    row.wholes = title_whole(&row, &t.title);
                     if k == 0 {
                         row.target = t.target.clone();
                     } else {
@@ -6851,14 +7009,21 @@ fn entry_line(row: &mut Row, t: &Tile, colour: tokens::Color, left: u16, end: u1
             .saturating_add(GLYPH_AIR)
             .saturating_add(marks),
     );
-    let words = t
-        .said
-        .iter()
-        .map(String::as_str)
-        .find(|w| width(w) <= before)
-        .unwrap_or(t.score.as_str());
+    let chosen = t.said.iter().position(|w| width(w) <= before);
+    let words = chosen.map_or(t.score.as_str(), |k| t.said[k].as_str());
     row.fields
         .push(piece(left, words.to_owned(), colour, width(words)));
+    // ITS CHANNEL, where the words say it, names itself whole under the
+    // pointer — the thing explained there is the channel, not the video.
+    if chosen == Some(0)
+        && let Some((from, cells)) = t.channel_in_said.filter(|(_, cells)| *cells > 0)
+    {
+        row.wholes.push(Whole {
+            from: left + from,
+            width: cells,
+            text: t.channel.clone(),
+        });
+    }
     let at = left.saturating_add(width(words)).saturating_add(GLYPH_AIR);
     // THE GLYPHS ONLY WHERE THEY FIT WHOLE — the marks against the edge,
     // the arrows after the score with a cell of air before the marks.
@@ -6939,6 +7104,7 @@ fn strip_entry(
         row.words_at = Some(text_at);
         if let Some(text) = title.get(k) {
             row.fields.push(piece(text_at, text.clone(), label, words));
+            row.wholes = title_whole(&row, &t.title);
         } else if k == title.len() {
             entry_line(&mut row, t, value, text_at, end);
         }
@@ -6972,6 +7138,43 @@ fn strip_entry(
     row.name.clone_from(&t.title);
     row.words_at = Some(text_at);
     out.push(row);
+}
+
+/// The name whose words are at cell `column` of line `n` ([`Row::wholes`]),
+/// whatever is under the pointer there.
+fn whole_on(rows: &[Row], n: usize, column: Option<u16>) -> Option<&str> {
+    let col = column?;
+    rows.get(n)?
+        .wholes
+        .iter()
+        .find(|w| crate::chrome::in_cell(col, w.from, w.width))
+        .map(|w| w.text.as_str())
+}
+
+/// THE TITLE'S NAME on a line of it, `row` holding the line's one field:
+/// the cells of its words, said whole under the pointer.
+fn title_whole(row: &Row, title: &str) -> Vec<Whole> {
+    row.fields
+        .first()
+        .map(|f| Whole {
+            from: f.at,
+            width: ronoctua_render::layout::width(&f.text),
+            text: title.to_owned(),
+        })
+        .into_iter()
+        .collect()
+}
+
+/// The field just put on a shelf's line is a NAME — a tile's title or its
+/// channel, cut to the tile: its cells say `whole` under the pointer.
+fn named(row: &mut Row, whole: &str) {
+    if let Some(f) = row.fields.last() {
+        row.wholes.push(Whole {
+            from: f.at,
+            width: ronoctua_render::layout::width(&f.text),
+            text: whole.to_owned(),
+        });
+    }
 }
 
 /// One shelf of the grid: the pictures' lines, the titles' two, the
@@ -7051,6 +7254,7 @@ fn shelf(
                         Kind::ListedSetting.tones(focused)
                     };
                     row.fields.push(piece(inside(*from), text, label, width));
+                    named(&mut row, &t.title);
                 }
             } else if channel_line == Some(line) {
                 row.fields.push(piece(
@@ -7059,6 +7263,7 @@ fn shelf(
                     Kind::ListedFact.tones(focused).1,
                     width,
                 ));
+                named(&mut row, &t.channel);
             } else if line == score_line {
                 // THE SCORE, never cut for a glyph — and the arrows of its
                 // rating a cell after it, where they fit whole.
@@ -8375,6 +8580,70 @@ pub(crate) mod tests {
             );
             assert_eq!(v.cursor(&rows), title + 1, "{layout:?}");
             assert_eq!(v.settle_on_list(&rows, &r), None, "placed twice");
+        }
+    }
+
+    /// FAILS IF: a turned page whose title is put first does not keep, under
+    /// it, the room a page of the door's lines takes — so a short last
+    /// page's title could not be first in either door (the owner's "2 of 2",
+    /// 2026-11-11) — or keeps it from the lines told before and not now; or
+    /// that room is anything but the air between sections: a line a click
+    /// takes or the pointer lights, a stop of the cursor, a section's title;
+    /// or the title is not kept first while the cursor's row is under it on
+    /// the page, or is kept when it was not first; or a page never turned to
+    /// is given room, or the room outlives the Videos page. In every layout.
+    #[test]
+    fn a_title_put_first_keeps_its_room_and_the_room_is_air() {
+        let t = texts("en-GB");
+        // A DOOR TALLER THAN THE SHORT PAGE in every layout: a strip's
+        // pictures take lines.
+        let lines = 80;
+        for layout in Layout::ALL {
+            // A SHORT PAGE NEVER TURNED TO is drawn as it was.
+            let (mut v, r) = on_page(1, 27);
+            v.layout = layout;
+            v.page_is(lines);
+            let own = v.rows(&r, COLUMNS, &t);
+            let title = row_of(&own, crate::paging::LIST_TITLE);
+            assert!(own.len() < title + lines, "{layout:?}: a page too long");
+            assert_eq!(
+                own.last().map(|x| x.spot.as_str()),
+                Some(crate::paging::LIST_PAGER),
+                "{layout:?}: a page never turned to was given room"
+            );
+            // TURNED TO, its title is put first, and keeps its room.
+            let (mut v, mut r) = on_page(0, 27);
+            v.layout = layout;
+            v.page_is(lines);
+            press(&mut v, &r, Press::PageOn);
+            if let Some(l) = r.listed.as_mut() {
+                l.query.page = 1;
+            }
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(v.settle_on_list(&rows, &r), Some(title), "{layout:?}");
+            let rows = v.rows(&r, COLUMNS, &t);
+            assert_eq!(rows.len(), title + lines, "{layout:?}: no room");
+            assert_eq!(rows[own.len() - 1].spot, crate::paging::LIST_PAGER);
+            for (n, x) in rows.iter().enumerate().skip(own.len()) {
+                assert!(x.fields.is_empty(), "{layout:?}: line {n} says something");
+                assert!(!x.takes(), "{layout:?}: line {n} takes a click");
+                assert!(!x.stops(), "{layout:?}: the cursor stops on line {n}");
+                assert!(
+                    !ronoctua_shell_kit::section_ring::is_title(&x.fields, x.takes()),
+                    "{layout:?}: line {n} begins a section"
+                );
+            }
+            // KEPT FIRST while the cursor's row is under it on the page.
+            assert_eq!(v.title_kept(&rows, title, lines), Some(title));
+            assert_eq!(v.title_kept(&rows, title - 1, lines), None, "not first");
+            assert_eq!(v.title_kept(&rows, title, 1), None, "past the page");
+            // A DOOR TALLER NOW keeps the page it has now.
+            v.page_is(lines + 5);
+            assert_eq!(v.rows(&r, COLUMNS, &t).len(), title + lines + 5);
+            // AND THE ROOM IS THE PAGE'S: opened again, none.
+            let _ = v.open(Page::Home);
+            let _ = v.open(Page::Videos);
+            assert_eq!(v.rows(&r, COLUMNS, &t).len(), own.len(), "{layout:?}");
         }
     }
 
@@ -10273,6 +10542,117 @@ pub(crate) mod tests {
         let (lines, channel) = said(Layout::GridWithChannel);
         assert_eq!(lines, usize::from(shelf_lines(true)));
         assert_eq!(channel, 10, "not every tile says its channel");
+    }
+
+    /// A video's title longer than a tile's two lines, for the tests of a
+    /// name said whole.
+    pub(crate) const LONG_TITLE: &str =
+        "A video whose title runs on far longer than any tile's two lines can ever hold";
+
+    /// And a channel's name longer than a tile is wide.
+    pub(crate) const LONG_CHANNEL: &str = "A channel whose name is far longer than a tile";
+
+    /// `r` with every video of its page titled [`LONG_TITLE`], of a channel
+    /// named [`LONG_CHANNEL`].
+    pub(crate) fn long_names(r: &mut Readings) {
+        for x in &mut r.listed.as_mut().expect("a page of videos").rows {
+            LONG_TITLE.clone_into(&mut x.title);
+            LONG_CHANNEL.clone_into(&mut x.channel);
+        }
+    }
+
+    /// FAILS IF: what explains a video of the list — the window's foot, the
+    /// footer's line — does not NAME it by its title WHOLE where the pointer
+    /// rests on the title's words, and by its channel's name whole on the
+    /// channel's, which a tile cuts (the owner, 2026-11-11); or the score,
+    /// the age, the picture or a glyph is named by the channel instead of
+    /// what it was named by. In every layout, in both languages.
+    #[test]
+    fn a_name_under_the_pointer_names_the_thing_whole() {
+        let mut r = readings();
+        long_names(&mut r);
+        for language in ["en-GB", "pt-BR"] {
+            let t = texts(language);
+            for layout in Layout::ALL {
+                let (mut v, _) = View::fresh(Page::Videos);
+                v.laid_out(layout);
+                let rows = v.rows(&r, COLUMNS, &t);
+                let what = format!("{language}, {layout:?}");
+                let name = |n: usize, column: u16| {
+                    v.explained_at(&rows, n, Some(column), &t).map(|e| e.name)
+                };
+                let (mut titles, mut channels, mut cut) = (0, 0, false);
+                // THE VIDEOS' LINES — a row's, a shelf's — and not the
+                // filters over them, whose words are no name.
+                let of_a_video = |n: usize| {
+                    let o = &rows[Row::owner(&rows, n)];
+                    matches!(o.target, Target::Video(_)) || !o.cells.is_empty()
+                };
+                for (n, row) in rows.iter().enumerate() {
+                    if !of_a_video(n) {
+                        continue;
+                    }
+                    for f in &row.fields {
+                        let text = f.text.trim_end_matches('…').trim_end();
+                        let last = f.at + ronoctua_render::layout::width(&f.text) - 1;
+                        if text.chars().count() > 1
+                            && LONG_TITLE.contains(text)
+                            && !LONG_CHANNEL.contains(text)
+                        {
+                            for column in [f.at, last] {
+                                assert_eq!(
+                                    name(n, column).as_deref(),
+                                    Some(LONG_TITLE),
+                                    "{what}: {:?} on line {n}",
+                                    f.text
+                                );
+                            }
+                            cut |= f.text.ends_with('…');
+                            titles += 1;
+                        } else if f.text.starts_with("A channel") {
+                            assert_eq!(
+                                name(n, f.at).as_deref(),
+                                Some(LONG_CHANNEL),
+                                "{what}: {:?} on line {n}",
+                                f.text
+                            );
+                            channels += 1;
+                            // THE WORDS AFTER IT on its line — the age, the
+                            // score — are the video's.
+                            if !f.text.ends_with('…') {
+                                assert_eq!(
+                                    name(n, last).as_deref(),
+                                    Some(LONG_TITLE),
+                                    "{what}: the score on line {n}"
+                                );
+                            }
+                        } else {
+                            // THE SCORE, THE AGE, THE PICTURE, A GLYPH.
+                            assert_ne!(
+                                name(n, f.at).as_deref(),
+                                Some(LONG_CHANNEL),
+                                "{what}: {:?} on line {n}",
+                                f.text
+                            );
+                        }
+                    }
+                    for c in &row.controls {
+                        assert_eq!(
+                            name(n, c.from).as_deref(),
+                            Some(c.name.as_str()),
+                            "{what}: a glyph on line {n}"
+                        );
+                    }
+                }
+                assert!(titles >= 10, "{what}: {titles} titles");
+                // THE LIST SAYS EVERY CHANNEL, the grid with the channel
+                // under each title too — and the grid's tile cuts both.
+                if layout != Layout::Grid {
+                    assert!(channels >= 10, "{what}: {channels} channels");
+                }
+                assert_eq!(cut, layout.grid(), "{what}: cut");
+            }
+        }
     }
 
     /// FAILS IF: what every door fills the download's sentence with teaches

@@ -14607,6 +14607,31 @@ impl Footer {
         g
     }
 
+    /// The most lines the shown region's page can hold
+    /// (`region::Page::most`): its ceiling — less the strip, for one in
+    /// sections — before the explanation takes its row, and however few
+    /// rows it has now.
+    ///
+    /// # Why not the grid's lines
+    ///
+    /// Those are the region's height NOW: one short while the explanation
+    /// under the hint is up (`grid`), and the list's own length while that
+    /// is under the ceiling (`grid_full`). Both come back between gestures,
+    /// with nothing told to the region — the pointer leaves the hint, an
+    /// echo takes the line, the list grows — and `current_offset` holds the
+    /// first row at the end less the lines shown then. A title a region put
+    /// first over room sized off the shorter page slid down by the
+    /// difference: the line above it back in sight. Asked of the ceiling,
+    /// the room is enough at every height, and a short region grows to it
+    /// at once.
+    fn region_most_lines(&self) -> usize {
+        let ceiling = self.expansion_ceiling();
+        if self.hosted_shape() == Some(crate::region::Shape::Sections) {
+            return ceiling.saturating_sub(self.sections_strip()).max(1);
+        }
+        ceiling
+    }
+
     /// The same grid, before the explanation line takes its row.
     ///
     /// Split off so `explain_rows` has something to ask that does not ask it

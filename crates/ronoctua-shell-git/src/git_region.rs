@@ -879,6 +879,7 @@ mod tests {
         .with_page(crate::region::Page {
             offset: 0,
             lines: 12,
+            most: 12,
         })
     }
 

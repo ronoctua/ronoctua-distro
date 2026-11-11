@@ -679,6 +679,7 @@ impl Builder<'_> {
                 caret: (n == caret_at && area.asking.is_none()).then_some(self.left + caret_cell),
                 lit: crate::player_rows::Lit::Row,
                 ground: None,
+                wholes: Vec::new(),
             });
         }
         let Some(yes) = area.asking() else {

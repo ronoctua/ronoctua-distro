@@ -4154,17 +4154,44 @@ a tinta, porque começa pelo chevron que a abre: sob o cursor ela veste o acento
 ninguém, então ele diz o que a linha é. A linha de setas no fim de uma lista não leva tinta de
 título: ali não começa seção.
 
-#### Uma página virada traz o título ao topo, uma vez
+#### Uma página virada traz o título ao topo, e ele fica lá
 
-Virar a página de uma lista leva a tela ao título logo antes dela (pedido do dono, 2026-11-10). Mas
-toda tecla da janela, e todo clique numa linha da lista, termina com a lista seguindo o cursor
-(`follow_into`) com duas linhas de margem: com o cursor na linha sob o título, esse seguir rolava o
-título de volta para fora do topo, no mesmo gesto que o pôs lá. `Ui::place_top` põe a linha
-primeiro, até onde o fim da lista deixa, e a protege do seguir que termina ESTE gesto — uma vez, e só
-enquanto o cursor está na tela: um cursor que a colocação deixou fora é seguido como sempre, e nunca
-se perde por um título. O gesto seguinte segue como todo gesto, e uma colocação que nenhum gesto
-seguiu (uma leitura que chegou) morre com a volta do laço. O rodapé faz o mesmo com o
-`Paging::Top` que uma região pede com a tecla (`Footer::top_placed`, `top_placed_holds`).
+Virar a página de uma lista leva a tela ao título logo antes dela (pedido do dono, 2026-11-10): a
+contagem ("26–27 de 27") é a primeira linha sob o transporte, na janela, na coluna e na região do
+rodapé, em todo layout, e continua sendo no gesto seguinte (2026-11-11). Três coisas a tiravam de
+lá.
+
+- **O seguir que termina o gesto.** Toda tecla da janela, e todo clique numa linha da lista, termina
+  com a lista seguindo o cursor (`follow_into`) com duas linhas de margem: com o cursor na linha sob
+  o título, esse seguir rolava o título de volta para fora do topo, no mesmo gesto que o pôs lá.
+  `Ui::place_top` põe a linha primeiro e a protege do seguir que termina ESTE gesto — uma vez, e só
+  enquanto o cursor está na tela: um cursor que a colocação deixou fora é seguido como sempre, e
+  nunca se perde por um título. Uma colocação que nenhum gesto seguiu (uma leitura que chegou) morre
+  com a volta do laço. O rodapé faz o mesmo com o `Paging::Top` que uma região pede com a tecla
+  (`Footer::top_placed`, `top_placed_holds`).
+- **O fim da lista.** Toda porta rola só até o fim da lista — uma página nunca passa da última
+  linha —, então uma última página curta (os dois vídeos de "26–27 de 27") não deixava o título
+  subir: ele ficava onde estava, com os filtros de cima à vista. Por isso a lista GUARDA ESPAÇO sob
+  o título: depois que uma virada o trouxe ao topo, ela ganha linhas de ar depois de si até haver,
+  do título para baixo, uma página inteira da porta (`View::room_for_the_top` no player,
+  `View::room_for_the_title` no video metrics). É ar, não conteúdo: não aceita clique, não acende
+  sob o ponteiro, o cursor não para nele e ele não abre seção. Dura enquanto a página está na tela
+  (`Level::held_top` no player, `title_held` no video metrics), e uma lista que nunca virou é
+  desenhada como antes. Preferimos o ar a deixar a porta rolar além do fim: nenhuma porta ganha
+  exceção, e "nada rola além do que a lista tem" continua valendo para todas. A página medida é a
+  maior que a porta pode mostrar: a janela diz a sua toda vez que monta as linhas (`page_is`), e o
+  rodapé diz o teto da região (`region::Page::most`, `View::page_holds`), não as linhas que ela
+  mostra no gesto. Medido por essas, o espaço ficava uma linha curto assim que a explicação sob a
+  dica saía, ou a região voltava a crescer sozinha: o rodapé segura a primeira linha no fim da lista
+  menos as linhas que mostra AGORA, e a linha acima do título reaparecia.
+- **O gesto seguinte.** Com o título em cima e o cursor na seta dele ou no primeiro vídeo, a margem
+  do seguir rolava o título de volta na tecla seguinte (`]` na última página, `↓`, `←` entre as
+  setas) e num clique que só escolhia um vídeo. Um gesto que começa com o título em primeiro e deixa
+  a linha inteira do cursor na página sob ele mantém o título em primeiro depois do seguir
+  (`View::kept_top` no player, `View::title_kept` no video metrics; na janela do video metrics,
+  `keep_the_title`): o que está acima do título não é contexto da lista, e a margem não o traz de
+  volta. Um cursor que vai acima do título, ou além da página, é seguido como sempre, e uma página
+  rolada para longe do título fica onde foi posta.
 
 ## 5. Buffers nativos e o protocolo
 
@@ -15013,6 +15040,22 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   um vídeo da grade são uma linha cada: juntas não cabem na largura. O canal sob o título de cada
   miniatura era um interruptor ao lado ("Canal nas miniaturas"); virou a quarta disposição, para uma
   escolha ter um caminho só.
+- **Um nome que a lista corta diz-se inteiro sob o ponteiro** (pedido do dono, 2026-11-11): o título
+  de um vídeo e o nome do canal — na miniatura, cortados com `…`; na tira do player, o título em duas
+  linhas — guardam as células das palavras em cada linha (`player_rows::Whole`, um tipo para as duas
+  vistas, em `Row::wholes`), e o ponteiro sobre ELAS diz o nome inteiro. No player, nas duas portas,
+  depois do controle sob o ponteiro (`player_rows::whole_under`): o minibuffer pela janela sem
+  cabeçalho, antes da frase da linha; a linha de explicação pela região (`Region::about_at`), que o
+  rodapé pergunta depois da frase da linha — e a linha de uma miniatura não tem frase. As duas portas
+  o leem NA PINTURA, contra as linhas de agora, nunca guardado do último movimento: uma tecla (`]`),
+  a roda ou uma página do daemon mudam as linhas sob o ponteiro parado, e o nome guardado seguia
+  dizendo um vídeo da página anterior. No catálogo, a coisa
+  explicada passa a se chamar pelo nome sob o ponteiro (`View::name_at`): o pé da janela o mostra, e
+  a linha do rodapé começa por ele; uma linha com nome não diz frase de linha (`Told::about`), que o
+  rodapé pergunta antes da célula e esconderia o nome. Só nas palavras: a figura, a pontuação, as
+  setas, as marcas, o `⋯` e o ar depois do nome dizem o que já diziam. O canal dentro da frase da
+  lista ("canal · idade · pontuação") é achado onde a língua o pôs (`Texts::t_args_marked`,
+  `Arg::Name`), nunca procurando as palavras dele na frase.
 - **As páginas de uma lista de vídeos** (`paging.rs`, do catálogo e do ranking do player; pedidos do
   dono de 2026-11-10). Uma página tem 25, 50 ou 100 vídeos (`PER_PAGES`; a linha "Por página" depois
   de "Página"), um anel só da sessão, como os filtros; trocar o tamanho fica na página que contém o
@@ -15029,10 +15072,13 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
     Alt`. A frase da linha "Página" as ensina por argumentos (`{ $earlier } { $prior } …`, montados
     da `OF_THE_VIEW` por `View::page_keys`): as puras no rodapé, `⌥[` na janela
     (`keys-are-never-text`), as teclas primeiro, porque o rodapé a diz numa linha cortada no fim.
-  - Virar leva a tela ao título da lista ("Uma página virada traz o título ao topo, uma vez", na
-    porta): a vista deve o topo (`top_owed`) e paga quando chega a leitura da página PEDIDA
+  - Virar leva a tela ao título da lista ("Uma página virada traz o título ao topo, e ele fica lá",
+    na porta): a vista deve o topo (`top_owed`) e paga quando chega a leitura da página PEDIDA
     (`View::settle_on_list`), com o cursor no primeiro vídeo — `Ui::place_top` na janela,
-    `Paging::Top` na região. Até lá a página antiga fica desenhada: nada pisca "lendo…".
+    `Paging::Top` na região. Até lá a página antiga fica desenhada: nada pisca "lendo…". Paga, o
+    título fica em primeiro enquanto a página está na tela — numa última página curta, sobre o ar
+    que a lista guarda sob ele (`View::room_for_the_title`), e no gesto seguinte que deixa o cursor
+    sob ele (`View::title_kept`).
 - **As marcas de um vídeo são glifos que agem no PRIMEIRO clique** (`Control`): na grade, a linha
   da pontuação leva o número e as quatro setas da nota (`⇊ ↓ ↑ ⇈`); a da idade, separar, ocultar ou
   mostrar, apagar e o ∞; na lista, o mesmo numa linha de meta. A seta acesa é a nota atual, e clicar
@@ -15907,8 +15953,11 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
 - **As páginas são as do catálogo** ("As páginas de uma lista de vídeos", acima): 25, 50 ou 100 por
   página ("Vídeos por página"), as mesmas teclas, e as setas no título e no fim (`heading_paged`,
   `pager`). O título "1–25 de 230" já diz a página e ganha só as setas. Virar põe o título no topo
-  com o cursor na › dele (`View::bring_to_top`), e o `RET` vira de novo. Na janela, o globo das
-  páginas do mundo aproxima e afasta com `⌥9`/`⌥8`: o `[`/`]` é das páginas.
+  com o cursor na › dele (`View::bring_to_top`), e o `RET` vira de novo; ele fica em primeiro
+  enquanto a página está na tela, numa última página curta também, e no gesto seguinte que deixa o
+  cursor sob ele (`Level::held_top`, `View::kept_top`; "Uma página virada traz o título ao topo, e
+  ele fica lá", na porta). Na janela, o globo das páginas do mundo aproxima e afasta com
+  `⌥9`/`⌥8`: o `[`/`]` é das páginas.
 - **Um controle é pego na linha em que é desenhado.** Uma linha de vídeo da lista tem seis ou sete
   linhas, e o `⋯` está na primeira: `player_rows::controls_under`, `control_under` e
   `View::clicked_at` só tomam um controle na linha dele — no resto da linha o clique é da linha.

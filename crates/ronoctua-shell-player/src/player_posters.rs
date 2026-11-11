@@ -38,7 +38,7 @@ use ronoctua_tokens as tokens;
 
 use crate::player::Target;
 use crate::player_find::Picture;
-use crate::player_rows::{Builder, Cell, CoverRow, Lit, Row};
+use crate::player_rows::{Builder, Cell, CoverRow, Lit, Row, Whole};
 
 /// What a decode left: the key, and the picture — `None` for a file that is
 /// no picture.
@@ -307,6 +307,7 @@ fn line(
         caret: None,
         lit: Lit::Row,
         ground: None,
+        wholes: Vec::new(),
     }
 }
 
@@ -343,6 +344,10 @@ pub struct Said {
     pub after: Vec<Control>,
     /// The controls at the line's right edge.
     pub end: Vec<Control>,
+    /// ITS FIRST PART IS A NAME — a video's channel — which the room may cut
+    /// or part over lines: the pointer resting on its words says it whole
+    /// (`player_rows::Whole`), and on the other parts nothing of it.
+    pub named: bool,
 }
 
 impl Said {
@@ -427,6 +432,10 @@ fn control_at(c: &Control, from: u16, spot: &str) -> (crate::fields::Field, Cell
 struct Laid<'s> {
     /// The words, cut to their room.
     words: String,
+    /// The cells of them that are the line's NAME ([`Said::named`]): its
+    /// first part, or as much of it as the cut left — none for a line that
+    /// names nothing.
+    named: u16,
     /// The controls after them, and their first cell.
     after: (&'s [Control], u16),
     /// The controls at the right edge, and their first cell.
@@ -468,9 +477,23 @@ fn laid<'s>(said: &'s Said, joiner: &str, room: u16, reserve: u16) -> Laid<'s> {
     };
     let end_at = room.saturating_sub(reserve.saturating_add(cells_of(end)));
     Laid {
+        named: named_cells(said, &words),
         words,
         after: (after, after_at),
         end: (end, end_at),
+    }
+}
+
+/// How many cells at the head of `words` — a line of `said`, cut or whole —
+/// are its NAME ([`Said::named`]): its first part's, or all of them where
+/// the cut fell inside it (its `…` is the name's too); none for a line of
+/// words that names nothing.
+fn named_cells(said: &Said, words: &str) -> u16 {
+    match said.parts.first() {
+        Some(name) if said.named => {
+            ronoctua_render::layout::width(name).min(ronoctua_render::layout::width(words))
+        }
+        _ => 0,
     }
 }
 
@@ -639,34 +662,42 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
             ));
         }
         // THE TITLES, wrapped in their box, the one the cursor is on in the
-        // cursor's colour.
+        // cursor's colour — and each line of one SAYS THE TITLE WHOLE under
+        // the pointer, on its words: two lines and a `…` keep the rest.
         let wrapped: Vec<Vec<String>> = on_shelf
             .iter()
             .map(|(_, _, t)| wrapped(&t.title, cells, titles))
             .collect();
         for k in 0..titles {
-            let fields = on_shelf
+            let (fields, wholes): (Vec<_>, Vec<_>) = on_shelf
                 .iter()
                 .zip(&wrapped)
                 .enumerate()
-                .filter_map(|(n, ((_, at, _), words))| {
+                .filter_map(|(n, ((_, at, t), words))| {
                     let text = words.get(usize::from(k))?.clone();
                     let colour = if focused && n == here {
                         tokens::color::TEXT_HERE_ACTS
                     } else {
                         tokens::color::TEXT_PRIMARY
                     };
-                    Some(Builder::piece(b.left + at, text, colour))
+                    let whole = Whole {
+                        from: b.left + at,
+                        width: ronoctua_render::layout::width(&text),
+                        text: t.title.clone(),
+                    };
+                    Some((Builder::piece(b.left + at, text, colour), whole))
                 })
-                .collect();
-            b.out.push(line(
+                .unzip();
+            let mut row = line(
                 fields,
                 Vec::new(),
                 Vec::new(),
                 (false, false),
                 row_target.clone(),
                 spot.clone(),
-            ));
+            );
+            row.wholes = wholes;
+            b.out.push(row);
         }
         // WHAT IS SAID UNDER THE TITLES, in the quiet register, with its
         // glyphs — the ones after its words and the ones at the box's right
@@ -679,6 +710,7 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
         for u in 0..under {
             let mut fields = Vec::new();
             let mut controls = Vec::new();
+            let mut wholes = Vec::new();
             for (_, at, t) in &on_shelf {
                 let left = b.left + at;
                 let more = t.more.as_ref().filter(|_| u == 0);
@@ -686,9 +718,19 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 if let Some(said) = t.under.get(usize::from(u)) {
                     let Laid {
                         words,
+                        named,
                         after: (after, after_at),
                         end: (end, end_at),
                     } = laid(said, &joiner, cells, reserve);
+                    // ITS NAME, cut to the box, says itself whole on its own
+                    // cells — and the glyphs beside it keep their sentences.
+                    if let Some(name) = said.parts.first().filter(|_| named > 0) {
+                        wholes.push(Whole {
+                            from: left,
+                            width: named,
+                            text: name.clone(),
+                        });
+                    }
                     fields.push(Builder::piece(left, words, tokens::color::TEXT_DIM));
                     let placed = after
                         .iter()
@@ -727,6 +769,7 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
             if let Some(row) = b.out.last_mut() {
                 row.cells = controls;
                 row.lit = Lit::Controls;
+                row.wholes = wholes;
             }
         }
         // AND A LINE OF AIR under what is said, before the next shelf's
@@ -792,7 +835,15 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
         for l in 0..lines {
             let mut fields = Vec::new();
             let mut cells = Vec::new();
+            // THE NAMES ON THE LINE, each said whole under the pointer on its
+            // words: the title's every line, and the channel's.
+            let mut wholes = Vec::new();
             if let Some(text) = title.get(l) {
+                wholes.push(Whole {
+                    from: text_at,
+                    width: ronoctua_render::layout::width(text),
+                    text: t.title.clone(),
+                });
                 fields.push(Builder::piece(text_at, text.clone(), label));
             } else if let Some(under) = said.get(l - title.len()) {
                 if !under.text.is_empty() {
@@ -801,6 +852,13 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                         under.text.clone(),
                         tokens::color::TEXT_DIM,
                     ));
+                }
+                if let Some((width, name)) = under.whole {
+                    wholes.push(Whole {
+                        from: text_at,
+                        width,
+                        text: name.to_owned(),
+                    });
                 }
                 // ITS GLYPHS, each a control of this line: after the words —
                 // at the line's head when it is theirs alone — and at the
@@ -873,6 +931,7 @@ pub fn strip(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 t.spot.clone(),
             );
             row.lit = lit;
+            row.wholes = wholes;
             b.out.push(row);
         }
         // A LINE OF AIR under each, the tile's own: two pictures one over
@@ -901,6 +960,9 @@ struct SaidLine<'s> {
     after: &'s [Control],
     /// The controls at the right edge.
     end: &'s [Control],
+    /// The NAME at the line's head ([`Said::named`]): its cells on this
+    /// line, and the name whole. `None` on a line that names nothing.
+    whole: Option<(u16, &'s str)>,
 }
 
 /// The lines said under a strip's title, its words in `room` cells and the
@@ -932,23 +994,35 @@ fn said_lines<'s>(under: &'s [Said], joiner: &str, room: u16, full: u16) -> Vec<
             }
         }
         let whole = said.parts.join(joiner);
+        // EACH LINE WITH THE PART IT IS OF — the first, a name when the said
+        // says so, names the line's head whole ([`named_cells`]).
+        let of_the_name = move |first: bool, text: String| {
+            let name = said.parts.first().filter(|_| first && said.named);
+            SaidLine {
+                whole: name
+                    .map(|n| (named_cells(said, &text), n.as_str()))
+                    .filter(|(cells, _)| *cells > 0),
+                text,
+                after: &[],
+                end: &[],
+            }
+        };
         let mut lines: Vec<SaidLine<'s>> = if said.parts.is_empty() {
             Vec::new()
         } else if ronoctua_render::layout::width(&whole) <= words_room {
-            vec![whole]
+            vec![of_the_name(true, whole)]
         } else {
             said.parts
                 .iter()
-                .flat_map(|p| crate::chrome::note_lines(p, words_room))
+                .enumerate()
+                .flat_map(|(k, p)| {
+                    crate::chrome::note_lines(p, words_room)
+                        .into_iter()
+                        .map(move |text| (k == 0, text))
+                })
+                .map(|(first, text)| of_the_name(first, text))
                 .collect()
-        }
-        .into_iter()
-        .map(|text| SaidLine {
-            text,
-            after: &[],
-            end: &[],
-        })
-        .collect();
+        };
         let after: &[Control] = &said.after;
         let after_cells = cells_of(after);
         if !after.is_empty() && after_cells <= words_room {
@@ -965,6 +1039,7 @@ fn said_lines<'s>(under: &'s [Said], joiner: &str, room: u16, full: u16) -> Vec<
                     text: String::new(),
                     after,
                     end: &[],
+                    whole: None,
                 }),
             }
         }
@@ -974,6 +1049,7 @@ fn said_lines<'s>(under: &'s [Said], joiner: &str, room: u16, full: u16) -> Vec<
                 text: String::new(),
                 after: &[],
                 end,
+                whole: None,
             }),
             None => {}
         }
@@ -1110,11 +1186,13 @@ mod tests {
                     parts: vec!["7300".into()],
                     after: rates,
                     end: Vec::new(),
+                    named: false,
                 },
                 Said {
                     parts: vec![channel],
                     after: Vec::new(),
                     end: marks,
+                    named: true,
                 },
             ]
         } else {
@@ -1123,11 +1201,13 @@ mod tests {
                     parts: vec![channel, "7300".into()],
                     after: rates,
                     end: Vec::new(),
+                    named: true,
                 },
                 Said {
                     parts: vec!["3 days ago".into(), "10:00".into()],
                     after: Vec::new(),
                     end: marks,
+                    named: false,
                 },
             ]
         };
@@ -1240,6 +1320,128 @@ mod tests {
         }
     }
 
+    /// FAILS IF: a tile's title, or its channel — a name the room cuts with
+    /// `…` or wraps — does not say itself WHOLE on every cell of its words,
+    /// on every line of it (`player_rows::whole_under`, what both doors say
+    /// under the pointer); or a name is said anywhere else: on the picture,
+    /// on a glyph, on the score or the age beside the channel, past the
+    /// words. In a strip and in a grid, from a narrow room to a wide one.
+    #[test]
+    fn a_name_says_itself_whole_on_its_words_alone() {
+        use crate::player_rows::{control_under, whole_under};
+        let texts = ronoctua_i18n::Texts::fresh("en-GB").expect("en-GB");
+        let width = ronoctua_render::layout::width;
+        let shape = Shape {
+            cells: tokens::space::VIDEOMETRICS_THUMBCELLS,
+            lines: tokens::space::VIDEOMETRICS_THUMBLINES,
+            titles: tokens::space::VIDEOMETRICS_TITLELINES,
+        };
+        let channel = "A channel with a long name";
+        for room in [20_u16, 28, 60] {
+            for grid in [false, true] {
+                let mut tiles: Vec<Tile> = (0..3).map(|n| marked(n, grid)).collect();
+                tiles[0].picture = Some(("k".into(), (16, 9)));
+                // A TITLE LONGER THAN A TILE'S TWO LINES, cut.
+                for t in &mut tiles {
+                    t.title.push_str(
+                        " — and what it is about, which runs on and on past every line it has",
+                    );
+                }
+                let built = Builder::build(1, room, 0, 0, &texts, |b| {
+                    if grid {
+                        tiled(&tiles, shape, b);
+                    } else {
+                        strip(&tiles, shape, b);
+                    }
+                });
+                let at = format!("room {room}, grid {grid}");
+                let (mut titles, mut channels, mut cut) = (0, 0, false);
+                for (n, r) in built.iter().enumerate() {
+                    // EVERY CELL A NAME IS SAID ON is a cell of its words:
+                    // drawn there, no glyph's, no picture's, and the words up
+                    // to it the name's own.
+                    for column in 0..=room + 1 {
+                        let Some(name) = whole_under(&built, n, column) else {
+                            continue;
+                        };
+                        assert!(control_under(&built, n, column).is_none(), "{at}: a glyph");
+                        assert!(
+                            r.covers
+                                .iter()
+                                .all(|c| !crate::chrome::in_cell(column, c.left, c.cells)),
+                            "{at}: {name:?} said on a picture, line {n}"
+                        );
+                        let f = r
+                            .fields
+                            .iter()
+                            .find(|f| crate::chrome::in_cell(column, f.at, width(&f.text)))
+                            .unwrap_or_else(|| panic!("{at}: {name:?} over nothing, line {n}"));
+                        let upto: String = f
+                            .text
+                            .chars()
+                            .take(usize::from(column - f.at) + 1)
+                            .collect();
+                        assert!(
+                            name.contains(upto.trim_end_matches('…').trim_end()),
+                            "{at}: {name:?} said on {upto:?}, line {n}"
+                        );
+                    }
+                    // AND EVERY WORD OF A NAME SAYS IT.
+                    for f in &r.fields {
+                        let text = f.text.trim_end_matches('…').trim_end();
+                        let last = f.at + width(&f.text) - 1;
+                        let a_title = text.chars().count() > 1
+                            && !channel.contains(text)
+                            && tiles.iter().any(|t| t.title.contains(text));
+                        if a_title {
+                            cut |= f.text.ends_with('…');
+                            for column in [f.at, last] {
+                                let said = whole_under(&built, n, column);
+                                assert!(
+                                    said.is_some_and(|w| {
+                                        w.contains(text) && tiles.iter().any(|t| t.title == w)
+                                    }),
+                                    "{at}: {:?} on line {n} says {said:?}",
+                                    f.text
+                                );
+                            }
+                            titles += 1;
+                        } else if text.chars().count() > 1
+                            && (f.text.starts_with("A channel") || channel.ends_with(text))
+                        {
+                            assert_eq!(
+                                whole_under(&built, n, f.at),
+                                Some(channel),
+                                "{at}: {:?} on line {n}",
+                                f.text
+                            );
+                            channels += 1;
+                        }
+                    }
+                    // THE SCORE AND THE AGE say nothing, alone or after the
+                    // channel on its line.
+                    for f in &r.fields {
+                        for word in ["7300", "3 days ago"] {
+                            if let Some(i) = f.text.find(word) {
+                                let from = f.at + width(&f.text[..i]);
+                                for column in from..from + width(word) {
+                                    assert_eq!(
+                                        whole_under(&built, n, column),
+                                        None,
+                                        "{at}: {word} names, line {n}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                assert!(titles >= tiles.len(), "{at}: {titles} titles said");
+                assert!(channels >= tiles.len(), "{at}: {channels} channels said");
+                assert!(cut, "{at}: no title was cut");
+            }
+        }
+    }
+
     /// FAILS IF: a strip's row lights differently with its picture than
     /// without — every line of either from its words on, never the
     /// picture's box — or the picture is drawn on lines past its box.
@@ -1291,6 +1493,7 @@ mod tests {
             parts,
             after: rates.clone(),
             end: Vec::new(),
+            named: false,
         }];
         let lines = said_lines(&said, " · ", 40, 40);
         assert_eq!(lines.len(), 1);
@@ -1304,6 +1507,7 @@ mod tests {
             parts: vec!["Slow Kitchen".to_owned()],
             after: Vec::new(),
             end: marks.clone(),
+            named: false,
         }];
         let lines = said_lines(&said, " · ", 30, 33);
         assert_eq!(lines[0].end, marks.as_slice());

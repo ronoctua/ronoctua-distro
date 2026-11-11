@@ -1151,11 +1151,14 @@ impl crate::region::Doorway for Ui {
     fn run(&mut self, command: &'static str, argument: Option<String>) {
         self.tell_the_footer(command, argument.as_deref());
     }
-    /// The list's page: its first row and the rows under the header.
+    /// The list's page: its first row and the rows under the header — all
+    /// a window's page holds at its size.
     fn page_shown(&self) -> crate::region::Page {
+        let lines = self.room_for_rows();
         crate::region::Page {
             offset: self.offset,
-            lines: self.room_for_rows(),
+            lines,
+            most: lines,
         }
     }
     /// The history is the footer's: the act goes down its socket, aimed at

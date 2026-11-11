@@ -588,6 +588,13 @@ pub struct Level {
     /// Only the arrows put it there: a page never opens on a title, and a
     /// rebuild that moves the cursor off one ends it (`View::clamp`).
     pub on_title: bool,
+    /// THE ROW A TURN BROUGHT TO THE TOP OF THE DOOR, by its spot — a list's
+    /// title once its page turned (`View::bring_to_top`) — for as long as
+    /// the page is on screen: the list keeps the room under it that lets it
+    /// be the first line drawn, however short the page (`View::rows`), and
+    /// a gesture that began with it there leaves it there while the cursor
+    /// stays under it (`View::kept_top`). The page's own: left, it goes.
+    pub held_top: Option<String>,
 }
 
 impl Level {
@@ -605,6 +612,7 @@ impl Level {
             only: None,
             by_name: false,
             on_title: false,
+            held_top: None,
         }
     }
 }
@@ -664,6 +672,7 @@ impl View {
             only: None,
             by_name: false,
             on_title: false,
+            held_top: None,
         });
         // A DIRECTORY'S PAGE ASKS FOR ITS LIST as it opens — the daemon's
         // desk is every door's, and another may hold something else on it.
