@@ -2,10 +2,10 @@
   "format": 1,
   "appimage": {
     "craft-launcher": {
-      "url": "https://github.com/storytold/craft-launcher/releases/download/v0.16.0/artcraft-launcher-0.16.0-linux-x86_64.AppImage",
-      "hash": "sha256-rRXvLEOvpiNlEYw9g8A++wW3jc5LCmTwVB9CD2cKgKQ=",
-      "version": "0.16.0",
-      "pinned-at": "2026-11-07T16:56:31Z"
+      "url": "https://github.com/storytold/craft-launcher/releases/download/v0.19.0/artcraft-launcher-0.19.0-linux-x86_64.AppImage",
+      "hash": "sha256-ZBl4WNFV9EeuMj+QUBURbYSPE3VnXXMesI1XCPhyLps=",
+      "version": "0.19.0",
+      "pinned-at": "2026-11-11T19:48:41Z"
     },
     "solidcraft": {
       "url": "https://github.com/tangency-labs/solidcraft/releases/download/v0.30.1/solidcraft-0.30.1-linux-x86_64.AppImage",
