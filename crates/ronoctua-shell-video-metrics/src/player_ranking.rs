@@ -4919,4 +4919,51 @@ pub(crate) mod tests {
             "a list opened anew is not brought up"
         );
     }
+
+    /// FAILS IF: the video the cursor is on in a grid of thumbnails — or of
+    /// wide ones — wears the grid's selection, a band on its shelf's first
+    /// line over the top of its picture (the owner, 2026-11-11: "isso está
+    /// horrível"), in the window or in the footer; or its title stops
+    /// wearing the cursor's colour, the one sign of where it is.
+    #[test]
+    fn a_tile_under_the_cursor_wears_the_cursor_s_colour_and_no_band() {
+        let t = texts("en-GB");
+        let s = fixture::idle();
+        for layout in [Layout::Grid, Layout::Wide] {
+            let mut v = on_the_ranking(3);
+            v.ranking_mut().layout = layout;
+            v.ranking_follow(&spot_of(&video(1).id), Some(&s), 100, &t);
+            let rows = v.rows(Some(&s), 100, &t);
+            let shelf = v.cursor();
+            assert_eq!(
+                rows[shelf].target,
+                Target::Ranked(video(1).id),
+                "{layout:?}"
+            );
+            assert_eq!(
+                crate::player_rows::grid_cursor(&rows),
+                None,
+                "{layout:?}: a band"
+            );
+            assert!(
+                rows.iter()
+                    .all(|r| crate::player_rows::selection_cell(r).is_none()),
+                "{layout:?}: a band in the footer"
+            );
+            let here = tokens::color::TEXT_HERE_ACTS;
+            let titled: Vec<&str> = rows
+                .iter()
+                .flat_map(|r| &r.fields)
+                .filter(|f| f.color == here)
+                .map(|f| f.text.as_str())
+                .collect();
+            assert!(
+                !titled.is_empty()
+                    && titled
+                        .iter()
+                        .all(|w| video(1).title.contains(w.trim_end_matches(" …"))),
+                "{layout:?}: the title does not wear the cursor: {titled:?}"
+            );
+        }
+    }
 }

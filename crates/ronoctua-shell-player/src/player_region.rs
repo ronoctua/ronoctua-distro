@@ -1801,17 +1801,9 @@ impl Player {
                     }
                 };
                 // A GRID'S CURSOR CELL wears the selection, by the arithmetic
-                // its click takes it with — and a pair side by side its own
-                // colour, as every pair.
-                let chosen = (r.focused && !r.pairs())
-                    .then(|| {
-                        r.cells
-                            .iter()
-                            .filter(|c| !c.control)
-                            .find(|c| c.target == r.target)
-                            .map(|c| (c.from, c.width))
-                    })
-                    .flatten();
+                // its click takes it with — and a pair side by side or a
+                // tile its own colour (`player_rows::selection_cell`).
+                let chosen = crate::player_rows::selection_cell(r);
                 crate::region::Told {
                     row: Row {
                         fields: r.fields.clone(),

@@ -146,6 +146,12 @@ pub enum Lit {
     /// pair's colour, as on every row of pairs, and never a grid's selection
     /// ([`grid_cursor`]); the arrows turn its value ([`Row::pairs`]).
     Pairs,
+    /// THE FIRST LINE OF A SHELF OF TILES (`player_posters::tiled`, `wide`):
+    /// the tile under the pointer, as a grid's cell — and the cursor is its
+    /// title's colour, never the grid's selection: a band on the shelf's
+    /// first line lay over the top of the picture (the owner, 2026-11-11:
+    /// "isso está horrível").
+    Tiles,
 }
 
 /// What the pointer resting on line `n` lights ([`Row::lit`]).
@@ -192,7 +198,7 @@ pub fn lighting(rows: &[Row], n: usize) -> Lighting {
                 })
                 .unwrap_or_default(),
         ),
-        Some(Lit::Row | Lit::Pairs) | None => {
+        Some(Lit::Row | Lit::Pairs | Lit::Tiles) | None => {
             let cells = grid_cells(rows, n);
             if cells.is_empty() {
                 Lighting::Whole
@@ -584,13 +590,26 @@ pub fn grid_cells(rows: &[Row], n: usize) -> Vec<(u16, u16)> {
 /// (`chrome::cell_selection`).
 #[must_use]
 pub fn grid_cursor(rows: &[Row]) -> Option<(usize, (u16, u16))> {
-    rows.iter().enumerate().find_map(|(n, r)| {
-        r.cells
-            .iter()
-            .filter(|c| !c.control && !r.pairs())
-            .find(|c| r.focused && c.target == r.target)
-            .map(|c| (n, (c.from, c.width)))
-    })
+    rows.iter()
+        .enumerate()
+        .find_map(|(n, r)| selection_cell(r).map(|cell| (n, cell)))
+}
+
+/// THE CELL LINE `r` WEARS THE SELECTION ON — `(first column, columns)` —
+/// the entry of a grid the cursor is on: the file picker's files, the file
+/// manager's cursor. NONE on a line of pairs or a shelf of tiles, whose
+/// cursor is a colour — the pair's, the title's ([`Lit::Pairs`],
+/// [`Lit::Tiles`]). The ONE answer both doors paint with.
+#[must_use]
+pub fn selection_cell(r: &Row) -> Option<(u16, u16)> {
+    if !r.focused || matches!(r.lit, Lit::Pairs | Lit::Tiles) {
+        return None;
+    }
+    r.cells
+        .iter()
+        .filter(|c| !c.control)
+        .find(|c| c.target == r.target)
+        .map(|c| (c.from, c.width))
 }
 
 /// A row of the FILE PICKER (`crate::file_picker`), as a row of this view:

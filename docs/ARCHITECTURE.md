@@ -15994,6 +15994,8 @@ comandos com as teclas, o fuso) e as threads do painel de arquivo; ele transform
   quando cabem, uma por linha quando não — um número nunca se separa da unidade dele.
 - Na grade, o cursor guarda o vídeo da CÉLULA (`ranking_here`), não o da prateleira: o ranking que
   se reordena põe outro vídeo naquela célula, e o `RET` punha na fila um vídeo que ninguém escolheu.
+  E ele é a COR do título, sem faixa: a seleção da grade caía na primeira linha da prateleira, por
+  cima da figura (o dono, 2026-11-11; `Lit::Tiles`, `player_rows::selection_cell`).
 - As miniaturas são arquivos que o catálogo já guardou; a porta só as decodifica fora do laço
   (`Posters::look_files`), com a chave levando arquivo, pixels e paleta.
 - Foto: `photograph --ranking <catalog.sqlite>` (lido `mode=ro`; o que marcaria, esconderia,

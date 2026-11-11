@@ -648,7 +648,7 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 }
             }
             let owner = l == 0;
-            b.out.push(line(
+            let mut row = line(
                 fields,
                 covers,
                 if owner {
@@ -659,7 +659,12 @@ pub fn tiled(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 (owner, owner && focused),
                 row_target.clone(),
                 spot.clone(),
-            ));
+            );
+            // THE CURSOR IS ITS TITLE'S COLOUR, and no band over the picture.
+            if owner {
+                row.lit = Lit::Tiles;
+            }
+            b.out.push(row);
         }
         // THE TITLES, wrapped in their box, the one the cursor is on in the
         // cursor's colour — and each line of one SAYS THE TITLE WHOLE under
@@ -941,6 +946,10 @@ pub fn wide(tiles: &[Tile], shape: Shape, b: &mut Builder<'_>) {
                 spot.clone(),
             );
             row.wholes = wholes;
+            // THE CURSOR IS ITS TITLE'S COLOUR, and no band over the picture.
+            if owner {
+                row.lit = Lit::Tiles;
+            }
             b.out.push(row);
         }
         // THE TITLES, wrapped across the whole tile under its picture, the
