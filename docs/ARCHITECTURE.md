@@ -15072,7 +15072,8 @@ já escrevia está nela, e uma que começa depois é um commit que a vigia ouve.
   dono de 2026-11-10 e 2026-11-11). Uma página tem 12, 16 (o padrão), 18, 20, 32, 40 ou 64 vídeos
   (`PER_PAGES`; a linha "Por página" depois de "Página"), um anel só da sessão, como os filtros;
   trocar o tamanho fica na página que contém o primeiro vídeo da página em que se estava
-  (`paging::resized`), e não volta à primeira como um filtro. O teto de miniaturas
+  (`paging::resized`), e não volta à primeira como um filtro — nem mexe na tela: o cursor fica na
+  linha, como em toda outra opção (o dono, 2026-11-11). O teto de miniaturas
   (`videoMetrics.thumbsMost`) é a maior página, desenhada inteira sob o `files.thumbMost`. O título
   da lista ("Por pontuação") leva a marca "1 de 2" em `text.dim` e, na borda, as setas ‹ ›
   (`list-page-earlier`/`later`, os chevrons horizontais da calculadora e do acesso rápido); o fim da

@@ -1749,10 +1749,11 @@ pub struct View {
     /// (`paging::PerPage`).
     per_page: crate::paging::PerPage,
     /// A TURNED PAGE OWES ITS TITLE THE TOP OF THE DOOR — a page key, an
-    /// arrow, a new size (the owner, 2026-11-10: "ao virar, a tela vai para
-    /// o título logo antes da lista"): paid once the reading for the page
-    /// asked is in ([`View::settle_on_list`]), with the cursor on its first
-    /// video.
+    /// arrow (the owner, 2026-11-10: "ao virar, a tela vai para o título
+    /// logo antes da lista"): paid once the reading for the page asked is in
+    /// ([`View::settle_on_list`]), with the cursor on its first video. A NEW
+    /// SIZE owes nothing: a ring of the page's options moves the door no
+    /// more than any other (the owner, 2026-11-11).
     top_owed: bool,
     /// THE LIST'S TITLE HOLDS THE TOP OF THE DOOR — put there by a turned
     /// page ([`View::settle_on_list`]), for as long as the Videos page is on
@@ -1944,7 +1945,7 @@ impl View {
     }
 
     /// THE LIST'S TITLE FIRST — paid ONCE, when a turned page owed it the top
-    /// of the door (a page key, an arrow, a new size) and the reading of the
+    /// of the door (a page key, an arrow) and the reading of the
     /// page ASKED is in, its filter, its page and its size: the cursor goes
     /// to the list's first video — its row, or its shelf's first cell — and
     /// the answer is the line of the title, for the door to put first
@@ -3319,8 +3320,9 @@ impl View {
     }
 
     /// HOW MANY VIDEOS A PAGE HOLDS, turned round its ring — and the page
-    /// that holds the first video of the one on screen asked, its title
-    /// owed the top of the door as a turned page's is.
+    /// that holds the first video of the one on screen asked. The door stays
+    /// where it is, the cursor on the row, as any other option leaves it
+    /// (the owner, 2026-11-11): the title is owed nothing.
     fn resize(&mut self, on: bool) -> Errand {
         if *self.page() != Page::Videos {
             return Errand::Nothing;
@@ -3328,7 +3330,6 @@ impl View {
         let from = self.per_page;
         self.per_page = from.turned(on);
         self.page = crate::paging::resized(self.page, from.get(), self.per_page.get());
-        self.top_owed = true;
         Errand::Look(self.look())
     }
 
@@ -8601,7 +8602,9 @@ pub(crate) mod tests {
     /// FAILS IF: a page's size does not turn round 12, 16, 18, 20, 32, 40
     /// and 64 from 16, a new size is not what the feed is asked for, or the
     /// page it lands on does not hold the first video of the one that was on
-    /// screen — or its title is not owed the top of the door.
+    /// screen — or its title is owed the top of the door, which moves it
+    /// where no other option does (the owner, 2026-11-11), or the cursor
+    /// leaves the row.
     #[test]
     fn a_page_size_turns_in_a_ring_and_keeps_the_first_video() {
         let (mut v, r) = on_page(3, 230);
@@ -8613,7 +8616,8 @@ pub(crate) mod tests {
         // THE 49TH VIDEO, the first of the fourth page of sixteen, is on the
         // third of eighteen.
         assert_eq!(look.query.map(|q| (q.page, q.per_page)), Some((2, 18)));
-        assert!(v.top_owed, "a new size owed its title nothing");
+        assert!(!v.top_owed, "a new size moves the door");
+        assert_eq!(v.at, "per-page", "the cursor left the row");
         let rows = v.rows(&r, COLUMNS, &texts("en-GB"));
         let size = row_of(&rows, "per-page");
         assert!(

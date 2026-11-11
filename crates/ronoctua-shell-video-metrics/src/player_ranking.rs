@@ -2412,8 +2412,10 @@ impl RankingView for View {
                 return Some(self.ranking_pressed(key, state, columns, texts));
             }
             // HOW MANY A PAGE HOLDS: `RET` and `→` on, `←` back — the page
-            // that holds the first video on screen asked, and its title
-            // brought to the top, as after a turn. THE SIZE IS BOTH LISTS',
+            // that holds the first video on screen asked, and the door left
+            // where it is, the cursor on the row, as any other option leaves
+            // it (the owner, 2026-11-11: "a mudança do valor dessa opção não
+            // deve mudar o alinhamento da janela"). THE SIZE IS BOTH LISTS',
             // and so is the turn: the other list keeps the page holding the
             // first video it showed, or a page number kept under the new
             // size showed it other videos — page 2 of the ones set aside,
@@ -2428,13 +2430,6 @@ impl RankingView for View {
                     let page = r.shown(list).page;
                     r.shown_mut(list).page = crate::paging::resized(page, from.get(), to);
                 }
-                self.bring_to_top(
-                    crate::paging::LIST_TITLE,
-                    &TURNED_ONTO,
-                    state,
-                    columns,
-                    texts,
-                );
                 self.settle_in(state, columns, texts);
                 Errand::Nothing
             }
@@ -3357,7 +3352,10 @@ pub(crate) mod tests {
     /// 16 on its row — `RET` and `→` on, `←` back — or a new size is not asked
     /// of the catalogue, or its page loses the first video that was on
     /// screen; or THE OTHER LIST, which the size is also of, keeps its page
-    /// number under the new size, and shows other videos when it is opened.
+    /// number under the new size, and shows other videos when it is opened;
+    /// or a new size moves the door — its count brought to the top — or
+    /// the cursor off the row, which no other option does (the owner,
+    /// 2026-11-11).
     #[test]
     fn the_ranking_page_size_is_a_ring() {
         let t = texts("en-GB");
@@ -3386,7 +3384,13 @@ pub(crate) mod tests {
             "the 33rd set aside is on the second page of eighteen"
         );
         assert_eq!(v.ranking().asked(List::Ranking).per_page, 18);
-        assert!(v.take_top().is_some(), "a new size owes its title the top");
+        assert_eq!(v.take_top(), None, "a new size moves the door");
+        let rows = v.rows(Some(&s), 100, &t);
+        assert_eq!(
+            (v.cursor(), v.top().cell),
+            option_at(&rows, "ranking-per-page"),
+            "the cursor left the row"
+        );
         let rows = v.rows(Some(&s), 100, &t);
         onto_option(&mut v, &rows, "ranking-per-page");
         v.key(Press::Less, Some(&s), 100, &t);
