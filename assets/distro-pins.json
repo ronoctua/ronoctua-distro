@@ -2,16 +2,16 @@
   "format": 1,
   "appimage": {
     "craft-launcher": {
-      "url": "https://github.com/storytold/craft-launcher/releases/download/v0.19.0/artcraft-launcher-0.19.0-linux-x86_64.AppImage",
-      "hash": "sha256-ZBl4WNFV9EeuMj+QUBURbYSPE3VnXXMesI1XCPhyLps=",
-      "version": "0.19.0",
-      "pinned-at": "2026-11-11T19:48:41Z"
+      "url": "https://github.com/storytold/craft-launcher/releases/download/v0.19.2/artcraft-launcher-0.19.2-linux-x86_64.AppImage",
+      "hash": "sha256-AhgImRbWC00oiCXRVC8Tyyyl+2kUGPQQIgH0OoTRvns=",
+      "version": "0.19.2",
+      "pinned-at": "2026-11-12T16:38:54Z"
     },
     "solidcraft": {
-      "url": "https://github.com/tangency-labs/solidcraft/releases/download/v0.30.1/solidcraft-0.30.1-linux-x86_64.AppImage",
-      "hash": "sha256-HODWGv04IA8MFieTGgSF8DuD4KiLHHTHXhoVAek4g10=",
-      "version": "0.30.1",
-      "pinned-at": "2026-11-07T16:56:39Z"
+      "url": "https://github.com/tangency-labs/solidcraft/releases/download/v0.40.1/solidcraft-0.40.1-linux-x86_64.AppImage",
+      "hash": "sha256-fzF4x39TSyi0omOBCpQK2L8IjZt9mT12ZTeQOklRHC0=",
+      "version": "0.40.1",
+      "pinned-at": "2026-11-12T16:39:05Z"
     }
   },
   "android": {}
