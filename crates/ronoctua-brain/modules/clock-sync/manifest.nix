@@ -30,8 +30,10 @@
   };
 
   # WHAT IT SAYS: nothing keeps the clock (with the button), or the clock is
-  # kept and has never reached a server (without one — what is missing is a
-  # network). Each goes when the next look finds it fixed.
+  # kept and has not reached a server for ten minutes (without one — what is
+  # missing is a network — so a person may put it away; a clock adrift is
+  # looked at again every minute, and the line goes the moment it agrees).
+  # Each goes when the next look finds it fixed.
   notices = {
     not-automatic = {
       level = "warn";
@@ -39,7 +41,7 @@
     };
     not-synchronised = {
       level = "info";
-      dismiss = false;
+      dismiss = true;
     };
   };
 

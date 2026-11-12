@@ -17,8 +17,20 @@
 //!
 //! What it found is its [`Module::face`]: a notice while nothing keeps the
 //! clock — with the action `keep` beside it, which is what the watch itself
-//! does on its schedule — or while the clock is kept and has never agreed
-//! with a server.
+//! does on its schedule — or while the clock is kept and has not agreed with
+//! a server for [`ADRIFT_GRACE`].
+//!
+//! # A clock adrift is looked at again, and not only in six hours
+//!
+//! A machine that has just booted has no network for its first seconds, and
+//! its time client agrees with a server a moment after it has one. Said at
+//! once and looked at again only on the schedule, the line went up on a boot
+//! and stayed for the six hours to the next look, with nothing to press, long
+//! after the clock had been set (2026-11-12). So while a look finds the clock
+//! adrift, the watch looks again every [`RELOOK`] seconds — a read of
+//! timedated, not a run, so nothing in the activity log — and the line waits
+//! out the grace; a person may put it away, and it goes the moment the clock
+//! agrees.
 //!
 //! A PRESS IS DONE NOW, and not queued: a queued run waits for the gate (held
 //! on battery) and behind whatever else is running (a two-hour update), which
@@ -31,12 +43,13 @@
 //! where a late answer can be read: the strip's line says it was refused, and
 //! the activity log keeps the machine's words.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::module::{
-    Act, Acted, Arg, Birth, Ctx, Face, Look, Manifest, Module, Noted, Notice, NoticeKind, Run,
-    Schedule, Scheduled,
+    Act, Acted, Arg, Birth, Ctx, Face, Heard, Look, Manifest, Module, Noted, Notice, NoticeKind,
+    Run, Schedule, Scheduled, Source, Watcher,
 };
 use crate::moment::Moment;
 use crate::prefs::TaskPrefs;
@@ -65,6 +78,15 @@ const _: () = assert!(
 /// its real answer; one that does not still gets its answer said, later, on
 /// the strip and in the activity log.
 const PATIENCE: Duration = Duration::from_millis(300);
+
+/// How long, in seconds, a clock that is kept may go without agreeing with a
+/// time server before the strip says so: the minutes a booted machine needs
+/// for a network, and its time client for an answer.
+const ADRIFT_GRACE: Moment = 10 * 60;
+
+/// How often, in seconds, a clock found adrift is looked at again. Only while
+/// it is adrift: a clock in hand arms no clock at all.
+const RELOOK: Moment = 60;
 
 /// The entry: one watch, asking the real `timedated`.
 #[must_use]
@@ -157,6 +179,8 @@ impl Keeper {
 struct Seen {
     last: Option<(Found, Moment)>,
     refused: bool,
+    /// When it was last looked at, by a run, a press or a look again.
+    looked: Moment,
 }
 
 impl Seen {
@@ -168,6 +192,7 @@ impl Seen {
         };
         self.last = Some((found, since));
         self.refused = refused;
+        self.looked = now;
     }
 }
 
@@ -187,6 +212,8 @@ struct ClockSync {
     keeper: Keeper,
     /// Shared with a press's thread, which writes what it found.
     seen: Arc<Mutex<Seen>>,
+    /// Whether a look again ([`ClockSync::relook`]) is on its way.
+    looking: Arc<AtomicBool>,
 }
 
 impl ClockSync {
@@ -196,12 +223,48 @@ impl ClockSync {
         Self {
             keeper: Keeper { planted, turn_on },
             seen: Arc::new(Mutex::new(Seen::default())),
+            looking: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// What the last look found.
     fn seen(&self) -> std::sync::MutexGuard<'_, Seen> {
         self.seen.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Looks again, and only looks: on a thread of its own, because the watch
+    /// thread never blocks and timedated may have to be started to answer.
+    /// One at a time; the thread says [`Ctx::changed`] when it knows, which
+    /// also asks [`Watcher::next_wake`] again.
+    fn relook(&self, ctx: &Ctx) {
+        if self.looking.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let (keeper, seen, looking, later) = (
+            self.keeper,
+            Arc::clone(&self.seen),
+            Arc::clone(&self.looking),
+            ctx.detached(),
+        );
+        let started = std::thread::Builder::new()
+            .name("clock-sync-look".into())
+            .spawn(move || {
+                let found = keeper.look();
+                {
+                    let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
+                    let refused = seen.refused;
+                    seen.found(found, refused, later.now());
+                }
+                looking.store(false, Ordering::Release);
+                later.changed();
+            });
+        if let Err(e) = started {
+            // NO THREAD: the next try a minute on, and not at once — a wake
+            // already due would ring again the moment this returns.
+            tracing::warn!(error = %e, "no thread to look at the clock again");
+            self.seen().looked = ctx.now();
+            self.looking.store(false, Ordering::Release);
+        }
     }
 
     /// A press: the keeping turned on, on a thread of its own, and the
@@ -271,13 +334,18 @@ impl Module for ClockSync {
         Some(self)
     }
 
-    fn face(&self, _look: &Look<'_>) -> Face {
+    fn watcher(&self) -> Option<&dyn Watcher> {
+        Some(self)
+    }
+
+    fn face(&self, look: &Look<'_>) -> Face {
         let (last, refused) = {
             let seen = self.seen();
             (seen.last, seen.refused)
         };
         let mut face = Face::default();
         if let Some((found, since)) = last
+            && ripe(found, since, look.now)
             && let Some(notice) = notice_of(found, refused, since)
         {
             face.notices.push(notice);
@@ -329,6 +397,33 @@ impl Scheduled for ClockSync {
     }
 }
 
+impl Watcher for ClockSync {
+    /// NOTHING TO LISTEN TO: timedated says nothing when the clock agrees,
+    /// and the one thing heard is the wake a clock adrift asks for.
+    fn sources(&self) -> Vec<Source> {
+        Vec::new()
+    }
+
+    fn heard(&self, heard: Heard<'_>, ctx: &Ctx) {
+        if matches!(heard, Heard::Wake) {
+            self.relook(ctx);
+        }
+    }
+
+    fn next_wake(&self, _now: Moment) -> Option<Moment> {
+        // NONE WHILE A LOOK IS ON ITS WAY: a wake already due would ring
+        // again at once; the look's `changed` asks again when it is done.
+        if self.looking.load(Ordering::Acquire) {
+            return None;
+        }
+        let seen = self.seen();
+        match seen.last {
+            Some((found, _)) if adrift(found) => Some(seen.looked + RELOOK),
+            _ => None,
+        }
+    }
+}
+
 /// The machine's words as a failed run's trouble.
 ///
 /// A run's `why` with no space in it is read as a WORD of the brain's
@@ -376,6 +471,17 @@ fn said(found: Found) -> Option<&'static NoticeKind> {
     (!found.synchronised).then_some(&super::notice::NOT_SYNCHRONISED)
 }
 
+/// A clock that is kept and has not agreed with a server.
+fn adrift(found: Found) -> bool {
+    said(found).is_some_and(|kind| kind.id == super::notice::NOT_SYNCHRONISED.id)
+}
+
+/// Whether a line found at `since` is said at `now`: at once, but for a
+/// clock adrift, which waits out [`ADRIFT_GRACE`].
+fn ripe(found: Found, since: Moment, now: Moment) -> bool {
+    !adrift(found) || now.saturating_sub(since) >= ADRIFT_GRACE
+}
+
 /// What the strip should say, given what was found, whether the last try at
 /// turning the keeping on was refused, and since when.
 fn notice_of(found: Found, refused: bool, since: Moment) -> Option<Notice> {
@@ -395,8 +501,10 @@ fn notice_of(found: Found, refused: bool, since: Moment) -> Option<Notice> {
     } else {
         // AND THE ONE WITHOUT ONE. The client is running and has not been
         // able to reach anybody; what is missing is a network, and there is
-        // no button for that.
+        // no button for that. It may be put away instead (`dismiss` in the
+        // manifest), and it goes by itself the moment the clock agrees.
         Notice::of(kind, super::key::CLOCK_SYNC_SAYS_NOT_SYNCHRONISED, since)
+            .with("minutes", Arg::Number(ADRIFT_GRACE / 60))
     })
 }
 
@@ -511,6 +619,99 @@ mod tests {
             None,
             "a clock in hand raised a line"
         );
+    }
+
+    /// A clock that is kept and has not agreed with a server.
+    const ADRIFT: Found = Found {
+        synchronised: false,
+        ..WELL
+    };
+
+    /// The face's one notice at `now`, if any.
+    fn notice_at(watch: &ClockSync, now: Moment) -> Option<Notice> {
+        let (pulse, mine) = (Pulse::default(), super::super::MANIFEST.defaults());
+        watch
+            .face(&Look {
+                now,
+                pulse: &pulse,
+                mine: &mine,
+                last: None,
+            })
+            .notices
+            .into_iter()
+            .next()
+    }
+
+    /// FAILS IF: a clock that has not reached a server yet raises its line
+    /// before the grace (2026-11-12: up on a boot, with nothing to press, for
+    /// the six hours to the next look), a clock adrift past the grace says
+    /// nothing or cannot be put away, it is not looked at again while adrift,
+    /// a look again moves the line's `since` (a line put away would come
+    /// back), the line stays once a look again finds the clock agreeing, or a
+    /// clock in hand keeps a wake armed.
+    #[test]
+    fn a_clock_adrift_waits_out_its_grace_and_is_looked_at_again_until_it_agrees() {
+        let watch = ClockSync::asking(Some(ADRIFT), takes);
+        assert_eq!(
+            watch.next_wake(0),
+            None,
+            "a clock never looked at armed a wake"
+        );
+        watch.seen().found(ADRIFT, false, 1_000);
+        assert!(
+            notice_at(&watch, 1_000 + ADRIFT_GRACE - 1).is_none(),
+            "a clock adrift was said before its grace"
+        );
+        assert_eq!(watch.next_wake(1_000), Some(1_000 + RELOOK));
+
+        let n = notice_at(&watch, 1_000 + ADRIFT_GRACE).expect("a clock adrift past its grace");
+        assert_eq!(n.says, super::super::key::CLOCK_SYNC_SAYS_NOT_SYNCHRONISED);
+        assert_eq!(
+            n.args,
+            vec![(
+                std::borrow::Cow::Borrowed("minutes"),
+                Arg::Number(ADRIFT_GRACE / 60)
+            )]
+        );
+        assert!(n.dismiss, "a line with nothing to press cannot be put away");
+
+        // LOOKED AT AGAIN, STILL ADRIFT: the same line since the same moment.
+        watch.seen().found(ADRIFT, false, 1_000 + 5 * RELOOK);
+        assert_eq!(watch.next_wake(0), Some(1_000 + 6 * RELOOK));
+        let again = notice_at(&watch, 1_000 + ADRIFT_GRACE).expect("the line went");
+        assert_eq!(again.since, 1_000, "a look again made the line news again");
+
+        // THE WAKE'S LOOK, and the clock has agreed meanwhile: the line goes,
+        // and no clock stays armed.
+        let watch = ClockSync::asking(Some(WELL), takes);
+        watch.seen().found(ADRIFT, false, 1_000);
+        let (ctx, kept) = Ctx::kept(super::super::ID, 1_000 + RELOOK);
+        watch.heard(Heard::Wake, &ctx);
+        for _ in 0..200 {
+            if !kept.changes().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !kept.changes().is_empty(),
+            "the look again published nothing"
+        );
+        assert!(
+            notice_at(&watch, 1_000 + ADRIFT_GRACE).is_none(),
+            "a clock that agreed kept its line"
+        );
+        assert_eq!(
+            watch.next_wake(0),
+            None,
+            "a clock in hand kept a wake armed"
+        );
+
+        // A CLOCK NOBODY KEEPS is said at once: its line has a button.
+        let watch = ClockSync::asking(Some(OFF), takes);
+        watch.seen().found(OFF, false, 1_000);
+        assert!(notice_at(&watch, 1_000).is_some());
+        assert_eq!(watch.next_wake(0), None);
     }
 
     /// A machine that could not be asked is not a machine with a problem.
@@ -695,8 +896,9 @@ mod tests {
         .rehearsing();
         assert_eq!(watch.run(&Run::new(report, ctx)), Outcome::Done(Vec::new()));
         let (pulse, mine) = (Pulse::default(), super::super::MANIFEST.defaults());
+        // PAST THE GRACE a clock adrift waits out before it is said.
         let face = watch.face(&Look {
-            now: 50,
+            now: 40 + ADRIFT_GRACE,
             pulse: &pulse,
             mine: &mine,
             last: None,

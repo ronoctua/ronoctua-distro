@@ -28,8 +28,8 @@ interruptor que alguém desligou. Uma vigia que rodasse mais de uma vez por hora
 ## O que ela diz, e o botão
 
 Um aviso enquanto nada mantém o relógio — com a ação `keep` ao lado (`clock-sync-keep`, também pelo
-nome) —, ou enquanto o relógio é mantido e nunca falou com um servidor, sem botão: o que falta ali é
-uma rede. O botão é o mesmo trabalho que a vigia faz sozinha, e é o ponto: quem desligou a vigia ainda
+nome) —, ou enquanto o relógio é mantido e não fala com um servidor há dez minutos, sem botão: o que
+falta ali é uma rede, e a pessoa pode guardá-lo. O botão é o mesmo trabalho que a vigia faz sozinha, e é o ponto: quem desligou a vigia ainda
 ganha um toque, e não uma frase sobre uma preferência.
 
 O toque é feito NA HORA, numa thread própria, e não enfileirado. Enfileirado, ele passava pelo portão
@@ -49,6 +49,17 @@ existe, e a linha não teria botão e nunca sairia — uma frase permanente num 
 ficar vazio. O que essa máquina é continua escrito na tela de data e hora, onde alguém olhando o
 relógio vai ler. O check do módulo confere que a distro instala o cliente e que a regra do polkit
 deixa a pessoa ligá-lo sem pergunta.
+
+## Um relógio sem servidor é olhado de novo, e não só em seis horas
+
+Uma máquina recém-ligada passa os primeiros segundos sem rede, e o cliente de hora fala com um
+servidor um instante depois de ter uma. Dito na hora, e olhado de novo só pela agenda, o aviso subia
+num boot e ficava as seis horas até a próxima olhada, sem botão e sem como guardar, muito depois de o
+relógio estar certo (2026-11-12). Por isso, enquanto uma olhada acha o relógio sem servidor, a vigia
+olha de novo a cada minuto (`RELOOK`, um `next_wake` do observador) — só uma leitura do `timedated`,
+não uma rodada, então nada no registro de atividade —, e o aviso só sobe depois de dez minutos assim
+(`ADRIFT_GRACE`). Num boot normal ele nunca aparece; quando aparece, pode ser guardado, e sai sozinho
+no minuto em que o relógio acerta. Com o relógio certo, nenhum relógio fica armado.
 
 ## Um interruptor, duas portas
 
