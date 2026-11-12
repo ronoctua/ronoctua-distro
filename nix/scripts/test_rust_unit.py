@@ -606,19 +606,6 @@ class ThirdParty(unittest.TestCase):
         }
         self.assertEqual(ru.manifest_features(manifest), ["cc", "default", "fast", "nix", "serde", "std"])
 
-    def test_lints_are_cargo_s_order_and_check_cfg_follows(self):
-        manifest = {"lints": {
-            "rust": {"unused_qualifications": "allow", "unexpected_cfgs": {"level": "warn", "check-cfg": ["cfg(a)"]}},
-            "clippy": {"ptr_as_ptr": "warn", "identity_op": "allow", "all": {"level": "deny", "priority": -1}},
-            "cargo": {"anything": "warn"},
-        }}
-        self.assertEqual(ru.manifest_lints(manifest), [
-            "--deny=clippy::all",
-            "--allow=unused_qualifications", "--warn=unexpected_cfgs",
-            "--warn=clippy::ptr_as_ptr", "--allow=clippy::identity_op",
-            "--check-cfg", "cfg(a)",
-        ])
-
     def test_a_dependent_reads_paths_where_the_unit_keeps_them(self):
         script = {
             "search": [{"kind": "native", "path": "/build/out-dir/sys/lib", "artifact": True},
@@ -688,7 +675,8 @@ class ThirdParty(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "Cargo.toml"), "w") as f:
                 f.write('[package]\nname = "foo"\nversion = "1.2.3-beta.1"\nauthors = ["A", "B"]\n'
-                        'license = "MIT"\n[features]\nx = []\n')
+                        'license = "MIT"\n[features]\nx = []\n'
+                        '[lints.rust]\nunsafe_code = "deny"\nunexpected_cfgs = { level = "warn", check-cfg = ["cfg(a)"] }\n')
             open(os.path.join(d, "README.md"), "w").close()
             ru.ROOT = d
             crate = ru.dep_crate({"name": "foo", "version": "1.2.3-beta.1", "links": "foo"})
@@ -697,6 +685,8 @@ class ThirdParty(unittest.TestCase):
             self.assertEqual(crate["pkgEnv"]["CARGO_PKG_README"], "README.md")
             self.assertEqual(crate["features"], ["x"])
             self.assertEqual((crate["links"], crate["srcRoot"], crate["capLints"]), ("foo", d, True))
+            # ITS `[lints]` ARE NOT PASSED: cargo 1.99 passes a dependency's no more.
+            self.assertEqual(crate["lints"], [])
             with self.assertRaises(SystemExit):
                 ru.dep_crate({"name": "bar", "version": "1.2.3-beta.1"})
 

@@ -1221,49 +1221,16 @@ def manifest_features(manifest):
     return sorted(features)
 
 
-LEVELS = {"forbid": "--forbid", "deny": "--deny", "warn": "--warn", "allow": "--allow"}
-
-
-def manifest_lints(manifest):
-    """cargo's `lints_to_rustflags` over a package's `[lints]`: every tool but
-    `cargo`, sorted by priority and then by name, descending, and after them
-    the `unexpected_cfgs.check-cfg` list, each with `--check-cfg`."""
-    flags, check_cfgs = [], []
-    for tool, lints in sorted(manifest.get("lints", {}).items()):
-        if tool == "cargo" or not isinstance(lints, dict):
-            continue
-        for name, config in lints.items():
-            level = config if isinstance(config, str) else config.get("level", "warn")
-            priority = config.get("priority", 0) if isinstance(config, dict) else 0
-            option = f"{LEVELS[level]}={name if tool == 'rust' else f'{tool}::{name}'}"
-            flags.append((priority, _Reverse(name), option))
-            if tool == "rust" and name == "unexpected_cfgs" and isinstance(config, dict):
-                check_cfgs += list(config.get("check-cfg", []))
-    flags.sort()
-    out = [f for _, _, f in flags]
-    for c in check_cfgs:
-        out += ["--check-cfg", c]
-    return out
-
-
-class _Reverse:
-    """`std::cmp::Reverse` for a string, as cargo sorts lint names."""
-
-    def __init__(self, value):
-        self.value = value
-
-    def __lt__(self, other):
-        return self.value > other.value
-
-    def __eq__(self, other):
-        return self.value == other.value
-
-
 def dep_crate(spec):
     """What cargo reads off a registry package's own `Cargo.toml` — its
-    `CARGO_PKG_*`, the features it declares, its lints — read here, in the
-    build, from the crate's source: at evaluation it would be a derivation's
-    output read by Nix (import from derivation)."""
+    `CARGO_PKG_*` and the features it declares — read here, in the build,
+    from the crate's source: at evaluation it would be a derivation's output
+    read by Nix (import from derivation).
+
+    NOT ITS `[lints]`: cargo 1.99 passes a dependency's lints no more — its
+    warnings are capped (`--cap-lints allow`) whatever they say — and a unit
+    that kept passing them was compiled otherwise than cargo compiles it
+    (`third-party-units-are-cargo-s`, 2026-11-12)."""
     import tomllib
 
     with open(os.path.join(ROOT, "Cargo.toml"), "rb") as f:
@@ -1288,7 +1255,7 @@ def dep_crate(spec):
         "srcRoot": ROOT,
         "links": spec.get("links"),
         "features": manifest_features(manifest),
-        "lints": manifest_lints(manifest),
+        "lints": [],
         "capLints": True,
         "primary": False,
         "hasLib": True,

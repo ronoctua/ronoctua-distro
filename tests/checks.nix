@@ -29447,10 +29447,11 @@ let
       # THE BUILDS HAVE A WALL, and not only a ceiling. `MemoryHigh` alone
       # swaps a growing build out with no end: on 2026-11-11 the daemon took
       # all 22 GiB of swap and the machine froze. What a wall does is
-      # `oom-vm`'s; this is that the unit carries one.
+      # `oom-vm`'s; this is that the unit carries one — in the unit or, where
+      # NixOS writes what a module sets on a packaged unit, its drop-in.
       daemon="$etc/systemd/system/nix-daemon.service"
       for line in "MemoryHigh=" "MemoryMax=" "MemorySwapMax=" "OOMPolicy=continue"; do
-        grep -q "^$line" "$daemon" 2>/dev/null || {
+        grep -qR "^$line" "$daemon" "$daemon.d" 2>/dev/null || {
           echo "ERROR: nix-daemon.service has no $line — a build that grows takes the machine's swap" >&2
           failed=1
         }
