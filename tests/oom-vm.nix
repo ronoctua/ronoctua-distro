@@ -206,6 +206,63 @@ pkgs.testers.runNixOSTest {
         assert "> 50.00%" in said, f"the configured limit is not the one that held:\n{said[-2000:]}"
         assert "for > 15s" in said, f"the configured duration did not hold:\n{said[-2000:]}"
 
+    with subtest("a build that never stops growing ends, and the daemon and the desktop stand"):
+        # THE NIGHT OF 2026-11-11: one `nix build`'s daemon grew to 25 GiB —
+        # its `MemoryHigh` held the RAM and pushed the rest into swap until all
+        # of it was gone, and the screen froze. The builder here does what that
+        # daemon did, in the daemon's own group: `tail` of a file with no line
+        # end keeps every byte it reads. Built by the person and not by root,
+        # because root's `nix-build` builds in its own process, not the
+        # daemon's.
+        large.succeed(
+            "cat > /tmp/grows.nix <<'EOF'\n"
+            "derivation {\n"
+            "  name = \"grows-without-end\";\n"
+            "  system = builtins.currentSystem;\n"
+            "  builder = \"''${builtins.storePath \"${pkgs.coreutils}\"}/bin/tail\";\n"
+            "  args = [ \"/dev/zero\" ];\n"
+            "}\n"
+            "EOF"
+        )
+        large.succeed(
+            "systemd-run --unit=grows --quiet --property=Type=exec --property=User=noctua -- "
+            "/bin/sh -c '/run/current-system/sw/bin/nix-build /tmp/grows.nix --no-out-link "
+            "> /tmp/grows.log 2>&1'"
+        )
+        # THE BUILDER, by its group: the hog above was a `tail` too.
+        large.wait_until_succeeds("pgrep -x -G nixbld tail", timeout=timedelta(seconds=60))
+        try:
+            large.wait_until_fails("systemctl is-active grows.service", timeout=timedelta(minutes=5))
+            large.wait_until_fails("pgrep -x -G nixbld tail", timeout=timedelta(minutes=1))
+        finally:
+            print(large.execute(
+                "journalctl -b --no-pager -u nix-daemon -u systemd-oomd | tail -n 30; "
+                "journalctl -b --no-pager -k --grep oom | tail -n 10; "
+                "cat /tmp/grows.log; "
+                "systemctl show nix-daemon.service -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy"
+            )[1])
+        # The build failed — it did not end by itself.
+        large.fail("systemctl show grows.service -p Result --value | grep -qx success")
+        # IT WAS THE DAEMON'S BOUND THAT ENDED IT: systemd-oomd once the swap it
+        # may take is full and the stall climbs, or the kernel at the wall.
+        oomd = large.succeed("journalctl -b --no-pager -u systemd-oomd")
+        kernel = large.succeed("journalctl -b --no-pager -k")
+        assert (
+            "Marked /system.slice/nix-daemon.service for killing" in oomd
+            or ("oom-kill" in kernel and "nix-daemon.service" in kernel)
+        ), "the build ended, but not by the daemon's bound"
+        # The daemon serves the person again: its socket brings it back.
+        large.succeed(
+            "runuser -u noctua -- /run/current-system/sw/bin/nix-store -q --hash ${pkgs.coreutils}"
+        )
+        large.succeed("systemctl is-active nix-daemon.service")
+        # The desktop was not touched.
+        assert "0" == large.succeed(
+            "systemctl --user --machine=noctua@ show stand-in.service "
+            "-p NRestarts --value"
+        ).strip(), "what is in session.slice was restarted, so it was killed"
+        large.succeed("systemctl --user --machine=noctua@ is-active stand-in.service")
+
     with subtest("the table of both profiles exists, and says which one comes back on restart"):
         # It is what `LEADER s m` reads in order to loosen the policy: the
         # numbers live in Nix and cross as text. A panel that computed them

@@ -33,6 +33,12 @@
 //! count, and comes down only [`RAM_EASE_PERCENT`] points under that line
 //! ([`ram_up`]): a use that hovers on the line would otherwise blink it every
 //! heartbeat. A click opens the memory panel ([`MEMORY_PANEL`]).
+//!
+//! It is up, too, while the machine WAITS on memory ([`stall_up`]), whatever
+//! the share in use: a cgroup's `MemoryHigh` pushes what it holds into swap
+//! instead of letting it fill the RAM, so a machine can thrash for hours with
+//! the RAM under the line (2026-11-12: a build's daemon filled 22 GiB of
+//! swap with the RAM at 76%, and the screen froze with no mark drawn).
 
 mod rules;
 
@@ -79,6 +85,21 @@ const RAM_DANGER_AT_PERCENT: u16 = 95;
 /// that is up comes down.
 const RAM_EASE_PERCENT: u16 = 5;
 
+/// From this memory stall (`/proc/pressure/memory`, `some avg10`), in per
+/// mille of a ten-second window, the RAM's mark is up whatever the share in
+/// use, in the warning's colour: a machine that waits on memory a fifth of
+/// the time is thrashing.
+const STALL_WARN_AT_PER_MILLE: u16 = 200;
+
+/// From this stall, the mark is in danger's colour: the screen and the input
+/// are waiting with everything else.
+const STALL_DANGER_AT_PER_MILLE: u16 = 400;
+
+/// How far under [`STALL_WARN_AT_PER_MILLE`] the stall falls before a mark it
+/// raised comes down: a ten-second average swings, and a mark that came and
+/// went with it would be read as nothing.
+const STALL_EASE_PER_MILLE: u16 = 100;
+
 /// The shell's command a click on the RAM's mark runs: the memory panel
 /// (`LEADER s m`), which says who is eating the memory and whether the
 /// protection is armed — the same the notification of a kill opens.
@@ -100,9 +121,30 @@ const fn ram_up(was: bool, used: Option<u16>) -> bool {
     used >= line
 }
 
-/// The colour of the RAM's mark at a share of `used` per cent.
-const fn ram_tone(used: u16) -> Tone {
-    if used >= RAM_DANGER_AT_PERCENT {
+/// Whether the machine waits on memory enough for the RAM's mark, given
+/// whether it `was` up for that and the `stall` now, in per mille: up from
+/// the warning's line and — once up — until the stall falls
+/// [`STALL_EASE_PER_MILLE`] under it. A kernel without PSI raises nothing.
+const fn stall_up(was: bool, stall: Option<u16>) -> bool {
+    let Some(stall) = stall else {
+        return false;
+    };
+    let line = if was {
+        STALL_WARN_AT_PER_MILLE - STALL_EASE_PER_MILLE
+    } else {
+        STALL_WARN_AT_PER_MILLE
+    };
+    stall >= line
+}
+
+/// The colour of the RAM's mark at a share of `used` per cent and a `stall`
+/// in per mille: danger when either is past its danger's line.
+const fn ram_tone(used: u16, stall: Option<u16>) -> Tone {
+    let stalled = match stall {
+        Some(stall) => stall >= STALL_DANGER_AT_PER_MILLE,
+        None => false,
+    };
+    if used >= RAM_DANGER_AT_PERCENT || stalled {
         Tone::Danger
     } else {
         Tone::Warning
@@ -147,6 +189,8 @@ struct State {
     generation: u64,
     /// Whether the RAM's mark was up at the last heartbeat ([`ram_up`]).
     ram_up: bool,
+    /// Whether it was up for the stall ([`stall_up`]).
+    stall_up: bool,
 }
 
 /// A kill as its page and the file keep it.
@@ -310,17 +354,27 @@ impl Module for OomWatch {
     fn face(&self, look: &Look<'_>) -> Face {
         // NO MARK FOR A KILL: it is told once, as it happens, and the
         // activity keeps it. The one mark is the RAM's, while it is nearly
-        // all in use.
+        // all in use or the machine waits on memory.
         let mut state = self.state();
         let used = look.pulse.ram_used_pct;
+        let stall = look.pulse.memory_stall;
         state.ram_up = ram_up(state.ram_up, used);
+        state.stall_up = stall_up(state.stall_up, stall);
         let marks = match used {
-            Some(used) if state.ram_up => vec![Mark {
+            Some(used) if state.ram_up || state.stall_up => vec![Mark {
                 id: super::mark::RAM.opening(MEMORY_PANEL),
-                tone: ram_tone(used),
+                tone: ram_tone(used, stall),
                 count: u32::from(used),
                 act: None,
-                told: Vec::new(),
+                // WHY IT IS UP UNDER ITS LINE: the count says the RAM, and
+                // the stall is what the hand came for.
+                told: match stall {
+                    Some(stall) if state.stall_up => vec![
+                        crate::module::Told::of(super::key::OOM_WATCH_TOLD_STALL)
+                            .stressing("stall", Arg::PerMille(stall)),
+                    ],
+                    _ => Vec::new(),
+                },
             }],
             _ => Vec::new(),
         };
@@ -471,11 +525,18 @@ mod tests {
 
     /// Its face over a heartbeat that read `used` per cent of the RAM.
     fn face_at(m: &OomWatch, used: Option<u16>) -> Face {
+        stalled_at(m, used, Some(0))
+    }
+
+    /// Its face over a heartbeat that read `used` per cent of the RAM and a
+    /// memory stall of `stall` per mille.
+    fn stalled_at(m: &OomWatch, used: Option<u16>, stall: Option<u16>) -> Face {
         let mine = super::super::MANIFEST.defaults();
         m.face(&Look {
             now: 100,
             pulse: &crate::pulse::Pulse {
                 ram_used_pct: used,
+                memory_stall: stall,
                 ..crate::pulse::Pulse::default()
             },
             mine: &mine,
@@ -529,6 +590,59 @@ mod tests {
         // NOTHING MEASURED: no mark, even after one was up.
         assert_eq!(face_at(&m, Some(99)).marks.len(), 1);
         assert!(face_at(&m, None).marks.is_empty());
+    }
+
+    /// FAILS IF: a machine that waits on memory with the RAM under its line
+    /// draws no mark (the night of 2026-11-12: 76% of the RAM, the swap full,
+    /// the screen frozen), the mark does not say the RAM as its count, does
+    /// not turn to danger on a heavy stall, does not tell the stall under
+    /// the pointer, blinks with a ten-second average that swings, stays up
+    /// once the machine stopped waiting, or a kernel without PSI raises it.
+    #[test]
+    fn the_ram_is_marked_while_the_machine_waits_on_memory() {
+        let m = watch();
+        let calm = Some(STALL_WARN_AT_PER_MILLE - 1);
+        assert!(stalled_at(&m, Some(76), calm).marks.is_empty());
+
+        let up = stalled_at(&m, Some(76), Some(STALL_WARN_AT_PER_MILLE));
+        assert_eq!(up.marks.len(), 1, "a thrashing machine drew no mark");
+        let mark = &up.marks[0];
+        assert_eq!(mark.count, 76, "the count is the RAM, not the stall");
+        assert_eq!(mark.tone, Tone::Warning);
+        assert_eq!(mark.told.len(), 1, "the mark did not say why it is up");
+        assert_eq!(mark.told[0].says, super::super::key::OOM_WATCH_TOLD_STALL);
+        assert_eq!(
+            mark.told[0].args,
+            vec![("stall".into(), Arg::PerMille(STALL_WARN_AT_PER_MILLE))]
+        );
+        assert_eq!(super::super::MANIFEST.refusal_of(mark, &[]), None);
+
+        let heavy = stalled_at(&m, Some(76), Some(STALL_DANGER_AT_PER_MILLE));
+        assert_eq!(heavy.marks[0].tone, Tone::Danger);
+
+        // A SWINGING AVERAGE does not blink it: under the line, it stays.
+        assert_eq!(
+            stalled_at(
+                &m,
+                Some(76),
+                Some(STALL_WARN_AT_PER_MILLE - STALL_EASE_PER_MILLE)
+            )
+            .marks
+            .len(),
+            1,
+            "the mark blinked with the average"
+        );
+        // EASED: it comes down, and climbs back only to the line itself.
+        let eased = Some(STALL_WARN_AT_PER_MILLE - STALL_EASE_PER_MILLE - 1);
+        assert!(stalled_at(&m, Some(76), eased).marks.is_empty());
+        assert!(stalled_at(&m, Some(76), calm).marks.is_empty());
+
+        // A RAM UP FOR ITSELF tells no stall.
+        let full = stalled_at(&m, Some(RAM_WARN_AT_PERCENT), Some(0));
+        assert!(full.marks[0].told.is_empty(), "a calm machine told a stall");
+
+        // NO PSI: nothing raised by it.
+        assert!(stalled_at(&m, Some(76), None).marks.is_empty());
     }
 
     fn hear(m: &OomWatch, ctx: &Ctx, source: usize, line: &str) {

@@ -86,3 +86,12 @@ A marca diz o USO, e não a pressão: a pessoa pediu a porcentagem, e uma porcen
 ela compara com o que vê num monitor. A pressão é o que o oomd julga, e pode subir com a RAM ainda
 longe do teto (o swap lento devolvendo páginas); quando ele age, a morte é dita por este módulo, com
 a pressão daquele momento.
+
+Mas a pressão também LEVANTA a marca (2026-11-12). Numa noite de build, o `nix-daemon` cresceu até
+25 GiB: o `MemoryHigh` dele segurou a RAM em 76% e empurrou o resto para o swap, que encheu; a
+máquina passou horas esperando pela memória até a tela congelar, e a marca nunca subiu, porque a
+RAM nunca chegou a 85%. Por isso ela aparece também enquanto a máquina espera pela memória um quinto
+do tempo (o `some avg10` de `/proc/pressure/memory`, que o pulso já traz em `memory_stall`), e na cor
+de perigo a partir de dois quintos, seja qual for a RAM; só desce com a espera abaixo de um décimo,
+porque uma média de dez segundos oscila. O número ao lado do glifo continua sendo a RAM, e sob o
+ponteiro a marca diz, antes da dica, quanto do tempo a máquina está esperando.

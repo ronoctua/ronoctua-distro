@@ -29444,6 +29444,18 @@ let
       grep -qR "MemoryHigh=$ceiling" "$etc/systemd/user/app.slice.d" 2>/dev/null || {
         echo "ERROR: the table's ceiling ($ceiling) is not app.slice's" >&2; failed=1; }
 
+      # THE BUILDS HAVE A WALL, and not only a ceiling. `MemoryHigh` alone
+      # swaps a growing build out with no end: on 2026-11-11 the daemon took
+      # all 22 GiB of swap and the machine froze. What a wall does is
+      # `oom-vm`'s; this is that the unit carries one.
+      daemon="$etc/systemd/system/nix-daemon.service"
+      for line in "MemoryHigh=" "MemoryMax=" "MemorySwapMax=" "OOMPolicy=continue"; do
+        grep -q "^$line" "$daemon" 2>/dev/null || {
+          echo "ERROR: nix-daemon.service has no $line — a build that grows takes the machine's swap" >&2
+          failed=1
+        }
+      done
+
       # THE FIVE UNITS THE PANEL MAY START, and the rule that lets it.
       #
       # A panel that could start any unit would be a bigger door than the whole
@@ -29454,7 +29466,62 @@ let
       done
 
       [ "$failed" = 0 ] || exit 1
-      echo "OK: a chain of four levels, app.slice armed, the desktop out of reach, a table for both profiles"
+      echo "OK: a chain of four levels, app.slice armed, the desktop out of reach, a table for both profiles, a wall for the builds"
+    '';
+
+  # NIX BUILDS SIX HUNDRED THINGS WITHOUT HOLDING ON TO THEM.
+  #
+  # Nix 2.34's builder kept a share of every waiting goal each time a build
+  # finished. One `nix build` of what the gate's 78 VM tests boot held its
+  # daemon at 25 GiB, swap full, until the screen froze (2026-11-11). This
+  # builds 600 trivial derivations in ONE build, on the Nix the machine runs
+  # (`nix/modules/memory.nix` chooses it), in a store of its own and with no
+  # sandbox of its own, and asks the kernel for the most the process ever held
+  # (`time -f %M`, from `wait4`). Measured here on 2026-11-12: 2.34.9 held
+  # 1010 MiB, 2.35.3 held 58.
+  nix-builds-without-leaking =
+    let
+      nix = self.nixosConfigurations.vm.config.nix.package;
+      # Each a file of its own, built by `/bin/sh`, which every sandbox has.
+      many = pkgs.writeText "many.nix" ''
+        builtins.genList (
+          i:
+          derivation {
+            name = "leaf-''${toString i}";
+            system = "${pkgs.stdenv.hostPlatform.system}";
+            builder = "/bin/sh";
+            args = [
+              "-c"
+              "echo ''${toString i} > $out"
+            ];
+          }
+        ) 600
+      '';
+      ceilingKiB = 256 * 1024;
+    in
+    mkCheck "nix-builds-without-leaking" [ pkgs.time ] ''
+      export HOME=$TMPDIR
+      root=$TMPDIR/nix
+      mkdir -p "$root/conf"
+      export NIX_CONF_DIR=$root/conf
+      printf '%s\n' "sandbox = false" "substituters =" "build-users-group =" \
+        > "$root/conf/nix.conf"
+      store="local?store=$root/store&state=$root/state&log=$root/log"
+      if ! command time -f '%M' -o "$TMPDIR/peak" \
+          ${nix}/bin/nix --extra-experimental-features nix-command build \
+          --store "$store" -f ${many} --no-link --max-jobs 3 --cores 1 2> "$TMPDIR/log"; then
+        tail -n 20 "$TMPDIR/log" >&2
+        echo "ERROR: Nix ${nix.version} did not build the 600" >&2
+        exit 1
+      fi
+      built=$(find "$root/store" -maxdepth 1 -name '*-leaf-*' ! -name '*.drv' | wc -l)
+      [ "$built" -eq 600 ] || { echo "ERROR: $built of 600 were built: nothing was measured" >&2; exit 1; }
+      peak=$(tail -n 1 "$TMPDIR/peak")
+      if [ "$peak" -gt ${toString ceilingKiB} ]; then
+        echo "ERROR: Nix ${nix.version} held $(( peak / 1024 )) MiB to build 600 trivial derivations — it keeps what it built; a machine's daemon grows with it" >&2
+        exit 1
+      fi
+      echo "OK: Nix ${nix.version} built 600 in one build holding $(( peak / 1024 )) MiB at most"
     '';
 
   # THE ISO CARRIES WHAT THE TARGET MACHINE WOULD OTHERWISE COMPILE.
@@ -58532,6 +58599,7 @@ let
       iso-carries-the-seed
       profile-minimal-closes
       memory-policy-shape
+      nix-builds-without-leaking
       buffer-commands-have-labels
       buffer-keys-have-text
       buffer-modes-have-text

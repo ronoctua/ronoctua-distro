@@ -285,6 +285,29 @@ in
         the cgroup is the only lever that adapts to the machine.
       '';
     };
+    buildLimit = lib.mkOption {
+      type = lib.types.str;
+      default = "65%";
+      description = ''
+        `MemoryMax` on `nix-daemon`: past it the kernel kills inside the
+        daemon's own group, the biggest process first. Above `buildCeiling` on
+        purpose — the ceiling is what builds are sized by, this is the wall a
+        runaway one meets.
+      '';
+    };
+    buildSwap = lib.mkOption {
+      type = lib.types.str;
+      default = "25%";
+      description = ''
+        `MemorySwapMax` on `nix-daemon`. Without it `buildCeiling` pushes
+        whatever a build holds past it into swap, with no end: the rest of the
+        machine is left without swap to give. A share of the PHYSICAL memory,
+        like every percentage here, and not of the swap, whatever
+        `systemd.resource-control(5)` says: measured on 2026-11-12, `25%` gave
+        3.6 GiB on 14 GiB of RAM and 22 GiB of swap. With zram at half the RAM
+        and the swapfile at least the RAM, it is a sixth of the swap at most.
+      '';
+    };
   };
 
   config = {
@@ -391,7 +414,41 @@ in
     # whatever the person is actually doing.
     nix.daemonCPUSchedPolicy = "idle";
     nix.daemonIOSchedClass = "idle";
-    systemd.services.nix-daemon.serviceConfig.MemoryHigh = cfg.buildCeiling;
+    #
+    # THE CEILING ALONE IS NOT A BOUND. `MemoryHigh` reclaims, and reclaiming
+    # an anonymous page is swapping it out: on 2026-11-11 the daemon of one
+    # `nix build` grew to 25 GiB — 7 in RAM under the ceiling, 17 in swap —
+    # and filled all 22 GiB of it. The RAM read 76% the whole night, oomd saw
+    # the system slice under its limit, and the machine waited on memory for
+    # five hours until the screen froze. So the swap the daemon may take is
+    # bounded. A build that keeps growing then cannot be swapped out any
+    # further: the ceiling throttles it, its group's stall climbs past the
+    # system slice's limit, and oomd ends the daemon's group half a minute
+    # later (`oom-vm` grows one and watches it go). `buildLimit` is the wall
+    # behind that, where the kernel kills inside the group.
+    #
+    # `OOMPolicy=continue`: the kernel's kill takes the process that grew — a
+    # build, or the worker that serves one client — and leaves the daemon and
+    # every other client's build. `stop`, systemd's default, would end them
+    # all.
+    systemd.services.nix-daemon.serviceConfig = {
+      MemoryHigh = cfg.buildCeiling;
+      MemoryMax = cfg.buildLimit;
+      MemorySwapMax = cfg.buildSwap;
+      OOMPolicy = "continue";
+    };
+
+    # THE NIX THAT DOES NOT LEAK. Nix 2.34's builder grows with every build it
+    # finishes, by a share of every goal still waiting: one process that
+    # builds a thousand derivations holds gigabytes, and the gate's phase 2 —
+    # what 78 VM tests boot, in one `nix build` — took that daemon to 25 GiB.
+    # Measured on 2026-11-12, 300 trivial derivations in one build: 389 MiB
+    # under 2.34.9, 85 MiB under 2.35.3, and 2000 under 2.35.3 stayed at 124.
+    # nixpkgs' `nix` was still 2.34 then, so the machine takes the newest one
+    # until `nix` itself is past it; `nix-builds-without-leaking` builds the
+    # thousand on the Nix this chooses.
+    nix.package =
+      if lib.versionOlder pkgs.nix.version "2.35" then pkgs.nixVersions.latest else pkgs.nix;
 
     # -----------------------------------------------------------------
     # 5. What must not be the victim inside system.slice

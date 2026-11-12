@@ -144,6 +144,8 @@
           inputs.rust-overlay.overlays.default
           # THE ONE yt-dlp, newer than the pinned nixpkgs' — see nix/yt-dlp.nix.
           (import ./nix/yt-dlp.nix)
+          # Codex with the AWS-LC its build asks for — see nix/codex.nix.
+          (import ./nix/codex.nix)
         ];
       };
 

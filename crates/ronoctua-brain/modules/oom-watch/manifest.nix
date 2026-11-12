@@ -9,7 +9,7 @@
 # how stalled the machine was and when. And it reads the RAM in use off the
 # heartbeat the core already takes. Why each is so is in `why.md`.
 {
-  what = "Write down and tell every process killed for lack of memory, by the kernel or by systemd-oomd; mark the modeline while the RAM is nearly all in use.";
+  what = "Write down and tell every process killed for lack of memory, by the kernel or by systemd-oomd; mark the modeline while the RAM is nearly all in use or the machine waits on memory.";
 
   needs = {
     root = false;
@@ -32,9 +32,12 @@
   # THE ONE MARK, only while it says something (invariant 14): from 85 per
   # cent of the RAM in use, in the warning's colour, and in danger's from 95;
   # once up, it stays until the use falls 5 points under its line, so a use
-  # that hovers on the line does not blink it every heartbeat. Its count is
-  # the share in use (`percent`), and a click opens the memory panel (`LEADER
-  # s m`): who is eating the memory, and whether the protection is armed.
+  # that hovers on the line does not blink it every heartbeat. Up too while
+  # the machine waits on memory a fifth of the time (danger's from two
+  # fifths), whatever the RAM says: a `MemoryHigh` thrashes a build in swap
+  # with the RAM under the line. Its count is the share in use (`percent`),
+  # and a click opens the memory panel (`LEADER s m`): who is eating the
+  # memory, and whether the protection is armed.
   marks = {
     ram = {
       glyph = "ram";

@@ -30,6 +30,8 @@
     inputs.rust-overlay.overlays.default
     # THE SAME yt-dlp AS THE FLAKE'S — see nix/yt-dlp.nix.
     (import ../yt-dlp.nix)
+    # And the same Codex — see nix/codex.nix.
+    (import ../codex.nix)
   ];
   # `nixpkgs.config` IS ONE DEFINITION, and has to be: a VM test hands `pkgs`
   # in from outside, and in that shape the option takes a single definition.
